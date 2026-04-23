@@ -1,0 +1,3 @@
+{"sessionId":"7fe9f5","location":"contact/route.ts","message":"H3,H5: request received","data":{"hasEmail":true,"hasSubject":true,"hasMessage":true,"hasEmailUser":true,"hasEmailPass":true,"emailUser":"kontakt@harry-english.pl","smtpHost":"smtp.zoho.eu"},"timestamp":1772038350861}
+{"sessionId":"7fe9f5","location":"contact/route.ts","message":"H1,H2,H4: before sendMail","data":{"step":"school_email"},"timestamp":1772038350871}
+{"sessionId":"7fe9f5","location":"contact/route.ts","message":"H1,H2,H4: sendMail error","data":{"errName":"Error","errMessage":"Invalid login: 535 Authentication Failed","errCode":"EAUTH","errResponse":"535 Authentication Failed"},"timestamp":1772038351637}
