@@ -30,8 +30,47 @@ model School {
   announcements Announcement[]
   rewards       Reward[]
   messages      Message[]
+  schoolYears   SchoolYear[]
+  schoolHolidays SchoolHoliday[]
 
   @@map("schools")
+}
+
+model SchoolYear {
+  id        String   @id @default(cuid())
+  schoolId  String   @map("school_id")
+  name      String
+  dateFrom  DateTime @map("date_from")
+  dateTo    DateTime @map("date_to")
+  active    Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  school          School           @relation(fields: [schoolId], references: [id])
+  holidays        SchoolHoliday[]
+  groups          Group[]
+  lessons         Lesson[]
+  subscriptions   Subscription[]
+
+  @@index([schoolId])
+  @@map("school_years")
+}
+
+model SchoolHoliday {
+  id           String    @id @default(cuid())
+  schoolId     String    @map("school_id")
+  schoolYearId String?  @map("school_year_id")
+  name         String
+  dateFrom     DateTime  @map("date_from")
+  dateTo       DateTime  @map("date_to")
+  type         String    @default("HOLIDAY")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  school     School      @relation(fields: [schoolId], references: [id])
+  schoolYear SchoolYear? @relation(fields: [schoolYearId], references: [id])
+
+  @@index([schoolId])
+  @@index([schoolYearId])
+  @@map("school_holidays")
 }
 
 // ============================================================
@@ -43,7 +82,8 @@ model User {
   schoolId     String    @map("school_id")
   email        String
   passwordHash String    @map("password_hash")
-  role         UserRole  @default(PARENT)
+  /// ADMIN | MANAGER | TEACHER | PARENT | CHILD (TEXT w PostgreSQL)
+  role         String    @default("PARENT") @db.Text
   firstName    String    @map("first_name")
   lastName     String    @map("last_name")
   phone        String?
@@ -78,12 +118,6 @@ model User {
   @@map("users")
 }
 
-enum UserRole {
-  ADMIN
-  TEACHER
-  PARENT
-}
-
 // ============================================================
 // DZIECI (osobne konta z loginem)
 // ============================================================
@@ -108,6 +142,9 @@ model Child {
 
   school School @relation(fields: [schoolId], references: [id])
   parent User   @relation("ParentChildren", fields: [parentId], references: [id])
+
+  preferredLocationId String?   @map("preferred_location_id")
+  preferredLocation   Location? @relation("ChildPreferredLocation", fields: [preferredLocationId], references: [id])
 
   childAuth     ChildAuth?
   groupStudents GroupStudent[]
@@ -148,6 +185,7 @@ model Location {
 
   scheduleTemplates ScheduleTemplate[]
   lessons           Lesson[]
+  preferredByChildren Child[] @relation("ChildPreferredLocation")
 
   @@index([schoolId])
   @@map("locations")
@@ -160,6 +198,7 @@ model Location {
 model Group {
   id          String  @id @default(cuid())
   schoolId    String  @map("school_id")
+  schoolYearId String? @map("school_year_id")
   teacherId   String  @map("teacher_id")
   name        String
   level       String?
@@ -167,7 +206,8 @@ model Group {
   active      Boolean @default(true)
   createdAt   DateTime @default(now()) @map("created_at")
 
-  school  School @relation(fields: [schoolId], references: [id])
+  school     School      @relation(fields: [schoolId], references: [id])
+  schoolYear SchoolYear? @relation(fields: [schoolYearId], references: [id])
   teacher User   @relation("TeacherGroups", fields: [teacherId], references: [id])
 
   groupStudents     GroupStudent[]
@@ -222,6 +262,7 @@ model ScheduleTemplate {
 model Lesson {
   id           String       @id @default(cuid())
   groupId      String       @map("group_id")
+  schoolYearId String?      @map("school_year_id")
   teacherId    String       @map("teacher_id")
   locationId   String       @map("location_id")
   scheduledAt  DateTime     @map("scheduled_at")
@@ -230,7 +271,8 @@ model Lesson {
   notes        String?
   createdAt    DateTime     @default(now()) @map("created_at")
 
-  group    Group    @relation(fields: [groupId], references: [id])
+  group      Group       @relation(fields: [groupId], references: [id])
+  schoolYear SchoolYear? @relation(fields: [schoolYearId], references: [id])
   location Location @relation(fields: [locationId], references: [id])
 
   attendance    Attendance[]
@@ -349,6 +391,7 @@ model ProgressNote {
 model Subscription {
   id            String             @id @default(cuid())
   schoolId      String             @map("school_id")
+  schoolYearId  String?            @map("school_year_id")
   parentId      String             @map("parent_id")
   childId       String             @map("child_id")
   groupId       String             @map("group_id")
@@ -359,7 +402,8 @@ model Subscription {
   validTo       DateTime?          @map("valid_to") @db.Date
   createdAt     DateTime           @default(now()) @map("created_at")
 
-  school School @relation(fields: [schoolId], references: [id])
+  school     School      @relation(fields: [schoolId], references: [id])
+  schoolYear SchoolYear? @relation(fields: [schoolYearId], references: [id])
 
   payments Payment[]
 

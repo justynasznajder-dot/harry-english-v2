@@ -1,1315 +1,2005 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
-interface User {
+type TabKey =
+  | 'organization'
+  | 'users'
+  | 'groups'
+  | 'classes'
+  | 'enrollment'
+  | 'announcements'
+  | 'payments';
+type MobileTab = 'organization' | 'users' | 'groups' | 'more';
+type OrganizationSubTab = 'schoolYear' | 'teachers' | 'locations' | 'history';
+
+/** Zgodnie z kolumną `users.role` (TEXT): ADMIN, MANAGER, TEACHER, PARENT, CHILD */
+type AdminPortalUserRole = 'ADMIN' | 'MANAGER' | 'TEACHER' | 'PARENT' | 'CHILD';
+
+interface AdminUser {
   id: string;
   first_name: string;
   last_name: string;
   email: string;
-  account_type: string;
+  role?: AdminPortalUserRole;
   confirmed: boolean;
-  active?: boolean;
-  resignation_date?: string | null;
-  created_at?: string;
-  last_login?: string;
+  active: boolean;
+  access_level?: 'PENDING' | 'PROPOSED' | 'CONTRACT_SENT' | 'ACTIVE';
 }
 
-interface Student {
-  student_id: string;
-  user_id: string;
+interface ChildRow {
+  child_id: string;
+  parent_id: string;
   first_name: string;
   last_name: string;
-  birth_year: string;
-  location: string;
+  birth_date: string;
   active: boolean;
-  resignation_requested: boolean;
-  resignation_reason?: string | null;
-  resignation_date?: string | null;
-  created_at?: string;
+  confirmed: boolean;
+  parent_first_name: string;
+  parent_last_name: string;
+  parent_email: string;
+  group_name: string | null;
+}
+
+interface Toast {
+  id: number;
+  kind: 'success' | 'error';
+  message: string;
+}
+
+interface GroupRow {
+  id: string;
+  name: string;
+  level: string | null;
+  teacher_name: string | null;
+  location_name: string | null;
+  students_count: string;
+  active: boolean;
+  max_students: number;
+  teacher_id: string | null;
+}
+
+interface GroupDetail {
+  group: {
+    id: string;
+    name: string;
+    level: string | null;
+    teacher_id: string | null;
+    teacher_name: string | null;
+    max_students: number;
+    active: boolean;
+  };
+  scheduleTemplates: Array<{
+    id: string;
+    day_of_week: number;
+    start_time: string;
+    duration_min: number;
+    location_id: string;
+    location_name: string | null;
+  }>;
+  students: Array<{
+    id: string;
+    child_id: string;
+    first_name: string;
+    last_name: string;
+    birth_date: string;
+    left_at: string | null;
+    confirmed: boolean;
+  }>;
+  nearestLessons: Array<{ id: string; scheduled_at: string; status: string }>;
+  locations: Array<{ id: string; name: string }>;
+}
+
+interface SchoolYearRow {
+  id: string;
+  name: string;
+  date_from: string;
+  date_to: string;
+  active?: boolean;
+  isActive?: boolean;
+}
+
+interface SchoolHolidayRow {
+  id: string;
+  name: string;
+  date_from: string;
+  date_to: string;
+  type: string;
+}
+
+const topTabs: Array<{ key: TabKey; label: string }> = [
+  { key: 'organization', label: 'Organizacja szkoły' },
+  { key: 'users', label: 'Użytkownicy' },
+  { key: 'groups', label: 'Grupy' },
+  { key: 'classes', label: 'Zajęcia' },
+  { key: 'enrollment', label: 'Zgłoszenia' },
+  { key: 'announcements', label: 'Wiadomości' },
+  { key: 'payments', label: 'Płatności' },
+];
+
+const mobileTabs: Array<{ key: MobileTab; label: string }> = [
+  { key: 'organization', label: 'Szkoła' },
+  { key: 'users', label: 'Uczniowie' },
+  { key: 'groups', label: 'Grupy' },
+  { key: 'more', label: 'Więcej' },
+];
+
+const organizationTabs: Array<{ key: OrganizationSubTab; label: string }> = [
+  { key: 'schoolYear', label: 'Rok szkolny' },
+  { key: 'teachers', label: 'Nauczyciele' },
+  { key: 'locations', label: 'Lokalizacje' },
+  { key: 'history', label: 'Historia' },
+];
+
+function SkeletonBlock() {
+  return <div className="h-24 animate-pulse rounded-2xl bg-emerald-100/80" />;
+}
+
+function PlaceholderCard({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="rounded-2xl border border-emerald-100 bg-white p-5">
+      <h3 className="text-lg font-semibold text-zinc-900">{title}</h3>
+      <p className="mt-2 text-sm text-zinc-600">{text}</p>
+    </div>
+  );
 }
 
 export default function AdminPortal() {
-  const [activeTab, setActiveTab] = useState<'users' | 'students' | 'resignations'>('users');
-  const [users, setUsers] = useState<User[]>([]);
-  const [students, setStudents] = useState<Student[]>([]);
-  const [formerStudents, setFormerStudents] = useState<Student[]>([]);
-  const [formerUsers, setFormerUsers] = useState<User[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [loadingFromDb, setLoadingFromDb] = useState(false);
-  const [pendingChanges, setPendingChanges] = useState<{
-    users: Record<string, Partial<User>>;
-    students: Record<string, Partial<Student>>;
-  }>({ users: {}, students: {} });
-  const [usersToDelete, setUsersToDelete] = useState<string[]>([]);
-  const [studentsToDelete, setStudentsToDelete] = useState<string[]>([]);
-  
-  // Filtry dla użytkowników
-  const [userFilterId, setUserFilterId] = useState<string>('');
-  const [userFilterFirstName, setUserFilterFirstName] = useState<string>('');
-  const [userFilterLastName, setUserFilterLastName] = useState<string>('');
-  const [userFilterEmail, setUserFilterEmail] = useState<string>('');
-  const [userFilterConfirmed, setUserFilterConfirmed] = useState<string>('all');
-  const [userFilterAccountType, setUserFilterAccountType] = useState<string>('all');
-  
-  // Filtry dla studentów
-  const [studentFilterId, setStudentFilterId] = useState<string>('');
-  const [studentFilterUserId, setStudentFilterUserId] = useState<string>('');
-  const [studentFilterFirstName, setStudentFilterFirstName] = useState<string>('');
-  const [studentFilterLastName, setStudentFilterLastName] = useState<string>('');
-  const [studentFilterBirthYear, setStudentFilterBirthYear] = useState<string>('');
-  const [studentFilterLocation, setStudentFilterLocation] = useState<string>('all');
-  const [studentFilterActive, setStudentFilterActive] = useState<string>('all');
-  const [studentFilterResignation, setStudentFilterResignation] = useState<string>('all');
-  
-  // Dane do filtrowania (wszystkie pobrane dane)
-  const [allUsers, setAllUsers] = useState<User[]>([]);
-  const [allStudents, setAllStudents] = useState<Student[]>([]);
-  
-  // Liczba rezygnacji (tylko aktywni studenci z chęcią rezygnacji)
-  const studentsWithResignation = allStudents.filter(s => s.resignation_requested && s.active === true).length;
-
-  // Formularze dodawania
-  const [showAddUser, setShowAddUser] = useState(false);
-  const [showAddStudent, setShowAddStudent] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabKey>('organization');
+  const [mobileTab, setMobileTab] = useState<MobileTab>('organization');
+  const [organizationSubTab, setOrganizationSubTab] = useState<OrganizationSubTab>('schoolYear');
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [children, setChildren] = useState<ChildRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [search, setSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState<'ALL' | AdminPortalUserRole>('ALL');
+  const [showInactive, setShowInactive] = useState(false);
+  const [newUserOpen, setNewUserOpen] = useState(false);
   const [newUser, setNewUser] = useState({
+    firstName: '',
+    lastName: '',
     email: '',
     password: '',
+    role: 'PARENT' as Exclude<AdminPortalUserRole, 'ADMIN'>,
+  });
+  const [newParentChildren, setNewParentChildren] = useState<Array<{
+    firstName: string;
+    lastName: string;
+    birthDate: string;
+  }>>([{ firstName: '', lastName: '', birthDate: '' }]);
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [childModalOpen, setChildModalOpen] = useState(false);
+  const [childForm, setChildForm] = useState({
+    parentId: '',
     firstName: '',
     lastName: '',
-    accountType: 'user' as 'user' | 'admin' | 'lektor',
-    confirmed: false,
+    birthDate: '',
+    parentSearch: '',
   });
-  const [newStudent, setNewStudent] = useState({
-    userId: '',
-    firstName: '',
-    lastName: '',
-    birthYear: '',
-    location: '' as '' | 'Paniówki' | 'Halemba' | 'Orzegów' | 'Kochłowice' | 'Bielszowice',
-    active: false,
+  const [enrollmentParents, setEnrollmentParents] = useState<Array<{
+    id: string;
+    firstName: string;
+    lastName: string;
+    email: string;
+    accessLevel: string;
+    children: Array<{ id: string; firstName: string; lastName: string; confirmed: boolean }>;
+  }>>([]);
+  const [enrollmentGroups, setEnrollmentGroups] = useState<Array<{
+    id: string;
+    name: string;
+    location_name: string;
+    schedule: string;
+  }>>([]);
+  const [proposalModalParentId, setProposalModalParentId] = useState<string | null>(null);
+  const [proposalForm, setProposalForm] = useState({ groupId: '', priceMonthly: '0' });
+  const [groups, setGroups] = useState<GroupRow[]>([]);
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const [groupForm, setGroupForm] = useState({
+    id: '',
+    name: '',
+    level: 'A1',
+    teacherId: '',
+    maxStudents: 12,
+  });
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [groupDetail, setGroupDetail] = useState<GroupDetail | null>(null);
+  const [groupLoading, setGroupLoading] = useState(false);
+  const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
+  const [scheduleForm, setScheduleForm] = useState({
+    dayOfWeek: 1,
+    startTime: '16:00',
+    locationId: '',
+    durationMin: 60,
+  });
+  const [addStudentModalOpen, setAddStudentModalOpen] = useState(false);
+  const [studentSearch, setStudentSearch] = useState('');
+  const [selectedChildId, setSelectedChildId] = useState('');
+  const [generateModalOpen, setGenerateModalOpen] = useState(false);
+  const [generateForm, setGenerateForm] = useState(() => {
+    const now = new Date();
+    const plus = new Date();
+    plus.setMonth(plus.getMonth() + 3);
+    return {
+      dateFrom: now.toISOString().slice(0, 10),
+      dateTo: plus.toISOString().slice(0, 10),
+    };
   });
 
-  useEffect(() => {
-    loadUsers();
-    loadStudents();
-    loadFormerStudents();
-    loadFormerUsers();
-  }, []);
+  const [schoolYearLoading, setSchoolYearLoading] = useState(false);
+  const [schoolYears, setSchoolYears] = useState<SchoolYearRow[]>([]);
+  const [schoolHolidays, setSchoolHolidays] = useState<SchoolHolidayRow[]>([]);
+  const [holidayModalOpen, setHolidayModalOpen] = useState(false);
+  const [holidayForm, setHolidayForm] = useState({
+    name: '',
+    dateFrom: '',
+    dateTo: '',
+    type: 'HOLIDAY' as 'HOLIDAY' | 'PUBLIC' | 'SCHOOL' | 'CANCELLED',
+  });
+  const [newYearModalOpen, setNewYearModalOpen] = useState(false);
+  const [newYearForm, setNewYearForm] = useState({ name: '', dateFrom: '', dateTo: '' });
+  const [closeYearModal, setCloseYearModal] = useState<{ id: string; name: string } | null>(null);
+  const [editYearModal, setEditYearModal] = useState<SchoolYearRow | null>(null);
+  /** `school_id` zalogowanego użytkownika (ADMIN może mieć `null`). */
+  const [sessionSchoolId, setSessionSchoolId] = useState<string | null>(null);
 
-  const loadUsers = async () => {
-    setLoadingFromDb(true);
-    try {
-      // Pobierz wszystkich użytkowników - filtrowanie będzie po stronie klienta
-      const url = '/api/admin/users?';
-      const response = await fetch(url);
-      if (response.ok) {
-        const data = await response.json();
-        const fetchedUsers = data.users || [];
-        setAllUsers(fetchedUsers);
-        applyUserFilters(fetchedUsers);
-      }
-    } catch (error) {
-      console.error('Error loading users:', error);
-    } finally {
-      setLoadingFromDb(false);
-    }
-  };
-  
-  const applyUserFilters = (usersToFilter: User[]) => {
-    // Najpierw wyklucz nieaktywnych użytkowników - nie powinni być widoczni w zakładce Użytkownicy
-    // Pokazuj tylko użytkowników z active = true
-    let filtered = usersToFilter.filter(u => u.active === true);
-    
-    if (userFilterId) {
-      filtered = filtered.filter(u => u.id.toLowerCase().includes(userFilterId.toLowerCase()));
-    }
-    if (userFilterFirstName) {
-      filtered = filtered.filter(u => u.first_name.toLowerCase().includes(userFilterFirstName.toLowerCase()));
-    }
-    if (userFilterLastName) {
-      filtered = filtered.filter(u => u.last_name.toLowerCase().includes(userFilterLastName.toLowerCase()));
-    }
-    if (userFilterEmail) {
-      filtered = filtered.filter(u => u.email.toLowerCase().includes(userFilterEmail.toLowerCase()));
-    }
-    if (userFilterAccountType !== 'all') {
-      filtered = filtered.filter(u => u.account_type === userFilterAccountType);
-    }
-    if (userFilterConfirmed !== 'all') {
-      const confirmedFilter = userFilterConfirmed === 'true';
-      filtered = filtered.filter(u => u.confirmed === confirmedFilter);
-    }
-    
-    setUsers(filtered);
+  const pushToast = (kind: Toast['kind'], message: string) => {
+    const id = Date.now() + Math.floor(Math.random() * 1000);
+    setToasts((prev) => [...prev, { id, kind, message }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 2600);
   };
 
-  const loadStudents = async () => {
-    setLoadingFromDb(true);
-    try {
-      // Pobierz wszystkich studentów - filtrowanie będzie po stronie klienta
-      const url = '/api/admin/students?';
-      const response = await fetch(url);
-      if (response.ok) {
-        const data = await response.json();
-        const fetchedStudents = data.students || [];
-        setAllStudents(fetchedStudents);
-        applyStudentFilters(fetchedStudents);
-      } else {
-        console.error('Failed to load students:', response.status, await response.text());
-      }
-    } catch (error) {
-      console.error('Error loading students:', error);
-    } finally {
-      setLoadingFromDb(false);
-    }
-  };
-
-  const loadFormerStudents = async () => {
-    setLoadingFromDb(true);
-    try {
-      const url = '/api/admin/students?';
-      const response = await fetch(url);
-      if (response.ok) {
-        const data = await response.json();
-        const allStudents = data.students || [];
-        // Filtruj tylko nieaktywnych uczniów (active = FALSE)
-        const former = allStudents.filter((s: Student) => s.active === false);
-        setFormerStudents(former);
-      } else {
-        console.error('Failed to load former students:', response.status, await response.text());
-      }
-    } catch (error) {
-      console.error('Error loading former students:', error);
-    } finally {
-      setLoadingFromDb(false);
-    }
-  };
-
-  const loadFormerUsers = async () => {
-    setLoadingFromDb(true);
-    try {
-      const url = '/api/admin/users?';
-      const response = await fetch(url);
-      if (response.ok) {
-        const data = await response.json();
-        const allUsers = data.users || [];
-        // Filtruj tylko nieaktywnych użytkowników (active = false)
-        const former = allUsers.filter((u: User) => u.active === false);
-        setFormerUsers(former);
-      } else {
-        console.error('Failed to load former users:', response.status, await response.text());
-      }
-    } catch (error) {
-      console.error('Error loading former users:', error);
-    } finally {
-      setLoadingFromDb(false);
-    }
-  };
-  
-  const applyStudentFilters = (studentsToFilter: Student[]) => {
-    // Najpierw wyklucz nieaktywnych uczniów - nie powinni być widoczni w zakładce Studenci
-    // Pokazuj tylko studentów z active = true
-    let filtered = studentsToFilter.filter(s => s.active === true);
-    
-    if (studentFilterId) {
-      filtered = filtered.filter(s => s.student_id.toLowerCase().includes(studentFilterId.toLowerCase()));
-    }
-    if (studentFilterUserId) {
-      filtered = filtered.filter(s => s.user_id.toLowerCase().includes(studentFilterUserId.toLowerCase()));
-    }
-    if (studentFilterFirstName) {
-      filtered = filtered.filter(s => s.first_name.toLowerCase().includes(studentFilterFirstName.toLowerCase()));
-    }
-    if (studentFilterLastName) {
-      filtered = filtered.filter(s => s.last_name.toLowerCase().includes(studentFilterLastName.toLowerCase()));
-    }
-    if (studentFilterBirthYear) {
-      filtered = filtered.filter(s => s.birth_year === studentFilterBirthYear);
-    }
-    if (studentFilterLocation !== 'all') {
-      filtered = filtered.filter(s => s.location === studentFilterLocation);
-    }
-    if (studentFilterActive !== 'all') {
-      const activeFilter = studentFilterActive === 'true';
-      filtered = filtered.filter(s => s.active === activeFilter);
-    }
-    if (studentFilterResignation !== 'all') {
-      const resignationFilter = studentFilterResignation === 'true';
-      filtered = filtered.filter(s => s.resignation_requested === resignationFilter);
-    }
-    
-    setStudents(filtered);
-  };
-
-  // Załaduj dane tylko raz przy starcie
-  useEffect(() => {
-    loadUsers();
-    loadStudents();
-  }, []);
-
-  // Automatyczne odświeżanie filtrów dla użytkowników (tekstowe filtry i selecty)
-  useEffect(() => {
-    if (allUsers.length > 0) {
-      applyUserFilters(allUsers);
-    }
-  }, [userFilterId, userFilterFirstName, userFilterLastName, userFilterEmail, userFilterAccountType, userFilterConfirmed, allUsers]);
-
-  // Automatyczne odświeżanie filtrów dla studentów (tekstowe filtry i selecty)
-  useEffect(() => {
-    if (allStudents.length > 0) {
-      applyStudentFilters(allStudents);
-    }
-  }, [studentFilterId, studentFilterUserId, studentFilterFirstName, studentFilterLastName, studentFilterBirthYear, studentFilterLocation, studentFilterActive, studentFilterResignation, allStudents]);
-
-  const handleUserChange = (userId: string, field: keyof User, value: any) => {
-    setPendingChanges(prev => ({
-      ...prev,
-      users: {
-        ...prev.users,
-        [userId]: {
-          ...prev.users[userId],
-          [field]: value,
-        },
-      },
-    }));
-  };
-
-  const handleStudentChange = (studentId: string, field: keyof Student, value: any) => {
-    setPendingChanges(prev => ({
-      ...prev,
-      students: {
-        ...prev.students,
-        [studentId]: {
-          ...prev.students[studentId],
-          [field]: value,
-        },
-      },
-    }));
-  };
-
-  const handleSaveChanges = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      // Zapisz zmiany użytkowników
-      for (const [userId, changes] of Object.entries(pendingChanges.users)) {
-        const response = await fetch(`/api/admin/users/${userId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(changes),
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Failed to update user ${userId}: ${response.status}`);
+      const [uRes, cRes, eRes, gRes, meRes] = await Promise.all([
+        fetch('/api/admin/users'),
+        fetch('/api/admin/children'),
+        fetch('/api/admin/enrollment'),
+        fetch('/api/admin/groups'),
+        fetch('/api/user/me'),
+      ]);
+      if (!uRes.ok || !cRes.ok || !eRes.ok || !gRes.ok) throw new Error('Nie udało się pobrać danych');
+      const uJson = await uRes.json();
+      const cJson = await cRes.json();
+      const eJson = await eRes.json();
+      const gJson = await gRes.json();
+      if (meRes.ok) {
+        const meJson = (await meRes.json()) as { user?: { schoolId?: string | null; role?: string } };
+        const sid = meJson.user?.schoolId ?? null;
+        setSessionSchoolId(sid);
+        if (meJson.user?.role === 'MANAGER' && !sid) {
+          pushToast('error', 'Konto zarządcy nie ma przypisanej szkoły — skontaktuj się z administratorem.');
         }
+      } else {
+        setSessionSchoolId(null);
       }
-
-      // Usuń użytkowników (oznacz jako byłych)
-      for (const userId of usersToDelete) {
-        const response = await fetch(`/api/admin/users/${userId}`, {
-          method: 'DELETE',
-        });
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(`Failed to delete user ${userId}: ${response.status} - ${errorData.message || 'Unknown error'}`);
-        }
-      }
-
-      // Zapisz zmiany studentów
-      for (const [studentId, changes] of Object.entries(pendingChanges.students)) {
-        const response = await fetch(`/api/admin/students/${studentId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(changes),
-        });
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(`Failed to update student ${studentId}: ${response.status} - ${errorData.message || 'Unknown error'}`);
-        }
-      }
-
-      // Usuń studentów (oznacz jako byłych)
-      for (const studentId of studentsToDelete) {
-        const response = await fetch(`/api/admin/students/${studentId}`, {
-          method: 'DELETE',
-        });
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(`Failed to delete student ${studentId}: ${response.status} - ${errorData.message || 'Unknown error'}`);
-        }
-      }
-
-      // Wyczyść pending changes
-      setPendingChanges({ users: {}, students: {} });
-      setUsersToDelete([]);
-      setStudentsToDelete([]);
-
-      // Przeładuj dane
-      await loadUsers();
-      await loadStudents();
-      await loadFormerStudents();
-      await loadFormerUsers();
-
-      alert('Zmiany zostały zapisane!');
+      setUsers((uJson.users ?? []) as AdminUser[]);
+      setChildren((cJson.children ?? []) as ChildRow[]);
+      setEnrollmentParents(eJson.parents ?? []);
+      setEnrollmentGroups(eJson.groups ?? []);
+      setGroups((gJson.groups ?? []) as GroupRow[]);
     } catch (error) {
-      console.error('Error saving changes:', error);
-      alert('Wystąpił błąd podczas zapisywania zmian');
+      console.error(error);
+      pushToast('error', 'Błąd pobierania danych panelu');
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const handleAddUser = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadSchoolYearData = useCallback(async () => {
+    setSchoolYearLoading(true);
     try {
-      const response = await fetch('/api/admin/users', {
+      const yRes = await fetch('/api/admin/school-years');
+      const yJson = (await yRes.json().catch(() => ({}))) as { years?: SchoolYearRow[]; message?: string };
+      if (!yRes.ok) {
+        pushToast(
+          'error',
+          yJson.message ?? `Nie udało się pobrać lat szkolnych (HTTP ${yRes.status}).`,
+        );
+        return;
+      }
+      const years = (yJson.years ?? []) as SchoolYearRow[];
+      setSchoolYears(years);
+      const active = years.find((y) => y.isActive ?? y.active);
+      const hRes = await fetch(
+        active?.id
+          ? `/api/admin/school-holidays?school_year_id=${encodeURIComponent(active.id)}`
+          : '/api/admin/school-holidays'
+      );
+      const hJson = (await hRes.json().catch(() => ({}))) as { holidays?: SchoolHolidayRow[]; message?: string };
+      if (!hRes.ok) {
+        console.error('school-holidays GET', hRes.status, hJson);
+        pushToast(
+          'error',
+          hJson.message ?? `Nie udało się pobrać dni wolnych (HTTP ${hRes.status}). Lista w roku może być pusta.`,
+        );
+        setSchoolHolidays([]);
+        return;
+      }
+      setSchoolHolidays((hJson.holidays ?? []) as SchoolHolidayRow[]);
+    } catch (e) {
+      console.error('loadSchoolYearData', e);
+      pushToast(
+        'error',
+        e instanceof Error ? e.message : 'Nie udało się pobrać roku szkolnego / dni wolnych',
+      );
+    } finally {
+      setSchoolYearLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'organization' && organizationSubTab === 'schoolYear') {
+      void loadSchoolYearData();
+    }
+  }, [activeTab, organizationSubTab, loadSchoolYearData]);
+
+  useEffect(() => {
+    if (mobileTab === 'organization') setActiveTab('organization');
+    if (mobileTab === 'users') setActiveTab('users');
+    if (mobileTab === 'groups') setActiveTab('groups');
+  }, [mobileTab]);
+
+  const filteredUsers = useMemo(() => {
+    return users.filter((user) => {
+      if (!showInactive && !user.active) return false;
+      if (roleFilter !== 'ALL' && user.role !== roleFilter) return false;
+      if (!search.trim()) return true;
+      const q = search.toLowerCase();
+      return (
+        user.first_name.toLowerCase().includes(q) ||
+        user.last_name.toLowerCase().includes(q) ||
+        user.email.toLowerCase().includes(q)
+      );
+    });
+  }, [users, showInactive, roleFilter, search]);
+
+  const parentOptions = useMemo(
+    () =>
+      users.filter((u) => u.role === 'PARENT' && u.active).filter((u) => {
+        const q = childForm.parentSearch.trim().toLowerCase();
+        if (!q) return true;
+        return (
+          `${u.first_name} ${u.last_name}`.toLowerCase().includes(q) ||
+          u.email.toLowerCase().includes(q)
+        );
+      }),
+    [users, childForm.parentSearch]
+  );
+
+  const loadGroupDetail = useCallback(async (groupId: string) => {
+    setGroupLoading(true);
+    try {
+      const res = await fetch(`/api/admin/groups/${groupId}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message ?? 'Nie udało się pobrać szczegółów grupy');
+      setGroupDetail(data as GroupDetail);
+      setSelectedGroupId(groupId);
+    } catch (error) {
+      pushToast('error', error instanceof Error ? error.message : 'Błąd pobierania grupy');
+    } finally {
+      setGroupLoading(false);
+    }
+  }, []);
+
+  const availableChildren = useMemo(() => {
+    if (!groupDetail) return [];
+    const activeInGroup = new Set(groupDetail.students.filter((s) => !s.left_at).map((s) => s.child_id));
+    return children
+      .filter((c) => c.confirmed && c.active && !activeInGroup.has(c.child_id))
+      .filter((c) => {
+        const q = studentSearch.trim().toLowerCase();
+        if (!q) return true;
+        return (
+          `${c.first_name} ${c.last_name}`.toLowerCase().includes(q) ||
+          `${c.parent_first_name} ${c.parent_last_name}`.toLowerCase().includes(q)
+        );
+      });
+  }, [children, groupDetail, studentSearch]);
+
+  const createUser = async () => {
+    if (!newUser.firstName || !newUser.lastName || !newUser.email || !newUser.password) {
+      pushToast('error', 'Uzupełnij wszystkie pola');
+      return;
+    }
+    if (newUser.role === 'PARENT') {
+      if (newParentChildren.length === 0 || newParentChildren.some((child) => !child.firstName || !child.lastName || !child.birthDate)) {
+        pushToast('error', 'Dodaj co najmniej jedno dziecko i uzupełnij jego dane');
+        return;
+      }
+    }
+    setBusy(true);
+    try {
+      const res = await fetch('/api/admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email: newUser.email,
-          password: newUser.password,
           firstName: newUser.firstName,
           lastName: newUser.lastName,
-          accountType: newUser.accountType,
-          confirmed: newUser.confirmed,
+          email: newUser.email,
+          password: newUser.password,
+          role: newUser.role,
+          confirmed: true,
+          accessLevel: newUser.role === 'PARENT' ? 'PENDING' : 'ACTIVE',
         }),
       });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message ?? 'Nie udało się dodać użytkownika');
 
-      if (response.ok) {
-        setShowAddUser(false);
-        setNewUser({
-          email: '',
-          password: '',
-          firstName: '',
-          lastName: '',
-          accountType: 'user',
-          confirmed: false,
-        });
-        await loadUsers();
-        alert('Użytkownik został dodany!');
+      if (newUser.role === 'PARENT') {
+        for (const child of newParentChildren) {
+          const childRes = await fetch('/api/admin/children', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              parentId: data.user.id,
+              firstName: child.firstName,
+              lastName: child.lastName,
+              birthDate: child.birthDate,
+            }),
+          });
+          if (!childRes.ok) {
+            const childData = await childRes.json();
+            throw new Error(childData.message ?? 'Nie udało się dodać dziecka');
+          }
+        }
+        pushToast('success', 'Rodzic i dzieci zostali dodani');
       } else {
-        const data = await response.json();
-        alert(data.message || 'Błąd podczas dodawania użytkownika');
+        pushToast('success', 'Dodano użytkownika');
       }
+
+      setNewUserOpen(false);
+      setNewUser({ firstName: '', lastName: '', email: '', password: '', role: 'PARENT' });
+      setNewParentChildren([{ firstName: '', lastName: '', birthDate: '' }]);
+      await loadData();
     } catch (error) {
-      console.error('Error adding user:', error);
-      alert('Wystąpił błąd');
+      pushToast('error', error instanceof Error ? error.message : 'Błąd dodawania');
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
   };
 
-  const handleAddStudent = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
+  const saveUser = async (user: AdminUser) => {
+    setBusy(true);
     try {
-      const response = await fetch('/api/admin/students', {
-        method: 'POST',
+      const res = await fetch(`/api/admin/users/${user.id}`, {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: newStudent.userId,
-          firstName: newStudent.firstName,
-          lastName: newStudent.lastName,
-          birthYear: newStudent.birthYear,
-          location: newStudent.location,
-          active: newStudent.active,
+          first_name: user.first_name,
+          last_name: user.last_name,
+          email: user.email,
+          role: user.role,
+          confirmed: user.confirmed,
         }),
       });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message ?? 'Aktualizacja nieudana');
+      pushToast('success', 'Zaktualizowano użytkownika');
+      setEditingUserId(null);
+      await loadData();
+    } catch (error) {
+      pushToast('error', error instanceof Error ? error.message : 'Błąd aktualizacji');
+    } finally {
+      setBusy(false);
+    }
+  };
 
-      if (response.ok) {
-        setShowAddStudent(false);
-        setNewStudent({
-          userId: '',
-          firstName: '',
-          lastName: '',
-          birthYear: '',
-          location: '',
-          active: false,
+  const toggleUserActive = async (user: AdminUser) => {
+    setBusy(true);
+    try {
+      if (user.active) {
+        const res = await fetch(`/api/admin/users/${user.id}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message ?? 'Nie udało się dezaktywować');
+        pushToast('success', 'Użytkownik oznaczony jako nieaktywny');
+      } else {
+        const res = await fetch(`/api/admin/users/${user.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ restore: true }),
         });
-        await loadStudents();
-        alert('Student został dodany!');
-      } else {
-        const data = await response.json();
-        alert(data.message || 'Błąd podczas dodawania studenta');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message ?? 'Nie udało się przywrócić');
+        pushToast('success', 'Użytkownik przywrócony');
       }
+      await loadData();
     } catch (error) {
-      console.error('Error adding student:', error);
-      alert('Wystąpił błąd');
+      pushToast('error', error instanceof Error ? error.message : 'Błąd operacji');
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
   };
 
-  const hasPendingChanges = Object.keys(pendingChanges.users).length > 0 ||
-    Object.keys(pendingChanges.students).length > 0 ||
-    usersToDelete.length > 0 ||
-    studentsToDelete.length > 0;
-
-  const handleRefreshData = async () => {
-    if (activeTab === 'users') {
-      await loadUsers();
-    } else if (activeTab === 'students') {
-      await loadStudents();
-    } else if (activeTab === 'resignations') {
-      await loadFormerStudents();
-      await loadFormerUsers();
+  const organizationLocationNames = useMemo(() => {
+    const set = new Set<string>();
+    for (const g of groups) {
+      if (g.location_name?.trim()) set.add(g.location_name.trim());
     }
+    return [...set].sort((a, b) => a.localeCompare(b, 'pl'));
+  }, [groups]);
+
+  const teachersList = useMemo(
+    () =>
+      users
+        .filter((u) => u.role === 'TEACHER')
+        .sort((a, b) => a.last_name.localeCompare(b.last_name, 'pl')),
+    [users]
+  );
+
+  const renderUsers = () => (
+    <div className="space-y-4">
+      <section className="rounded-2xl border border-emerald-100 bg-white p-4">
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Szukaj po imieniu, nazwisku, emailu"
+            className="rounded-xl border border-emerald-200 px-3 py-2"
+          />
+          <select
+            value={roleFilter}
+            onChange={(e) => setRoleFilter(e.target.value as 'ALL' | AdminPortalUserRole)}
+            className="rounded-xl border border-emerald-200 px-3 py-2"
+          >
+            <option value="ALL">Wszystkie role</option>
+            <option value="PARENT">Rodzice</option>
+            <option value="TEACHER">Nauczyciele</option>
+            <option value="MANAGER">Zarządcy szkoły</option>
+            <option value="ADMIN">Super admin</option>
+            <option value="CHILD">Uczniowie (konto)</option>
+          </select>
+          <label className="flex items-center gap-2 rounded-xl border border-emerald-200 px-3 py-2 text-sm">
+            <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
+            Pokaż nieaktywnych
+          </label>
+          <button
+            onClick={() => setNewUserOpen((v) => !v)}
+            className="rounded-xl bg-[#0f6e56] px-3 py-2 font-semibold text-white"
+          >
+            {newUserOpen ? 'Zamknij formularz' : 'Dodaj użytkownika'}
+          </button>
+        </div>
+
+        {newUserOpen && (
+          <div className="mt-4 space-y-3">
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-5">
+            <input className="rounded-xl border border-emerald-200 px-3 py-2" placeholder="Imię" value={newUser.firstName} onChange={(e) => setNewUser((prev) => ({ ...prev, firstName: e.target.value }))} />
+            <input className="rounded-xl border border-emerald-200 px-3 py-2" placeholder="Nazwisko" value={newUser.lastName} onChange={(e) => setNewUser((prev) => ({ ...prev, lastName: e.target.value }))} />
+            <input className="rounded-xl border border-emerald-200 px-3 py-2" placeholder="Email" type="email" value={newUser.email} onChange={(e) => setNewUser((prev) => ({ ...prev, email: e.target.value }))} />
+            <input className="rounded-xl border border-emerald-200 px-3 py-2" placeholder="Hasło" type="password" value={newUser.password} onChange={(e) => setNewUser((prev) => ({ ...prev, password: e.target.value }))} />
+            <div className="flex gap-2">
+              <select
+                className="flex-1 rounded-xl border border-emerald-200 px-3 py-2"
+                value={newUser.role}
+                onChange={(e) =>
+                  setNewUser((prev) => ({ ...prev, role: e.target.value as Exclude<AdminPortalUserRole, 'ADMIN'> }))
+                }
+              >
+                <option value="PARENT">Rodzic</option>
+                <option value="TEACHER">Nauczyciel</option>
+                <option value="MANAGER">Zarządca szkoły</option>
+                <option value="CHILD">Uczeń (konto)</option>
+              </select>
+              <button disabled={busy} onClick={createUser} className="rounded-xl bg-emerald-600 px-4 py-2 text-white disabled:opacity-60">Dodaj</button>
+            </div>
+            </div>
+
+            {newUser.role === 'PARENT' && (
+              <div className="rounded-xl border border-emerald-200 p-3">
+                <p className="mb-2 font-semibold text-zinc-800">Dane dziecka</p>
+                <div className="space-y-2">
+                  {newParentChildren.map((child, idx) => (
+                    <div key={idx} className="grid grid-cols-1 gap-2 md:grid-cols-4">
+                      <input
+                        className="rounded-xl border border-emerald-200 px-3 py-2"
+                        placeholder="Imię dziecka"
+                        value={child.firstName}
+                        onChange={(e) =>
+                          setNewParentChildren((prev) =>
+                            prev.map((row, i) => (i === idx ? { ...row, firstName: e.target.value } : row))
+                          )
+                        }
+                      />
+                      <input
+                        className="rounded-xl border border-emerald-200 px-3 py-2"
+                        placeholder="Nazwisko dziecka"
+                        value={child.lastName}
+                        onChange={(e) =>
+                          setNewParentChildren((prev) =>
+                            prev.map((row, i) => (i === idx ? { ...row, lastName: e.target.value } : row))
+                          )
+                        }
+                      />
+                      <input
+                        className="rounded-xl border border-emerald-200 px-3 py-2"
+                        type="date"
+                        value={child.birthDate}
+                        onChange={(e) =>
+                          setNewParentChildren((prev) =>
+                            prev.map((row, i) => (i === idx ? { ...row, birthDate: e.target.value } : row))
+                          )
+                        }
+                      />
+                      <button
+                        type="button"
+                        className="rounded-xl bg-zinc-200 px-3 py-2"
+                        disabled={newParentChildren.length === 1}
+                        onClick={() =>
+                          setNewParentChildren((prev) => prev.filter((_, i) => i !== idx))
+                        }
+                      >
+                        Usuń
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="mt-3 rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white"
+                  onClick={() =>
+                    setNewParentChildren((prev) => [...prev, { firstName: '', lastName: '', birthDate: '' }])
+                  }
+                >
+                  + Dodaj kolejne dziecko
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+
+      <section className="overflow-hidden rounded-2xl border border-emerald-100 bg-white">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px] text-sm">
+            <thead className="bg-emerald-50 text-zinc-700">
+              <tr>
+                <th className="px-4 py-3 text-left">Użytkownik</th>
+                <th className="px-4 py-3 text-left">Email</th>
+                <th className="px-4 py-3 text-left">Rola</th>
+                <th className="px-4 py-3 text-left">Status</th>
+                <th className="px-4 py-3 text-left">Akcje</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredUsers.map((user) => {
+                const editing = editingUserId === user.id;
+                return (
+                  <tr key={user.id} className="border-t border-emerald-50">
+                    <td className="px-4 py-3">
+                      {editing ? (
+                        <div className="grid grid-cols-2 gap-2">
+                          <input className="rounded-lg border border-emerald-200 px-2 py-1" value={user.first_name} onChange={(e) => setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, first_name: e.target.value } : u)))} />
+                          <input className="rounded-lg border border-emerald-200 px-2 py-1" value={user.last_name} onChange={(e) => setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, last_name: e.target.value } : u)))} />
+                        </div>
+                      ) : (
+                        <span>{user.first_name} {user.last_name}</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      {editing ? (
+                        <input className="w-full rounded-lg border border-emerald-200 px-2 py-1" value={user.email} onChange={(e) => setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, email: e.target.value } : u)))} />
+                      ) : user.email}
+                    </td>
+                    <td className="px-4 py-3">
+                      {editing ? (
+                        <select
+                          className="rounded-lg border border-emerald-200 px-2 py-1"
+                          value={user.role ?? 'PARENT'}
+                          onChange={(e) =>
+                            setUsers((prev) =>
+                              prev.map((u) =>
+                                u.id === user.id ? { ...u, role: e.target.value as AdminPortalUserRole } : u
+                              )
+                            )
+                          }
+                        >
+                          <option value="PARENT">Rodzic</option>
+                          <option value="TEACHER">Nauczyciel</option>
+                          <option value="MANAGER">Zarządca szkoły</option>
+                          <option value="CHILD">Uczeń</option>
+                          <option value="ADMIN">Super admin</option>
+                        </select>
+                      ) : (
+                        <span>{user.role}</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`rounded-full px-2 py-1 text-xs font-semibold ${user.active ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-700'}`}>
+                        {user.active ? 'aktywny' : 'nieaktywny'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-2">
+                        {editing ? (
+                          <>
+                            <button disabled={busy} onClick={() => saveUser(user)} className="rounded-lg bg-emerald-600 px-3 py-1 text-white">Zapisz</button>
+                            <button onClick={() => setEditingUserId(null)} className="rounded-lg bg-zinc-200 px-3 py-1">Anuluj</button>
+                          </>
+                        ) : (
+                          <>
+                            <button onClick={() => setEditingUserId(user.id)} className="rounded-lg bg-zinc-200 px-3 py-1">Edytuj</button>
+                            <button disabled={busy} onClick={() => toggleUserActive(user)} className={`rounded-lg px-3 py-1 text-white ${user.active ? 'bg-red-600' : 'bg-emerald-600'}`}>
+                              {user.active ? 'Soft-delete' : 'Przywróć'}
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="overflow-hidden rounded-2xl border border-emerald-100 bg-white">
+        <div className="flex items-center justify-between border-b border-emerald-50 px-4 py-3">
+          <h3 className="font-semibold">Dzieci</h3>
+          <button
+            onClick={() => setChildModalOpen(true)}
+            className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white"
+          >
+            + Dodaj dziecko
+          </button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[820px] text-sm">
+            <thead className="bg-emerald-50 text-zinc-700">
+              <tr>
+                <th className="px-4 py-3 text-left">Imię</th>
+                <th className="px-4 py-3 text-left">Nazwisko</th>
+                <th className="px-4 py-3 text-left">Data urodzenia</th>
+                <th className="px-4 py-3 text-left">Rodzic</th>
+                <th className="px-4 py-3 text-left">Status</th>
+                <th className="px-4 py-3 text-left">Grupa</th>
+              </tr>
+            </thead>
+            <tbody>
+              {children.map((child) => (
+                <tr key={child.child_id} className="border-t border-emerald-50">
+                  <td className="px-4 py-3">{child.first_name}</td>
+                  <td className="px-4 py-3">{child.last_name}</td>
+                  <td className="px-4 py-3">{child.birth_date}</td>
+                  <td className="px-4 py-3">{child.parent_first_name} {child.parent_last_name}</td>
+                  <td className="px-4 py-3">
+                    <span className={`rounded-full px-2 py-1 text-xs font-semibold ${child.confirmed ? 'bg-emerald-100 text-emerald-700' : 'bg-yellow-100 text-yellow-800'}`}>
+                      {child.confirmed ? 'potwierdzony' : 'niepotwierdzony'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">{child.group_name ?? '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+
+  const orgTabLabel = organizationTabs.find((t) => t.key === organizationSubTab)?.label ?? '';
+
+  const renderOrganization = () => {
+    const tabBtn = (active: boolean) =>
+      active
+        ? 'border-[#0f6e56] bg-[#0f6e56] text-white shadow-sm'
+        : 'border-emerald-100 bg-emerald-50/50 text-zinc-800 hover:border-emerald-200 hover:bg-emerald-50';
+
+    return (
+      <section className="rounded-2xl border border-emerald-100 bg-white p-4 shadow-sm sm:p-6">
+        <header className="border-b border-emerald-50 pb-4">
+          <h2 className="text-xl font-bold text-[#0f6e56] sm:text-2xl">Organizacja szkoły</h2>
+          <p className="mt-1 text-sm text-zinc-600">
+            Konfiguracja roku szkolnego, kadry, sal oraz archiwum zmian.
+          </p>
+        </header>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {organizationTabs.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setOrganizationSubTab(t.key)}
+              className={`rounded-full border px-4 py-2.5 text-sm font-semibold transition ${tabBtn(organizationSubTab === t.key)}`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-6 rounded-2xl border border-emerald-100 bg-white p-4 sm:p-5">
+          <h3 className="text-lg font-bold text-[#0f6e56] sm:text-xl">{orgTabLabel}</h3>
+
+          {organizationSubTab === 'schoolYear' && (
+            <div className="mt-4 space-y-4">
+              <p className="text-sm text-zinc-600">
+                Jeden aktywny rok szkolny naraz. Generowanie zajęć i dni wolnych musi mieścić się w jego zakresie dat.
+              </p>
+
+              {schoolYearLoading ? (
+                <div className="space-y-3">
+                  <div className="h-24 animate-pulse rounded-2xl bg-emerald-100/80" />
+                  <div className="h-32 animate-pulse rounded-2xl bg-emerald-100/60" />
+                  <div className="h-40 animate-pulse rounded-2xl bg-emerald-100/50" />
+                </div>
+              ) : (
+                <>
+                  {(() => {
+                    const active = schoolYears.find((y) => y.isActive ?? y.active);
+                    const inactive = schoolYears.filter((y) => !(y.isActive ?? y.active));
+                    return (
+                      <>
+                        {active ? (
+                          <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                              <div>
+                                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-800">Aktywny rok</p>
+                                <p className="mt-1 text-lg font-bold text-zinc-900">{active.name}</p>
+                                <p className="mt-1 text-sm text-zinc-600">
+                                  {active.date_from} — {active.date_to}
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => setCloseYearModal({ id: active.id, name: active.name })}
+                                className="shrink-0 rounded-xl border-2 border-red-400 bg-white px-4 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-50 disabled:opacity-50"
+                              >
+                                Zakończ rok szkolny
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="rounded-xl border border-amber-200 bg-amber-50/60 px-4 py-3 text-sm text-amber-900">
+                            Brak aktywnego roku szkolnego — dodaj nowy, aby planować zajęcia i dni wolne.
+                          </p>
+                        )}
+
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            disabled={busy || !!active}
+                            onClick={() => {
+                              setNewYearForm({ name: '', dateFrom: '', dateTo: '' });
+                              setNewYearModalOpen(true);
+                            }}
+                            className="rounded-xl bg-[#0f6e56] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0c5a47] disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            + Nowy rok szkolny
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy || !active}
+                            onClick={() => {
+                              setHolidayForm({
+                                name: '',
+                                dateFrom: active?.date_from ?? '',
+                                dateTo: active?.date_from ?? '',
+                                type: 'HOLIDAY',
+                              });
+                              setHolidayModalOpen(true);
+                            }}
+                            className="rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm font-semibold text-[#0f6e56] shadow-sm transition hover:bg-emerald-50 disabled:opacity-50"
+                          >
+                            + Dodaj dzień wolny
+                          </button>
+                        </div>
+
+                        {active && (
+                          <div className="rounded-xl border border-emerald-100 bg-white p-4">
+                            <h4 className="text-sm font-semibold text-zinc-800">Dni wolne (aktywny rok)</h4>
+                            {schoolHolidays.length === 0 ? (
+                              <p className="mt-2 text-sm text-zinc-500">Brak wpisów.</p>
+                            ) : (
+                              <ul className="mt-3 divide-y divide-emerald-100">
+                                {schoolHolidays.map((h) => (
+                                  <li key={h.id} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
+                                    <div>
+                                      <p className="font-medium text-zinc-900">{h.name}</p>
+                                      <p className="text-xs text-zinc-600">
+                                        {h.date_from} — {h.date_to} · {h.type}
+                                      </p>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      disabled={busy}
+                                      onClick={async () => {
+                                        if (!confirm('Usunąć ten dzień wolny?')) return;
+                                        setBusy(true);
+                                        try {
+                                          const res = await fetch(`/api/admin/school-holidays/${h.id}`, {
+                                            method: 'DELETE',
+                                          });
+                                          const data = await res.json().catch(() => ({}));
+                                          if (!res.ok) throw new Error(data.message ?? 'Błąd');
+                                          pushToast('success', 'Usunięto dzień wolny');
+                                          await loadSchoolYearData();
+                                        } catch (e) {
+                                          pushToast('error', e instanceof Error ? e.message : 'Błąd usuwania');
+                                        } finally {
+                                          setBusy(false);
+                                        }
+                                      }}
+                                      className="self-start rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 sm:self-center"
+                                    >
+                                      Usuń
+                                    </button>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        )}
+
+                        {inactive.length > 0 && (
+                          <div className="rounded-xl border border-emerald-100 bg-zinc-50/50 p-4">
+                            <h4 className="text-sm font-semibold text-zinc-800">Poprzednie lata</h4>
+                            <ul className="mt-2 space-y-2">
+                              {inactive.map((y) => (
+                                <li
+                                  key={y.id}
+                                  className="flex flex-col gap-2 rounded-lg border border-emerald-100 bg-white px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+                                >
+                                  <div>
+                                    <p className="font-medium text-zinc-900">{y.name}</p>
+                                    <p className="text-xs text-zinc-600">
+                                      {y.date_from} — {y.date_to}
+                                    </p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="text-xs font-semibold text-[#0f6e56] underline"
+                                    onClick={() => setEditYearModal(y)}
+                                  >
+                                    Edytuj
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </>
+              )}
+            </div>
+          )}
+
+          {organizationSubTab === 'teachers' && (
+            <div className="mt-4 space-y-4">
+              <p className="text-sm text-zinc-600">
+                Lista nauczycieli przypisanych do Harry English. Aktywni mogą być wybierani przy tworzeniu grup.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <span className="rounded-full bg-[#0f6e56] px-3 py-1 text-xs font-semibold text-white">Wszyscy</span>
+                <span className="rounded-full border border-emerald-100 bg-emerald-50/60 px-3 py-1 text-xs font-semibold text-zinc-700">
+                  Tylko aktywni
+                </span>
+              </div>
+              <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                {teachersList.length === 0 ? (
+                  <p className="text-sm text-zinc-600">Brak nauczycieli w bazie — dodaj konto z rolą „Nauczyciel” w zakładce Użytkownicy.</p>
+                ) : (
+                  teachersList.map((t) => (
+                    <div
+                      key={t.id}
+                      className="flex flex-col justify-between gap-2 rounded-xl border border-emerald-100 bg-white px-4 py-3 sm:flex-row sm:items-center"
+                    >
+                      <div>
+                        <p className="font-semibold text-zinc-900">
+                          {t.first_name} {t.last_name}
+                        </p>
+                        <p className="text-sm text-zinc-600">{t.email}</p>
+                      </div>
+                      <span
+                        className={`self-start rounded-full px-2 py-1 text-xs font-semibold sm:self-center ${
+                          t.active ? 'bg-emerald-100 text-emerald-800' : 'bg-zinc-100 text-zinc-600'
+                        }`}
+                      >
+                        {t.active ? 'Aktywny' : 'Nieaktywny'}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
+          {organizationSubTab === 'locations' && (
+            <div className="mt-4 space-y-4">
+              <p className="text-sm text-zinc-600">
+                Lokalizacje zajęć — obecnie wykryte z przypisań grup. Docelowo pełna edycja (dodawanie, kolejność, wyłączanie).
+              </p>
+              <div className="rounded-xl border border-dashed border-emerald-200 bg-emerald-50/30 p-4 text-sm text-zinc-600">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                  <label className="flex-1">
+                    <span className="mb-1 block text-xs font-semibold text-zinc-700">Nowa lokalizacja</span>
+                    <input
+                      disabled
+                      placeholder="np. Paniówki — sala 2"
+                      className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-500"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    disabled
+                    className="rounded-xl bg-[#0f6e56]/50 px-4 py-2 text-sm font-semibold text-white"
+                  >
+                    Dodaj
+                  </button>
+                </div>
+              </div>
+              <ul className="divide-y divide-emerald-100 rounded-xl border border-emerald-100">
+                {organizationLocationNames.length === 0 ? (
+                  <li className="px-4 py-6 text-sm text-zinc-600">Brak lokalizacji w danych grup — utwórz grupę z lokalizacją w module Grupy.</li>
+                ) : (
+                  organizationLocationNames.map((name) => (
+                    <li key={name} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
+                      <span className="font-medium text-zinc-900">{name}</span>
+                      <span className="text-xs text-zinc-500">tylko odczyt</span>
+                    </li>
+                  ))
+                )}
+              </ul>
+            </div>
+          )}
+
+          {organizationSubTab === 'history' && (
+            <div className="mt-4 space-y-3">
+              <p className="text-sm text-zinc-600">
+                Archiwum lat szkolnych i istotnych zmian konfiguracji szkoły.
+              </p>
+              <div className="max-h-[380px] space-y-2 overflow-y-auto pr-1">
+                {[
+                  { title: 'Rok 2024/2025', status: 'nieaktywny', range: '2024-09-01 — 2025-08-31' },
+                  { title: 'Rok 2023/2024', status: 'nieaktywny', range: '2023-09-01 — 2024-08-31' },
+                ].map((row) => (
+                  <div key={row.title} className="rounded-xl border border-emerald-100 bg-white px-4 py-3">
+                    <p className="font-semibold text-[#0f6e56]">
+                      {row.title}{' '}
+                      <span className="font-normal text-zinc-500">· {row.status}</span>
+                    </p>
+                    <p className="mt-1 text-sm text-zinc-600">{row.range}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+    );
   };
 
-  // Wyciągnij unikalne lata urodzenia z bazy (tylko aktywni uczniowie)
-  const availableBirthYears = Array.from(
-    new Set(
-      allStudents
-        .filter(s => s.active === true && s.birth_year)
-        .map(s => s.birth_year)
-        .filter(year => year && year.trim() !== '')
-    )
-  ).sort((a, b) => b.localeCompare(a)); // Sortuj malejąco (najnowsze najpierw)
-
-  const handleRestoreStudent = async (studentId: string) => {
-    try {
-      setLoading(true);
-      const response = await fetch(`/api/admin/students/${studentId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ restore: true }),
-      });
-      if (response.ok) {
-        await loadFormerStudents();
-        await loadStudents(); // Odśwież też listę studentów
-        await loadUsers(); // Odśwież też listę użytkowników (rodzic mógł zostać przywrócony)
-        await loadFormerUsers(); // Odśwież też listę byłych użytkowników
-        alert('Student został przywrócony');
-      } else {
-        const errorData = await response.json().catch(() => ({}));
-        alert(errorData.message || 'Błąd podczas przywracania studenta');
-      }
-    } catch (error) {
-      console.error('Error restoring student:', error);
-      alert('Błąd podczas przywracania studenta');
-    } finally {
-      setLoading(false);
+  const renderGroups = () => {
+    if (groupLoading) {
+      return (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <SkeletonBlock />
+          <SkeletonBlock />
+        </div>
+      );
     }
+
+    if (selectedGroupId && groupDetail) {
+      return (
+        <div className="space-y-4">
+          <section className="rounded-2xl border border-emerald-100 bg-white p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-xl font-semibold">{groupDetail.group.name}</h3>
+                <p className="text-sm text-zinc-600">
+                  Poziom: {groupDetail.group.level ?? '-'} · Nauczyciel: {groupDetail.group.teacher_name ?? '-'}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="rounded-xl bg-emerald-600 px-3 py-2 text-white"
+                  onClick={() => {
+                    setGroupForm({
+                      id: groupDetail.group.id,
+                      name: groupDetail.group.name,
+                      level: groupDetail.group.level ?? 'inne',
+                      teacherId: groupDetail.group.teacher_id ?? '',
+                      maxStudents: groupDetail.group.max_students,
+                    });
+                    setGroupModalOpen(true);
+                  }}
+                >
+                  Edytuj
+                </button>
+                <button
+                  className="rounded-xl bg-zinc-200 px-3 py-2"
+                  onClick={() => {
+                    setSelectedGroupId(null);
+                    setGroupDetail(null);
+                  }}
+                >
+                  Wróć do listy
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-emerald-100 bg-white p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h4 className="font-semibold">Harmonogram</h4>
+              <button
+                className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white"
+                onClick={() => setScheduleModalOpen(true)}
+              >
+                + Dodaj termin
+              </button>
+            </div>
+            <div className="space-y-2 text-sm">
+              {groupDetail.scheduleTemplates.map((st) => (
+                <div key={st.id} className="flex items-center justify-between rounded-xl border border-emerald-100 p-3">
+                  <div>
+                    <p>
+                      Dzień {st.day_of_week} · {st.start_time.slice(0, 5)} · {st.duration_min} min
+                    </p>
+                    <p className="text-zinc-600">{st.location_name ?? '-'}</p>
+                  </div>
+                  <button
+                    className="rounded-lg bg-red-600 px-3 py-1 text-white"
+                    onClick={async () => {
+                      const res = await fetch(`/api/admin/schedule-templates/${st.id}`, { method: 'DELETE' });
+                      if (!res.ok) {
+                        pushToast('error', 'Nie udało się usunąć terminu');
+                        return;
+                      }
+                      pushToast('success', 'Termin usunięty');
+                      await loadGroupDetail(selectedGroupId);
+                    }}
+                  >
+                    Usuń
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-emerald-100 bg-white p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h4 className="font-semibold">Uczniowie grupy</h4>
+              <button
+                className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white"
+                onClick={() => setAddStudentModalOpen(true)}
+              >
+                + Dodaj ucznia
+              </button>
+            </div>
+            <div className="space-y-2 text-sm">
+              {groupDetail.students.map((st) => (
+                <div key={st.id} className="flex items-center justify-between rounded-xl border border-emerald-100 p-3">
+                  <div>
+                    <p>{st.first_name} {st.last_name}</p>
+                    <p className="text-zinc-600">
+                      {st.birth_date} · {st.left_at ? 'były' : 'aktywny'}
+                    </p>
+                  </div>
+                  {!st.left_at && (
+                    <button
+                      className="rounded-lg bg-red-600 px-3 py-1 text-white"
+                      onClick={async () => {
+                        const res = await fetch(`/api/admin/group-students/${st.id}`, { method: 'DELETE' });
+                        if (!res.ok) {
+                          pushToast('error', 'Nie udało się usunąć ucznia z grupy');
+                          return;
+                        }
+                        pushToast('success', 'Uczeń usunięty z grupy');
+                        await loadGroupDetail(selectedGroupId);
+                      }}
+                    >
+                      Usuń z grupy
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-emerald-100 bg-white p-4">
+            <div className="flex items-center justify-between">
+              <h4 className="font-semibold">Generowanie zajęć</h4>
+              <button
+                className="rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white"
+                onClick={() => setGenerateModalOpen(true)}
+              >
+                Generuj zajęcia z harmonogramu
+              </button>
+            </div>
+          </section>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-4">
+        <section className="rounded-2xl border border-emerald-100 bg-white p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="font-semibold">Grupy</h3>
+            <button
+              className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white"
+              onClick={() => {
+                setGroupForm({ id: '', name: '', level: 'A1', teacherId: '', maxStudents: 12 });
+                setGroupModalOpen(true);
+              }}
+            >
+              + Nowa grupa
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[860px] text-sm">
+              <thead className="bg-emerald-50 text-zinc-700">
+                <tr>
+                  <th className="px-4 py-3 text-left">Nazwa</th>
+                  <th className="px-4 py-3 text-left">Poziom</th>
+                  <th className="px-4 py-3 text-left">Nauczyciel</th>
+                  <th className="px-4 py-3 text-left">Lokalizacja</th>
+                  <th className="px-4 py-3 text-left">Uczniowie</th>
+                  <th className="px-4 py-3 text-left">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {groups.map((g) => (
+                  <tr
+                    key={g.id}
+                    className="cursor-pointer border-t border-emerald-50 hover:bg-emerald-50/40"
+                    onClick={() => loadGroupDetail(g.id)}
+                  >
+                    <td className="px-4 py-3">{g.name}</td>
+                    <td className="px-4 py-3">{g.level ?? '-'}</td>
+                    <td className="px-4 py-3">{g.teacher_name ?? '-'}</td>
+                    <td className="px-4 py-3">{g.location_name ?? '-'}</td>
+                    <td className="px-4 py-3">{g.students_count}</td>
+                    <td className="px-4 py-3">
+                      <span className={`rounded-full px-2 py-1 text-xs font-semibold ${g.active ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-700'}`}>
+                        {g.active ? 'aktywna' : 'nieaktywna'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    );
   };
 
-  const handleRestoreUser = async (userId: string) => {
-    try {
-      setLoading(true);
-      const response = await fetch(`/api/admin/users/${userId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ restore: true }),
-      });
-      if (response.ok) {
-        await loadFormerUsers();
-        await loadUsers(); // Odśwież też listę użytkowników
-        await loadFormerStudents(); // Odśwież też listę byłych uczniów (mogą być przywróceni razem z użytkownikiem)
-        await loadStudents(); // Odśwież też listę studentów
-        alert('Użytkownik został przywrócony');
-      } else {
-        const errorData = await response.json().catch(() => ({}));
-        alert(errorData.message || 'Błąd podczas przywracania użytkownika');
-      }
-    } catch (error) {
-      console.error('Error restoring user:', error);
-      alert('Błąd podczas przywracania użytkownika');
-    } finally {
-      setLoading(false);
+  const renderContent = () => {
+    if (loading) {
+      return (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <SkeletonBlock />
+          <SkeletonBlock />
+          <SkeletonBlock />
+          <SkeletonBlock />
+        </div>
+      );
     }
+    if (activeTab === 'organization') return renderOrganization();
+    if (activeTab === 'users') return renderUsers();
+    if (activeTab === 'groups') return renderGroups();
+    if (activeTab === 'classes') return <PlaceholderCard title="Zajęcia" text="Tutaj będzie kalendarz i lista zajęć z możliwością tworzenia szablonów." />;
+    if (activeTab === 'payments')
+      return (
+        <PlaceholderCard
+          title="Płatności"
+          text="Historia wpłat, subskrypcji i przypomnień o terminach — moduł zostanie rozbudowany o listę transakcji i eksport."
+        />
+      );
+    if (activeTab === 'enrollment') return (
+      <section className="rounded-2xl border border-emerald-100 bg-white p-4 space-y-3">
+        {enrollmentParents
+          .filter((parent) => parent.accessLevel === 'PENDING' || parent.accessLevel === 'PROPOSED')
+          .map((parent) => (
+          <div key={parent.id} className="rounded-xl border border-emerald-100 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="font-semibold">{parent.firstName} {parent.lastName}</p>
+                <p className="text-sm text-zinc-600">{parent.email}</p>
+                <p className="text-xs text-zinc-500 mt-1">Status: {parent.accessLevel}</p>
+              </div>
+              <button
+                className="rounded-xl bg-[#0f6e56] px-3 py-2 text-white text-sm"
+                onClick={() => {
+                  setProposalModalParentId(parent.id);
+                  setProposalForm({ groupId: '', priceMonthly: '0' });
+                }}
+              >
+                Zaproponuj grupę
+              </button>
+            </div>
+            <p className="mt-2 text-sm text-zinc-600">
+              Dzieci: {parent.children.map((child) => `${child.firstName} ${child.lastName}`).join(', ') || 'brak'}
+            </p>
+          </div>
+        ))}
+      </section>
+    );
+    if (activeTab === 'announcements')
+      return (
+        <PlaceholderCard
+          title="Wiadomości"
+          text="Wysyłka wiadomości do ról lub wszystkich użytkowników zostanie podłączona pod dedykowany endpoint."
+        />
+      );
+    return <PlaceholderCard title="Panel" text="Nieznana zakładka." />;
   };
 
   return (
-    <div className="space-y-6">
-      {/* Loading overlay */}
-      {loadingFromDb && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
-          <div className="bg-white rounded-xl p-8 flex flex-col items-center gap-4 shadow-2xl">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#175244]"></div>
-            <p className="text-gray-700 font-medium">Pobieranie danych z bazy...</p>
+    <div className="pb-24" data-session-school-id={sessionSchoolId ?? ''}>
+      <div className="rounded-3xl border border-emerald-100 bg-white">
+        <nav className="no-scrollbar overflow-x-auto border-b border-emerald-100">
+          <div className="flex min-w-max gap-2 p-2">
+            {topTabs.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveTab(tab.key)}
+                className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                  activeTab === tab.key
+                    ? 'border-[#0f6e56] bg-[#0f6e56] text-white shadow-sm'
+                    : 'border-transparent bg-emerald-50/60 text-zinc-800 hover:border-emerald-200 hover:bg-emerald-50'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
-        </div>
-      )}
-
-      {/* Powiadomienie o rezygnacjach */}
-      {studentsWithResignation > 0 && (
-        <div className="bg-red-50 border-2 border-red-400 rounded-xl p-4 mb-4">
-          <p className="text-red-800 font-semibold text-lg">
-            ⚠️ Uwaga: {studentsWithResignation} {studentsWithResignation === 1 ? 'rodzic zgłosił' : studentsWithResignation < 5 ? 'rodziców zgłosiło' : 'rodziców zgłosiło'} chęć rezygnacji z kursu
-          </p>
-          <p className="text-red-700 text-sm mt-1">
-            Sprawdź zakładkę "Studenci" i użyj filtra "Chęć rezygnacji" aby zobaczyć szczegóły.
-          </p>
-        </div>
-      )}
-
-      {/* Przycisk Zapisz */}
-      {hasPendingChanges && (
-        <div className="bg-yellow-50 border-2 border-yellow-400 rounded-xl p-4 flex justify-between items-center">
-          <p className="text-yellow-800 font-medium">
-            Masz niezapisane zmiany
-          </p>
-          <button
-            onClick={handleSaveChanges}
-            disabled={loading}
-            className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-semibold disabled:opacity-50"
-          >
-            {loading ? 'Zapisywanie...' : '💾 Zapisz zmiany'}
-          </button>
-        </div>
-      )}
-
-      {/* Tabs */}
-      <div className="bg-white rounded-xl p-2 border border-gray-200 flex gap-2">
-        <button
-          onClick={() => setActiveTab('users')}
-          className={`px-6 py-3 text-lg font-bold transition-all rounded-lg ${
-            activeTab === 'users'
-              ? 'bg-[#175244] text-white shadow-lg'
-              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-          }`}
-        >
-          👥 Użytkownicy
-        </button>
-        <button
-          onClick={() => setActiveTab('students')}
-          className={`px-6 py-3 text-lg font-bold transition-all rounded-lg ${
-            activeTab === 'students'
-              ? 'bg-[#175244] text-white shadow-lg'
-              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-          }`}
-        >
-          🎓 Studenci
-        </button>
-        <button
-          onClick={() => setActiveTab('resignations')}
-          className={`px-6 py-3 text-lg font-bold transition-all rounded-lg ${
-            activeTab === 'resignations'
-              ? 'bg-[#175244] text-white shadow-lg'
-              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-          }`}
-        >
-          📋 Rezygnacje
-        </button>
+        </nav>
       </div>
 
-      {/* Users Tab */}
-      {activeTab === 'users' && (
-        <div className="space-y-4">
-          {/* Filtry */}
-          <div className="bg-white p-4 rounded-xl border border-gray-200">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold text-gray-800">Filtry</h3>
-              <button
-                onClick={handleRefreshData}
-                disabled={loadingFromDb}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold disabled:opacity-50 flex items-center gap-2 hidden"
-              >
-                <span>🔄</span>
-                Pobierz z bazy
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-4 items-end">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">ID</label>
-              <input
-                type="text"
-                placeholder="Filtruj po ID"
-                value={userFilterId}
-                onChange={(e) => setUserFilterId(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-lg w-32"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Imię</label>
-              <input
-                type="text"
-                placeholder="Filtruj po imieniu"
-                value={userFilterFirstName}
-                onChange={(e) => setUserFilterFirstName(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-lg w-32"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Nazwisko</label>
-              <input
-                type="text"
-                placeholder="Filtruj po nazwisku"
-                value={userFilterLastName}
-                onChange={(e) => setUserFilterLastName(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-lg w-32"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-              <input
-                type="text"
-                placeholder="Filtruj po email"
-                value={userFilterEmail}
-                onChange={(e) => setUserFilterEmail(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-lg w-40"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Typ konta</label>
-              <select
-                value={userFilterAccountType}
-                onChange={(e) => setUserFilterAccountType(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-lg"
-              >
-                <option value="all">Wszyscy</option>
-                <option value="user">User</option>
-                <option value="lektor">Lektor</option>
-                <option value="admin">Admin</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Potwierdzony</label>
-              <select
-                value={userFilterConfirmed}
-                onChange={(e) => setUserFilterConfirmed(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-lg"
-              >
-                <option value="all">Wszyscy</option>
-                <option value="true">Tak</option>
-                <option value="false">Nie</option>
-              </select>
-            </div>
-            <div className="flex items-end">
-              <button
-                onClick={() => setShowAddUser(!showAddUser)}
-                className="px-4 py-2 bg-[#175244] text-white rounded-lg hover:bg-[#144a37]"
-              >
-                {showAddUser ? '✕ Anuluj' : '+ Dodaj użytkownika'}
-              </button>
-            </div>
-            </div>
+      <div className="mt-4">{renderContent()}</div>
+
+      <nav className="fixed bottom-3 left-1/2 z-40 w-[min(96vw,460px)] -translate-x-1/2 rounded-2xl border border-emerald-200 bg-white p-1 shadow-lg md:hidden">
+        <div className="grid grid-cols-4 gap-1">
+          {mobileTabs.map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setMobileTab(tab.key)}
+              className={`rounded-full px-2 py-2 text-xs font-semibold ${
+                mobileTab === tab.key ? 'bg-[#0f6e56] text-white' : 'text-zinc-700'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      </nav>
+
+      <div className="fixed right-4 top-4 z-50 space-y-2">
+        {toasts.map((toast) => (
+          <div
+            key={toast.id}
+            className={`rounded-xl px-4 py-3 text-sm text-white shadow ${
+              toast.kind === 'success' ? 'bg-emerald-600' : 'bg-red-600'
+            }`}
+          >
+            {toast.message}
           </div>
+        ))}
+      </div>
 
-          {/* Formularz dodawania użytkownika */}
-          {showAddUser && (
-            <form onSubmit={handleAddUser} className="bg-white p-6 rounded-xl border-2 border-[#175244] space-y-4">
-              <h3 className="text-lg font-semibold">Nowy użytkownik</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <input
-                  type="text"
-                  placeholder="Imię"
-                  value={newUser.firstName}
-                  onChange={(e) => setNewUser({ ...newUser, firstName: e.target.value })}
-                  className="px-3 py-2 border border-gray-300 rounded-lg"
-                  required
-                />
-                <input
-                  type="text"
-                  placeholder="Nazwisko"
-                  value={newUser.lastName}
-                  onChange={(e) => setNewUser({ ...newUser, lastName: e.target.value })}
-                  className="px-3 py-2 border border-gray-300 rounded-lg"
-                  required
-                />
-                <input
-                  type="email"
-                  placeholder="Email"
-                  value={newUser.email}
-                  onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
-                  className="px-3 py-2 border border-gray-300 rounded-lg"
-                  required
-                />
-                <input
-                  type="password"
-                  placeholder="Hasło"
-                  value={newUser.password}
-                  onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
-                  className="px-3 py-2 border border-gray-300 rounded-lg"
-                  required
-                />
-                <select
-                  value={newUser.accountType}
-                  onChange={(e) => setNewUser({ ...newUser, accountType: e.target.value as any })}
-                  className="px-3 py-2 border border-gray-300 rounded-lg"
-                >
-                  <option value="user">User</option>
-                  <option value="lektor">Lektor</option>
-                  <option value="admin">Admin</option>
-                </select>
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={newUser.confirmed}
-                    onChange={(e) => setNewUser({ ...newUser, confirmed: e.target.checked })}
-                  />
-                  <span className="text-sm">Potwierdzony</span>
-                </label>
-              </div>
+      {closeYearModal && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+            <h3 className="text-lg font-semibold text-zinc-900">Zakończenie roku szkolnego</h3>
+            <p className="mt-3 text-sm text-zinc-600">
+              Czy na pewno chcesz zakończyć rok szkolny <strong>{closeYearModal.name}</strong>? Spowoduje to
+              anulowanie wszystkich zaplanowanych zajęć, zamknięcie grup i wygaśnięcie subskrypcji.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
               <button
-                type="submit"
-                disabled={loading}
-                className="px-6 py-2 bg-[#175244] text-white rounded-lg hover:bg-[#144a37] disabled:opacity-50"
+                type="button"
+                className="rounded-xl bg-zinc-200 px-4 py-2 text-sm font-semibold"
+                onClick={() => setCloseYearModal(null)}
               >
-                Dodaj
+                Anuluj
               </button>
-            </form>
-          )}
-
-          {/* Tabela użytkowników */}
-          <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">ID</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Imię</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Nazwisko</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Email</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Typ</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Potwierdzony</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Akcje</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {users.map((user) => {
-                  const changedUser = { ...user, ...pendingChanges.users[user.id] };
-                  const isDeleted = usersToDelete.includes(user.id);
-                  return (
-                    <tr key={user.id} className={isDeleted ? 'bg-red-50 opacity-50' : ''}>
-                      <td className="px-4 py-3">{changedUser.id}</td>
-                      <td className="px-4 py-3">
-                        <input
-                          type="text"
-                          value={changedUser.first_name || ''}
-                          onChange={(e) => handleUserChange(user.id, 'first_name', e.target.value)}
-                          className="w-full px-2 py-1 border border-gray-300 rounded"
-                        />
-                      </td>
-                      <td className="px-4 py-3">
-                        <input
-                          type="text"
-                          value={changedUser.last_name || ''}
-                          onChange={(e) => handleUserChange(user.id, 'last_name', e.target.value)}
-                          className="w-full px-2 py-1 border border-gray-300 rounded"
-                        />
-                      </td>
-                      <td className="px-4 py-3">
-                        <input
-                          type="email"
-                          value={changedUser.email || ''}
-                          onChange={(e) => handleUserChange(user.id, 'email', e.target.value)}
-                          className="w-full px-2 py-1 border border-gray-300 rounded"
-                        />
-                      </td>
-                      <td className="px-4 py-3">
-                        <select
-                          value={changedUser.account_type || 'user'}
-                          onChange={(e) => handleUserChange(user.id, 'account_type', e.target.value)}
-                          className="w-full px-2 py-1 border border-gray-300 rounded"
-                        >
-                          <option value="user">User</option>
-                          <option value="lektor">Lektor</option>
-                          <option value="admin">Admin</option>
-                        </select>
-                      </td>
-                      <td className="px-4 py-3">
-                        <input
-                          type="checkbox"
-                          checked={changedUser.confirmed || false}
-                          onChange={(e) => handleUserChange(user.id, 'confirmed', e.target.checked)}
-                          className="w-5 h-5"
-                        />
-                      </td>
-                      <td className="px-4 py-3">
-                        <button
-                          onClick={() => {
-                            if (isDeleted) {
-                              setUsersToDelete(prev => prev.filter(id => id !== user.id));
-                            } else {
-                              setUsersToDelete(prev => [...prev, user.id]);
-                            }
-                          }}
-                          className="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 text-xs"
-                        >
-                          {isDeleted ? 'Przywróć' : 'Usuń'}
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+              <button
+                type="button"
+                disabled={busy}
+                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    const res = await fetch(`/api/admin/school-years/${closeYearModal.id}`, {
+                      method: 'DELETE',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ action: 'close' }),
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) throw new Error(data.message ?? 'Błąd zamykania roku');
+                    pushToast(
+                      'success',
+                      `Rok zamknięty: anulowano ${data.lessonsCancelled ?? 0} zajęć, ` +
+                        `zamknięto ${data.groupsClosed ?? 0} grup, wygaszono ${data.subscriptionsExpired ?? 0} subskrypcji.`
+                    );
+                    setCloseYearModal(null);
+                    await loadSchoolYearData();
+                    await loadData();
+                  } catch (e) {
+                    pushToast('error', e instanceof Error ? e.message : 'Błąd');
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                Zakończ rok
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Students Tab */}
-      {activeTab === 'students' && (
-        <div className="space-y-4">
-          {/* Filtry */}
-          <div className="bg-white p-4 rounded-xl border border-gray-200">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold text-gray-800">Filtry</h3>
+      {newYearModalOpen && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+            <h3 className="text-lg font-semibold">Nowy rok szkolny</h3>
+            <div className="mt-4 space-y-3">
+              <label className="block text-sm">
+                <span className="mb-1 block font-semibold text-zinc-700">Nazwa</span>
+                <input
+                  className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                  value={newYearForm.name}
+                  onChange={(e) => setNewYearForm((p) => ({ ...p, name: e.target.value }))}
+                  placeholder="np. 2026/2027"
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="mb-1 block font-semibold text-zinc-700">Data od</span>
+                <input
+                  type="date"
+                  className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                  value={newYearForm.dateFrom}
+                  onChange={(e) => setNewYearForm((p) => ({ ...p, dateFrom: e.target.value }))}
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="mb-1 block font-semibold text-zinc-700">Data do</span>
+                <input
+                  type="date"
+                  className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                  value={newYearForm.dateTo}
+                  onChange={(e) => setNewYearForm((p) => ({ ...p, dateTo: e.target.value }))}
+                />
+              </label>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" className="rounded-xl bg-zinc-200 px-4 py-2" onClick={() => setNewYearModalOpen(false)}>
+                Anuluj
+              </button>
               <button
-                onClick={handleRefreshData}
-                disabled={loadingFromDb}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold disabled:opacity-50 flex items-center gap-2 hidden"
+                type="button"
+                disabled={busy}
+                className="rounded-xl bg-[#0f6e56] px-4 py-2 text-white disabled:opacity-50"
+                onClick={async () => {
+                  if (!newYearForm.name.trim() || !newYearForm.dateFrom || !newYearForm.dateTo) {
+                    pushToast('error', 'Uzupełnij wszystkie pola');
+                    return;
+                  }
+                  setBusy(true);
+                  try {
+                    const res = await fetch('/api/admin/school-years', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        name: newYearForm.name.trim(),
+                        date_from: newYearForm.dateFrom,
+                        date_to: newYearForm.dateTo,
+                      }),
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) throw new Error(data.message ?? 'Błąd');
+                    pushToast('success', 'Utworzono rok szkolny');
+                    setNewYearModalOpen(false);
+                    await loadSchoolYearData();
+                  } catch (e) {
+                    pushToast('error', e instanceof Error ? e.message : 'Błąd');
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
               >
-                <span>🔄</span>
-                Pobierz z bazy
+                Utwórz
               </button>
             </div>
-            <div className="flex flex-wrap gap-4 items-end">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">ID Student</label>
-              <input
-                type="text"
-                placeholder="Filtruj po ID"
-                value={studentFilterId}
-                onChange={(e) => setStudentFilterId(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-lg w-32"
-              />
+          </div>
+        </div>
+      )}
+
+      {holidayModalOpen && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+            <h3 className="text-lg font-semibold">Dzień wolny</h3>
+            <div className="mt-4 space-y-3">
+              <label className="block text-sm">
+                <span className="mb-1 block font-semibold text-zinc-700">Nazwa</span>
+                <input
+                  className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                  value={holidayForm.name}
+                  onChange={(e) => setHolidayForm((p) => ({ ...p, name: e.target.value }))}
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="mb-1 block font-semibold text-zinc-700">Od</span>
+                <input
+                  type="date"
+                  className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                  value={holidayForm.dateFrom}
+                  onChange={(e) => setHolidayForm((p) => ({ ...p, dateFrom: e.target.value }))}
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="mb-1 block font-semibold text-zinc-700">Do</span>
+                <input
+                  type="date"
+                  className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                  value={holidayForm.dateTo}
+                  onChange={(e) => setHolidayForm((p) => ({ ...p, dateTo: e.target.value }))}
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="mb-1 block font-semibold text-zinc-700">Typ</span>
+                <select
+                  className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                  value={holidayForm.type}
+                  onChange={(e) =>
+                    setHolidayForm((p) => ({
+                      ...p,
+                      type: e.target.value as typeof holidayForm.type,
+                    }))
+                  }
+                >
+                  <option value="HOLIDAY">HOLIDAY</option>
+                  <option value="PUBLIC">PUBLIC</option>
+                  <option value="SCHOOL">SCHOOL</option>
+                  <option value="CANCELLED">CANCELLED</option>
+                </select>
+              </label>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">ID Rodzica</label>
-              <input
-                type="text"
-                placeholder="Filtruj po ID rodzica"
-                value={studentFilterUserId}
-                onChange={(e) => setStudentFilterUserId(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-lg w-32"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Imię</label>
-              <input
-                type="text"
-                placeholder="Filtruj po imieniu"
-                value={studentFilterFirstName}
-                onChange={(e) => setStudentFilterFirstName(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-lg w-32"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Nazwisko</label>
-              <input
-                type="text"
-                placeholder="Filtruj po nazwisku"
-                value={studentFilterLastName}
-                onChange={(e) => setStudentFilterLastName(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-lg w-32"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Rok urodzenia</label>
-              <select
-                value={studentFilterBirthYear}
-                onChange={(e) => setStudentFilterBirthYear(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-lg w-32"
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" className="rounded-xl bg-zinc-200 px-4 py-2" onClick={() => setHolidayModalOpen(false)}>
+                Anuluj
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                className="rounded-xl bg-[#0f6e56] px-4 py-2 text-white disabled:opacity-50"
+                onClick={async () => {
+                  if (!holidayForm.name.trim() || !holidayForm.dateFrom || !holidayForm.dateTo) {
+                    pushToast('error', 'Uzupełnij pola');
+                    return;
+                  }
+                  setBusy(true);
+                  try {
+                    const res = await fetch('/api/admin/school-holidays', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        name: holidayForm.name.trim(),
+                        date_from: holidayForm.dateFrom,
+                        date_to: holidayForm.dateTo,
+                        type: holidayForm.type,
+                      }),
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) throw new Error(data.message ?? 'Błąd');
+                    pushToast('success', 'Dodano dzień wolny');
+                    setHolidayModalOpen(false);
+                    await loadSchoolYearData();
+                  } catch (e) {
+                    pushToast('error', e instanceof Error ? e.message : 'Błąd');
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
               >
-                <option value="">Wszystkie</option>
-                {availableBirthYears.map((year) => (
-                  <option key={year} value={year}>
-                    {year}
+                Zapisz
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editYearModal && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+            <h3 className="text-lg font-semibold">Edycja roku (nieaktywnego)</h3>
+            <div className="mt-4 space-y-3">
+              <input
+                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                value={editYearModal.name}
+                onChange={(e) => setEditYearModal((p) => (p ? { ...p, name: e.target.value } : p))}
+              />
+              <input
+                type="date"
+                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                value={editYearModal.date_from.slice(0, 10)}
+                onChange={(e) =>
+                  setEditYearModal((p) => (p ? { ...p, date_from: e.target.value } : p))
+                }
+              />
+              <input
+                type="date"
+                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                value={editYearModal.date_to.slice(0, 10)}
+                onChange={(e) =>
+                  setEditYearModal((p) => (p ? { ...p, date_to: e.target.value } : p))
+                }
+              />
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" className="rounded-xl bg-zinc-200 px-4 py-2" onClick={() => setEditYearModal(null)}>
+                Anuluj
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                className="rounded-xl bg-[#0f6e56] px-4 py-2 text-white disabled:opacity-50"
+                onClick={async () => {
+                  if (!editYearModal) return;
+                  setBusy(true);
+                  try {
+                    const res = await fetch(`/api/admin/school-years/${editYearModal.id}`, {
+                      method: 'PUT',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        name: editYearModal.name.trim(),
+                        date_from: editYearModal.date_from.slice(0, 10),
+                        date_to: editYearModal.date_to.slice(0, 10),
+                      }),
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) throw new Error(data.message ?? 'Błąd');
+                    pushToast('success', 'Zapisano zmiany roku');
+                    setEditYearModal(null);
+                    await loadSchoolYearData();
+                  } catch (e) {
+                    pushToast('error', e instanceof Error ? e.message : 'Błąd');
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                Zapisz
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {groupModalOpen && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-5">
+            <h3 className="text-lg font-semibold">{groupForm.id ? 'Edytuj grupę' : 'Nowa grupa'}</h3>
+            <div className="mt-4 space-y-3">
+              <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" placeholder="Nazwa grupy" value={groupForm.name} onChange={(e) => setGroupForm((p) => ({ ...p, name: e.target.value }))} />
+              <select className="w-full rounded-xl border border-emerald-200 px-3 py-2" value={groupForm.level} onChange={(e) => setGroupForm((p) => ({ ...p, level: e.target.value }))}>
+                {['A1','A2','B1','B2','C1','C2','inne'].map((lvl) => <option key={lvl} value={lvl}>{lvl}</option>)}
+              </select>
+              <select className="w-full rounded-xl border border-emerald-200 px-3 py-2" value={groupForm.teacherId} onChange={(e) => setGroupForm((p) => ({ ...p, teacherId: e.target.value }))}>
+                <option value="">Wybierz nauczyciela</option>
+                {users.filter((u) => u.role === 'TEACHER' && u.active).map((t) => (
+                  <option key={t.id} value={t.id}>{t.first_name} {t.last_name}</option>
+                ))}
+              </select>
+              <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="number" min="1" value={groupForm.maxStudents} onChange={(e) => setGroupForm((p) => ({ ...p, maxStudents: Number(e.target.value || 12) }))} />
+              <div className="flex justify-end gap-2">
+                <button className="rounded-xl bg-zinc-200 px-3 py-2" onClick={() => setGroupModalOpen(false)}>Anuluj</button>
+                <button
+                  className="rounded-xl bg-emerald-600 px-3 py-2 text-white"
+                  onClick={async () => {
+                    const endpoint = groupForm.id ? `/api/admin/groups/${groupForm.id}` : '/api/admin/groups';
+                    const res = await fetch(endpoint, {
+                      method: groupForm.id ? 'PUT' : 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        name: groupForm.name,
+                        level: groupForm.level,
+                        teacherId: groupForm.teacherId || null,
+                        maxStudents: groupForm.maxStudents,
+                      }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok) {
+                      pushToast('error', data.message ?? 'Nie udało się zapisać grupy');
+                      return;
+                    }
+                    pushToast('success', groupForm.id ? 'Grupa zaktualizowana' : 'Grupa zapisana');
+                    setGroupModalOpen(false);
+                    await loadData();
+                    if (groupForm.id) await loadGroupDetail(groupForm.id);
+                  }}
+                >
+                  Zapisz
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {scheduleModalOpen && selectedGroupId && groupDetail && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-5">
+            <h3 className="text-lg font-semibold">Dodaj termin</h3>
+            <div className="mt-4 space-y-3">
+              <select className="w-full rounded-xl border border-emerald-200 px-3 py-2" value={scheduleForm.dayOfWeek} onChange={(e) => setScheduleForm((p) => ({ ...p, dayOfWeek: Number(e.target.value) }))}>
+                <option value={1}>Poniedziałek</option><option value={2}>Wtorek</option><option value={3}>Środa</option><option value={4}>Czwartek</option><option value={5}>Piątek</option><option value={6}>Sobota</option><option value={7}>Niedziela</option>
+              </select>
+              <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="time" value={scheduleForm.startTime} onChange={(e) => setScheduleForm((p) => ({ ...p, startTime: e.target.value }))} />
+              <select className="w-full rounded-xl border border-emerald-200 px-3 py-2" value={scheduleForm.locationId} onChange={(e) => setScheduleForm((p) => ({ ...p, locationId: e.target.value }))}>
+                <option value="">Wybierz lokalizację</option>
+                {groupDetail.locations.map((loc) => <option key={loc.id} value={loc.id}>{loc.name}</option>)}
+              </select>
+              <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="number" min="15" value={scheduleForm.durationMin} onChange={(e) => setScheduleForm((p) => ({ ...p, durationMin: Number(e.target.value || 60) }))} />
+              <div className="flex justify-end gap-2">
+                <button className="rounded-xl bg-zinc-200 px-3 py-2" onClick={() => setScheduleModalOpen(false)}>Anuluj</button>
+                <button
+                  className="rounded-xl bg-emerald-600 px-3 py-2 text-white"
+                  onClick={async () => {
+                    const res = await fetch('/api/admin/schedule-templates', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ groupId: selectedGroupId, ...scheduleForm }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok) {
+                      pushToast('error', data.message ?? 'Konflikt harmonogramu');
+                      return;
+                    }
+                    pushToast('success', 'Termin dodany');
+                    setScheduleModalOpen(false);
+                    await loadGroupDetail(selectedGroupId);
+                  }}
+                >
+                  Sprawdź konflikty i zapisz
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {addStudentModalOpen && selectedGroupId && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-5">
+            <h3 className="text-lg font-semibold">Dodaj ucznia do grupy</h3>
+            <div className="mt-4 space-y-3">
+              <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" placeholder="Szukaj po dziecku lub rodzicu" value={studentSearch} onChange={(e) => setStudentSearch(e.target.value)} />
+              <select className="w-full rounded-xl border border-emerald-200 px-3 py-2" value={selectedChildId} onChange={(e) => setSelectedChildId(e.target.value)}>
+                <option value="">Wybierz dziecko</option>
+                {availableChildren.map((c) => (
+                  <option key={c.child_id} value={c.child_id}>
+                    {c.first_name} {c.last_name} — rodzic: {c.parent_first_name} {c.parent_last_name}
                   </option>
                 ))}
               </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Lokalizacja</label>
-              <select
-                value={studentFilterLocation}
-                onChange={(e) => setStudentFilterLocation(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-lg"
-              >
-                <option value="all">Wszystkie</option>
-                <option value="Paniówki">Paniówki</option>
-                <option value="Halemba">Halemba</option>
-                <option value="Orzegów">Orzegów</option>
-                <option value="Kochłowice">Kochłowice</option>
-                <option value="Bielszowice">Bielszowice</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Aktywny</label>
-              <select
-                value={studentFilterActive}
-                onChange={(e) => setStudentFilterActive(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-lg"
-              >
-                <option value="all">Wszyscy</option>
-                <option value="true">Tak</option>
-                <option value="false">Nie</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Chęć rezygnacji</label>
-              <select
-                value={studentFilterResignation}
-                onChange={(e) => setStudentFilterResignation(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-lg"
-              >
-                <option value="all">Wszyscy</option>
-                <option value="true">Tak</option>
-                <option value="false">Nie</option>
-              </select>
-            </div>
-            <div className="flex items-end">
-              <button
-                onClick={() => setShowAddStudent(!showAddStudent)}
-                className="px-4 py-2 bg-[#175244] text-white rounded-lg hover:bg-[#144a37]"
-              >
-                {showAddStudent ? '✕ Anuluj' : '+ Dodaj studenta'}
-              </button>
-            </div>
-            </div>
-          </div>
-
-          {/* Formularz dodawania studenta */}
-          {showAddStudent && (
-            <form onSubmit={handleAddStudent} className="bg-white p-6 rounded-xl border-2 border-[#175244] space-y-4">
-              <h3 className="text-lg font-semibold">Nowy student</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <input
-                  type="text"
-                  placeholder="ID Rodzica (user_id)"
-                  value={newStudent.userId}
-                  onChange={(e) => setNewStudent({ ...newStudent, userId: e.target.value })}
-                  className="px-3 py-2 border border-gray-300 rounded-lg"
-                  required
-                />
-                <input
-                  type="text"
-                  placeholder="Imię dziecka"
-                  value={newStudent.firstName}
-                  onChange={(e) => setNewStudent({ ...newStudent, firstName: e.target.value })}
-                  className="px-3 py-2 border border-gray-300 rounded-lg"
-                  required
-                />
-                <input
-                  type="text"
-                  placeholder="Nazwisko dziecka"
-                  value={newStudent.lastName}
-                  onChange={(e) => setNewStudent({ ...newStudent, lastName: e.target.value })}
-                  className="px-3 py-2 border border-gray-300 rounded-lg"
-                  required
-                />
-                <input
-                  type="number"
-                  placeholder="Rok urodzenia"
-                  value={newStudent.birthYear}
-                  onChange={(e) => setNewStudent({ ...newStudent, birthYear: e.target.value })}
-                  className="px-3 py-2 border border-gray-300 rounded-lg"
-                  required
-                />
-                <select
-                  value={newStudent.location}
-                  onChange={(e) => setNewStudent({ ...newStudent, location: e.target.value as any })}
-                  className="px-3 py-2 border border-gray-300 rounded-lg"
-                  required
+              <div className="flex justify-end gap-2">
+                <button className="rounded-xl bg-zinc-200 px-3 py-2" onClick={() => setAddStudentModalOpen(false)}>Anuluj</button>
+                <button
+                  className="rounded-xl bg-emerald-600 px-3 py-2 text-white"
+                  onClick={async () => {
+                    if (!selectedChildId) {
+                      pushToast('error', 'Wybierz dziecko');
+                      return;
+                    }
+                    const res = await fetch('/api/admin/group-students', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ groupId: selectedGroupId, childId: selectedChildId }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok) {
+                      pushToast('error', data.message ?? 'Nie udało się dodać ucznia');
+                      return;
+                    }
+                    pushToast('success', 'Uczeń dodany do grupy');
+                    setAddStudentModalOpen(false);
+                    setSelectedChildId('');
+                    await loadGroupDetail(selectedGroupId);
+                  }}
                 >
-                  <option value="">Wybierz lokalizację</option>
-                  <option value="Paniówki">Paniówki</option>
-                  <option value="Halemba">Halemba</option>
-                  <option value="Orzegów">Orzegów</option>
-                  <option value="Kochłowice">Kochłowice</option>
-                  <option value="Bielszowice">Bielszowice</option>
-                </select>
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={newStudent.active}
-                    onChange={(e) => setNewStudent({ ...newStudent, active: e.target.checked })}
-                  />
-                  <span className="text-sm">Aktywny</span>
-                </label>
+                  Dodaj ucznia
+                </button>
               </div>
-              <button
-                type="submit"
-                disabled={loading}
-                className="px-6 py-2 bg-[#175244] text-white rounded-lg hover:bg-[#144a37] disabled:opacity-50"
-              >
-                Dodaj
-              </button>
-            </form>
-          )}
-
-          {/* Tabela studentów */}
-          <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">ID Student</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">ID Rodzica</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Imię</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Nazwisko</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Rok urodzenia</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Lokalizacja</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Aktywny</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Chęć rezygnacji</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Akcje</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {students.map((student) => {
-                  const changedStudent = { ...student, ...pendingChanges.students[student.student_id] };
-                  const isDeleted = studentsToDelete.includes(student.student_id);
-                  return (
-                    <tr key={student.student_id} className={isDeleted ? 'bg-red-50 opacity-50' : ''}>
-                      <td className="px-4 py-3">{changedStudent.student_id}</td>
-                      <td className="px-4 py-3">{changedStudent.user_id}</td>
-                      <td className="px-4 py-3">
-                        <input
-                          type="text"
-                          value={changedStudent.first_name || ''}
-                          onChange={(e) => handleStudentChange(student.student_id, 'first_name', e.target.value)}
-                          className="w-full px-2 py-1 border border-gray-300 rounded"
-                        />
-                      </td>
-                      <td className="px-4 py-3">
-                        <input
-                          type="text"
-                          value={changedStudent.last_name || ''}
-                          onChange={(e) => handleStudentChange(student.student_id, 'last_name', e.target.value)}
-                          className="w-full px-2 py-1 border border-gray-300 rounded"
-                        />
-                      </td>
-                      <td className="px-4 py-3">
-                        <input
-                          type="text"
-                          value={changedStudent.birth_year || ''}
-                          onChange={(e) => handleStudentChange(student.student_id, 'birth_year', e.target.value)}
-                          className="w-full px-2 py-1 border border-gray-300 rounded"
-                        />
-                      </td>
-                      <td className="px-4 py-3">
-                        <select
-                          value={changedStudent.location || ''}
-                          onChange={(e) => handleStudentChange(student.student_id, 'location', e.target.value)}
-                          className="w-full px-2 py-1 border border-gray-300 rounded"
-                        >
-                          <option value="Paniówki">Paniówki</option>
-                          <option value="Halemba">Halemba</option>
-                          <option value="Orzegów">Orzegów</option>
-                          <option value="Kochłowice">Kochłowice</option>
-                          <option value="Bielszowice">Bielszowice</option>
-                        </select>
-                      </td>
-                      <td className="px-4 py-3">
-                        <input
-                          type="checkbox"
-                          checked={changedStudent.active || false}
-                          onChange={(e) => handleStudentChange(student.student_id, 'active', e.target.checked)}
-                          className="w-5 h-5"
-                        />
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex flex-col gap-1">
-                          <input
-                            type="checkbox"
-                            checked={changedStudent.resignation_requested || false}
-                            onChange={(e) => handleStudentChange(student.student_id, 'resignation_requested', e.target.checked)}
-                            className="w-5 h-5"
-                          />
-                          {changedStudent.resignation_requested && changedStudent.resignation_reason && (
-                            <span className="text-xs text-gray-600 max-w-xs truncate" title={changedStudent.resignation_reason}>
-                              {changedStudent.resignation_reason}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <button
-                          onClick={() => {
-                            if (isDeleted) {
-                              setStudentsToDelete(prev => prev.filter(id => id !== student.student_id));
-                            } else {
-                              setStudentsToDelete(prev => [...prev, student.student_id]);
-                            }
-                          }}
-                          className="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 text-xs"
-                        >
-                          {isDeleted ? 'Anuluj' : 'Usuń'}
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Resignations Tab */}
-      {activeTab === 'resignations' && (
-        <div className="space-y-4">
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <div className="p-4 bg-gray-50 border-b border-gray-200">
-              <h3 className="text-lg font-semibold text-gray-800">
-                Byli uczniowie ({formerStudents.length})
-              </h3>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b border-gray-200">
-                      ID Użytkownika
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b border-gray-200">
-                      ID Ucznia
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b border-gray-200">
-                      Imię i nazwisko
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b border-gray-200">
-                      Rok urodzenia
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b border-gray-200">
-                      Lokalizacja
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b border-gray-200">
-                      Data zakończenia
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b border-gray-200">
-                      Akcje
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {formerStudents.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
-                        Brak byłych uczniów
-                      </td>
-                    </tr>
-                  ) : (
-                    formerStudents.map((student) => (
-                      <tr key={student.student_id} className="hover:bg-gray-50">
-                        <td className="px-4 py-3 text-sm text-gray-900">
-                          {student.user_id}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-900">
-                          {student.student_id}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-900">
-                          {student.first_name} {student.last_name}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-700">
-                          {student.birth_year}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-700">
-                          {student.location}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-700">
-                          {student.resignation_date ? (
-                            <span>
-                              {new Date(student.resignation_date).toLocaleDateString('pl-PL', {
-                                year: 'numeric',
-                                month: '2-digit',
-                                day: '2-digit',
-                                hour: '2-digit',
-                                minute: '2-digit'
-                              })}
-                            </span>
-                          ) : (
-                            <span className="text-gray-400">—</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          <button
-                            onClick={() => handleRestoreStudent(student.student_id)}
-                            disabled={loading}
-                            className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            Przywróć
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+      {generateModalOpen && selectedGroupId && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-5">
+            <h3 className="text-lg font-semibold">Generuj zajęcia</h3>
+            <div className="mt-4 space-y-3">
+              <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="date" value={generateForm.dateFrom} onChange={(e) => setGenerateForm((p) => ({ ...p, dateFrom: e.target.value }))} />
+              <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="date" value={generateForm.dateTo} onChange={(e) => setGenerateForm((p) => ({ ...p, dateTo: e.target.value }))} />
+              <div className="flex justify-end gap-2">
+                <button className="rounded-xl bg-zinc-200 px-3 py-2" onClick={() => setGenerateModalOpen(false)}>Anuluj</button>
+                <button
+                  className="rounded-xl bg-emerald-600 px-3 py-2 text-white"
+                  onClick={async () => {
+                    const res = await fetch('/api/admin/lessons/generate', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ groupId: selectedGroupId, ...generateForm }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok) {
+                      pushToast('error', data.message ?? 'Błąd generowania');
+                      return;
+                    }
+                    pushToast('success', data.message ?? `Wygenerowano ${data.created ?? 0} zajęć`);
+                    setGenerateModalOpen(false);
+                    await loadGroupDetail(selectedGroupId);
+                  }}
+                >
+                  Generuj
+                </button>
+              </div>
             </div>
           </div>
+        </div>
+      )}
 
-          {/* Byli użytkownicy */}
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mt-6">
-            <div className="p-4 bg-gray-50 border-b border-gray-200">
-              <h3 className="text-lg font-semibold text-gray-800">
-                Byli użytkownicy ({formerUsers.length})
-              </h3>
+      {childModalOpen && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-5">
+            <h3 className="text-lg font-semibold">Dodaj dziecko</h3>
+            <div className="mt-4 space-y-3">
+              <input
+                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                placeholder="Szukaj rodzica po imieniu lub emailu"
+                value={childForm.parentSearch}
+                onChange={(e) => setChildForm((prev) => ({ ...prev, parentSearch: e.target.value }))}
+              />
+              <select
+                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                value={childForm.parentId}
+                onChange={(e) => setChildForm((prev) => ({ ...prev, parentId: e.target.value }))}
+              >
+                <option value="">Wybierz rodzica</option>
+                {parentOptions.map((parent) => (
+                  <option key={parent.id} value={parent.id}>
+                    {parent.first_name} {parent.last_name} ({parent.email})
+                  </option>
+                ))}
+              </select>
+              <input
+                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                placeholder="Imię dziecka"
+                value={childForm.firstName}
+                onChange={(e) => setChildForm((prev) => ({ ...prev, firstName: e.target.value }))}
+              />
+              <input
+                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                placeholder="Nazwisko dziecka"
+                value={childForm.lastName}
+                onChange={(e) => setChildForm((prev) => ({ ...prev, lastName: e.target.value }))}
+              />
+              <input
+                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                type="date"
+                value={childForm.birthDate}
+                onChange={(e) => setChildForm((prev) => ({ ...prev, birthDate: e.target.value }))}
+              />
+              <div className="flex justify-end gap-2">
+                <button
+                  className="rounded-xl bg-zinc-200 px-3 py-2"
+                  onClick={() => setChildModalOpen(false)}
+                >
+                  Anuluj
+                </button>
+                <button
+                  className="rounded-xl bg-emerald-600 px-3 py-2 text-white"
+                  onClick={async () => {
+                    if (!childForm.parentId || !childForm.firstName || !childForm.lastName || !childForm.birthDate) {
+                      pushToast('error', 'Uzupełnij wszystkie pola');
+                      return;
+                    }
+                    const res = await fetch('/api/admin/children', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        parentId: childForm.parentId,
+                        firstName: childForm.firstName,
+                        lastName: childForm.lastName,
+                        birthDate: childForm.birthDate,
+                      }),
+                    });
+                    if (!res.ok) {
+                      const data = await res.json();
+                      pushToast('error', data.message ?? 'Nie udało się dodać dziecka');
+                      return;
+                    }
+                    pushToast('success', 'Dziecko zostało dodane');
+                    setChildForm({ parentId: '', firstName: '', lastName: '', birthDate: '', parentSearch: '' });
+                    setChildModalOpen(false);
+                    await loadData();
+                  }}
+                >
+                  Dodaj dziecko
+                </button>
+              </div>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b border-gray-200">
-                      ID Użytkownika
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b border-gray-200">
-                      Imię i nazwisko
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b border-gray-200">
-                      Email
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b border-gray-200">
-                      Typ konta
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b border-gray-200">
-                      Data zakończenia
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b border-gray-200">
-                      Akcje
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {formerUsers.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
-                        Brak byłych użytkowników
-                      </td>
-                    </tr>
-                  ) : (
-                    formerUsers.map((user) => (
-                      <tr key={user.id} className="hover:bg-gray-50">
-                        <td className="px-4 py-3 text-sm text-gray-900">
-                          {user.id}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-900">
-                          {user.first_name} {user.last_name}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-700">
-                          {user.email}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-700">
-                          {user.account_type === 'user' ? 'Użytkownik' : user.account_type === 'admin' ? 'Admin' : 'Lektor'}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-700">
-                          {user.resignation_date ? (
-                            <span>
-                              {new Date(user.resignation_date).toLocaleDateString('pl-PL', {
-                                year: 'numeric',
-                                month: '2-digit',
-                                day: '2-digit',
-                                hour: '2-digit',
-                                minute: '2-digit'
-                              })}
-                            </span>
-                          ) : (
-                            <span className="text-gray-400">—</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          <button
-                            onClick={() => handleRestoreUser(user.id)}
-                            disabled={loading}
-                            className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            Przywróć
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+          </div>
+        </div>
+      )}
+
+      {proposalModalParentId && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-5">
+            <h3 className="text-lg font-semibold">Zaproponuj grupę</h3>
+            <div className="mt-4 space-y-3">
+              <select
+                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                value={proposalForm.groupId}
+                onChange={(e) => setProposalForm((prev) => ({ ...prev, groupId: e.target.value }))}
+              >
+                <option value="">Wybierz grupę</option>
+                {enrollmentGroups.map((group) => (
+                  <option key={group.id} value={group.id}>
+                    {group.name} - {group.location_name} - {group.schedule}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                type="number"
+                min="0"
+                value={proposalForm.priceMonthly}
+                onChange={(e) => setProposalForm((prev) => ({ ...prev, priceMonthly: e.target.value }))}
+                placeholder="Cena miesięczna"
+              />
+              <div className="flex gap-2 justify-end">
+                <button
+                  className="rounded-xl bg-zinc-200 px-3 py-2"
+                  onClick={() => setProposalModalParentId(null)}
+                >
+                  Anuluj
+                </button>
+                <button
+                  className="rounded-xl bg-emerald-600 px-3 py-2 text-white"
+                  onClick={async () => {
+                    if (!proposalForm.groupId) {
+                      pushToast('error', 'Wybierz grupę');
+                      return;
+                    }
+                    const res = await fetch('/api/admin/enrollment', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        parentId: proposalModalParentId,
+                        groupId: proposalForm.groupId,
+                        priceMonthly: Number(proposalForm.priceMonthly || 0),
+                      }),
+                    });
+                    if (!res.ok) {
+                      pushToast('error', 'Nie udało się wysłać propozycji');
+                      return;
+                    }
+                    pushToast('success', 'Propozycja wysłana');
+                    setProposalModalParentId(null);
+                    await loadData();
+                  }}
+                >
+                  Wyślij propozycję
+                </button>
+              </div>
             </div>
           </div>
         </div>

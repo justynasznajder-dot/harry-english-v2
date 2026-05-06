@@ -108,7 +108,7 @@ export async function sendWelcomeEmail(
           
           <p>Cieszymy się, że dołączyliście do Harry English wraz z <strong>${childFirstName}</strong>! 🎉</p>
           
-          <p>Twoje konto zostało pomyślnie utworzone. Obecnie przygotowujemy dla Was spersonalizowany plan zajęć.</p>
+          <p>Twoje konto zostało pomyślnie utworzone. Czekamy na kontakt z naszej strony i przygotowujemy dla Was spersonalizowany plan zajęć.</p>
           
           <h3>Co dalej?</h3>
           <ul>
@@ -146,7 +146,7 @@ Witaj ${parentFirstName} ${parentLastName}!
 
 Cieszymy się, że dołączyliście do Harry English wraz z ${childFirstName}!
 
-Twoje konto zostało pomyślnie utworzone. Obecnie przygotowujemy dla Was spersonalizowany plan zajęć.
+Twoje konto zostało pomyślnie utworzone. Czekamy na kontakt z naszej strony i przygotowujemy dla Was spersonalizowany plan zajęć.
 
 Co dalej?
 - Nasz lektor skontaktuje się z Tobą w ciągu 24-48 godzin
@@ -478,4 +478,85 @@ export async function verifyEmailConfig() {
     console.error('❌ Email configuration error:', error);
     return false;
   }
+}
+
+export async function sendProposalEmail(
+  to: string,
+  parentName: string,
+  proposal: {
+    groupName: string;
+    locationName: string;
+    schedule: string;
+    priceMonthly: number;
+  }
+) {
+  await transporter.sendMail({
+    from: {
+      name: "Harry English",
+      address: process.env.EMAIL_USER || "kontakt@harry-english.pl",
+    },
+    to,
+    subject: "Nowa propozycja grupy - Harry English",
+    html: `
+      <p>Dzień dobry ${parentName},</p>
+      <p>Przygotowaliśmy propozycję grupy dla Twojego dziecka:</p>
+      <ul>
+        <li><strong>Grupa:</strong> ${proposal.groupName}</li>
+        <li><strong>Lokalizacja:</strong> ${proposal.locationName}</li>
+        <li><strong>Termin:</strong> ${proposal.schedule}</li>
+        <li><strong>Cena miesięczna:</strong> ${proposal.priceMonthly} zł</li>
+      </ul>
+      <p>Zaloguj się do portalu, aby zaakceptować termin lub poprosić o inny.</p>
+    `,
+    text: `Dzień dobry ${parentName},
+Przygotowaliśmy propozycję grupy:
+- Grupa: ${proposal.groupName}
+- Lokalizacja: ${proposal.locationName}
+- Termin: ${proposal.schedule}
+- Cena miesięczna: ${proposal.priceMonthly} zł
+Zaloguj się do portalu, aby zaakceptować lub poprosić o inny termin.`,
+  });
+}
+
+export async function sendContractEmail(
+  to: string,
+  parentName: string,
+  contractHtml: string
+) {
+  await transporter.sendMail({
+    from: {
+      name: "Harry English",
+      address: process.env.EMAIL_USER || "kontakt@harry-english.pl",
+    },
+    to,
+    subject: "Umowa gotowa do podpisu - Harry English",
+    html: `
+      <p>Dzień dobry ${parentName},</p>
+      <p>Twoja umowa została przygotowana. Zapoznaj się z nią i podpisz ją w portalu.</p>
+      <hr />
+      ${contractHtml}
+    `,
+    text: `Dzień dobry ${parentName}, Twoja umowa została przygotowana. Zaloguj się do portalu i podpisz ją elektronicznie.`,
+  });
+}
+
+export async function sendSignedContractEmail(
+  parentEmail: string,
+  contractHtml: string
+) {
+  const recipients = [parentEmail, "kontakt@harry-english.pl"];
+  await transporter.sendMail({
+    from: {
+      name: "Harry English",
+      address: process.env.EMAIL_USER || "kontakt@harry-english.pl",
+    },
+    to: recipients.join(", "),
+    subject: "Podpisana umowa - Harry English",
+    html: `
+      <p>Umowa została podpisana elektronicznie.</p>
+      <hr />
+      ${contractHtml}
+    `,
+    text: "Umowa została podpisana elektronicznie. Szczegóły znajdują się w wersji HTML wiadomości.",
+  });
 }

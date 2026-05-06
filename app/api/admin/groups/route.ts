@@ -1,0 +1,139 @@
+import { randomUUID } from "crypto";
+import { NextRequest, NextResponse } from "next/server";
+import {
+  canAccessSchoolAdminApis,
+  getRegistrationSchoolId,
+  queryDb,
+  resolveAdminPanelTenant,
+} from "@/lib/db";
+
+function tokenToUserId(token: string): string | null {
+  try {
+    return Buffer.from(token, "base64").toString().split(":")[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+async function ensureAdmin(request: NextRequest): Promise<string | null> {
+  const token = request.cookies.get("auth-token")?.value;
+  if (!token) return null;
+  const userId = tokenToUserId(token);
+  if (!userId) return null;
+  return (await canAccessSchoolAdminApis(userId)) ? userId : null;
+}
+
+export async function GET(request: NextRequest) {
+  const adminId = await ensureAdmin(request);
+  if (!adminId) return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
+
+  const resolved = await resolveAdminPanelTenant(adminId);
+  if (!resolved.ok) {
+    return NextResponse.json({ message: resolved.message }, { status: resolved.status });
+  }
+  const { tenant } = resolved;
+  const schoolClause = tenant.role === "MANAGER" ? `AND g.school_id = $1` : "";
+  const listParams = tenant.role === "MANAGER" ? [tenant.tenantSchoolId] : [];
+
+  try {
+    const groups = await queryDb<{
+      id: string;
+      name: string;
+      level: string | null;
+      max_students: number;
+      active: boolean;
+      teacher_id: string | null;
+      teacher_name: string | null;
+      location_name: string | null;
+      students_count: string;
+    }>(
+      `SELECT
+         g.id,
+         g.name,
+         g.level,
+         g.max_students,
+         g.active,
+         g.teacher_id,
+         CASE WHEN t.id IS NULL THEN NULL ELSE CONCAT(t.first_name, ' ', t.last_name) END AS teacher_name,
+         MAX(l.name) AS location_name,
+         COUNT(DISTINCT gs.id) FILTER (WHERE gs.left_at IS NULL)::text AS students_count
+       FROM groups g
+       LEFT JOIN users t ON t.id = g.teacher_id
+       LEFT JOIN schedule_templates st ON st.group_id = g.id
+       LEFT JOIN locations l ON l.id = st.location_id
+       LEFT JOIN group_students gs ON gs.group_id = g.id
+       WHERE 1=1 ${schoolClause}
+       GROUP BY g.id, t.id
+       ORDER BY g.created_at DESC`,
+      listParams
+    );
+
+    return NextResponse.json({ groups: groups.rows });
+  } catch (error) {
+    console.error("GET groups error:", error);
+    return NextResponse.json({ message: "Błąd pobierania grup" }, { status: 500 });
+  }
+}
+
+export async function POST(request: NextRequest) {
+  const adminId = await ensureAdmin(request);
+  if (!adminId) return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
+
+  const resolved = await resolveAdminPanelTenant(adminId);
+  if (!resolved.ok) {
+    return NextResponse.json({ message: resolved.message }, { status: resolved.status });
+  }
+  const { tenant } = resolved;
+
+  try {
+    const body = await request.json();
+    const {
+      name,
+      level,
+      teacherId,
+      maxStudents = 12,
+      school_id: bodySchoolId,
+      schoolId: bodySchoolIdCamel,
+    }: {
+      name?: string;
+      level?: string;
+      teacherId?: string | null;
+      maxStudents?: number;
+      school_id?: string;
+      schoolId?: string;
+    } = body;
+
+    if (!name) return NextResponse.json({ message: "Nazwa grupy jest wymagana" }, { status: 400 });
+
+    let insertSchoolId: string | null =
+      tenant.role === "MANAGER" ? tenant.tenantSchoolId : null;
+    if (tenant.role === "ADMIN") {
+      const fromBody =
+        (typeof bodySchoolId === "string" && bodySchoolId.trim()) ||
+        (typeof bodySchoolIdCamel === "string" && bodySchoolIdCamel.trim()) ||
+        "";
+      insertSchoolId = fromBody || getRegistrationSchoolId() || null;
+    }
+    if (!insertSchoolId) {
+      return NextResponse.json(
+        { message: "Brak identyfikatora szkoły (school_id / schoolId lub SCHOOL_ID w środowisku)" },
+        { status: 400 }
+      );
+    }
+
+    const inserted = await queryDb<{ id: string }>(
+      `INSERT INTO groups (id, school_id, teacher_id, name, level, max_students, active, created_at, school_year_id)
+       VALUES (
+         $1, $2, $3, $4, $5, $6, TRUE, NOW(),
+         (SELECT id FROM school_years WHERE school_id = $2 AND active = TRUE LIMIT 1)
+       )
+       RETURNING id`,
+      [randomUUID(), insertSchoolId, teacherId ?? null, name.trim(), level ?? null, maxStudents]
+    );
+
+    return NextResponse.json({ id: inserted.rows[0].id, message: "Grupa została utworzona" });
+  } catch (error) {
+    console.error("POST groups error:", error);
+    return NextResponse.json({ message: "Błąd tworzenia grupy" }, { status: 500 });
+  }
+}

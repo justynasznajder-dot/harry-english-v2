@@ -7,12 +7,11 @@ interface UserInfo {
   email: string;
   firstName: string;
   lastName: string;
-  students?: Array<{
-    studentId?: string;
+  children?: Array<{
+    childId?: string;
     firstName: string;
     lastName: string;
-    birthYear: string;
-    location: string;
+    birthDate: string;
     active?: boolean;
     resignationRequested?: boolean;
     resignationReason?: string | null;
@@ -37,11 +36,10 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
   });
   const [showPayments, setShowPayments] = useState(false);
   
-  const [newStudent, setNewStudent] = useState({
+  const [newChild, setNewChild] = useState({
     firstName: '',
     lastName: '',
-    birthYear: '',
-    location: '' as '' | 'Paniówki' | 'Halemba' | 'Orzegów' | 'Kochłowice' | 'Bielszowice',
+    birthDate: '',
   });
 
   const handleAddStudent = async (e: React.FormEvent) => {
@@ -50,19 +48,16 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
 
     const errors: Record<string, string> = {};
     const currentYear = new Date().getFullYear();
-    const birthYearNum = parseInt(newStudent.birthYear);
+    const birthDate = newChild.birthDate;
 
-    if (!newStudent.firstName.trim()) {
+    if (!newChild.firstName.trim()) {
       errors.firstName = 'Pole wymagane';
     }
-    if (!newStudent.lastName.trim()) {
+    if (!newChild.lastName.trim()) {
       errors.lastName = 'Pole wymagane';
     }
-    if (!newStudent.birthYear || !birthYearNum || birthYearNum < 2000 || birthYearNum > currentYear) {
-      errors.birthYear = `Podaj prawidłowy rok urodzenia (2000-${currentYear})`;
-    }
-    if (!newStudent.location) {
-      errors.location = 'Wybierz lokalizację';
+    if (!birthDate) {
+      errors.birthDate = "Wybierz datę urodzenia";
     }
 
     if (Object.keys(errors).length > 0) {
@@ -73,26 +68,25 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
     setSubmitting(true);
 
     try {
-      const response = await fetch('/api/students/add', {
+      const response = await fetch('/api/children/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newStudent),
+        body: JSON.stringify(newChild),
       });
 
       const data = await response.json();
 
       if (response.ok) {
-        if (data.students) {
-          const updatedInfo = { ...userInfo, students: data.students };
+        if (data.children) {
+          const updatedInfo = { ...userInfo, children: data.children };
           onUserInfoUpdate(updatedInfo);
           localStorage.setItem('userInfo', JSON.stringify(updatedInfo));
         }
         
-        setNewStudent({
+        setNewChild({
           firstName: '',
           lastName: '',
-          birthYear: '',
-          location: '',
+          birthDate: '',
         });
         setShowAddStudentForm(false);
         setAddStudentErrors({});
@@ -124,11 +118,11 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
     try {
       if (contactForm.subject === 'rezygnacja') {
         // Wysyłamy rezygnację przez dedykowany endpoint
-        const response = await fetch('/api/students/resign', {
+        const response = await fetch('/api/children/resign', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            studentId: contactForm.studentId,
+            childId: contactForm.studentId,
             reason: contactForm.message.trim(),
           }),
         });
@@ -147,7 +141,7 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
             if (meData.user) {
               const updatedInfo = {
                 ...userInfo,
-                students: meData.user.students || userInfo.students,
+                children: meData.user.children || userInfo.children,
               };
               onUserInfoUpdate(updatedInfo);
               localStorage.setItem('userInfo', JSON.stringify(updatedInfo));
@@ -230,8 +224,8 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
                 </label>
                 <input
                   type="text"
-                  value={newStudent.firstName}
-                  onChange={(e) => setNewStudent({ ...newStudent, firstName: e.target.value })}
+                  value={newChild.firstName}
+                  onChange={(e) => setNewChild({ ...newChild, firstName: e.target.value })}
                   className={`w-full rounded-lg border ${addStudentErrors.firstName ? 'border-red-300' : 'border-gray-300'} px-4 py-2.5 text-gray-900 focus:border-[#175244] focus:ring-2 focus:ring-[#175244]/20 outline-none transition-all`}
                   placeholder="Ania"
                   required
@@ -245,8 +239,8 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
                 </label>
                 <input
                   type="text"
-                  value={newStudent.lastName}
-                  onChange={(e) => setNewStudent({ ...newStudent, lastName: e.target.value })}
+                  value={newChild.lastName}
+                  onChange={(e) => setNewChild({ ...newChild, lastName: e.target.value })}
                   className={`w-full rounded-lg border ${addStudentErrors.lastName ? 'border-red-300' : 'border-gray-300'} px-4 py-2.5 text-gray-900 focus:border-[#175244] focus:ring-2 focus:ring-[#175244]/20 outline-none transition-all`}
                   placeholder="Kowalska"
                   required
@@ -258,39 +252,16 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Rok urodzenia *
+                  Data urodzenia *
                 </label>
                 <input
-                  type="number"
-                  value={newStudent.birthYear}
-                  onChange={(e) => setNewStudent({ ...newStudent, birthYear: e.target.value })}
-                  className={`w-full rounded-lg border ${addStudentErrors.birthYear ? 'border-red-300' : 'border-gray-300'} px-4 py-2.5 text-gray-900 focus:border-[#175244] focus:ring-2 focus:ring-[#175244]/20 outline-none transition-all`}
-                  placeholder="2018"
-                  min="2000"
-                  max={new Date().getFullYear()}
+                  type="date"
+                  value={newChild.birthDate}
+                  onChange={(e) => setNewChild({ ...newChild, birthDate: e.target.value })}
+                  className={`w-full rounded-lg border ${addStudentErrors.birthDate ? 'border-red-300' : 'border-gray-300'} px-4 py-2.5 text-gray-900 focus:border-[#175244] focus:ring-2 focus:ring-[#175244]/20 outline-none transition-all`}
                   required
                 />
-                {addStudentErrors.birthYear && <p className="mt-1 text-xs text-red-600">{addStudentErrors.birthYear}</p>}
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Lokalizacja *
-                </label>
-                <select
-                  value={newStudent.location}
-                  onChange={(e) => setNewStudent({ ...newStudent, location: e.target.value as typeof newStudent.location })}
-                  className={`w-full rounded-lg border ${addStudentErrors.location ? 'border-red-300' : 'border-gray-300'} px-4 py-2.5 text-gray-900 focus:border-[#175244] focus:ring-2 focus:ring-[#175244]/20 outline-none transition-all`}
-                  required
-                >
-                  <option value="">Wybierz lokalizację</option>
-                  <option value="Paniówki">Paniówki</option>
-                  <option value="Halemba">Halemba</option>
-                  <option value="Orzegów">Orzegów</option>
-                  <option value="Kochłowice">Kochłowice</option>
-                  <option value="Bielszowice">Bielszowice</option>
-                </select>
-                {addStudentErrors.location && <p className="mt-1 text-xs text-red-600">{addStudentErrors.location}</p>}
+                {addStudentErrors.birthDate && <p className="mt-1 text-xs text-red-600">{addStudentErrors.birthDate}</p>}
               </div>
             </div>
 
@@ -305,23 +276,23 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
         )}
 
         {/* Lista dzieci */}
-        {userInfo?.students && userInfo.students.length > 0 ? (
+        {userInfo?.children && userInfo.children.length > 0 ? (
           <div className="space-y-4">
-            {userInfo.students.map((student, index) => {
+            {userInfo.children.map((student, index) => {
               const hasResignationRequested = (student as any).resignationRequested;
               
               return (
-                <div key={student.studentId || index} className="p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
+                <div key={student.childId || index} className="p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
                   <div className="flex justify-between items-start">
                     <div className="flex-1">
                       <h3 className="text-lg font-semibold text-[#1f2933]">
                         {student.firstName} {student.lastName}
                       </h3>
                       <p className="text-sm text-gray-600 mt-1">
-                        Rok urodzenia: {student.birthYear} • Lokalizacja: {student.location}
+                        Data urodzenia: {student.birthDate}
                       </p>
-                      {student.studentId && (
-                        <p className="text-xs text-gray-500 mt-1">ID: {student.studentId}</p>
+                      {student.childId && (
+                        <p className="text-xs text-gray-500 mt-1">ID: {student.childId}</p>
                       )}
                       {hasResignationRequested && (
                         <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
@@ -457,13 +428,13 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
                     disabled={submittingContact}
                   >
                     <option value="">Wybierz dziecko</option>
-                    {userInfo.students?.filter(s => !s.resignationRequested).map((student) => (
-                      <option key={student.studentId} value={student.studentId}>
+                    {userInfo.children?.filter(s => !s.resignationRequested).map((student) => (
+                      <option key={student.childId} value={student.childId}>
                         {student.firstName} {student.lastName}
                       </option>
                     ))}
                   </select>
-                  {userInfo.students?.filter(s => !s.resignationRequested).length === 0 && (
+                  {userInfo.children?.filter(s => !s.resignationRequested).length === 0 && (
                     <p className="text-sm text-gray-500 mt-1">Wszystkie dzieci mają już zgłoszoną rezygnację</p>
                   )}
                 </div>

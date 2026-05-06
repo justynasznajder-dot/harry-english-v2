@@ -1,5 +1,55 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getUserById, updateUser, deleteUser, restoreUser, getAllUsers, isAdmin } from "@/lib/db";
+import type { User } from "@/lib/db";
+import {
+  accountTypeToUserRole,
+  canAccessSchoolAdminApis,
+  getUserById,
+  updateUser,
+  deleteUser,
+  restoreUser,
+  getAllUsers,
+  isAdmin,
+  parseUserRole,
+} from "@/lib/db";
+
+/** Manager może działać wyłącznie na użytkownikach swojej szkoły (nie na ADMIN / bez school_id). */
+function managerSchoolScopeError(actor: User, target: User | null): NextResponse | null {
+  if (actor.role !== "MANAGER") return null;
+  if (!actor.school_id) {
+    return NextResponse.json(
+      { message: "Konto zarządcy nie ma przypisanej szkoły." },
+      { status: 400 }
+    );
+  }
+  if (!target) {
+    return NextResponse.json({ message: "Użytkownik nie został znaleziony" }, { status: 404 });
+  }
+  if (target.role === "ADMIN" || target.school_id == null) {
+    return NextResponse.json({ message: "Brak uprawnień do tego użytkownika" }, { status: 403 });
+  }
+  if (target.school_id !== actor.school_id) {
+    return NextResponse.json(
+      { message: "Możesz zarządzać tylko użytkownikami ze swojej szkoły" },
+      { status: 403 }
+    );
+  }
+  return null;
+}
+
+function managerForbiddenSchoolFields(actor: User, body: Record<string, unknown>): NextResponse | null {
+  if (actor.role !== "MANAGER") return null;
+  if (
+    body.school_id !== undefined ||
+    body.schoolId !== undefined ||
+    body.school !== undefined
+  ) {
+    return NextResponse.json(
+      { message: "Zarządca nie może zmieniać przypisania szkoły (school_id)" },
+      { status: 403 }
+    );
+  }
+  return null;
+}
 
 // PUT - aktualizuj użytkownika
 export async function PUT(
@@ -21,18 +71,41 @@ export async function PUT(
       return NextResponse.json({ message: "Nieprawidłowy token" }, { status: 401 });
     }
 
-    const userIsAdmin = await isAdmin(userId);
-    if (!userIsAdmin) {
+    const userCanStaff = await canAccessSchoolAdminApis(userId);
+    if (!userCanStaff) {
       return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
+    }
+
+    const actor = await getUserById(userId);
+    if (!actor) {
+      return NextResponse.json({ message: "Nie znaleziono użytkownika" }, { status: 401 });
     }
 
     const { id } = await params;
     const targetUserId = id;
     const body = await request.json();
 
+    const schoolFieldReject = managerForbiddenSchoolFields(actor, body as Record<string, unknown>);
+    if (schoolFieldReject) return schoolFieldReject;
+
     // Sprawdź czy to operacja przywracania
     if (body.restore === true) {
-      const restored = await restoreUser(targetUserId);
+      const targetUser = await getUserById(targetUserId);
+      const scopeErr = managerSchoolScopeError(actor, targetUser);
+      if (scopeErr) return scopeErr;
+
+      let restoreScope: string | null | undefined;
+      if (actor.role === "MANAGER") {
+        restoreScope = actor.school_id;
+      } else if (targetUser?.role === "ADMIN" && targetUser.school_id == null) {
+        restoreScope = null;
+      } else if (targetUser?.school_id != null) {
+        restoreScope = targetUser.school_id;
+      } else {
+        restoreScope = undefined;
+      }
+
+      const restored = await restoreUser(targetUserId, restoreScope);
       if (!restored) {
         return NextResponse.json({ message: "Użytkownik nie został znaleziony" }, { status: 404 });
       }
@@ -46,6 +119,7 @@ export async function PUT(
         first_name: user.first_name,
         last_name: user.last_name,
         email: user.email,
+        role: user.role,
         account_type: user.account_type,
         confirmed: user.confirmed,
         active: user.active,
@@ -60,12 +134,46 @@ export async function PUT(
     if (body.first_name !== undefined) updateData.first_name = body.first_name;
     if (body.last_name !== undefined) updateData.last_name = body.last_name;
     if (body.email !== undefined) updateData.email = body.email;
-    if (body.account_type !== undefined) updateData.account_type = body.account_type;
+    if (body.role !== undefined) {
+      const pr = parseUserRole(String(body.role));
+      if (!pr) {
+        return NextResponse.json({ message: "Nieprawidłowa rola" }, { status: 400 });
+      }
+      if (pr === "ADMIN" && !(await isAdmin(userId))) {
+        return NextResponse.json(
+          { message: "Tylko super administrator (ADMIN) może nadać rolę ADMIN" },
+          { status: 403 }
+        );
+      }
+      if (actor.role === "MANAGER" && (pr === "ADMIN" || pr === "MANAGER")) {
+        return NextResponse.json(
+          { message: "Zarządca nie może nadać roli ADMIN ani MANAGER" },
+          { status: 403 }
+        );
+      }
+      updateData.role = pr;
+    }
+    if (body.account_type !== undefined) {
+      if (actor.role === "MANAGER") {
+        const elevated = accountTypeToUserRole(body.account_type as "user" | "admin" | "lektor");
+        if (elevated === "ADMIN" || elevated === "MANAGER") {
+          return NextResponse.json(
+            { message: "Zarządca nie może nadać roli ADMIN ani MANAGER" },
+            { status: 403 }
+          );
+        }
+      }
+      updateData.account_type = body.account_type;
+    }
     if (body.confirmed !== undefined) updateData.confirmed = body.confirmed;
 
     if (Object.keys(updateData).length === 0) {
       return NextResponse.json({ message: "Brak danych do aktualizacji" }, { status: 400 });
     }
+
+    const targetForUpdate = await getUserById(targetUserId);
+    const updateScopeErr = managerSchoolScopeError(actor, targetForUpdate);
+    if (updateScopeErr) return updateScopeErr;
 
     const updated = await updateUser(targetUserId, updateData);
 
@@ -84,6 +192,7 @@ export async function PUT(
       first_name: user.first_name,
       last_name: user.last_name,
       email: user.email,
+      role: user.role,
       account_type: user.account_type,
       confirmed: user.confirmed,
       active: user.active,
@@ -128,9 +237,14 @@ export async function DELETE(
       return NextResponse.json({ message: "Nieprawidłowy token" }, { status: 401 });
     }
 
-    const userIsAdmin = await isAdmin(userId);
-    if (!userIsAdmin) {
+    const userCanStaff = await canAccessSchoolAdminApis(userId);
+    if (!userCanStaff) {
       return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
+    }
+
+    const actor = await getUserById(userId);
+    if (!actor) {
+      return NextResponse.json({ message: "Nie znaleziono użytkownika" }, { status: 401 });
     }
 
     const { id } = await params;
@@ -144,8 +258,23 @@ export async function DELETE(
       );
     }
 
+    const targetUser = await getUserById(targetUserId);
+    const deleteScopeErr = managerSchoolScopeError(actor, targetUser);
+    if (deleteScopeErr) return deleteScopeErr;
+
+    let deleteScope: string | null | undefined;
+    if (actor.role === "MANAGER") {
+      deleteScope = actor.school_id;
+    } else if (targetUser?.role === "ADMIN" && targetUser.school_id == null) {
+      deleteScope = null;
+    } else if (targetUser?.school_id != null) {
+      deleteScope = targetUser.school_id;
+    } else {
+      deleteScope = undefined;
+    }
+
     console.log(`Attempting to mark user ${targetUserId} as former`);
-    const deleted = await deleteUser(targetUserId);
+    const deleted = await deleteUser(targetUserId, deleteScope);
 
     if (!deleted) {
       console.log(`User ${targetUserId} not found`);
@@ -164,6 +293,7 @@ export async function DELETE(
         first_name: user.first_name,
         last_name: user.last_name,
         email: user.email,
+        role: user.role,
         account_type: user.account_type,
         confirmed: user.confirmed,
         active: user.active,

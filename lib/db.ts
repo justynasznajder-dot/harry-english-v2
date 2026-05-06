@@ -1,434 +1,1598 @@
-import { Pool } from 'pg';
+import { randomUUID } from "crypto";
+import { Pool, type PoolClient, type QueryResultRow } from "pg";
 
-// Połączenie z bazą PostgreSQL (Neon)
-// Priorytet: DATABASE_URL (Neon) > POSTGRES_URL > POSTGRES_PRISMA_URL > PRISMA_DATABASE_URL
-const getConnectionString = () => {
-  // Neon używa standardowo DATABASE_URL
-  if (process.env.DATABASE_URL) {
-    return process.env.DATABASE_URL;
-  }
-  if (process.env.POSTGRES_URL) {
-    return process.env.POSTGRES_URL;
-  }
-  if (process.env.POSTGRES_PRISMA_URL) {
-    return process.env.POSTGRES_PRISMA_URL;
-  }
-  if (process.env.PRISMA_DATABASE_URL) {
-    // Usuń prefix prisma+ jeśli istnieje
-    return process.env.PRISMA_DATABASE_URL.replace(/^prisma\+/, '');
-  }
-  throw new Error('No PostgreSQL connection string found in environment variables');
-};
+/** Domyślna szkoła z env — multi-tenant (pusty string gdy brak `SCHOOL_ID`). */
+export const DEFAULT_SCHOOL_ID = process.env.SCHOOL_ID || "";
 
-const pool = new Pool({
-  connectionString: getConnectionString(),
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-});
-
-// Flagi migracji - zapamiętują, czy kolumny zostały już usunięte
-let isFormerUserColumnRemoved = false;
-let isFormerStudentColumnRemoved = false;
-
-// Helper do wykonywania zapytań SQL
-const sql = (strings: TemplateStringsArray, ...values: any[]) => {
-  let query = strings[0];
-  for (let i = 0; i < values.length; i++) {
-    query += `$${i + 1}`;
-    query += strings[i + 1];
-  }
-  return pool.query(query, values);
-};
-
-// Typy
-export type AccountType = 'user' | 'admin' | 'lektor';
-export type Location = 'Paniówki' | 'Halemba' | 'Orzegów' | 'Kochłowice' | 'Bielszowice';
-
-export interface User {
-  id: string; // Format: 0001, 0002, etc.
-  first_name: string;
-  last_name: string;
-  email: string;
-  password_hash: string;
-  account_type: AccountType;
-  confirmed: boolean;
-  reset_token?: string | null;
-  reset_token_expiry?: Date | null;
-  active?: boolean;
-  resignation_date?: Date | null;
-  created_at: Date;
-  last_login?: Date | null;
+/** Szkoła dla rejestracji i publicznych endpointów (np. produkcja harry-english.pl). */
+export function getRegistrationSchoolId(): string {
+  const raw = process.env.SCHOOL_ID?.trim();
+  return raw && raw.length > 0 ? raw : DEFAULT_SCHOOL_ID;
 }
 
+/** Dozwolone wartości kolumny `users.role` (TEXT w PostgreSQL). */
+export const USER_ROLES = ["ADMIN", "MANAGER", "TEACHER", "PARENT", "CHILD"] as const;
+export type UserRole = (typeof USER_ROLES)[number];
+
+export function parseUserRole(raw: string | null | undefined): UserRole | null {
+  if (raw == null || String(raw).trim() === "") return null;
+  const u = String(raw).trim().toUpperCase();
+  return (USER_ROLES as readonly string[]).includes(u) ? (u as UserRole) : null;
+}
+
+export type AccessLevel = "PENDING" | "PROPOSED" | "CONTRACT_SENT" | "ACTIVE";
+
+/** @deprecated Stary model UI / API — mapowany na `UserRole` */
+export type AccountType = "user" | "admin" | "lektor";
+
+/** @deprecated Lokalizacje zajęć są w tabeli `locations`; pole zostaje dla formularzy */
+export type Location = "Paniówki" | "Halemba" | "Orzegów" | "Kochłowice" | "Bielszowice";
+
+function getConnectionString(): string {
+  const url = process.env.DATABASE_URL;
+  if (url) return url;
+  throw new Error("DATABASE_URL is not set");
+}
+
+const connectionString = getConnectionString();
+
+function pgNeedsSsl(url: string): boolean {
+  try {
+    const u = new URL(url.replace(/^postgres(ql)?:/i, "http:"));
+    const h = u.hostname.toLowerCase();
+    return h !== "localhost" && h !== "127.0.0.1";
+  } catch {
+    return true;
+  }
+}
+
+const pool = new Pool({
+  connectionString,
+  ssl: pgNeedsSsl(connectionString)
+    ? { rejectUnauthorized: false }
+    : undefined,
+});
+
+/** Cache kształtu bazy (legacy vs Prisma) — jedno zapytanie na proces. */
+type DbShape = {
+  userHasSchoolId: boolean;
+  userHasRole: boolean;
+  userHasPhone: boolean;
+  userHasAccessLevel: boolean;
+  hasChildrenTable: boolean;
+  hasStudentsTable: boolean;
+  childHasConfirmed: boolean;
+  childHasEnrollmentRequestId: boolean;
+  childHasPreferredLocationId: boolean;
+};
+
+let dbShapeCache: DbShape | null = null;
+
+export async function getDbShape(): Promise<DbShape> {
+  if (dbShapeCache) return dbShapeCache;
+  const r = await pool.query<{
+    user_has_school_id: boolean;
+    user_has_role: boolean;
+    user_has_phone: boolean;
+    user_has_access_level: boolean;
+    has_children: boolean;
+    has_students: boolean;
+    child_has_confirmed: boolean;
+    child_has_enrollment_request_id: boolean;
+    child_has_preferred_location_id: boolean;
+  }>(
+    `SELECT
+       EXISTS(
+         SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'school_id'
+       ) AS user_has_school_id,
+       EXISTS(
+         SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'role'
+       ) AS user_has_role,
+       EXISTS(
+         SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'phone'
+       ) AS user_has_phone,
+       EXISTS(
+         SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'access_level'
+       ) AS user_has_access_level,
+       EXISTS(
+         SELECT 1 FROM information_schema.tables
+         WHERE table_schema = 'public' AND table_name = 'children'
+       ) AS has_children,
+       EXISTS(
+         SELECT 1 FROM information_schema.tables
+         WHERE table_schema = 'public' AND table_name = 'students'
+       ) AS has_students,
+       EXISTS(
+         SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'children' AND column_name = 'confirmed'
+       ) AS child_has_confirmed,
+       EXISTS(
+         SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'children' AND column_name = 'enrollment_request_id'
+       ) AS child_has_enrollment_request_id,
+       EXISTS(
+         SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'children' AND column_name = 'preferred_location_id'
+       ) AS child_has_preferred_location_id`
+  );
+  const row = r.rows[0];
+  dbShapeCache = {
+    userHasSchoolId: Boolean(row?.user_has_school_id),
+    userHasRole: Boolean(row?.user_has_role),
+    userHasPhone: Boolean(row?.user_has_phone),
+    userHasAccessLevel: Boolean(row?.user_has_access_level),
+    hasChildrenTable: Boolean(row?.has_children),
+    hasStudentsTable: Boolean(row?.has_students),
+    childHasConfirmed: Boolean(row?.child_has_confirmed),
+    childHasEnrollmentRequestId: Boolean(row?.child_has_enrollment_request_id),
+    childHasPreferredLocationId: Boolean(row?.child_has_preferred_location_id),
+  };
+  return dbShapeCache;
+}
+
+// --- Role mapping (legacy API ↔ DB) ---
+
+export function userRoleToAccountType(role: UserRole): AccountType {
+  if (role === "ADMIN" || role === "MANAGER") return "admin";
+  if (role === "TEACHER") return "lektor";
+  return "user";
+}
+
+export function accountTypeToUserRole(t: AccountType): UserRole {
+  if (t === "admin") return "ADMIN";
+  if (t === "lektor") return "TEACHER";
+  return "PARENT";
+}
+
+export interface User {
+  id: string;
+  /** NULL wyłącznie dla roli ADMIN (globalny super admin). */
+  school_id: string | null;
+  email: string;
+  password_hash: string;
+  role: UserRole;
+  access_level: AccessLevel;
+  /** Uzupełniane przy odczycie — zgodność ze starym API */
+  account_type: AccountType;
+  first_name: string;
+  last_name: string;
+  phone: string | null;
+  active: boolean;
+  confirmed: boolean;
+  reset_token: string | null;
+  reset_token_expiry: Date | null;
+  resignation_date: Date | null;
+  last_login: Date | null;
+  created_at: Date;
+}
+
+export interface Child {
+  id: string;
+  school_id: string;
+  parent_id: string;
+  first_name: string;
+  last_name: string;
+  birth_date: string;
+  avatar_url: string | null;
+  xp_total: number;
+  active: boolean;
+  confirmed: boolean;
+  enrollment_request_id: string | null;
+  resignation_requested: boolean;
+  resignation_reason: string | null;
+  resignation_date: Date | null;
+  created_at: Date;
+}
+
+/** Kształt zwracany dawniej przez warstwę „students” */
 export interface Student {
-  student_id: string; // Format: 0001-01, 0001-02, etc.
-  user_id: string; // FK do users.id
+  student_id: string;
+  user_id: string;
   first_name: string;
   last_name: string;
   birth_year: string;
-  location: Location;
+  location: Location | "";
   active: boolean;
+  confirmed: boolean;
+  enrollment_request_id: string | null;
   resignation_requested: boolean;
   resignation_reason?: string | null;
   resignation_date?: Date | null;
   created_at?: Date;
 }
 
-// ====================================
-// INICJALIZACJA BAZY DANYCH
-// ====================================
+type UserRow = QueryResultRow & {
+  id: string;
+  school_id: string;
+  email: string;
+  password_hash: string;
+  role: UserRole;
+  first_name: string;
+  last_name: string;
+  phone: string | null;
+  active: boolean;
+  confirmed: boolean;
+  reset_token: string | null;
+  reset_token_expiry: Date | null;
+  resignation_date: Date | null;
+  last_login: Date | null;
+  created_at: Date;
+};
+
+let staffAdminEmailCache: Set<string> | null = null;
+let staffManagerEmailCache: Set<string> | null = null;
+
+/** Maile super admina — wymuszają rolę ADMIN przy błędnym `role` w DB. */
+function staffAdminEmailSet(): Set<string> {
+  if (staffAdminEmailCache) return staffAdminEmailCache;
+  const raw =
+    process.env.STAFF_ADMIN_EMAILS ??
+    process.env.ADMIN_STAFF_EMAILS ??
+    "";
+  staffAdminEmailCache = new Set(
+    raw
+      .split(/[,;\s]+/)
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean)
+  );
+  return staffAdminEmailCache;
+}
+
+/** Maile zarządcy szkoły — wymuszają rolę MANAGER. */
+function staffManagerEmailSet(): Set<string> {
+  if (staffManagerEmailCache) return staffManagerEmailCache;
+  const raw = process.env.STAFF_MANAGER_EMAILS ?? "";
+  staffManagerEmailCache = new Set(
+    raw
+      .split(/[,;\s]+/)
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean)
+  );
+  return staffManagerEmailCache;
+}
 
 /**
- * Tworzy sekwencję dla ID użytkowników (format 0001, 0002...)
+ * Przy migracji ze starego modelu: `account_type = admin|lektor` jest źródłem prawdy dla personelu,
+ * nawet gdy kolumna `role` została błędnie ustawiona (np. PARENT).
+ * Dodatkowo: `STAFF_ADMIN_EMAILS` → ADMIN, `STAFF_MANAGER_EMAILS` → MANAGER.
  */
-async function ensureUserSequenceExists(): Promise<void> {
-  try {
-    await sql`
-      CREATE SEQUENCE IF NOT EXISTS user_id_seq START 1;
-    `;
-  } catch (error) {
-    console.error('Error creating user_id sequence:', error);
-    throw error;
+function resolveUserRoleFromRow(row: QueryResultRow): UserRole {
+  const emailNorm =
+    row.email != null ? String(row.email).trim().toLowerCase() : "";
+  if (emailNorm && staffAdminEmailSet().has(emailNorm)) {
+    return "ADMIN";
   }
-}
-
-/**
- * Generuje nowe ID użytkownika w formacie 0001, 0002...
- */
-async function generateUserId(): Promise<string> {
-  try {
-    await ensureUserSequenceExists();
-    
-    const result = await sql`
-      SELECT LPAD(nextval('user_id_seq')::TEXT, 4, '0') as user_id;
-    `;
-    
-    return result.rows[0].user_id;
-  } catch (error) {
-    console.error('Error generating user ID:', error);
-    throw error;
+  if (emailNorm && staffManagerEmailSet().has(emailNorm)) {
+    return "MANAGER";
   }
-}
 
-/**
- * Tworzy tabelę users jeśli nie istnieje
- */
-async function ensureUsersTableExists(): Promise<void> {
-  try {
-    await sql`
-      CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        first_name VARCHAR(100) NOT NULL,
-        last_name VARCHAR(100) NOT NULL,
-        email VARCHAR(255) UNIQUE NOT NULL,
-        password_hash VARCHAR(255) NOT NULL,
-        account_type VARCHAR(20) DEFAULT 'user' NOT NULL,
-        confirmed BOOLEAN DEFAULT FALSE NOT NULL,
-        reset_token VARCHAR(255),
-        reset_token_expiry TIMESTAMP,
-        active BOOLEAN DEFAULT TRUE NOT NULL,
-        resignation_date TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        last_login TIMESTAMP,
-        CONSTRAINT valid_account_type CHECK (account_type IN ('user', 'admin', 'lektor'))
-      );
-    `;
-    
-    // Dodaj kolumny jeśli nie istnieją (dla istniejących tabel)
-    try {
-      await sql`
-        ALTER TABLE users 
-        ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE NOT NULL;
-      `;
-    } catch (error) {
-      console.log('Column active may already exist');
-    }
-    
-    try {
-      await sql`
-        ALTER TABLE users 
-        ADD COLUMN IF NOT EXISTS resignation_date TIMESTAMP;
-      `;
-    } catch (error) {
-      console.log('Column resignation_date may already exist');
-    }
-    
-    // Usuń kolumnę is_former_user jeśli istnieje (migracja - tylko raz)
-    if (!isFormerUserColumnRemoved) {
-      try {
-        const columnExists = await sql`
-          SELECT column_name 
-          FROM information_schema.columns 
-          WHERE table_name = 'users' AND column_name = 'is_former_user'
-        `;
-        
-        if (columnExists.rows.length > 0) {
-          await sql`
-            ALTER TABLE users 
-            DROP COLUMN is_former_user;
-          `;
-          console.log('✅ Removed is_former_user column from users table');
-        }
-        isFormerUserColumnRemoved = true;
-      } catch (error) {
-        // Ignoruj błąd - kolumna może już nie istnieć
-        isFormerUserColumnRemoved = true;
-      }
-    }
-    
-    // Indeksy dla szybszego wyszukiwania
-    await sql`
-      CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-    `;
-    
-    await sql`
-      CREATE INDEX IF NOT EXISTS idx_users_reset_token ON users(reset_token);
-    `;
-    
-    await sql`
-      CREATE INDEX IF NOT EXISTS idx_users_account_type ON users(account_type);
-    `;
-    
-    console.log('✅ Users table ready');
-  } catch (error) {
-    console.error('Error ensuring users table exists:', error);
-    throw error;
+  const atRaw =
+    row.account_type != null
+      ? String(row.account_type).trim().toLowerCase()
+      : "";
+  if (atRaw === "admin") return "ADMIN";
+  if (atRaw === "lektor") return "TEACHER";
+
+  const raw = row.role != null ? String(row.role).trim() : "";
+  if (raw) {
+    const parsed = parseUserRole(raw);
+    if (parsed) return parsed;
   }
+
+  const at = row.account_type as AccountType | null | undefined;
+  return accountTypeToUserRole((at as AccountType) || "user");
 }
 
-/**
- * Tworzy tabelę students jeśli nie istnieje
- */
-async function ensureStudentsTableExists(): Promise<void> {
-  try {
-    await sql`
-      CREATE TABLE IF NOT EXISTS students (
-        student_id TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL,
-        first_name VARCHAR(100) NOT NULL,
-        last_name VARCHAR(100) NOT NULL,
-        birth_year VARCHAR(4) NOT NULL,
-        location VARCHAR(50) NOT NULL,
-        active BOOLEAN DEFAULT FALSE NOT NULL,
-        resignation_requested BOOLEAN DEFAULT FALSE NOT NULL,
-        resignation_reason TEXT,
-        resignation_date TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-        CONSTRAINT valid_location CHECK (location IN ('Paniówki', 'Halemba', 'Orzegów', 'Kochłowice', 'Bielszowice'))
-      );
-    `;
-    
-    // Indeks dla szybszego wyszukiwania
-    await sql`
-      CREATE INDEX IF NOT EXISTS idx_students_user_id ON students(user_id);
-    `;
-    
-    await sql`
-      CREATE INDEX IF NOT EXISTS idx_students_location ON students(location);
-    `;
-    
-    await sql`
-      CREATE INDEX IF NOT EXISTS idx_students_student_id ON students(student_id);
-    `;
-    
-    // Migracja: dodaj kolumny rezygnacji jeśli nie istnieją
-    try {
-      await sql`
-        ALTER TABLE students 
-        ADD COLUMN IF NOT EXISTS resignation_requested BOOLEAN DEFAULT FALSE NOT NULL;
-      `;
-    } catch (error) {
-      // Kolumna może już istnieć, ignoruj błąd
-      console.log('Column resignation_requested may already exist');
-    }
-    
-    try {
-      await sql`
-        ALTER TABLE students 
-        ADD COLUMN IF NOT EXISTS resignation_reason TEXT;
-      `;
-    } catch (error) {
-      // Kolumna może już istnieć, ignoruj błąd
-      console.log('Column resignation_reason may already exist');
-    }
-    
-    try {
-      await sql`
-        ALTER TABLE students 
-        ADD COLUMN IF NOT EXISTS resignation_date TIMESTAMP;
-      `;
-    } catch (error) {
-      // Kolumna może już istnieć, ignoruj błąd
-      console.log('Column resignation_date may already exist');
-    }
-    
-    // Usuń kolumnę is_former_student jeśli istnieje (migracja - tylko raz)
-    if (!isFormerStudentColumnRemoved) {
-      try {
-        const columnExists = await sql`
-          SELECT column_name 
-          FROM information_schema.columns 
-          WHERE table_name = 'students' AND column_name = 'is_former_student'
-        `;
-        
-        if (columnExists.rows.length > 0) {
-          await sql`
-            ALTER TABLE students 
-            DROP COLUMN is_former_student;
-          `;
-          console.log('✅ Removed is_former_student column from students table');
-        }
-        isFormerStudentColumnRemoved = true;
-      } catch (error) {
-        // Ignoruj błąd - kolumna może już nie istnieć
-        isFormerStudentColumnRemoved = true;
-      }
-    }
-    
-    console.log('✅ Students table ready');
-  } catch (error) {
-    console.error('Error ensuring students table exists:', error);
-    throw error;
-  }
+type ChildRow = QueryResultRow & {
+  id: string;
+  school_id: string;
+  parent_id: string;
+  first_name: string;
+  last_name: string;
+  birth_date: Date | string;
+  avatar_url: string | null;
+  xp_total: number;
+  active: boolean;
+  confirmed: boolean;
+  enrollment_request_id: string | null;
+  resignation_requested: boolean;
+  resignation_reason: string | null;
+  resignation_date: Date | null;
+  created_at: Date;
+};
+
+function mapUserRow(row: QueryResultRow): User {
+  const role = resolveUserRoleFromRow(row);
+  const rawSid = row.school_id as string | null | undefined;
+  const hasSid = rawSid != null && String(rawSid).trim() !== "";
+  const school_id = hasSid
+    ? String(rawSid)
+    : role === "ADMIN"
+      ? null
+      : DEFAULT_SCHOOL_ID;
+  return {
+    id: row.id as string,
+    school_id,
+    email: row.email as string,
+    password_hash: row.password_hash as string,
+    role,
+    access_level: (row.access_level as AccessLevel | undefined) ?? "ACTIVE",
+    account_type: userRoleToAccountType(role),
+    first_name: row.first_name as string,
+    last_name: row.last_name as string,
+    phone: row.phone != null ? (row.phone as string) : null,
+    active: row.active === undefined ? true : Boolean(row.active),
+    confirmed: Boolean(row.confirmed),
+    reset_token: row.reset_token != null ? (row.reset_token as string) : null,
+    reset_token_expiry: (row.reset_token_expiry as Date | null) ?? null,
+    resignation_date: (row.resignation_date as Date | null) ?? null,
+    last_login: (row.last_login as Date | null) ?? null,
+    created_at: row.created_at as Date,
+  };
 }
 
-/**
- * Inicjalizuje wszystkie tabele
- */
-async function ensureTablesExist(): Promise<void> {
-  await ensureUsersTableExists();
-  await ensureStudentsTableExists();
-  await ensureUserSequenceExists();
+function birthDateToIso(d: Date | string): string {
+  if (typeof d === "string") return d.slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
-// ====================================
-// FUNKCJE DO ZARZĄDZANIA UŻYTKOWNIKAMI
-// ====================================
+function birthYearFromBirthDate(d: Date | string): string {
+  if (typeof d === "string") return d.slice(0, 4);
+  return String(d.getFullYear());
+}
 
-/**
- * Pobiera użytkownika po email
- */
+export function childToLegacyStudent(
+  row: Child | ChildRow,
+  locationHint?: Location | ""
+): Student {
+  const c = row as ChildRow;
+  const birth_date = birthDateToIso(c.birth_date);
+  return {
+    student_id: c.id,
+    user_id: c.parent_id,
+    first_name: c.first_name,
+    last_name: c.last_name,
+    birth_year: birthYearFromBirthDate(c.birth_date),
+    location: (locationHint ?? "") as Location | "",
+    active: c.active,
+    confirmed: (c as QueryResultRow).confirmed === undefined ? false : Boolean((c as QueryResultRow).confirmed),
+    enrollment_request_id:
+      ((c as QueryResultRow).enrollment_request_id as string | null | undefined) ?? null,
+    resignation_requested: c.resignation_requested,
+    resignation_reason: c.resignation_reason,
+    resignation_date: c.resignation_date ?? undefined,
+    created_at: c.created_at,
+  };
+}
+
+function mapChildRow(row: ChildRow): Child {
+  return {
+    id: row.id,
+    school_id: row.school_id,
+    parent_id: row.parent_id,
+    first_name: row.first_name,
+    last_name: row.last_name,
+    birth_date: birthDateToIso(row.birth_date),
+    avatar_url: row.avatar_url,
+    xp_total: row.xp_total,
+    active: row.active,
+    confirmed: row.confirmed ?? false,
+    enrollment_request_id: row.enrollment_request_id ?? null,
+    resignation_requested: row.resignation_requested,
+    resignation_reason: row.resignation_reason,
+    resignation_date: row.resignation_date,
+    created_at: row.created_at,
+  };
+}
+
+/** Wiersz tabeli `students` (stary schemat) → `Child`. */
+function studentRowToChild(row: QueryResultRow): Child {
+  const birthYear = String(row.birth_year ?? "").slice(0, 4);
+  const birth_date =
+    birthYear.length === 4 && /^\d{4}$/.test(birthYear)
+      ? `${birthYear}-01-01`
+      : "2000-01-01";
+  return {
+    id: row.student_id as string,
+    school_id: DEFAULT_SCHOOL_ID,
+    parent_id: row.user_id as string,
+    first_name: row.first_name as string,
+    last_name: row.last_name as string,
+    birth_date,
+    avatar_url: null,
+    xp_total: 0,
+    active: row.active !== false,
+    confirmed: false,
+    enrollment_request_id: null,
+    resignation_requested: Boolean(row.resignation_requested),
+    resignation_reason: (row.resignation_reason as string | null) ?? null,
+    resignation_date: (row.resignation_date as Date | null) ?? null,
+    created_at: (row.created_at as Date) ?? new Date(),
+  };
+}
+
+// --- Users ---
+
 export async function getUserByEmail(email: string): Promise<User | null> {
-  try {
-    await ensureTablesExist();
-    
-    const result = await sql`
-      SELECT * FROM users 
-      WHERE LOWER(email) = LOWER(${email})
-      LIMIT 1
-    `;
-    
-    return result.rows[0] || null;
-  } catch (error) {
-    console.error('Error fetching user by email:', error);
-    throw error;
-  }
+  const shape = await getDbShape();
+  const r = shape.userHasSchoolId
+    ? await pool.query<UserRow>(
+        `SELECT * FROM users
+         WHERE LOWER(email::text) = LOWER($1::text)
+           AND (
+             school_id IS NOT DISTINCT FROM $2::text
+             OR (role = 'ADMIN' AND school_id IS NULL)
+           )
+         ORDER BY
+           CASE WHEN school_id IS NOT DISTINCT FROM $2::text THEN 0 ELSE 1 END
+         LIMIT 1`,
+        [email, getRegistrationSchoolId()]
+      )
+    : await pool.query<UserRow>(
+        `SELECT * FROM users
+         WHERE LOWER(email::text) = LOWER($1::text)
+         LIMIT 1`,
+        [email]
+      );
+  return r.rows[0] ? mapUserRow(r.rows[0]) : null;
 }
 
-/**
- * Pobiera użytkownika po ID
- */
 export async function getUserById(id: string): Promise<User | null> {
-  try {
-    await ensureTablesExist();
-    
-    const result = await sql`
-      SELECT * FROM users 
-      WHERE id = ${id}
-      LIMIT 1
-    `;
-    
-    return result.rows[0] || null;
-  } catch (error) {
-    console.error('Error fetching user by ID:', error);
-    throw error;
-  }
+  const r = await pool.query<UserRow>(
+    `SELECT * FROM users WHERE id = $1 LIMIT 1`,
+    [id]
+  );
+  return r.rows[0] ? mapUserRow(r.rows[0]) : null;
 }
 
-/**
- * Tworzy nowego użytkownika (domyślnie z typem 'user')
- */
+/** Tenant scope for admin panel APIs: MANAGER is bound to actor.school_id; ADMIN is global (no school filter on reads). */
+export type ResolvedAdminPanelTenant =
+  | { role: "MANAGER"; tenantSchoolId: string }
+  | { role: "ADMIN"; tenantSchoolId: null };
+
+export async function resolveAdminPanelTenant(
+  userId: string
+): Promise<
+  | { ok: true; tenant: ResolvedAdminPanelTenant }
+  | { ok: false; status: number; message: string }
+> {
+  const actor = await getUserById(userId);
+  if (!actor) {
+    return { ok: false, status: 401, message: "Nie znaleziono użytkownika" };
+  }
+  if (actor.role === "MANAGER") {
+    if (!actor.school_id) {
+      return {
+        ok: false,
+        status: 400,
+        message: "Konto zarządcy nie ma przypisanej szkoły.",
+      };
+    }
+    return {
+      ok: true,
+      tenant: { role: "MANAGER", tenantSchoolId: actor.school_id },
+    };
+  }
+  if (actor.role === "ADMIN") {
+    return { ok: true, tenant: { role: "ADMIN", tenantSchoolId: null } };
+  }
+  return { ok: false, status: 403, message: "Brak uprawnień" };
+}
+
+export async function emailExists(
+  email: string,
+  schoolId: string = DEFAULT_SCHOOL_ID
+): Promise<boolean> {
+  const shape = await getDbShape();
+  const r = shape.userHasSchoolId
+    ? await pool.query<{ exists: boolean }>(
+        `SELECT EXISTS(
+           SELECT 1 FROM users
+           WHERE school_id = $1 AND LOWER(email::text) = LOWER($2::text)
+         ) AS exists`,
+        [schoolId, email]
+      )
+    : await pool.query<{ exists: boolean }>(
+        `SELECT EXISTS(
+           SELECT 1 FROM users
+           WHERE LOWER(email::text) = LOWER($1::text)
+         ) AS exists`,
+        [email]
+      );
+  return Boolean(r.rows[0]?.exists);
+}
+
 export async function createUser(data: {
   email: string;
   passwordHash: string;
   firstName: string;
   lastName: string;
-  accountType?: AccountType; // Opcjonalne, domyślnie 'user'
+  role?: UserRole;
+  accountType?: AccountType;
+  /** Dla ADMIN można pominąć lub podać null (tylko ADMIN może mieć school_id NULL w bazie). */
+  schoolId?: string | null;
+  phone?: string | null;
+  confirmed?: boolean;
+  accessLevel?: AccessLevel;
 }): Promise<User> {
-  try {
-    await ensureTablesExist();
-    
-    // Generuj ID w formacie 0001, 0002...
-    const userId = await generateUserId();
-    
-    const result = await sql`
-      INSERT INTO users (
-        id,
-        email, 
-        password_hash, 
-        first_name, 
-        last_name,
-        account_type,
-        confirmed
-      )
-      VALUES (
-        ${userId},
-        ${data.email.toLowerCase()},
-        ${data.passwordHash},
-        ${data.firstName},
-        ${data.lastName},
-        ${data.accountType || 'user'},
-        FALSE
-      )
-      RETURNING *
-    `;
-    
-    return result.rows[0];
-  } catch (error) {
-    console.error('Error creating user:', error);
-    throw error;
+  const id = randomUUID();
+  const role =
+    data.role ??
+    (data.accountType != null
+      ? accountTypeToUserRole(data.accountType)
+      : "PARENT");
+  const confirmed = data.confirmed ?? false;
+  const accessLevel = data.accessLevel ?? "ACTIVE";
+  const shape = await getDbShape();
+
+  let insertSchoolId: string | null;
+  if (role === "ADMIN") {
+    const raw = data.schoolId;
+    insertSchoolId =
+      raw != null && String(raw).trim() !== "" ? String(raw).trim() : null;
+  } else {
+    if (data.schoolId == null || String(data.schoolId).trim() === "") {
+      throw new Error("Brak identyfikatora szkoły — użytkownik musi należeć do szkoły");
+    }
+    insertSchoolId = String(data.schoolId).trim();
   }
+
+  if (shape.userHasSchoolId && insertSchoolId != null) {
+    await ensureDefaultSchoolRow(pool, insertSchoolId);
+  }
+
+  if (shape.userHasRole) {
+    const r = shape.userHasAccessLevel
+      ? await pool.query<UserRow>(
+          `INSERT INTO users (
+             id, school_id, email, password_hash, role,
+             first_name, last_name, phone, active, confirmed, access_level
+           ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9, $10)
+           RETURNING *`,
+          [
+            id,
+            insertSchoolId,
+            data.email,
+            data.passwordHash,
+            role,
+            data.firstName,
+            data.lastName,
+            data.phone ?? null,
+            confirmed,
+            accessLevel,
+          ]
+        )
+      : await pool.query<UserRow>(
+          `INSERT INTO users (
+             id, school_id, email, password_hash, role,
+             first_name, last_name, phone, active, confirmed
+           ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9)
+           RETURNING *`,
+          [
+            id,
+            insertSchoolId,
+            data.email,
+            data.passwordHash,
+            role,
+            data.firstName,
+            data.lastName,
+            data.phone ?? null,
+            confirmed,
+          ]
+        );
+    return mapUserRow(r.rows[0]);
+  }
+
+  const legacyType = userRoleToAccountType(role);
+  const r = await pool.query<UserRow>(
+    `INSERT INTO users (
+       id, email, password_hash, account_type,
+       first_name, last_name, confirmed, active
+     ) VALUES ($1, LOWER($2), $3, $4, $5, $6, $7, TRUE)
+     RETURNING *`,
+    [
+      id,
+      data.email,
+      data.passwordHash,
+      legacyType,
+      data.firstName,
+      data.lastName,
+      confirmed,
+    ]
+  );
+  return mapUserRow(r.rows[0]);
+}
+
+export async function updateUser(
+  userId: string,
+  data: Partial<{
+    first_name: string;
+    last_name: string;
+    email: string;
+    role: UserRole;
+    account_type: AccountType;
+    confirmed: boolean;
+    phone: string | null;
+  }>
+): Promise<boolean> {
+  const shape = await getDbShape();
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  let i = 1;
+
+  if (data.first_name !== undefined) {
+    sets.push(`first_name = $${i++}`);
+    vals.push(data.first_name);
+  }
+  if (data.last_name !== undefined) {
+    sets.push(`last_name = $${i++}`);
+    vals.push(data.last_name);
+  }
+  if (data.email !== undefined) {
+    sets.push(`email = $${i++}`);
+    vals.push(data.email.toLowerCase());
+  }
+  if (data.role !== undefined) {
+    if (shape.userHasRole) {
+      sets.push(`role = $${i++}`);
+      vals.push(data.role);
+    } else {
+      sets.push(`account_type = $${i++}`);
+      vals.push(userRoleToAccountType(data.role));
+    }
+  } else if (data.account_type !== undefined) {
+    if (shape.userHasRole) {
+      sets.push(`role = $${i++}`);
+      vals.push(accountTypeToUserRole(data.account_type));
+    } else {
+      sets.push(`account_type = $${i++}`);
+      vals.push(data.account_type);
+    }
+  }
+  if (data.confirmed !== undefined) {
+    sets.push(`confirmed = $${i++}`);
+    vals.push(data.confirmed);
+  }
+  if (data.phone !== undefined && shape.userHasPhone) {
+    sets.push(`phone = $${i++}`);
+    vals.push(data.phone);
+  }
+
+  if (sets.length === 0) return false;
+
+  vals.push(userId);
+  const q = `UPDATE users SET ${sets.join(", ")} WHERE id = $${i} RETURNING id`;
+  const r = await pool.query(q, vals);
+  return (r.rowCount ?? 0) > 0;
+}
+
+export async function updateLastLogin(userId: string): Promise<void> {
+  await pool.query(
+    `UPDATE users SET last_login = NOW() WHERE id = $1`,
+    [userId]
+  );
+}
+
+export async function getAllUsers(): Promise<User[]> {
+  const shape = await getDbShape();
+  const r = shape.userHasSchoolId
+    ? await pool.query<UserRow>(
+        `SELECT * FROM users WHERE school_id = $1 ORDER BY created_at DESC`,
+        [DEFAULT_SCHOOL_ID]
+      )
+    : await pool.query<UserRow>(`SELECT * FROM users ORDER BY created_at DESC`);
+  return r.rows.map(mapUserRow);
+}
+
+export async function getUsersByRole(role: UserRole): Promise<User[]> {
+  const shape = await getDbShape();
+  const r =
+    shape.userHasRole && shape.userHasSchoolId
+      ? await pool.query<UserRow>(
+          `SELECT * FROM users
+           WHERE school_id = $1 AND role = $2
+           ORDER BY created_at DESC`,
+          [DEFAULT_SCHOOL_ID, role]
+        )
+      : shape.userHasRole
+        ? await pool.query<UserRow>(
+            `SELECT * FROM users
+             WHERE role = $1
+             ORDER BY created_at DESC`,
+            [role]
+          )
+        : await pool.query<UserRow>(
+            `SELECT * FROM users
+             WHERE account_type = $1
+             ORDER BY created_at DESC`,
+            [userRoleToAccountType(role)]
+          );
+  return r.rows.map(mapUserRow);
 }
 
 /**
- * Generuje ID ucznia w formacie user_id-001, user_id-002...
+ * @param tenantSchoolId Szkoła zakresu (np. managera). `undefined` → `DEFAULT_SCHOOL_ID`.
+ *        `null` → tylko wiersz z `school_id IS NULL` (np. globalny ADMIN).
  */
-async function generateStudentId(userId: string): Promise<string> {
+export async function deleteUser(
+  userId: string,
+  tenantSchoolId?: string | null
+): Promise<boolean> {
+  const shape = await getDbShape();
+  const client = await pool.connect();
   try {
-    // Pobierz wszystkie student_id dla danego użytkownika
-    const studentsResult = await sql`
-      SELECT student_id FROM students WHERE user_id = ${userId}
-    `;
-    
-    let maxNumber = 0;
-    
-    // Przejdź przez wszystkie ID i znajdź najwyższy numer
-    for (const row of studentsResult.rows) {
-      const studentId = row.student_id;
-      // Wyciągnij numer z końcówki ID (format: userId-XX)
-      const parts = studentId.split('-');
-      if (parts.length === 2) {
-        const number = parseInt(parts[1], 10);
-        if (!isNaN(number) && number > maxNumber) {
-          maxNumber = number;
+    await client.query("BEGIN");
+    if (shape.hasChildrenTable && tenantSchoolId != null) {
+      await client.query(
+        `UPDATE children
+         SET active = FALSE, resignation_date = COALESCE(resignation_date, NOW())
+         WHERE parent_id = $1 AND school_id = $2 AND active = TRUE`,
+        [userId, tenantSchoolId]
+      );
+    } else if (shape.hasStudentsTable) {
+      await client.query(
+        `UPDATE students
+         SET active = FALSE, resignation_date = COALESCE(resignation_date, NOW())
+         WHERE user_id = $1 AND active = TRUE`,
+        [userId]
+      );
+    }
+    const schoolScope =
+      tenantSchoolId === undefined ? DEFAULT_SCHOOL_ID : tenantSchoolId;
+    const u = shape.userHasSchoolId
+      ? schoolScope === null
+        ? await client.query(
+            `UPDATE users
+             SET active = FALSE, resignation_date = NOW()
+             WHERE id = $1 AND school_id IS NULL
+             RETURNING id`,
+            [userId]
+          )
+        : await client.query(
+            `UPDATE users
+             SET active = FALSE, resignation_date = NOW()
+             WHERE id = $1 AND school_id = $2
+             RETURNING id`,
+            [userId, schoolScope]
+          )
+      : await client.query(
+          `UPDATE users
+           SET active = FALSE, resignation_date = NOW()
+           WHERE id = $1
+           RETURNING id`,
+          [userId]
+        );
+    await client.query("COMMIT");
+    return (u.rowCount ?? 0) > 0;
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/** @param tenantSchoolId Jak w `deleteUser`. */
+export async function restoreUser(
+  userId: string,
+  tenantSchoolId?: string | null
+): Promise<boolean> {
+  const shape = await getDbShape();
+  const schoolScope =
+    tenantSchoolId === undefined ? DEFAULT_SCHOOL_ID : tenantSchoolId;
+  const r = shape.userHasSchoolId
+    ? schoolScope === null
+      ? await pool.query(
+          `UPDATE users
+           SET active = TRUE, resignation_date = NULL
+           WHERE id = $1 AND school_id IS NULL
+           RETURNING id`,
+          [userId]
+        )
+      : await pool.query(
+          `UPDATE users
+           SET active = TRUE, resignation_date = NULL
+           WHERE id = $1 AND school_id = $2
+           RETURNING id`,
+          [userId, schoolScope]
+        )
+    : await pool.query(
+        `UPDATE users
+         SET active = TRUE, resignation_date = NULL
+         WHERE id = $1
+         RETURNING id`,
+        [userId]
+      );
+  return (r.rowCount ?? 0) > 0;
+}
+
+export async function isAdmin(userId: string): Promise<boolean> {
+  try {
+    const shape = await getDbShape();
+    if (shape.userHasRole) {
+      const r = await pool.query<QueryResultRow>(
+        `SELECT * FROM users WHERE id = $1 LIMIT 1`,
+        [userId]
+      );
+      const row = r.rows[0];
+      if (!row) return false;
+      return resolveUserRoleFromRow(row) === "ADMIN";
+    }
+    const r = await pool.query<{ account_type: string }>(
+      `SELECT account_type FROM users WHERE id = $1 LIMIT 1`,
+      [userId]
+    );
+    return r.rows[0]?.account_type === "admin";
+  } catch {
+    return false;
+  }
+}
+
+/** Panel szkoły (`/api/admin/*`, `AdminPortal`) — super admin lub zarządca szkoły. */
+export async function canAccessSchoolAdminApis(userId: string): Promise<boolean> {
+  const u = await getUserById(userId);
+  if (!u) return false;
+  return u.role === "ADMIN" || u.role === "MANAGER";
+}
+
+export async function setResetToken(
+  email: string,
+  token: string,
+  expiry: Date
+): Promise<void> {
+  const shape = await getDbShape();
+  if (shape.userHasSchoolId) {
+    const tenant = getRegistrationSchoolId();
+    await pool.query(
+      `UPDATE users
+       SET reset_token = $1, reset_token_expiry = $2
+       WHERE LOWER(email::text) = LOWER($4::text)
+         AND (
+           school_id IS NOT DISTINCT FROM $3::text
+           OR (role = 'ADMIN' AND school_id IS NULL)
+         )`,
+      [token, expiry, tenant, email]
+    );
+  } else {
+    await pool.query(
+      `UPDATE users
+       SET reset_token = $1, reset_token_expiry = $2
+       WHERE LOWER(email::text) = LOWER($3::text)`,
+      [token, expiry, email]
+    );
+  }
+}
+
+export async function getUserByResetToken(token: string): Promise<User | null> {
+  const r = await pool.query<UserRow>(
+    `SELECT * FROM users
+     WHERE reset_token = $1
+       AND reset_token_expiry IS NOT NULL
+       AND reset_token_expiry > NOW()
+     LIMIT 1`,
+    [token]
+  );
+  return r.rows[0] ? mapUserRow(r.rows[0]) : null;
+}
+
+export async function resetPassword(
+  token: string,
+  newPasswordHash: string
+): Promise<boolean> {
+  const r = await pool.query(
+    `UPDATE users
+     SET password_hash = $1,
+         reset_token = NULL,
+         reset_token_expiry = NULL
+     WHERE reset_token = $2
+       AND reset_token_expiry IS NOT NULL
+       AND reset_token_expiry > NOW()
+     RETURNING id`,
+    [newPasswordHash, token]
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+// --- Children ---
+
+export async function createChild(data: {
+  schoolId?: string;
+  parentId: string;
+  firstName: string;
+  lastName: string;
+  birthDate: string;
+  avatarUrl?: string | null;
+}): Promise<Child> {
+  const shape = await getDbShape();
+  const id = randomUUID();
+  const schoolId = data.schoolId ?? DEFAULT_SCHOOL_ID;
+
+  if (shape.hasChildrenTable) {
+    const r = shape.childHasConfirmed
+      ? await pool.query<ChildRow>(
+          `INSERT INTO children (
+             id, school_id, parent_id, first_name, last_name, birth_date, avatar_url, confirmed
+           ) VALUES ($1, $2, $3, $4, $5, $6::date, $7, FALSE)
+           RETURNING *`,
+          [
+            id,
+            schoolId,
+            data.parentId,
+            data.firstName,
+            data.lastName,
+            data.birthDate.slice(0, 10),
+            data.avatarUrl ?? null,
+          ]
+        )
+      : await pool.query<ChildRow>(
+          `INSERT INTO children (
+             id, school_id, parent_id, first_name, last_name, birth_date, avatar_url
+           ) VALUES ($1, $2, $3, $4, $5, $6::date, $7)
+           RETURNING *`,
+          [
+            id,
+            schoolId,
+            data.parentId,
+            data.firstName,
+            data.lastName,
+            data.birthDate.slice(0, 10),
+            data.avatarUrl ?? null,
+          ]
+        );
+    return mapChildRow(r.rows[0]);
+  }
+
+  if (shape.hasStudentsTable) {
+    const birthYear = data.birthDate.slice(0, 4);
+    await pool.query(
+      `INSERT INTO students (
+         student_id, user_id, first_name, last_name, birth_year, location, active
+       ) VALUES ($1, $2, $3, $4, $5, 'Paniówki', TRUE)`,
+      [id, data.parentId, data.firstName, data.lastName, birthYear]
+    );
+    const r = await pool.query(
+      `SELECT * FROM students WHERE student_id = $1 LIMIT 1`,
+      [id]
+    );
+    return studentRowToChild(r.rows[0]);
+  }
+
+  throw new Error("Brak tabeli children ani students w bazie");
+}
+
+/**
+ * Gdy w `users` jest `school_id` (FK do `schools`), rejestracja wymaga istniejącego rekordu szkoły.
+ * Brak seeda w repo — tworzymy domyślną szkołę idempotentnie przed pierwszym rodzicem.
+ */
+type PgQueryable = Pick<Pool, "query">;
+
+async function ensureDefaultSchoolRow(
+  executor: PgQueryable | PoolClient,
+  schoolId: string
+): Promise<void> {
+  // slug musi być unikalny — UUID szkoły jest deterministyczny i nie koliduje z innymi rekordami
+  await executor.query(
+    `INSERT INTO schools (id, name, slug, timezone, active)
+     VALUES ($1, $2, $1, 'Europe/Warsaw', TRUE)
+     ON CONFLICT (id) DO NOTHING`,
+    [schoolId, "Harry English"]
+  );
+}
+
+/** Rodzic + dzieci w jednej transakcji (rejestracja). */
+export async function createParentUserWithChildren(data: {
+  email: string;
+  passwordHash: string;
+  firstName: string;
+  lastName: string;
+  /** Wymagane — zwykle `process.env.SCHOOL_ID` / `getRegistrationSchoolId()`; rodzic nigdy bez szkoły. */
+  schoolId: string;
+  phone?: string | null;
+  confirmed?: boolean;
+  accessLevel?: AccessLevel;
+  children: Array<{
+    firstName: string;
+    lastName: string;
+    birthDate: string;
+    preferredLocationId?: string | null;
+  }>;
+}): Promise<{ user: User; children: Child[] }> {
+  const shape = await getDbShape();
+  const schoolId = data.schoolId?.trim();
+  if (!schoolId) {
+    throw new Error("Brak schoolId — rejestracja rodzica wymaga SCHOOL_ID");
+  }
+  const userId = randomUUID();
+  const role: UserRole = "PARENT";
+  const confirmed = data.confirmed ?? false;
+  const accessLevel = data.accessLevel ?? "PENDING";
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    if (shape.userHasSchoolId) {
+      await ensureDefaultSchoolRow(client, schoolId);
+    }
+
+    let ur;
+    if (shape.userHasRole) {
+      ur = shape.userHasAccessLevel
+        ? await client.query<UserRow>(
+            `INSERT INTO users (
+               id, school_id, email, password_hash, role,
+               first_name, last_name, phone, active, confirmed, access_level
+             ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9, $10)
+             RETURNING *`,
+            [
+              userId,
+              schoolId,
+              data.email,
+              data.passwordHash,
+              role,
+              data.firstName,
+              data.lastName,
+              data.phone ?? null,
+              confirmed,
+              accessLevel,
+            ]
+          )
+        : await client.query<UserRow>(
+            `INSERT INTO users (
+               id, school_id, email, password_hash, role,
+               first_name, last_name, phone, active, confirmed
+             ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9)
+             RETURNING *`,
+            [
+              userId,
+              schoolId,
+              data.email,
+              data.passwordHash,
+              role,
+              data.firstName,
+              data.lastName,
+              data.phone ?? null,
+              confirmed,
+            ]
+          );
+    } else {
+      ur = await client.query<UserRow>(
+        `INSERT INTO users (
+           id, email, password_hash, account_type,
+           first_name, last_name, confirmed, active
+         ) VALUES ($1, LOWER($2), $3, 'user', $4, $5, $6, TRUE)
+         RETURNING *`,
+        [
+          userId,
+          data.email,
+          data.passwordHash,
+          data.firstName,
+          data.lastName,
+          confirmed,
+        ]
+      );
+    }
+
+    const children: Child[] = [];
+    if (shape.hasChildrenTable) {
+      for (const ch of data.children) {
+        const cid = randomUUID();
+        const cr = shape.childHasConfirmed
+          ? await client.query<ChildRow>(
+              `INSERT INTO children (
+                 id, school_id, parent_id, first_name, last_name, birth_date, avatar_url, active, confirmed
+               ) VALUES ($1, $2, $3, $4, $5, $6::date, $7, TRUE, FALSE)
+               RETURNING *`,
+              [
+                cid,
+                schoolId,
+                userId,
+                ch.firstName.trim(),
+                ch.lastName.trim(),
+                ch.birthDate.slice(0, 10),
+                null,
+              ]
+            )
+          : await client.query<ChildRow>(
+              `INSERT INTO children (
+                 id, school_id, parent_id, first_name, last_name, birth_date, avatar_url, active
+               ) VALUES ($1, $2, $3, $4, $5, $6::date, $7, TRUE)
+               RETURNING *`,
+              [
+                cid,
+                schoolId,
+                userId,
+                ch.firstName.trim(),
+                ch.lastName.trim(),
+                ch.birthDate.slice(0, 10),
+                null,
+              ]
+            );
+        if (
+          shape.childHasPreferredLocationId &&
+          ch.preferredLocationId != null &&
+          String(ch.preferredLocationId).trim() !== ""
+        ) {
+          await client.query(
+            `UPDATE children
+             SET preferred_location_id = $1
+             WHERE id = $2 AND school_id = $3`,
+            [String(ch.preferredLocationId).trim(), cid, schoolId]
+          );
+        }
+        children.push(mapChildRow(cr.rows[0]));
+      }
+    } else if (shape.hasStudentsTable) {
+      for (const ch of data.children) {
+        const sid = randomUUID();
+        const birthYear = ch.birthDate.slice(0, 4);
+        await client.query(
+          `INSERT INTO students (
+             student_id, user_id, first_name, last_name, birth_year, location, active
+           ) VALUES ($1, $2, $3, $4, $5, 'Paniówki', TRUE)`,
+          [sid, userId, ch.firstName.trim(), ch.lastName.trim(), birthYear]
+        );
+        const sr = await client.query(
+          `SELECT * FROM students WHERE student_id = $1`,
+          [sid]
+        );
+        children.push(studentRowToChild(sr.rows[0]));
+      }
+    } else {
+      throw new Error("Brak tabeli children ani students — nie można zapisać dzieci.");
+    }
+
+    await client.query("COMMIT");
+    return { user: mapUserRow(ur.rows[0]), children };
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+export async function getChildrenByParentId(parentId: string): Promise<Child[]> {
+  const shape = await getDbShape();
+  if (shape.hasChildrenTable) {
+    const r = await pool.query<ChildRow>(
+      `SELECT * FROM children
+       WHERE parent_id = $1 AND school_id = $2
+       ORDER BY created_at ASC`,
+      [parentId, DEFAULT_SCHOOL_ID]
+    );
+    return r.rows.map(mapChildRow);
+  }
+  if (shape.hasStudentsTable) {
+    const r = await pool.query(
+      `SELECT * FROM students WHERE user_id = $1 ORDER BY created_at ASC`,
+      [parentId]
+    );
+    return r.rows.map(studentRowToChild);
+  }
+  return [];
+}
+
+export async function getChildById(childId: string): Promise<Child | null> {
+  const shape = await getDbShape();
+  if (shape.hasChildrenTable) {
+    const r = await pool.query<ChildRow>(
+      `SELECT * FROM children WHERE id = $1 LIMIT 1`,
+      [childId]
+    );
+    return r.rows[0] ? mapChildRow(r.rows[0]) : null;
+  }
+  if (shape.hasStudentsTable) {
+    const r = await pool.query(
+      `SELECT * FROM students WHERE student_id = $1 LIMIT 1`,
+      [childId]
+    );
+    return r.rows[0] ? studentRowToChild(r.rows[0]) : null;
+  }
+  return null;
+}
+
+export async function getAllChildren(): Promise<Child[]> {
+  const shape = await getDbShape();
+  if (shape.hasChildrenTable) {
+    const r = await pool.query<ChildRow>(
+      `SELECT * FROM children WHERE school_id = $1 ORDER BY created_at DESC`,
+      [DEFAULT_SCHOOL_ID]
+    );
+    return r.rows.map(mapChildRow);
+  }
+  if (shape.hasStudentsTable) {
+    const r = await pool.query(
+      `SELECT * FROM students ORDER BY created_at DESC`
+    );
+    return r.rows.map(studentRowToChild);
+  }
+  return [];
+}
+
+export async function updateChild(
+  childId: string,
+  data: Partial<{
+    first_name: string;
+    last_name: string;
+    birth_date: string;
+    avatar_url: string | null;
+    xp_total: number;
+    active: boolean;
+    confirmed: boolean;
+    enrollment_request_id: string | null;
+    resignation_requested: boolean;
+    resignation_reason: string | null;
+    resignation_date: Date | string | null;
+  }>
+): Promise<boolean> {
+  const shape = await getDbShape();
+
+  if (shape.hasChildrenTable) {
+    const sets: string[] = [];
+    const vals: unknown[] = [];
+    let i = 1;
+
+    if (data.first_name !== undefined) {
+      sets.push(`first_name = $${i++}`);
+      vals.push(data.first_name);
+    }
+    if (data.last_name !== undefined) {
+      sets.push(`last_name = $${i++}`);
+      vals.push(data.last_name);
+    }
+    if (data.birth_date !== undefined) {
+      sets.push(`birth_date = $${i++}::date`);
+      vals.push(data.birth_date.slice(0, 10));
+    }
+    if (data.avatar_url !== undefined) {
+      sets.push(`avatar_url = $${i++}`);
+      vals.push(data.avatar_url);
+    }
+    if (data.xp_total !== undefined) {
+      sets.push(`xp_total = $${i++}`);
+      vals.push(data.xp_total);
+    }
+    if (data.active !== undefined) {
+      sets.push(`active = $${i++}`);
+      vals.push(data.active);
+    }
+    if (data.confirmed !== undefined && shape.childHasConfirmed) {
+      sets.push(`confirmed = $${i++}`);
+      vals.push(data.confirmed);
+    }
+    if (data.enrollment_request_id !== undefined && shape.childHasEnrollmentRequestId) {
+      sets.push(`enrollment_request_id = $${i++}`);
+      vals.push(data.enrollment_request_id);
+    }
+    if (data.resignation_requested !== undefined) {
+      sets.push(`resignation_requested = $${i++}`);
+      vals.push(data.resignation_requested);
+    }
+    if (data.resignation_reason !== undefined) {
+      sets.push(`resignation_reason = $${i++}`);
+      vals.push(data.resignation_reason);
+    }
+    if (data.resignation_date !== undefined) {
+      sets.push(`resignation_date = $${i++}`);
+      vals.push(
+        data.resignation_date === null
+          ? null
+          : typeof data.resignation_date === "string"
+            ? data.resignation_date
+            : data.resignation_date.toISOString()
+      );
+    }
+
+    if (sets.length === 0) return false;
+
+    vals.push(childId);
+    const q = `UPDATE children SET ${sets.join(", ")} WHERE id = $${i} RETURNING id`;
+    const r = await pool.query(q, vals);
+    return (r.rowCount ?? 0) > 0;
+  }
+
+  if (shape.hasStudentsTable) {
+    const sets: string[] = [];
+    const vals: unknown[] = [];
+    let i = 1;
+
+    if (data.first_name !== undefined) {
+      sets.push(`first_name = $${i++}`);
+      vals.push(data.first_name);
+    }
+    if (data.last_name !== undefined) {
+      sets.push(`last_name = $${i++}`);
+      vals.push(data.last_name);
+    }
+    if (data.birth_date !== undefined) {
+      sets.push(`birth_year = $${i++}`);
+      vals.push(data.birth_date.slice(0, 4));
+    }
+    if (data.active !== undefined) {
+      sets.push(`active = $${i++}`);
+      vals.push(data.active);
+    }
+    if (data.resignation_requested !== undefined) {
+      sets.push(`resignation_requested = $${i++}`);
+      vals.push(data.resignation_requested);
+    }
+    if (data.resignation_reason !== undefined) {
+      sets.push(`resignation_reason = $${i++}`);
+      vals.push(data.resignation_reason);
+    }
+    if (data.resignation_date !== undefined) {
+      sets.push(`resignation_date = $${i++}`);
+      vals.push(
+        data.resignation_date === null
+          ? null
+          : typeof data.resignation_date === "string"
+            ? data.resignation_date
+            : data.resignation_date.toISOString()
+      );
+    }
+
+    if (sets.length === 0) return false;
+
+    vals.push(childId);
+    const q = `UPDATE students SET ${sets.join(", ")} WHERE student_id = $${i} RETURNING student_id`;
+    const r = await pool.query(q, vals);
+    return (r.rowCount ?? 0) > 0;
+  }
+
+  return false;
+}
+
+export async function deleteChild(childId: string): Promise<boolean> {
+  const shape = await getDbShape();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    if (shape.hasChildrenTable) {
+      const q = await client.query<{ parent_id: string }>(
+        `SELECT parent_id FROM children WHERE id = $1 AND school_id = $2`,
+        [childId, DEFAULT_SCHOOL_ID]
+      );
+      if (q.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      const parentId = q.rows[0].parent_id;
+
+      const u = await client.query(
+        `UPDATE children
+         SET active = FALSE, resignation_date = COALESCE(resignation_date, NOW())
+         WHERE id = $1 AND school_id = $2
+         RETURNING id`,
+        [childId, DEFAULT_SCHOOL_ID]
+      );
+      if ((u.rowCount ?? 0) === 0) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+
+      const cnt = await client.query<{ c: string }>(
+        `SELECT COUNT(*)::text AS c FROM children
+         WHERE parent_id = $1 AND school_id = $2 AND active = TRUE`,
+        [parentId, DEFAULT_SCHOOL_ID]
+      );
+      const activeChildren = parseInt(cnt.rows[0]?.c ?? "0", 10);
+      if (activeChildren === 0) {
+        if (shape.userHasSchoolId) {
+          await client.query(
+            `UPDATE users
+             SET active = FALSE, resignation_date = NOW()
+             WHERE id = $1 AND school_id = $2`,
+            [parentId, DEFAULT_SCHOOL_ID]
+          );
+        } else {
+          await client.query(
+            `UPDATE users
+             SET active = FALSE, resignation_date = NOW()
+             WHERE id = $1`,
+            [parentId]
+          );
         }
       }
+    } else if (shape.hasStudentsTable) {
+      const q = await client.query<{ user_id: string }>(
+        `SELECT user_id FROM students WHERE student_id = $1`,
+        [childId]
+      );
+      if (q.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      const parentId = q.rows[0].user_id;
+
+      const u = await client.query(
+        `UPDATE students
+         SET active = FALSE, resignation_date = COALESCE(resignation_date, NOW())
+         WHERE student_id = $1
+         RETURNING student_id`,
+        [childId]
+      );
+      if ((u.rowCount ?? 0) === 0) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+
+      const cnt = await client.query<{ c: string }>(
+        `SELECT COUNT(*)::text AS c FROM students
+         WHERE user_id = $1 AND active = TRUE`,
+        [parentId]
+      );
+      const activeChildren = parseInt(cnt.rows[0]?.c ?? "0", 10);
+      if (activeChildren === 0) {
+        if (shape.userHasSchoolId) {
+          await client.query(
+            `UPDATE users
+             SET active = FALSE, resignation_date = NOW()
+             WHERE id = $1 AND school_id = $2`,
+            [parentId, DEFAULT_SCHOOL_ID]
+          );
+        } else {
+          await client.query(
+            `UPDATE users
+             SET active = FALSE, resignation_date = NOW()
+             WHERE id = $1`,
+            [parentId]
+          );
+        }
+      }
+    } else {
+      await client.query("ROLLBACK");
+      return false;
     }
-    
-    // Następny numer to maxNumber + 1
-    const nextNumber = maxNumber + 1;
-    const studentId = `${userId}-${String(nextNumber).padStart(2, '0')}`;
-    
-    return studentId;
-  } catch (error) {
-    console.error('Error generating student ID:', error);
-    throw error;
+
+    await client.query("COMMIT");
+    return true;
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
   }
 }
 
-/**
- * Tworzy ucznia (studenta)
- */
+export async function restoreChild(childId: string): Promise<boolean> {
+  const shape = await getDbShape();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    if (shape.hasChildrenTable) {
+      const q = await client.query<{ parent_id: string }>(
+        `SELECT parent_id FROM children WHERE id = $1`,
+        [childId]
+      );
+      if (q.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      const parentId = q.rows[0].parent_id;
+
+      const u = await client.query(
+        `UPDATE children
+         SET active = TRUE, resignation_date = NULL
+         WHERE id = $1
+         RETURNING id`,
+        [childId]
+      );
+      if ((u.rowCount ?? 0) === 0) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+
+      const p = await client.query<{ active: boolean }>(
+        `SELECT active FROM users WHERE id = $1 LIMIT 1`,
+        [parentId]
+      );
+      if (p.rows[0] && p.rows[0].active === false) {
+        await client.query(
+          `UPDATE users SET active = TRUE, resignation_date = NULL WHERE id = $1`,
+          [parentId]
+        );
+      }
+    } else if (shape.hasStudentsTable) {
+      const q = await client.query<{ user_id: string }>(
+        `SELECT user_id FROM students WHERE student_id = $1`,
+        [childId]
+      );
+      if (q.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      const parentId = q.rows[0].user_id;
+
+      const u = await client.query(
+        `UPDATE students
+         SET active = TRUE, resignation_date = NULL
+         WHERE student_id = $1
+         RETURNING student_id`,
+        [childId]
+      );
+      if ((u.rowCount ?? 0) === 0) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+
+      const p = await client.query<{ active: boolean }>(
+        `SELECT active FROM users WHERE id = $1 LIMIT 1`,
+        [parentId]
+      );
+      if (p.rows[0] && p.rows[0].active === false) {
+        await client.query(
+          `UPDATE users SET active = TRUE, resignation_date = NULL WHERE id = $1`,
+          [parentId]
+        );
+      }
+    } else {
+      await client.query("ROLLBACK");
+      return false;
+    }
+
+    await client.query("COMMIT");
+    return true;
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+export async function requestStudentResignation(
+  childId: string,
+  parentUserId: string,
+  reason: string
+): Promise<boolean> {
+  const shape = await getDbShape();
+  if (shape.hasChildrenTable) {
+    const r = await pool.query(
+      `UPDATE children
+       SET resignation_requested = TRUE,
+           resignation_reason = $1
+       WHERE id = $2 AND parent_id = $3 AND school_id = $4
+       RETURNING id`,
+      [reason, childId, parentUserId, DEFAULT_SCHOOL_ID]
+    );
+    return (r.rowCount ?? 0) > 0;
+  }
+  if (shape.hasStudentsTable) {
+    const r = await pool.query(
+      `UPDATE students
+       SET resignation_requested = TRUE,
+           resignation_reason = $1
+       WHERE student_id = $2 AND user_id = $3
+       RETURNING student_id`,
+      [reason, childId, parentUserId]
+    );
+    return (r.rowCount ?? 0) > 0;
+  }
+  return false;
+}
+
+// --- Legacy „students” API (aliasy pod istniejące route handlery) ---
+
+export async function getStudentsByUserId(userId: string): Promise<Student[]> {
+  const rows = await getChildrenByParentId(userId);
+  return rows.map((c) => childToLegacyStudent(c));
+}
+
+export async function getStudentById(studentId: string): Promise<Student | null> {
+  const c = await getChildById(studentId);
+  return c ? childToLegacyStudent(c) : null;
+}
+
 export async function createStudent(data: {
   userId: string;
   firstName: string;
@@ -436,546 +1600,21 @@ export async function createStudent(data: {
   birthYear: string;
   location: Location;
 }): Promise<Student> {
-  try {
-    await ensureTablesExist();
-    
-    // Generuj student_id w formacie user_id-01, user_id-02...
-    const studentId = await generateStudentId(data.userId);
-    
-    const result = await sql`
-      INSERT INTO students (
-        student_id,
-        user_id,
-        first_name,
-        last_name,
-        birth_year,
-        location,
-        active
-      )
-      VALUES (
-        ${studentId},
-        ${data.userId},
-        ${data.firstName},
-        ${data.lastName},
-        ${data.birthYear},
-        ${data.location},
-        FALSE
-      )
-      RETURNING *
-    `;
-    
-    return result.rows[0];
-  } catch (error) {
-    console.error('Error creating student:', error);
-    throw error;
-  }
+  const birthDate = `${data.birthYear}-01-01`;
+  const child = await createChild({
+    parentId: data.userId,
+    firstName: data.firstName,
+    lastName: data.lastName,
+    birthDate,
+  });
+  return { ...childToLegacyStudent(child), location: data.location };
 }
 
-/**
- * Pobiera wszystkich uczniów dla danego użytkownika
- */
-export async function getStudentsByUserId(userId: string): Promise<Student[]> {
-  try {
-    await ensureTablesExist();
-    
-    const result = await sql`
-      SELECT * FROM students 
-      WHERE user_id = ${userId}
-      ORDER BY created_at ASC
-    `;
-    
-    return result.rows;
-  } catch (error) {
-    console.error('Error fetching students by user ID:', error);
-    throw error;
-  }
-}
-
-/**
- * Pobiera studenta po ID
- */
-export async function getStudentById(studentId: string): Promise<Student | null> {
-  try {
-    await ensureTablesExist();
-    
-    const result = await sql`
-      SELECT * FROM students 
-      WHERE student_id = ${studentId}
-      LIMIT 1
-    `;
-    
-    return result.rows[0] || null;
-  } catch (error) {
-    console.error('Error fetching student by ID:', error);
-    throw error;
-  }
-}
-
-/**
- * Aktualizuje datę ostatniego logowania
- */
-export async function updateLastLogin(userId: string): Promise<void> {
-  try {
-    await ensureTablesExist();
-    
-    await sql`
-      UPDATE users 
-      SET last_login = CURRENT_TIMESTAMP 
-      WHERE id = ${userId}
-    `;
-  } catch (error) {
-    console.error('Error updating last login:', error);
-    throw error;
-  }
-}
-
-/**
- * Ustawia token resetowania hasła
- */
-export async function setResetToken(
-  email: string, 
-  token: string, 
-  expiry: Date
-): Promise<void> {
-  try {
-    await ensureTablesExist();
-    
-    await sql`
-      UPDATE users 
-      SET 
-        reset_token = ${token},
-        reset_token_expiry = ${expiry.toISOString()}
-      WHERE LOWER(email) = LOWER(${email})
-    `;
-  } catch (error) {
-    console.error('Error setting reset token:', error);
-    throw error;
-  }
-}
-
-/**
- * Pobiera użytkownika po tokenie resetowania
- */
-export async function getUserByResetToken(token: string): Promise<User | null> {
-  try {
-    await ensureTablesExist();
-    
-    const result = await sql`
-      SELECT * FROM users 
-      WHERE reset_token = ${token}
-      AND reset_token_expiry > CURRENT_TIMESTAMP
-      LIMIT 1
-    `;
-    
-    return result.rows[0] || null;
-  } catch (error) {
-    console.error('Error fetching user by reset token:', error);
-    throw error;
-  }
-}
-
-/**
- * Resetuje hasło użytkownika i usuwa token
- */
-export async function resetPassword(
-  token: string, 
-  newPasswordHash: string
-): Promise<boolean> {
-  try {
-    await ensureTablesExist();
-    
-    const result = await sql`
-      UPDATE users 
-      SET 
-        password_hash = ${newPasswordHash},
-        reset_token = NULL,
-        reset_token_expiry = NULL
-      WHERE reset_token = ${token}
-      AND reset_token_expiry > CURRENT_TIMESTAMP
-      RETURNING id
-    `;
-    
-    return (result.rowCount ?? 0) > 0;
-  } catch (error) {
-    console.error('Error resetting password:', error);
-    throw error;
-  }
-}
-
-/**
- * Sprawdza czy email już istnieje w bazie
- */
-export async function emailExists(email: string): Promise<boolean> {
-  try {
-    await ensureTablesExist();
-    
-    const result = await sql`
-      SELECT COUNT(*) as count FROM users 
-      WHERE LOWER(email) = LOWER(${email})
-    `;
-    
-    return parseInt(result.rows[0].count) > 0;
-  } catch (error) {
-    console.error('Error checking email existence:', error);
-    throw error;
-  }
-}
-
-// ====================================
-// FUNKCJE DLA ADMINISTRACJI I LEKTORÓW
-// ====================================
-
-/**
- * Zmienia typ konta użytkownika (TYLKO DLA ADMINÓW)
- * Używaj tej funkcji aby nadać komuś uprawnienia admin lub lektor
- */
-export async function updateAccountType(
-  userId: string,
-  newAccountType: AccountType
-): Promise<boolean> {
-  try {
-    await ensureTablesExist();
-    
-    const result = await sql`
-      UPDATE users 
-      SET account_type = ${newAccountType}
-      WHERE id = ${userId}
-      RETURNING id
-    `;
-    
-    return (result.rowCount ?? 0) > 0;
-  } catch (error) {
-    console.error('Error updating account type:', error);
-    throw error;
-  }
-}
-
-/**
- * Zmienia typ konta użytkownika po emailu (TYLKO DLA ADMINÓW)
- */
-export async function updateAccountTypeByEmail(
-  email: string,
-  newAccountType: AccountType
-): Promise<boolean> {
-  try {
-    await ensureTablesExist();
-    
-    const result = await sql`
-      UPDATE users 
-      SET account_type = ${newAccountType}
-      WHERE LOWER(email) = LOWER(${email})
-      RETURNING id
-    `;
-    
-    return (result.rowCount ?? 0) > 0;
-  } catch (error) {
-    console.error('Error updating account type by email:', error);
-    throw error;
-  }
-}
-
-/**
- * Pobiera wszystkich użytkowników (dla adminów)
- */
-export async function getAllUsers(): Promise<User[]> {
-  try {
-    await ensureTablesExist();
-    
-    const result = await sql`
-      SELECT * FROM users 
-      ORDER BY created_at DESC
-    `;
-    
-    return result.rows;
-  } catch (error) {
-    console.error('Error fetching all users:', error);
-    throw error;
-  }
-}
-
-/**
- * Pobiera użytkowników według typu konta
- */
-export async function getUsersByAccountType(accountType: AccountType): Promise<User[]> {
-  try {
-    await ensureTablesExist();
-    
-    const result = await sql`
-      SELECT * FROM users 
-      WHERE account_type = ${accountType}
-      ORDER BY created_at DESC
-    `;
-    
-    return result.rows;
-  } catch (error) {
-    console.error('Error fetching users by account type:', error);
-    throw error;
-  }
-}
-
-/**
- * Sprawdza czy użytkownik jest adminem
- */
-export async function isAdmin(userId: string): Promise<boolean> {
-  try {
-    await ensureTablesExist();
-    
-    const result = await sql`
-      SELECT account_type FROM users 
-      WHERE id = ${userId}
-      LIMIT 1
-    `;
-    
-    return result.rows[0]?.account_type === 'admin';
-  } catch (error) {
-    console.error('Error checking admin status:', error);
-    return false;
-  }
-}
-
-/**
- * Sprawdza czy użytkownik jest lektorem
- */
-export async function isLektor(userId: string): Promise<boolean> {
-  try {
-    await ensureTablesExist();
-    
-    const result = await sql`
-      SELECT account_type FROM users 
-      WHERE id = ${userId}
-      LIMIT 1
-    `;
-    
-    return result.rows[0]?.account_type === 'lektor';
-  } catch (error) {
-    console.error('Error checking lektor status:', error);
-    return false;
-  }
-}
-
-/**
- * Sprawdza czy użytkownik ma uprawnienia (admin lub lektor)
- */
-export async function hasElevatedPermissions(userId: string): Promise<boolean> {
-  try {
-    await ensureTablesExist();
-    
-    const result = await sql`
-      SELECT account_type FROM users 
-      WHERE id = ${userId}
-      LIMIT 1
-    `;
-    
-    const accountType = result.rows[0]?.account_type;
-    return accountType === 'admin' || accountType === 'lektor';
-  } catch (error) {
-    console.error('Error checking permissions:', error);
-    return false;
-  }
-}
-
-// ====================================
-// FUNKCJE POMOCNICZE
-// ====================================
-
-/**
- * Testuje połączenie z bazą danych
- */
-export async function testDatabaseConnection(): Promise<boolean> {
-  try {
-    await sql`SELECT 1`;
-    console.log('✅ Database connection successful');
-    return true;
-  } catch (error) {
-    console.error('❌ Database connection failed:', error);
-    return false;
-  }
-}
-
-/**
- * Sprawdza czy tabela users istnieje
- */
-export async function checkUsersTableExists(): Promise<boolean> {
-  try {
-    const result = await sql`
-      SELECT EXISTS (
-        SELECT FROM information_schema.tables 
-        WHERE table_name = 'users'
-      );
-    `;
-    return result.rows[0].exists;
-  } catch (error) {
-    console.error('Error checking users table:', error);
-    return false;
-  }
-}
-
-// ====================================
-// FUNKCJE ADMINISTRACYJNE
-// ====================================
-
-/**
- * Aktualizuje dane użytkownika (TYLKO DLA ADMINÓW)
- */
-export async function updateUser(
-  userId: string,
-  data: {
-    first_name?: string;
-    last_name?: string;
-    email?: string;
-    account_type?: AccountType;
-    confirmed?: boolean;
-  }
-): Promise<boolean> {
-  try {
-    await ensureTablesExist();
-    
-    const updates: string[] = [];
-    const values: any[] = [];
-    let paramCount = 1;
-
-    if (data.first_name !== undefined) {
-      updates.push(`first_name = $${paramCount++}`);
-      values.push(data.first_name);
-    }
-    if (data.last_name !== undefined) {
-      updates.push(`last_name = $${paramCount++}`);
-      values.push(data.last_name);
-    }
-    if (data.email !== undefined) {
-      updates.push(`email = $${paramCount++}`);
-      values.push(data.email.toLowerCase());
-    }
-    if (data.account_type !== undefined) {
-      updates.push(`account_type = $${paramCount++}`);
-      values.push(data.account_type);
-    }
-    if (data.confirmed !== undefined) {
-      updates.push(`confirmed = $${paramCount++}`);
-      values.push(data.confirmed);
-    }
-
-    if (updates.length === 0) {
-      return false;
-    }
-
-    values.push(userId);
-    const query = `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramCount} RETURNING id`;
-    
-    const result = await pool.query(query, values);
-    
-    return (result.rowCount ?? 0) > 0;
-  } catch (error) {
-    console.error('Error updating user:', error);
-    throw error;
-  }
-}
-
-/**
- * Usuwa użytkownika (TYLKO DLA ADMINÓW)
- * Uwaga: automatycznie usuwa związanych studentów przez CASCADE
- */
-export async function deleteUser(userId: string): Promise<boolean> {
-  try {
-    await ensureTablesExist();
-    
-    // Sprawdź czy kolumny istnieją, jeśli nie - dodaj je
-    try {
-      await sql`
-        ALTER TABLE users 
-        ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE NOT NULL;
-      `;
-    } catch (error) {
-      console.log('Column active may already exist');
-    }
-    
-    try {
-      await sql`
-        ALTER TABLE users 
-        ADD COLUMN IF NOT EXISTS resignation_date TIMESTAMP;
-      `;
-    } catch (error) {
-      console.log('Column resignation_date may already exist');
-    }
-    
-    // Oznacz użytkownika jako nieaktywnego (active = FALSE)
-    const result = await sql`
-      UPDATE users 
-      SET 
-        active = FALSE,
-        resignation_date = NOW()
-      WHERE id = ${userId}
-      RETURNING id
-    `;
-    
-    if ((result.rowCount ?? 0) === 0) {
-      return false;
-    }
-    
-    // Oznacz wszystkich dzieci użytkownika jako nieaktywnych uczniów (active = FALSE)
-    await sql`
-      UPDATE students 
-      SET 
-        resignation_date = NOW(),
-        active = FALSE
-      WHERE user_id = ${userId}
-    `;
-    
-    console.log(`Marked user ${userId} as inactive and all their students as inactive`);
-    return true;
-  } catch (error) {
-    console.error('Error marking user as inactive:', error);
-    throw error;
-  }
-}
-
-/**
- * Przywraca byłego użytkownika (oznacza jako aktywnego)
- */
-export async function restoreUser(userId: string): Promise<boolean> {
-  try {
-    await ensureTablesExist();
-    
-    // Przywróć tylko użytkownika - dzieci NIE są automatycznie przywracane
-    const result = await sql`
-      UPDATE users 
-      SET 
-        active = TRUE,
-        resignation_date = NULL
-      WHERE id = ${userId}
-      RETURNING id
-    `;
-    
-    console.log(`Restored user ${userId} (children are not automatically restored)`);
-    return (result.rowCount ?? 0) > 0;
-  } catch (error) {
-    console.error('Error restoring user:', error);
-    throw error;
-  }
-}
-
-/**
- * Pobiera wszystkich studentów
- */
 export async function getAllStudents(): Promise<Student[]> {
-  try {
-    await ensureTablesExist();
-    
-    const result = await sql`
-      SELECT * FROM students 
-      ORDER BY created_at DESC
-    `;
-    
-    return result.rows;
-  } catch (error) {
-    console.error('Error fetching all students:', error);
-    throw error;
-  }
+  const rows = await getAllChildren();
+  return rows.map((c) => childToLegacyStudent(c));
 }
 
-/**
- * Aktualizuje dane studenta (TYLKO DLA ADMINÓW)
- */
 export async function updateStudent(
   studentId: string,
   data: {
@@ -989,258 +1628,150 @@ export async function updateStudent(
     resignation_date?: Date | null;
   }
 ): Promise<boolean> {
-  try {
-    await ensureTablesExist();
-    
-    const updates: string[] = [];
-    const values: any[] = [];
-    let paramCount = 1;
-
-    if (data.first_name !== undefined) {
-      updates.push(`first_name = $${paramCount++}`);
-      values.push(data.first_name);
-    }
-    if (data.last_name !== undefined) {
-      updates.push(`last_name = $${paramCount++}`);
-      values.push(data.last_name);
-    }
-    if (data.birth_year !== undefined) {
-      updates.push(`birth_year = $${paramCount++}`);
-      values.push(data.birth_year);
-    }
-    if (data.location !== undefined) {
-      updates.push(`location = $${paramCount++}`);
-      values.push(data.location);
-    }
-    if (data.active !== undefined) {
-      updates.push(`active = $${paramCount++}`);
-      values.push(data.active);
-    }
-    if (data.resignation_requested !== undefined) {
-      updates.push(`resignation_requested = $${paramCount++}`);
-      values.push(data.resignation_requested);
-    }
-    if (data.resignation_reason !== undefined) {
-      updates.push(`resignation_reason = $${paramCount++}`);
-      values.push(data.resignation_reason);
-    }
-    if (data.resignation_date !== undefined) {
-      updates.push(`resignation_date = $${paramCount++}`);
-      values.push(data.resignation_date ? data.resignation_date.toISOString() : null);
-    }
-
-    if (updates.length === 0) {
-      return false;
-    }
-
-    values.push(studentId);
-    const query = `UPDATE students SET ${updates.join(', ')} WHERE student_id = $${paramCount} RETURNING student_id`;
-    
-    const result = await pool.query(query, values);
-    return (result.rowCount ?? 0) > 0;
-  } catch (error) {
-    console.error('Error updating student:', error);
-    throw error;
-  }
+  const payload: Parameters<typeof updateChild>[1] = {};
+  if (data.first_name !== undefined) payload.first_name = data.first_name;
+  if (data.last_name !== undefined) payload.last_name = data.last_name;
+  if (data.birth_year !== undefined)
+    payload.birth_date = `${data.birth_year}-01-01`;
+  if (data.active !== undefined) payload.active = data.active;
+  if (data.resignation_requested !== undefined)
+    payload.resignation_requested = data.resignation_requested;
+  if (data.resignation_reason !== undefined)
+    payload.resignation_reason = data.resignation_reason;
+  if (data.resignation_date !== undefined)
+    payload.resignation_date = data.resignation_date;
+  return updateChild(studentId, payload);
 }
 
-/**
- * Oznacza studenta jako byłego ucznia zamiast usuwać (TYLKO DLA ADMINÓW)
- * Ustawia active = FALSE i resignation_date = CURRENT_TIMESTAMP
- */
 export async function deleteStudent(studentId: string): Promise<boolean> {
-  try {
-    await ensureTablesExist();
-    
-    // Sprawdź czy kolumna resignation_date istnieje, jeśli nie - dodaj ją
-    try {
-      await sql`
-        ALTER TABLE students 
-        ADD COLUMN IF NOT EXISTS resignation_date TIMESTAMP;
-      `;
-    } catch (error) {
-      console.log('Column resignation_date may already exist');
-    }
-    
-    // Najpierw pobierz user_id studenta przed oznaczeniem jako nieaktywny
-    const studentResult = await sql`
-      SELECT user_id FROM students WHERE student_id = ${studentId}
-    `;
-    
-    if (studentResult.rows.length === 0) {
-      return false;
-    }
-    
-    const userId = studentResult.rows[0].user_id;
-    
-    // Oznacz studenta jako nieaktywnego
-    const result = await sql`
-      UPDATE students 
-      SET 
-        resignation_date = NOW(),
-        active = FALSE
-      WHERE student_id = ${studentId}
-      RETURNING student_id
-    `;
-    
-    if ((result.rowCount ?? 0) === 0) {
-      return false;
-    }
-    
-    // Sprawdź czy rodzic ma inne aktywne dzieci (tylko active = TRUE)
-    const activeChildrenResult = await sql`
-      SELECT COUNT(*)::int as count 
-      FROM students 
-      WHERE user_id = ${userId} 
-        AND active IS TRUE
-    `;
-    
-    const activeChildrenCount = activeChildrenResult.rows[0]?.count || 0;
-    
-    // Jeśli rodzic NIE MA innych aktywnych dzieci, oznacz go jako nieaktywnego
-    if (activeChildrenCount === 0) {
-      await sql`
-        UPDATE users 
-        SET 
-          active = FALSE,
-          resignation_date = NOW()
-        WHERE id = ${userId}
-      `;
-    }
-    
-    return true;
-  } catch (error) {
-    console.error('Error marking student as inactive:', error);
-    throw error;
-  }
+  return deleteChild(studentId);
 }
 
-/**
- * Przywraca byłego ucznia do aktywnego stanu (TYLKO DLA ADMINÓW)
- * Ustawia active = TRUE i czyści resignation_date
- * Również przywraca rodzica (user) jako active = TRUE
- */
 export async function restoreStudent(studentId: string): Promise<boolean> {
-  try {
-    await ensureTablesExist();
-    
-    // Najpierw pobierz user_id studenta
-    const studentResult = await sql`
-      SELECT user_id FROM students WHERE student_id = ${studentId}
-    `;
-    
-    if (studentResult.rows.length === 0) {
-      return false;
-    }
-    
-    const userId = studentResult.rows[0].user_id;
-    
-    // Przywróć studenta
-    const result = await sql`
-      UPDATE students 
-      SET 
-        active = TRUE,
-        resignation_date = NULL
-      WHERE student_id = ${studentId}
-      RETURNING student_id
-    `;
-    
-    if ((result.rowCount ?? 0) === 0) {
-      return false;
-    }
-    
-    // Sprawdź status rodzica - przywróć tylko jeśli active = FALSE
-    const parentResult = await sql`
-      SELECT active FROM users WHERE id = ${userId}
-    `;
-    
-    if (parentResult.rows.length > 0) {
-      const parentActive = parentResult.rows[0].active;
-      
-      // Jeśli rodzic ma active = FALSE, zmień na TRUE
-      if (parentActive === false) {
-        await sql`
-          UPDATE users 
-          SET 
-            active = TRUE,
-            resignation_date = NULL
-          WHERE id = ${userId}
-        `;
-        console.log(`Restored student ${studentId} and their parent user ${userId} (parent was inactive)`);
-      } else {
-        console.log(`Restored student ${studentId}. Parent ${userId} is already active, no change needed`);
-      }
-    }
-    
-    return true;
-  } catch (error) {
-    console.error('Error restoring student:', error);
-    throw error;
-  }
+  return restoreChild(studentId);
 }
 
-/**
- * Pobiera studentów według user_id
- */
-export async function getStudentsByUserIdAdmin(userId: string): Promise<Student[]> {
-  return getStudentsByUserId(userId);
+export async function getUsersByAccountType(
+  accountType: AccountType
+): Promise<User[]> {
+  return getUsersByRole(accountTypeToUserRole(accountType));
 }
 
-/**
- * Aktualizuje rezygnację studenta (dla użytkowników)
- */
-export async function requestStudentResignation(
-  studentId: string,
+export async function updateAccountType(
   userId: string,
-  reason: string
+  newAccountType: AccountType
 ): Promise<boolean> {
+  return updateUser(userId, { account_type: newAccountType });
+}
+
+export async function updateAccountTypeByEmail(
+  email: string,
+  newAccountType: AccountType
+): Promise<boolean> {
+  const shape = await getDbShape();
+  const r = shape.userHasRole
+    ? shape.userHasSchoolId
+      ? await pool.query(
+          `UPDATE users SET role = $1
+           WHERE school_id = $2 AND LOWER(email::text) = LOWER($3::text)
+           RETURNING id`,
+          [accountTypeToUserRole(newAccountType), DEFAULT_SCHOOL_ID, email]
+        )
+      : await pool.query(
+          `UPDATE users SET role = $1
+           WHERE LOWER(email::text) = LOWER($2::text)
+           RETURNING id`,
+          [accountTypeToUserRole(newAccountType), email]
+        )
+    : await pool.query(
+        `UPDATE users SET account_type = $1
+         WHERE LOWER(email::text) = LOWER($2::text)
+         RETURNING id`,
+        [newAccountType, email]
+      );
+  return (r.rowCount ?? 0) > 0;
+}
+
+export async function isLektor(userId: string): Promise<boolean> {
+  const u = await getUserById(userId);
+  return u?.role === "TEACHER";
+}
+
+export async function hasElevatedPermissions(userId: string): Promise<boolean> {
+  const u = await getUserById(userId);
+  if (!u) return false;
+  return (
+    u.role === "ADMIN" ||
+    u.role === "MANAGER" ||
+    u.role === "TEACHER"
+  );
+}
+
+export async function testDatabaseConnection(): Promise<boolean> {
   try {
-    await ensureTablesExist();
-    
-    // Sprawdź czy student należy do użytkownika
-    const student = await sql`
-      SELECT student_id, user_id FROM students 
-      WHERE student_id = ${studentId} AND user_id = ${userId}
-      LIMIT 1
-    `;
-    
-    if (student.rows.length === 0) {
-      return false;
-    }
-    
-    // Aktualizuj rezygnację
-    const result = await sql`
-      UPDATE students 
-      SET 
-        resignation_requested = TRUE,
-        resignation_reason = ${reason}
-      WHERE student_id = ${studentId} AND user_id = ${userId}
-      RETURNING student_id
-    `;
-    
-    return (result.rowCount ?? 0) > 0;
-  } catch (error) {
-    console.error('Error requesting student resignation:', error);
-    throw error;
+    await pool.query("SELECT 1");
+    return true;
+  } catch {
+    return false;
   }
 }
 
-/**
- * Pobiera wszystkich studentów z zgłoszoną rezygnacją
- */
-export async function getStudentsWithResignation(): Promise<Student[]> {
+/** Aktywny rok szkolny szkoły (max. jeden dzięki indeksowi częściowemu). */
+export async function getActiveSchoolYear(schoolId: string): Promise<QueryResultRow | null> {
+  const result = await pool.query(
+    `SELECT id, school_id, name,
+            date_from::date::text AS date_from,
+            date_to::date::text AS date_to,
+            active, created_at
+     FROM school_years
+     WHERE school_id = $1 AND active = TRUE
+     LIMIT 1`,
+    [schoolId]
+  );
+  return result.rows[0] ?? null;
+}
+
+/** Jedna transakcja `pg` (BEGIN / COMMIT / ROLLBACK). */
+export async function runPgTransaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
   try {
-    await ensureTablesExist();
-    
-    const result = await sql`
-      SELECT * FROM students 
-      WHERE resignation_requested = TRUE
-      ORDER BY created_at DESC
-    `;
-    
-    return result.rows;
-  } catch (error) {
-    console.error('Error fetching students with resignation:', error);
-    throw error;
+    await client.query("BEGIN");
+    const out = await work(client);
+    await client.query("COMMIT");
+    return out;
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
   }
+}
+
+export async function queryDb<T extends QueryResultRow = QueryResultRow>(
+  text: string,
+  values?: unknown[]
+) {
+  return pool.query<T>(text, values);
+}
+
+export async function getStudentsWithResignation(): Promise<Student[]> {
+  const shape = await getDbShape();
+  if (shape.hasChildrenTable) {
+    const r = await pool.query<ChildRow>(
+      `SELECT * FROM children
+       WHERE school_id = $1 AND resignation_requested = TRUE
+       ORDER BY created_at DESC`,
+      [DEFAULT_SCHOOL_ID]
+    );
+    return r.rows.map((row) => childToLegacyStudent(mapChildRow(row)));
+  }
+  if (shape.hasStudentsTable) {
+    const r = await pool.query(
+      `SELECT * FROM students
+       WHERE resignation_requested = TRUE
+       ORDER BY created_at DESC`
+    );
+    return r.rows.map((row) => childToLegacyStudent(studentRowToChild(row)));
+  }
+  return [];
 }

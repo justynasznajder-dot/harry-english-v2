@@ -1,111 +1,72 @@
+import { getAllChildren, getChildrenByParentId, createChild, updateChild, canAccessSchoolAdminApis } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
-import { getAllStudents, getStudentsByUserId, isAdmin, createStudent } from "@/lib/db";
 
 // GET - pobierz studentów z filtrami
 export async function GET(request: NextRequest) {
   try {
-    // Sprawdź autoryzację admina
-    const authToken = request.cookies.get('auth-token');
-    if (!authToken) {
-      return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-    }
+    const authToken = request.cookies.get("auth-token");
+    if (!authToken) return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
+    const userId = Buffer.from(authToken.value, "base64").toString().split(":")[0];
+    if (!(await canAccessSchoolAdminApis(userId))) return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
 
-    let userId: string;
-    try {
-      const tokenData = Buffer.from(authToken.value, 'base64').toString();
-      userId = tokenData.split(':')[0];
-    } catch (error) {
-      return NextResponse.json({ message: "Nieprawidłowy token" }, { status: 401 });
-    }
-
-    const userIsAdmin = await isAdmin(userId);
-    if (!userIsAdmin) {
-      return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
-    }
-
-    // Pobierz parametry filtrowania
     const { searchParams } = new URL(request.url);
-    const filterUserId = searchParams.get('userId');
-    const filterActive = searchParams.get('active');
+    const filterUserId = searchParams.get("userId");
+    const filterActive = searchParams.get("active");
+    let children = filterUserId ? await getChildrenByParentId(filterUserId) : await getAllChildren();
+    if (filterActive !== null) children = children.filter((c) => c.active === (filterActive === "true"));
 
-    let students;
-
-    if (filterUserId) {
-      students = await getStudentsByUserId(filterUserId);
-    } else {
-      students = await getAllStudents();
-    }
-
-    // Filtruj po active jeśli podano
-    if (filterActive !== null) {
-      const active = filterActive === 'true';
-      students = students.filter(s => s.active === active);
-    }
-
-    return NextResponse.json({ students });
+    return NextResponse.json({
+      students: children.map((c) => ({
+        student_id: c.id,
+        user_id: c.parent_id,
+        first_name: c.first_name,
+        last_name: c.last_name,
+        birth_year: c.birth_date.slice(0, 4),
+        location: "",
+        active: c.active,
+        resignation_requested: c.resignation_requested,
+        resignation_reason: c.resignation_reason,
+        resignation_date: c.resignation_date,
+        created_at: c.created_at,
+      })),
+    });
   } catch (error) {
     console.error("Get students error:", error);
-    return NextResponse.json(
-      { message: "Wystąpił błąd podczas pobierania studentów" },
-      { status: 500 }
-    );
+    return NextResponse.json({ message: "Wystąpił błąd podczas pobierania studentów" }, { status: 500 });
   }
 }
 
 // POST - dodaj nowego studenta
 export async function POST(request: NextRequest) {
   try {
-    // Sprawdź autoryzację admina
-    const authToken = request.cookies.get('auth-token');
-    if (!authToken) {
-      return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-    }
-
-    let userId: string;
-    try {
-      const tokenData = Buffer.from(authToken.value, 'base64').toString();
-      userId = tokenData.split(':')[0];
-    } catch (error) {
-      return NextResponse.json({ message: "Nieprawidłowy token" }, { status: 401 });
-    }
-
-    const userIsAdmin = await isAdmin(userId);
-    if (!userIsAdmin) {
-      return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
-    }
+    const authToken = request.cookies.get("auth-token");
+    if (!authToken) return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
+    const userId = Buffer.from(authToken.value, "base64").toString().split(":")[0];
+    if (!(await canAccessSchoolAdminApis(userId))) return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
 
     const body = await request.json();
-    const { userId: targetUserId, firstName, lastName, birthYear, location, active } = body;
-
-    // Walidacja
-    if (!targetUserId || !firstName || !lastName || !birthYear || !location) {
-      return NextResponse.json(
-        { message: "Wszystkie pola są wymagane" },
-        { status: 400 }
-      );
-    }
-
-    // Utwórz studenta
-    const newStudent = await createStudent({
-      userId: targetUserId,
-      firstName,
-      lastName,
-      birthYear,
-      location,
+    const child = await createChild({
+      parentId: body.userId,
+      firstName: body.firstName,
+      lastName: body.lastName,
+      birthDate: `${body.birthYear}-01-01`,
     });
+    if (body.active !== undefined) await updateChild(child.id, { active: Boolean(body.active) });
 
-    // Jeśli active jest podane, zaktualizuj
-    if (active !== undefined) {
-      const { updateStudent } = await import('@/lib/db');
-      await updateStudent(newStudent.student_id, { active });
-    }
-
-    return NextResponse.json({ student: newStudent, message: "Student został utworzony" });
+    return NextResponse.json({
+      student: {
+        student_id: child.id,
+        user_id: child.parent_id,
+        first_name: child.first_name,
+        last_name: child.last_name,
+        birth_year: child.birth_date.slice(0, 4),
+        location: "",
+        active: body.active ?? child.active,
+      },
+      message: "Student został utworzony",
+    });
   } catch (error) {
     console.error("Create student error:", error);
-    return NextResponse.json(
-      { message: "Wystąpił błąd podczas tworzenia studenta" },
-      { status: 500 }
-    );
+    return NextResponse.json({ message: "Wystąpił błąd podczas tworzenia studenta" }, { status: 500 });
   }
 }

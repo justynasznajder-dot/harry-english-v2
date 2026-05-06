@@ -10,6 +10,28 @@ interface AuthModalProps {
 
 export default function AuthModal({ isOpen, onClose, initialMode = "select" }: AuthModalProps) {
   const [mode, setMode] = useState<"select" | "login" | "register" | "forgot-password">(initialMode);
+  const [formData, setFormData] = useState({
+    email: "",
+    password: "",
+    firstName: "",
+    lastName: "",
+    phone: "",
+    students: [
+      {
+        firstName: "",
+        lastName: "",
+        birthDate: "",
+        preferredLocationId: "",
+      },
+    ],
+    rodoConsent: false,
+  });
+  const [locations, setLocations] = useState<Array<{ id: string; name: string }>>([]);
+  const [locationsLoading, setLocationsLoading] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [showPassword, setShowPassword] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [forgotPasswordSuccess, setForgotPasswordSuccess] = useState(false);
 
   // Resetuj tryb do initialMode gdy modal się otwiera
   useEffect(() => {
@@ -17,51 +39,28 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
       setMode(initialMode);
     }
   }, [isOpen, initialMode]);
-  const [formData, setFormData] = useState({
-    email: "",
-    password: "",
-    confirmPassword: "",
-    firstName: "",
-    lastName: "",
-    students: [
-      {
-        firstName: "",
-        lastName: "",
-        birthYear: "",
-        location: "" as "" | "Paniówki" | "Halemba" | "Orzegów" | "Kochłowice" | "Bielszowice",
-      },
-    ],
-    rodoConsent: false,
-  });
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [forgotPasswordSuccess, setForgotPasswordSuccess] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen || mode !== "register") return;
+    let cancelled = false;
+    setLocationsLoading(true);
+    fetch("/api/public/locations")
+      .then((res) => (res.ok ? res.json() : Promise.reject()))
+      .then((data: { locations?: Array<{ id: string; name: string }> }) => {
+        if (!cancelled) setLocations(Array.isArray(data.locations) ? data.locations : []);
+      })
+      .catch(() => {
+        if (!cancelled) setLocations([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLocationsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, mode]);
 
   if (!isOpen) return null;
-
-  const validatePassword = (password: string): string[] => {
-    const errors: string[] = [];
-    if (password.length < 8) errors.push("Minimum 8 znaków");
-    if (!/[A-Z]/.test(password)) errors.push("Minimum 1 wielka litera");
-    if (!/[a-z]/.test(password)) errors.push("Minimum 1 mała litera");
-    if (!/[0-9]/.test(password)) errors.push("Minimum 1 cyfra");
-    if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) errors.push("Minimum 1 znak specjalny");
-    return errors;
-  };
-
-  const getPasswordStrength = (password: string): { strength: number; label: string; color: string } => {
-    if (!password) return { strength: 0, label: "", color: "" };
-    
-    const validationErrors = validatePassword(password);
-    const strength = 5 - validationErrors.length;
-    
-    if (strength <= 2) return { strength, label: "Słabe", color: "bg-red-500" };
-    if (strength === 3) return { strength, label: "Średnie", color: "bg-yellow-500" };
-    if (strength === 4) return { strength, label: "Dobre", color: "bg-blue-500" };
-    return { strength, label: "Bardzo dobre", color: "bg-green-500" };
-  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -112,15 +111,6 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
       newErrors.email = "Podaj prawidłowy adres email";
     }
 
-    const passwordErrors = validatePassword(formData.password);
-    if (passwordErrors.length > 0) {
-      newErrors.password = "Hasło nie spełnia wymagań";
-    }
-
-    if (formData.password !== formData.confirmPassword) {
-      newErrors.confirmPassword = "Hasła nie są identyczne";
-    }
-
     if (!formData.firstName.trim()) {
       newErrors.firstName = "Pole wymagane";
     }
@@ -129,8 +119,16 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
       newErrors.lastName = "Pole wymagane";
     }
 
-    // Walidacja dzieci
-    const currentYear = new Date().getFullYear();
+    const phoneDigits = formData.phone.replace(/\D/g, "");
+    if (!formData.phone.trim()) {
+      newErrors.phone = "Pole wymagane";
+    } else if (phoneDigits.length < 9) {
+      newErrors.phone = "Podaj numer z co najmniej 9 cyframi";
+    }
+
+    const isoDate = /^\d{4}-\d{2}-\d{2}$/;
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
     formData.students.forEach((student, index) => {
       if (!student.firstName.trim()) {
         newErrors[`student_${index}_firstName`] = "Pole wymagane";
@@ -138,12 +136,26 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
       if (!student.lastName.trim()) {
         newErrors[`student_${index}_lastName`] = "Pole wymagane";
       }
-      const birthYear = parseInt(student.birthYear);
-      if (!birthYear || birthYear < 2000 || birthYear > currentYear) {
-        newErrors[`student_${index}_birthYear`] = `Podaj prawidłowy rok urodzenia (2000-${currentYear})`;
+      const bd = student.birthDate?.trim() ?? "";
+      if (!bd || !isoDate.test(bd)) {
+        newErrors[`student_${index}_birthDate`] = "Wybierz datę urodzenia (YYYY-MM-DD)";
+      } else {
+        const [y, m, d] = bd.split("-").map(Number);
+        const parsed = new Date(y, m - 1, d);
+        if (
+          parsed.getFullYear() !== y ||
+          parsed.getMonth() !== m - 1 ||
+          parsed.getDate() !== d
+        ) {
+          newErrors[`student_${index}_birthDate`] = "Nieprawidłowa data";
+        } else if (y < 2000) {
+          newErrors[`student_${index}_birthDate`] = "Rok urodzenia nie może być wcześniejszy niż 2000";
+        } else if (parsed > todayEnd) {
+          newErrors[`student_${index}_birthDate`] = "Data nie może być w przyszłości";
+        }
       }
-      if (!student.location) {
-        newErrors[`student_${index}_location`] = "Wybierz lokalizację";
+      if (locations.length > 0 && !student.preferredLocationId?.trim()) {
+        newErrors[`student_${index}_preferredLocationId`] = "Wybierz lokalizację";
       }
     });
 
@@ -164,11 +176,15 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email: formData.email,
-          password: formData.password,
-          confirmPassword: formData.confirmPassword,
           firstName: formData.firstName,
           lastName: formData.lastName,
-          students: formData.students,
+          phone: formData.phone.trim(),
+          children: formData.students.map((s) => ({
+            firstName: s.firstName.trim(),
+            lastName: s.lastName.trim(),
+            birthDate: s.birthDate.trim(),
+            preferredLocationId: s.preferredLocationId.trim() || undefined,
+          })),
           rodoConsent: formData.rodoConsent,
         }),
       });
@@ -227,15 +243,15 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
     setFormData({
       email: "",
       password: "",
-      confirmPassword: "",
       firstName: "",
       lastName: "",
+      phone: "",
       students: [
         {
           firstName: "",
           lastName: "",
-          birthYear: "",
-          location: "" as "" | "Paniówki" | "Halemba" | "Orzegów" | "Kochłowice" | "Bielszowice",
+          birthDate: "",
+          preferredLocationId: "",
         },
       ],
       rodoConsent: false,
@@ -252,8 +268,8 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
         {
           firstName: "",
           lastName: "",
-          birthYear: "",
-          location: "" as "" | "Paniówki" | "Halemba" | "Orzegów" | "Kochłowice" | "Bielszowice",
+          birthDate: "",
+          preferredLocationId: "",
         },
       ],
     });
@@ -281,8 +297,6 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
     resetForm();
     onClose();
   };
-
-  const passwordStrength = getPasswordStrength(formData.password);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -514,116 +528,21 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
                 {errors.email && <p className="mt-1 text-xs text-red-600">{errors.email}</p>}
               </div>
 
-              {/* Password */}
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Hasło *
+                  Telefon (rodzica) *
                 </label>
-                <div className="relative">
-                  <input
-                    type={showPassword ? "text" : "password"}
-                    value={formData.password}
-                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                    className={`w-full rounded-lg border ${errors.password ? 'border-red-300' : 'border-gray-300'} px-4 py-2.5 pr-10 text-gray-900 focus:border-[#175244] focus:ring-2 focus:ring-[#175244]/20 outline-none transition-all`}
-                    placeholder="••••••••"
-                    required
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                  >
-                    {showPassword ? (
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
-                      </svg>
-                    ) : (
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                      </svg>
-                    )}
-                  </button>
-                </div>
-
-                {/* Password strength indicator */}
-                {formData.password && (
-                  <div className="mt-2">
-                    <div className="flex items-center gap-2 mb-1">
-                      <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                        <div 
-                          className={`h-full ${passwordStrength.color} transition-all duration-300`}
-                          style={{ width: `${(passwordStrength.strength / 5) * 100}%` }}
-                        />
-                      </div>
-                      <span className={`text-xs font-medium ${passwordStrength.color.replace('bg-', 'text-')}`}>
-                        {passwordStrength.label}
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Password requirements */}
-                <div className="mt-2 p-3 bg-gray-50 rounded-lg">
-                  <p className="text-xs font-semibold text-gray-700 mb-2">Wymagania hasła:</p>
-                  <ul className="text-xs text-gray-600 space-y-1">
-                    {[
-                      { test: formData.password.length >= 8, text: "Minimum 8 znaków" },
-                      { test: /[A-Z]/.test(formData.password), text: "Minimum 1 wielka litera" },
-                      { test: /[a-z]/.test(formData.password), text: "Minimum 1 mała litera" },
-                      { test: /[0-9]/.test(formData.password), text: "Minimum 1 cyfra" },
-                      { test: /[!@#$%^&*(),.?":{}|<>]/.test(formData.password), text: "Minimum 1 znak specjalny (!@#$%...)" },
-                    ].map((req, idx) => (
-                      <li key={idx} className="flex items-center gap-2">
-                        {req.test ? (
-                          <svg className="w-4 h-4 text-green-600" fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                          </svg>
-                        ) : (
-                          <svg className="w-4 h-4 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                          </svg>
-                        )}
-                        <span className={req.test ? "text-green-700" : ""}>{req.text}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-                {errors.password && <p className="mt-1 text-xs text-red-600">{errors.password}</p>}
-              </div>
-
-              {/* Confirm Password */}
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Powtórz hasło *
-                </label>
-                <div className="relative">
-                  <input
-                    type={showConfirmPassword ? "text" : "password"}
-                    value={formData.confirmPassword}
-                    onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
-                    className={`w-full rounded-lg border ${errors.confirmPassword ? 'border-red-300' : 'border-gray-300'} px-4 py-2.5 pr-10 text-gray-900 focus:border-[#175244] focus:ring-2 focus:ring-[#175244]/20 outline-none transition-all`}
-                    placeholder="••••••••"
-                    required
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                  >
-                    {showConfirmPassword ? (
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
-                      </svg>
-                    ) : (
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                      </svg>
-                    )}
-                  </button>
-                </div>
-                {errors.confirmPassword && <p className="mt-1 text-xs text-red-600">{errors.confirmPassword}</p>}
+                <input
+                  type="tel"
+                  inputMode="tel"
+                  autoComplete="tel"
+                  value={formData.phone}
+                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  className={`w-full rounded-lg border ${errors.phone ? "border-red-300" : "border-gray-300"} px-4 py-2.5 text-gray-900 focus:border-[#175244] focus:ring-2 focus:ring-[#175244]/20 outline-none transition-all`}
+                  placeholder="+48 600 000 000"
+                  required
+                />
+                {errors.phone && <p className="mt-1 text-xs text-red-600">{errors.phone}</p>}
               </div>
 
               {/* Students Info */}
@@ -676,43 +595,62 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-semibold text-gray-700 mb-2">
-                          Rok urodzenia *
-                        </label>
-                        <input
-                          type="number"
-                          value={student.birthYear}
-                          onChange={(e) => updateStudent(index, "birthYear", e.target.value)}
-                          className={`w-full rounded-lg border ${errors[`student_${index}_birthYear`] ? 'border-red-300' : 'border-gray-300'} px-4 py-2.5 text-gray-900 focus:border-[#175244] focus:ring-2 focus:ring-[#175244]/20 outline-none transition-all`}
-                          placeholder="2018"
-                          min="2000"
-                          max={new Date().getFullYear()}
-                          required
-                        />
-                        {errors[`student_${index}_birthYear`] && <p className="mt-1 text-xs text-red-600">{errors[`student_${index}_birthYear`]}</p>}
-                      </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">
+                        Data urodzenia * <span className="font-normal text-gray-500">(YYYY-MM-DD)</span>
+                      </label>
+                      <input
+                        type="date"
+                        value={student.birthDate}
+                        onChange={(e) => updateStudent(index, "birthDate", e.target.value)}
+                        max={new Date().toISOString().slice(0, 10)}
+                        min="2000-01-01"
+                        className={`w-full rounded-lg border ${errors[`student_${index}_birthDate`] ? 'border-red-300' : 'border-gray-300'} px-4 py-2.5 text-gray-900 focus:border-[#175244] focus:ring-2 focus:ring-[#175244]/20 outline-none transition-all`}
+                        required
+                      />
+                      {errors[`student_${index}_birthDate`] && (
+                        <p className="mt-1 text-xs text-red-600">{errors[`student_${index}_birthDate`]}</p>
+                      )}
+                    </div>
 
-                      <div>
-                        <label className="block text-sm font-semibold text-gray-700 mb-2">
-                          Lokalizacja *
-                        </label>
-                        <select
-                          value={student.location}
-                          onChange={(e) => updateStudent(index, "location", e.target.value)}
-                          className={`w-full rounded-lg border ${errors[`student_${index}_location`] ? 'border-red-300' : 'border-gray-300'} px-4 py-2.5 text-gray-900 focus:border-[#175244] focus:ring-2 focus:ring-[#175244]/20 outline-none transition-all`}
-                          required
-                        >
-                          <option value="">Wybierz lokalizację</option>
-                          <option value="Paniówki">Paniówki</option>
-                          <option value="Halemba">Halemba</option>
-                          <option value="Orzegów">Orzegów</option>
-                          <option value="Kochłowice">Kochłowice</option>
-                          <option value="Bielszowice">Bielszowice</option>
-                        </select>
-                        {errors[`student_${index}_location`] && <p className="mt-1 text-xs text-red-600">{errors[`student_${index}_location`]}</p>}
-                      </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">
+                        Preferowana lokalizacja *
+                      </label>
+                      <select
+                        value={student.preferredLocationId}
+                        onChange={(e) => updateStudent(index, "preferredLocationId", e.target.value)}
+                        disabled={locationsLoading || locations.length === 0}
+                        className={`w-full rounded-lg border ${
+                          errors[`student_${index}_preferredLocationId`]
+                            ? "border-red-300"
+                            : "border-gray-300"
+                        } px-4 py-2.5 text-gray-900 focus:border-[#175244] focus:ring-2 focus:ring-[#175244]/20 outline-none transition-all disabled:bg-gray-100 disabled:text-gray-500`}
+                        required={locations.length > 0}
+                      >
+                        <option value="">
+                          {locationsLoading
+                            ? "Ładowanie lokalizacji…"
+                            : locations.length === 0
+                              ? "Brak lokalizacji — skontaktuj się ze szkołą"
+                              : "— Wybierz —"}
+                        </option>
+                        {locations.map((loc) => (
+                          <option key={loc.id} value={loc.id}>
+                            {loc.name}
+                          </option>
+                        ))}
+                      </select>
+                      {errors[`student_${index}_preferredLocationId`] && (
+                        <p className="mt-1 text-xs text-red-600">
+                          {errors[`student_${index}_preferredLocationId`]}
+                        </p>
+                      )}
+                      {!locationsLoading && locations.length === 0 && (
+                        <p className="mt-1 text-xs text-amber-700">
+                          Nie udało się wczytać listy placówek. Odśwież stronę lub skontaktuj się z biurem.
+                        </p>
+                      )}
                     </div>
                   </div>
                 ))}

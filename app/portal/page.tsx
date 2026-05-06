@@ -1,83 +1,141 @@
 'use client';
 
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import UserPortal from '@/src/components/UserPortal';
 import LektorPortal from '@/src/components/LektorPortal';
 import AdminPortal from '@/src/components/AdminPortal';
+import PendingPortal from '@/src/components/PendingPortal';
+import ProposedPortal from '@/src/components/ProposedPortal';
+import ContractPortal from '@/src/components/ContractPortal';
+import ChildPortal from '@/src/components/ChildPortal';
 
 interface UserInfo {
   id: string;
   email: string;
   firstName: string;
   lastName: string;
-  accountType?: string;
-  students?: Array<{
-    studentId?: string;
+  role?: string;
+  accessLevel?: 'PENDING' | 'PROPOSED' | 'CONTRACT_SENT' | 'ACTIVE';
+  children?: Array<{
+    childId?: string;
     firstName: string;
     lastName: string;
-    birthYear: string;
-    location: string;
+    birthDate: string;
     active?: boolean;
   }>;
+}
+
+/** Np. „piątek, 24 kwietnia 2026” → „Piątek, 24 kwietnia 2026” */
+function formatPolishLongDate(d: Date): string {
+  const raw = d.toLocaleDateString('pl-PL', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
+function panelRoleLabel(role: string | undefined): string {
+  if (role === 'ADMIN') return 'PANEL SUPER ADMINA';
+  if (role === 'MANAGER') return 'PANEL ZARZĄDCY SZKOŁY';
+  if (role === 'TEACHER') return 'PANEL NAUCZYCIELA';
+  if (role === 'CHILD') return 'PANEL UCZNIA';
+  if (role === 'PARENT') return 'PANEL RODZICA';
+  return 'PANEL';
+}
+
+function PortalHeaderUserBlock({ userInfo }: { userInfo: UserInfo | null }) {
+  if (!userInfo) {
+    return <p className="text-sm text-zinc-500">Ładowanie profilu…</p>;
+  }
+  return (
+    <>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#1f2933]">
+        {panelRoleLabel(userInfo.role)}
+      </p>
+      <p className="mt-2 text-2xl font-bold leading-tight tracking-tight text-[#1e3a4c] sm:text-3xl">
+        {[userInfo.firstName, userInfo.lastName].filter(Boolean).join(' ') || userInfo.email}
+      </p>
+      <p className="mt-2 text-sm font-semibold uppercase tracking-[0.12em] text-[#1f2933]">
+        {(process.env.NEXT_PUBLIC_PORTAL_SITE_TAG ?? 'Harry English').toUpperCase()}
+      </p>
+      <p className="mt-2 text-sm text-[#1f2933]">{formatPolishLongDate(new Date())}</p>
+    </>
+  );
+}
+
+function PortalHeaderLogout({
+  loading,
+  onLogout,
+}: {
+  loading: boolean;
+  onLogout: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onLogout}
+      disabled={loading}
+      className="shrink-0 rounded-full border border-zinc-800/55 bg-white px-4 py-2.5 text-xs font-semibold text-[#1e3a4c] shadow-sm transition-all hover:border-zinc-800 hover:bg-zinc-50 disabled:opacity-50 sm:px-6 sm:py-3 sm:text-sm"
+    >
+      {loading ? 'Wylogowywanie...' : 'Wyloguj się'}
+    </button>
+  );
 }
 
 export default function PortalPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
+  const [enrollmentData, setEnrollmentData] = useState<{
+    proposal: {
+      group_name: string;
+      location_name: string;
+      schedule: string;
+      price_monthly?: number | null;
+    } | null;
+    contract: {
+      id: string;
+      content_html: string;
+      status: string;
+    } | null;
+  } | null>(null);
 
-  useEffect(() => {
-    // Funkcja do pobrania danych z API
-    const fetchUserData = async () => {
-      try {
-        const response = await fetch('/api/user/me');
-        if (response.ok) {
-          const data = await response.json();
-          setUserInfo(data.user);
-          // Zaktualizuj localStorage
-          localStorage.setItem('userInfo', JSON.stringify(data.user));
-          if (data.user.email) {
-            localStorage.setItem('userEmail', data.user.email);
-          }
-        } else {
-          // Jeśli API nie działa, użyj localStorage jako fallback
-          const storedUserInfo = localStorage.getItem('userInfo');
-          const storedEmail = localStorage.getItem('userEmail');
-          
-          if (storedUserInfo) {
-            try {
-              setUserInfo(JSON.parse(storedUserInfo));
-            } catch (error) {
-              console.error('Error parsing user info:', error);
-              if (storedEmail) {
-                setUserInfo({
-                  id: '',
-                  email: storedEmail,
-                  firstName: '',
-                  lastName: '',
-                });
-              }
-            }
-          } else if (storedEmail) {
-            setUserInfo({
-              id: '',
-              email: storedEmail,
-              firstName: '',
-              lastName: '',
-            });
-          }
+  const fetchEnrollmentStatus = async () => {
+    try {
+      const res = await fetch('/api/enrollment/status');
+      if (!res.ok) return;
+      const data = await res.json();
+      setEnrollmentData(data);
+    } catch (error) {
+      console.error('Enrollment status error:', error);
+    }
+  };
+
+  const fetchUserData = async () => {
+    try {
+      const response = await fetch('/api/user/me', { cache: 'no-store' });
+      if (response.ok) {
+        const data = await response.json();
+        setUserInfo(data.user);
+        if (data.user.role === 'PARENT' && data.user.accessLevel !== 'ACTIVE') {
+          fetchEnrollmentStatus();
         }
-      } catch (error) {
-        console.error('Error fetching user data:', error);
-        // Fallback do localStorage
+        localStorage.setItem('userInfo', JSON.stringify(data.user));
+        if (data.user.email) {
+          localStorage.setItem('userEmail', data.user.email);
+        }
+      } else {
         const storedUserInfo = localStorage.getItem('userInfo');
         const storedEmail = localStorage.getItem('userEmail');
-        
         if (storedUserInfo) {
           try {
             setUserInfo(JSON.parse(storedUserInfo));
-          } catch (err) {
+          } catch (error) {
+            console.error('Error parsing user info:', error);
             if (storedEmail) {
               setUserInfo({
                 id: '',
@@ -87,10 +145,21 @@ export default function PortalPage() {
               });
             }
           }
+        } else if (storedEmail) {
+          setUserInfo({
+            id: '',
+            email: storedEmail,
+            firstName: '',
+            lastName: '',
+          });
         }
       }
-    };
+    } catch (error) {
+      console.error('Error fetching user data:', error);
+    }
+  };
 
+  useEffect(() => {
     fetchUserData();
   }, []);
 
@@ -120,58 +189,50 @@ export default function PortalPage() {
     <div className="min-h-screen bg-gradient-to-br from-[#0f3c33] to-[#175244] p-4">
       <div className="mx-auto max-w-6xl">
         {/* Header */}
-        <header className="bg-[#f8f6f3] rounded-3xl p-6 shadow-xl mb-8">
-          <div className="flex flex-col gap-4">
-            {/* Top row - title and logout */}
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-              <div>
-                <h1 className="text-3xl font-bold text-[#1f2933]">
-                  🦒 Portal Harry English
-                </h1>
-                <p className="text-sm text-[#4b5563] mt-1">
-                  {userInfo?.accountType === 'admin' && 'Panel administratora'}
-                  {userInfo?.accountType === 'lektor' && 'Panel lektora'}
-                  {(!userInfo?.accountType || userInfo?.accountType === 'user') && 'Witaj w panelu ucznia!'}
-                </p>
-              </div>
-              <button
-                onClick={handleLogout}
-                disabled={loading}
-                className="px-6 py-3 bg-red-500 text-white font-semibold rounded-full hover:bg-red-600 transition-all disabled:opacity-50 self-start sm:self-auto"
-              >
-                {loading ? 'Wylogowywanie...' : 'Wyloguj się'}
-              </button>
+        <header className="mb-4 rounded-3xl border-t-[5px] border-[#0f3c33] bg-[#f8f6f3] p-4 shadow-xl sm:p-5">
+          <div className="flex flex-row items-start justify-between gap-3 sm:gap-6 md:items-center">
+            <div className="min-w-0 flex-1 pr-2 text-left">
+              <PortalHeaderUserBlock userInfo={userInfo} />
             </div>
-
-            {/* User info - if available */}
-            {userInfo && (
-              <div className="pt-4 border-t border-gray-200">
-                <div className="flex items-center gap-2 text-sm">
-                  <svg className="w-5 h-5 text-[#175244]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                  </svg>
-                  <span className="text-gray-700 font-medium">
-                    Zalogowano jako:
-                  </span>
-                  <span className="text-[#175244] font-semibold">
-                    {userInfo.email}
-                  </span>
-                </div>
-                {userInfo.firstName && userInfo.lastName && (
-                  <div className="mt-2 text-sm text-gray-600">
-                    <span className="font-medium">Rodzic:</span> {userInfo.firstName} {userInfo.lastName}
-                  </div>
-                )}
-              </div>
-            )}
+            <div className="flex shrink-0 flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:gap-3">
+              {userInfo?.role === 'MANAGER' && (
+                <Link
+                  href="/"
+                  className="rounded-full border border-zinc-800/55 bg-white px-4 py-2.5 text-center text-xs font-semibold text-[#1e3a4c] shadow-sm transition-all hover:border-zinc-800 hover:bg-zinc-50 sm:px-6 sm:py-3 sm:text-sm"
+                >
+                  Powrót na stronę główną
+                </Link>
+              )}
+              <PortalHeaderLogout loading={loading} onLogout={handleLogout} />
+            </div>
           </div>
         </header>
 
         {/* Render odpowiedniego portalu w zależności od typu konta */}
-        {userInfo?.accountType === 'admin' ? (
+        {userInfo?.role === "ADMIN" || userInfo?.role === "MANAGER" ? (
           <AdminPortal />
-        ) : userInfo?.accountType === 'lektor' ? (
+        ) : userInfo?.role === "TEACHER" ? (
           <LektorPortal />
+        ) : userInfo?.role === "CHILD" ? (
+          <ChildPortal />
+        ) : userInfo?.role === "PARENT" && userInfo.accessLevel === "PENDING" ? (
+          <PendingPortal children={userInfo.children ?? []} />
+        ) : userInfo?.role === "PARENT" && userInfo.accessLevel === "PROPOSED" ? (
+          <ProposedPortal
+            proposal={enrollmentData?.proposal ?? null}
+            onAccepted={async () => {
+              await fetchUserData();
+              await fetchEnrollmentStatus();
+            }}
+          />
+        ) : userInfo?.role === "PARENT" && userInfo.accessLevel === "CONTRACT_SENT" ? (
+          <ContractPortal
+            contract={enrollmentData?.contract ?? null}
+            onSigned={async () => {
+              await fetchUserData();
+              await fetchEnrollmentStatus();
+            }}
+          />
         ) : userInfo ? (
           <UserPortal userInfo={userInfo} onUserInfoUpdate={setUserInfo} />
         ) : (

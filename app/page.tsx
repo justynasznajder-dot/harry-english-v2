@@ -132,7 +132,7 @@ export default function HomePage() {
                       setAuthModalMode("register");
                       setAuthModalOpen(true);
                     }}
-                    className="hidden rounded-full bg-[#ffc94a] px-5 py-2 text-xs font-semibold text-[#3b2a10] shadow-md shadow-black/20 transition-colors hover:bg-[#ffd76f]"
+                    className="rounded-full bg-[#ffc94a] px-5 py-2 text-xs font-semibold text-[#3b2a10] shadow-md shadow-black/20 transition-colors hover:bg-[#ffd76f]"
                   >
                     Zapisz dziecko
                   </button>
@@ -223,19 +223,16 @@ export default function HomePage() {
                       Zaloguj
                     </button>
 
-                    {/* Zapisz dziecko – wyłączone w burgerze (ustaw true, żeby wrócić) */}
-                    {false && (
-                      <button
-                        onClick={() => {
-                          setMobileOpen(false);
-                          setAuthModalMode("register");
-                          setAuthModalOpen(true);
-                        }}
-                        className="mt-2 inline-flex justify-center rounded-full bg-[#ffc94a] px-6 py-3 text-xs font-semibold text-[#3b2a10] shadow-md shadow-black/20 transition-colors hover:bg-[#ffd76f]"
-                      >
-                        Zapisz dziecko
-                      </button>
-                    )}
+                    <button
+                      onClick={() => {
+                        setMobileOpen(false);
+                        setAuthModalMode("register");
+                        setAuthModalOpen(true);
+                      }}
+                      className="mt-2 inline-flex justify-center rounded-full bg-[#ffc94a] px-6 py-3 text-xs font-semibold text-[#3b2a10] shadow-md shadow-black/20 transition-colors hover:bg-[#ffd76f]"
+                    >
+                      Zapisz dziecko
+                    </button>
                   </nav>
                 </div>
               )}
@@ -321,12 +318,25 @@ export default function HomePage() {
 
             <div className="mt-8 grid gap-6 md:grid-cols-3">
               <div className="rounded-2xl bg-white px-6 pb-6 shadow-md overflow-hidden">
-                <div className="mb-2 h-40 w-full overflow-hidden rounded-t-xl">
-                  <img
-                    src="/images/gallery/22.jpg"
-                    alt="Zabawa i nauka"
-                    className="h-full w-full object-contain"
-                  />
+                <div className="mb-2 h-40 w-full overflow-hidden rounded-t-xl bg-gray-300/60">
+                  <button
+                    type="button"
+                    onClick={() => setGalleryZoomNum(22)}
+                    className="group relative h-full w-full cursor-pointer transition-transform hover:scale-105 text-left"
+                    aria-label="Powiększ zdjęcie: Zabawa i nauka"
+                  >
+                    <ReloadableImage
+                      src="/images/gallery/22.jpg"
+                      alt="Zabawa i nauka"
+                      fill
+                      className="object-contain"
+                    />
+                    <div className="absolute inset-0 flex items-center justify-center bg-[#175244]/0 transition-colors group-hover:bg-[#175244]/20 pointer-events-none">
+                      <span className="text-2xl text-white opacity-0 transition-opacity group-hover:opacity-100">
+                        🔍
+                      </span>
+                    </div>
+                  </button>
                 </div>
 
                 <h3 className="text-center text-base font-semibold text-[#1f2933]">
@@ -339,12 +349,25 @@ export default function HomePage() {
               </div>
 
               <div className="rounded-2xl bg-white px-6 pb-6 shadow-md overflow-hidden">
-                <div className="mb-2 h-40 w-full overflow-hidden rounded-t-xl">
-                  <img
-                    src="/images/gallery/23.jpg"
-                    alt="Mówienie od pierwszych zajęć"
-                    className="h-full w-full object-contain"
-                  />
+                <div className="mb-2 h-40 w-full overflow-hidden rounded-t-xl bg-gray-300/60">
+                  <button
+                    type="button"
+                    onClick={() => setGalleryZoomNum(23)}
+                    className="group relative h-full w-full cursor-pointer transition-transform hover:scale-105 text-left"
+                    aria-label="Powiększ zdjęcie: Mówienie od pierwszych zajęć"
+                  >
+                    <ReloadableImage
+                      src="/images/gallery/23.jpg"
+                      alt="Mówienie od pierwszych zajęć"
+                      fill
+                      className="object-contain"
+                    />
+                    <div className="absolute inset-0 flex items-center justify-center bg-[#175244]/0 transition-colors group-hover:bg-[#175244]/20 pointer-events-none">
+                      <span className="text-2xl text-white opacity-0 transition-opacity group-hover:opacity-100">
+                        🔍
+                      </span>
+                    </div>
+                  </button>
                 </div>
 
                 <h3 className="text-center text-base font-semibold text-[#1f2933]">
@@ -357,12 +380,25 @@ export default function HomePage() {
               </div>
 
               <div className="rounded-2xl bg-white px-6 pb-6 shadow-md overflow-hidden">
-                <div className="mb-2 h-40 w-full overflow-hidden rounded-t-xl">
-                  <img
-                    src="/images/gallery/16.jpg"
-                    alt="Małe grupy, indywidualne podejście"
-                    className="h-full w-full object-contain"
-                  />
+                <div className="mb-2 h-40 w-full overflow-hidden rounded-t-xl bg-gray-300/60">
+                  <button
+                    type="button"
+                    onClick={() => setGalleryZoomNum(16)}
+                    className="group relative h-full w-full cursor-pointer transition-transform hover:scale-105 text-left"
+                    aria-label="Powiększ zdjęcie: Małe grupy, indywidualne podejście"
+                  >
+                    <ReloadableImage
+                      src="/images/gallery/16.jpg"
+                      alt="Małe grupy, indywidualne podejście"
+                      fill
+                      className="object-contain"
+                    />
+                    <div className="absolute inset-0 flex items-center justify-center bg-[#175244]/0 transition-colors group-hover:bg-[#175244]/20 pointer-events-none">
+                      <span className="text-2xl text-white opacity-0 transition-opacity group-hover:opacity-100">
+                        🔍
+                      </span>
+                    </div>
+                  </button>
                 </div>
 
                 <h3 className="text-center text-base font-semibold text-[#1f2933]">

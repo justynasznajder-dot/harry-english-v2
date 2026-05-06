@@ -9,7 +9,6 @@ export default function CookieBanner() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    // Dla testów: banner zawsze się pokazuje przy każdym odświeżeniu (wyłącz zapis do localStorage)
     const consent = localStorage.getItem(STORAGE_KEY);
     if (consent !== "accepted") {
       setVisible(true);
@@ -17,8 +16,7 @@ export default function CookieBanner() {
   }, []);
 
   const handleAccept = () => {
-    // Wyłączone dla testów – przywróć poniższą linię, gdy skończysz testowanie:
-    // localStorage.setItem(STORAGE_KEY, "accepted");
+    localStorage.setItem(STORAGE_KEY, "accepted");
     setVisible(false);
   };
 

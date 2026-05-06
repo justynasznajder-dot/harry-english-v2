@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getUserById, getStudentsByUserId } from "@/lib/db";
+import { getChildrenByParentId, getUserById } from "@/lib/db";
 
 export async function GET(request: NextRequest) {
   try {
@@ -33,19 +33,20 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Pobierz listę dzieci użytkownika tylko dla user i lektor (admin nie ma dzieci)
-    let students: any[] = [];
-    if (user.account_type === 'user' || user.account_type === 'lektor') {
-      const studentsData = await getStudentsByUserId(userId);
-      students = studentsData.map(s => ({
-        studentId: s.student_id,
-        firstName: s.first_name,
-        lastName: s.last_name,
-        birthYear: s.birth_year,
-        location: s.location,
-        active: s.active,
-        resignationRequested: s.resignation_requested || false,
-        resignationReason: s.resignation_reason || null,
+    // Rodzic widzi swoje dzieci; admin/teacher bez listy dzieci.
+    let children: any[] = [];
+    if (user.role === "PARENT") {
+      const rows = await getChildrenByParentId(userId);
+      children = rows.map((c) => ({
+        childId: c.id,
+        firstName: c.first_name,
+        lastName: c.last_name,
+        birthDate: c.birth_date,
+        active: c.active,
+        confirmed: c.confirmed,
+        enrollmentRequestId: c.enrollment_request_id,
+        resignationRequested: c.resignation_requested || false,
+        resignationReason: c.resignation_reason || null,
       }));
     }
 
@@ -55,8 +56,20 @@ export async function GET(request: NextRequest) {
         email: user.email,
         firstName: user.first_name,
         lastName: user.last_name,
+        role: user.role,
+        accessLevel: user.access_level,
+        schoolId: user.school_id,
+        children,
         accountType: user.account_type,
-        students: students,
+        students: children.map((c) => ({
+          studentId: c.childId,
+          firstName: c.firstName,
+          lastName: c.lastName,
+          birthYear: String(c.birthDate).slice(0, 4),
+          active: c.active,
+          resignationRequested: c.resignationRequested,
+          resignationReason: c.resignationReason,
+        })),
       },
     });
   } catch (error) {
