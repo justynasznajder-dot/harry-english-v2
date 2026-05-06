@@ -69,6 +69,7 @@ export async function GET(request: NextRequest) {
       confirmed: u.confirmed,
       active: u.active,
       access_level: u.access_level,
+      phone: u.phone,
       resignation_date: u.resignation_date,
       created_at: u.created_at,
       last_login: u.last_login,
@@ -112,7 +113,19 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { email, password, firstName, lastName, role, accountType, confirmed, accessLevel } = body;
+    const {
+      email,
+      password,
+      firstName,
+      lastName,
+      role,
+      accountType,
+      confirmed,
+      accessLevel,
+      phone: phoneRaw,
+    } = body;
+    const phone =
+      phoneRaw != null && String(phoneRaw).trim() !== "" ? String(phoneRaw).trim() : null;
 
     // Walidacja
     if (!email || !password || !firstName || !lastName) {
@@ -174,6 +187,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: "Brak uprawnień" }, { status: 403 });
     }
 
+    const resolvedConfirmed =
+      confirmed !== undefined ? Boolean(confirmed) : targetRole === "PARENT" ? false : true;
+
     // Utwórz użytkownika — school_id wyłącznie z sesji (MANAGER) / reguł powyżej, nigdy „ufamy” samemu body przy managerze
     const newUser = await createUser({
       email,
@@ -182,14 +198,10 @@ export async function POST(request: NextRequest) {
       lastName,
       role: targetRole,
       schoolId: targetSchoolId,
+      phone,
+      confirmed: resolvedConfirmed,
       accessLevel: accessLevel || (targetRole === "PARENT" ? "PENDING" : "ACTIVE"),
     });
-
-    // Zaktualizuj confirmed jeśli podano
-    if (confirmed !== undefined) {
-      const { updateUser } = await import('@/lib/db');
-      await updateUser(newUser.id, { confirmed });
-    }
 
     // Usuń password_hash z odpowiedzi
     const safeUser = {
@@ -199,21 +211,36 @@ export async function POST(request: NextRequest) {
       email: newUser.email,
       role: newUser.role,
       account_type: newUser.account_type,
-      confirmed: confirmed || false,
+      confirmed: newUser.confirmed,
+      active: newUser.active,
+      access_level: newUser.access_level,
+      phone: newUser.phone,
       created_at: newUser.created_at,
     };
 
     return NextResponse.json({ user: safeUser, message: "Użytkownik został utworzony" });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Create user error:", error);
-    if (error.message?.includes('UNIQUE') || error.message?.includes('unique')) {
+    const pg = error as { code?: string; message?: string; detail?: string };
+    if (
+      pg.code === "23505" ||
+      /duplicate key|unique constraint/i.test(String(pg.message ?? ""))
+    ) {
       return NextResponse.json(
-        { message: "Użytkownik z tym adresem email już istnieje" },
+        { message: "Użytkownik z tym adresem email już istnieje w tej szkole" },
         { status: 409 }
       );
     }
+    if (error instanceof Error && error.message.includes("Brak identyfikatora szkoły")) {
+      return NextResponse.json({ message: error.message }, { status: 400 });
+    }
     return NextResponse.json(
-      { message: "Wystąpił błąd podczas tworzenia użytkownika" },
+      {
+        message: "Wystąpił błąd podczas tworzenia użytkownika",
+        pgCode: pg.code,
+        pgMessage: pg.message,
+        detail: pg.detail,
+      },
       { status: 500 }
     );
   }

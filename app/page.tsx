@@ -4,6 +4,79 @@ import { useState, useEffect } from "react";
 import ReloadableImage from "../src/components/ReloadableImage";
 import ContactForm from "../src/components/ContactForm";
 import AuthModal from "../src/components/AuthModal";
+import {
+  usePublicSiteContent,
+  type PublicSiteContent,
+} from "../src/hooks/usePublicSiteContent";
+
+function GoogleIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden>
+      <path
+        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+        fill="#4285F4"
+      />
+      <path
+        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+        fill="#34A853"
+      />
+      <path
+        d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+        fill="#FBBC05"
+      />
+      <path
+        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+        fill="#EA4335"
+      />
+    </svg>
+  );
+}
+
+function TestimonialCard({
+  t,
+  idx,
+}: {
+  t: PublicSiteContent["testimonials"][number];
+  idx: number;
+}) {
+  const colors = ["bg-[#175244]", "bg-purple-600", "bg-blue-600", "bg-gray-500"];
+  const bg = colors[idx % colors.length];
+  const initial = (t.author_name?.trim()?.[0] ?? "?").toUpperCase();
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-6">
+      <div className="flex items-start gap-4">
+        <div
+          className={`flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full ${bg} text-lg font-bold text-white`}
+        >
+          {initial}
+        </div>
+        <div className="flex-1">
+          <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <div className="font-semibold text-[#202124]">{t.author_name}</div>
+              <div className="mt-1 flex items-center gap-2">
+                <span className="text-xs text-[#5f6368]">Opinia z:</span>
+                <GoogleIcon className="h-4 w-4" />
+                <span className="text-xs font-medium text-[#5f6368]">Google</span>
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="flex items-center justify-end gap-1 text-sm text-[#5f6368]">
+                <span>{t.rating}</span>
+                <span className="text-gray-400">/</span>
+                <span>5</span>
+              </div>
+              {t.sort_label ? (
+                <div className="mt-1 text-xs text-[#5f6368]">{t.sort_label}</div>
+              ) : null}
+            </div>
+          </div>
+          <p className="mt-3 text-sm leading-relaxed text-[#202124]">{t.body}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function HomePage() {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -13,14 +86,16 @@ export default function HomePage() {
   const [selectedPlan, setSelectedPlan] = useState<"walk" | "run" | "swim" | "fly" | null>(null);
   const [allReviewsOpen, setAllReviewsOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
-  const [galleryZoomNum, setGalleryZoomNum] = useState<number | null>(null);
+  const [galleryZoomSrc, setGalleryZoomSrc] = useState<string | null>(null);
   const [minorProtectionOpen, setMinorProtectionOpen] = useState(false);
+  const { data: siteContent, loading: siteContentLoading } = usePublicSiteContent();
 
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        setGalleryZoomNum(null);
+        setGalleryZoomSrc(null);
         setMinorProtectionOpen(false);
+        setAllReviewsOpen(false);
       }
     };
     window.addEventListener("keydown", handleEscape);
@@ -304,7 +379,7 @@ export default function HomePage() {
             </div>
           </section>
 
-          {/* SEKCJA: DLACZEGO MY */}
+          {/* SEKCJA: DLACZEGO MY — zdjęcia z bazy (marketing_gallery), max 3 */}
           <section
             id="about"
             className="mt-12 rounded-3xl bg-[#f8f6f3] px-6 py-10 shadow-xl shadow-black/20 scroll-mt-32 lg:px-10"
@@ -312,103 +387,54 @@ export default function HomePage() {
             <div className="text-center">
               <h2 className="text-2xl font-bold text-[#1f2933]">Dlaczego my?</h2>
               <p className="mt-2 text-sm text-[#4b5563]">
-              Sensowne zajęcia do których nie trzeba nikogo zmuszać
+                Sensowne zajęcia do których nie trzeba nikogo zmuszać
               </p>
             </div>
 
-            <div className="mt-8 grid gap-6 md:grid-cols-3">
-              <div className="rounded-2xl bg-white px-6 pb-6 shadow-md overflow-hidden">
-                <div className="mb-2 h-40 w-full overflow-hidden rounded-t-xl bg-gray-300/60">
-                  <button
-                    type="button"
-                    onClick={() => setGalleryZoomNum(22)}
-                    className="group relative h-full w-full cursor-pointer transition-transform hover:scale-105 text-left"
-                    aria-label="Powiększ zdjęcie: Zabawa i nauka"
-                  >
-                    <ReloadableImage
-                      src="/images/gallery/22.jpg"
-                      alt="Zabawa i nauka"
-                      fill
-                      className="object-contain"
-                    />
-                    <div className="absolute inset-0 flex items-center justify-center bg-[#175244]/0 transition-colors group-hover:bg-[#175244]/20 pointer-events-none">
-                      <span className="text-2xl text-white opacity-0 transition-opacity group-hover:opacity-100">
-                        🔍
-                      </span>
-                    </div>
-                  </button>
-                </div>
-
-                <h3 className="text-center text-base font-semibold text-[#1f2933]">
-                  Zabawa + nauka
-                </h3>
-
-                <p className="mt-2 text-center text-sm text-[#4b5563]">
-                  Gry, ruch, historyjki – ale zawsze z celem językowym.
-                </p>
+            {siteContentLoading ? (
+              <div className="mt-8 grid gap-6 md:grid-cols-3">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="h-64 animate-pulse rounded-2xl bg-gray-200/80" />
+                ))}
               </div>
-
-              <div className="rounded-2xl bg-white px-6 pb-6 shadow-md overflow-hidden">
-                <div className="mb-2 h-40 w-full overflow-hidden rounded-t-xl bg-gray-300/60">
-                  <button
-                    type="button"
-                    onClick={() => setGalleryZoomNum(23)}
-                    className="group relative h-full w-full cursor-pointer transition-transform hover:scale-105 text-left"
-                    aria-label="Powiększ zdjęcie: Mówienie od pierwszych zajęć"
+            ) : (siteContent?.gallery ?? []).length === 0 ? (
+              <p className="mt-8 text-center text-sm text-[#5f6368]">Brak danych.</p>
+            ) : (
+              <div className="mt-8 grid gap-6 md:grid-cols-3">
+                {(siteContent?.gallery ?? []).slice(0, 3).map((item, idx) => (
+                  <div
+                    key={`${item.image_path}-${idx}`}
+                    className="overflow-hidden rounded-2xl bg-white px-6 pb-6 shadow-md"
                   >
-                    <ReloadableImage
-                      src="/images/gallery/23.jpg"
-                      alt="Mówienie od pierwszych zajęć"
-                      fill
-                      className="object-contain"
-                    />
-                    <div className="absolute inset-0 flex items-center justify-center bg-[#175244]/0 transition-colors group-hover:bg-[#175244]/20 pointer-events-none">
-                      <span className="text-2xl text-white opacity-0 transition-opacity group-hover:opacity-100">
-                        🔍
-                      </span>
+                    <div className="mb-2 h-40 w-full overflow-hidden rounded-t-xl bg-gray-300/60">
+                      <button
+                        type="button"
+                        onClick={() => setGalleryZoomSrc(item.image_path)}
+                        className="group relative h-full w-full cursor-pointer text-left transition-transform hover:scale-105"
+                        aria-label="Powiększ zdjęcie"
+                      >
+                        <ReloadableImage
+                          src={item.image_path}
+                          alt={item.caption ?? "Zdjęcie z zajęć"}
+                          fill
+                          className="object-contain"
+                        />
+                        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-[#175244]/0 transition-colors group-hover:bg-[#175244]/20">
+                          <span className="text-2xl text-white opacity-0 transition-opacity group-hover:opacity-100">
+                            🔍
+                          </span>
+                        </div>
+                      </button>
                     </div>
-                  </button>
-                </div>
-
-                <h3 className="text-center text-base font-semibold text-[#1f2933]">
-                  Mówienie od pierwszych zajęć
-                </h3>
-                <p className="mt-2 text-center text-sm text-[#4b5563]">
-                  Dzieci i dorośli mówią pełnymi zdaniami, a nie tylko powtarzają
-                  słówka.
-                </p>
+                    {item.caption ? (
+                      <h3 className="text-center text-base font-semibold text-[#1f2933]">
+                        {item.caption}
+                      </h3>
+                    ) : null}
+                  </div>
+                ))}
               </div>
-
-              <div className="rounded-2xl bg-white px-6 pb-6 shadow-md overflow-hidden">
-                <div className="mb-2 h-40 w-full overflow-hidden rounded-t-xl bg-gray-300/60">
-                  <button
-                    type="button"
-                    onClick={() => setGalleryZoomNum(16)}
-                    className="group relative h-full w-full cursor-pointer transition-transform hover:scale-105 text-left"
-                    aria-label="Powiększ zdjęcie: Małe grupy, indywidualne podejście"
-                  >
-                    <ReloadableImage
-                      src="/images/gallery/16.jpg"
-                      alt="Małe grupy, indywidualne podejście"
-                      fill
-                      className="object-contain"
-                    />
-                    <div className="absolute inset-0 flex items-center justify-center bg-[#175244]/0 transition-colors group-hover:bg-[#175244]/20 pointer-events-none">
-                      <span className="text-2xl text-white opacity-0 transition-opacity group-hover:opacity-100">
-                        🔍
-                      </span>
-                    </div>
-                  </button>
-                </div>
-
-                <h3 className="text-center text-base font-semibold text-[#1f2933]">
-                  Małe grupy, indywidualne podejście
-                </h3>
-                <p className="mt-2 text-center text-sm text-[#4b5563]">
-                  Znamy naszych kursantów z imienia, wiemy, czego potrzebują.
-                </p>
-              </div>
-            </div>
+            )}
           </section>
 
           {/* SEKCJA: CENNIK - NOWY STYL Z KARTAMI */}
@@ -436,9 +462,11 @@ export default function HomePage() {
                   <p className="text-xs text-[#4b5563] sm:text-sm">3-6 lat</p>
                 </div>
 
-                <div className="text-center mb-3 py-2 border-y border-gray-200 sm:mb-4 sm:py-3">
-                  <div className="text-4xl font-bold text-[#175244] sm:text-5xl">41 zł</div>
-                  <div className="text-xs text-[#4b5563] mt-0.5 sm:text-sm sm:mt-1">za zajęcia</div>
+                <div className="mb-3 border-y border-gray-200 py-3 text-center sm:mb-4 sm:py-4">
+                  <p className="text-sm font-medium text-[#1f2933]">Cennik w biurze</p>
+                  <p className="mt-1 text-xs text-[#4b5563] sm:text-sm">
+                    Aktualne stawki ustalamy indywidualnie.
+                  </p>
                 </div>
 
                 <div className="space-y-1 mb-3 sm:space-y-1.5 sm:mb-4">
@@ -478,9 +506,11 @@ export default function HomePage() {
                   <p className="text-xs text-[#4b5563] sm:text-sm">7-9 lat</p>
                 </div>
 
-                <div className="text-center mb-3 py-2 border-y border-gray-200 sm:mb-4 sm:py-3">
-                  <div className="text-4xl font-bold text-[#175244] sm:text-5xl">47 zł</div>
-                  <div className="text-xs text-[#4b5563] mt-0.5 sm:text-sm sm:mt-1">za zajęcia</div>
+                <div className="mb-3 border-y border-gray-200 py-3 text-center sm:mb-4 sm:py-4">
+                  <p className="text-sm font-medium text-[#1f2933]">Cennik w biurze</p>
+                  <p className="mt-1 text-xs text-[#4b5563] sm:text-sm">
+                    Aktualne stawki ustalamy indywidualnie.
+                  </p>
                 </div>
 
                 <div className="space-y-1 mb-3 sm:space-y-1.5 sm:mb-4">
@@ -520,9 +550,11 @@ export default function HomePage() {
                   <p className="text-xs text-[#4b5563] sm:text-sm">10+ lat</p>
                 </div>
 
-                <div className="text-center mb-3 py-2 border-y border-gray-200 sm:mb-4 sm:py-3">
-                  <div className="text-4xl font-bold text-[#175244] sm:text-5xl">56 zł</div>
-                  <div className="text-xs text-[#4b5563] mt-0.5 sm:text-sm sm:mt-1">za zajęcia</div>
+                <div className="mb-3 border-y border-gray-200 py-3 text-center sm:mb-4 sm:py-4">
+                  <p className="text-sm font-medium text-[#1f2933]">Cennik w biurze</p>
+                  <p className="mt-1 text-xs text-[#4b5563] sm:text-sm">
+                    Aktualne stawki ustalamy indywidualnie.
+                  </p>
                 </div>
 
                 <div className="space-y-1 mb-3 sm:space-y-1.5 sm:mb-4">
@@ -562,9 +594,11 @@ export default function HomePage() {
                   <p className="text-xs text-[#4b5563] sm:text-sm">Wszystkie grupy wiekowe</p>
                 </div>
 
-                <div className="text-center mb-3 py-2 border-y border-gray-200 sm:mb-4 sm:py-3">
-                  <div className="text-4xl font-bold text-[#175244] sm:text-5xl">190 zł</div>
-                  <div className="text-xs text-[#4b5563] mt-0.5 sm:text-sm sm:mt-1">za zajęcia</div>
+                <div className="mb-3 border-y border-gray-200 py-3 text-center sm:mb-4 sm:py-4">
+                  <p className="text-sm font-medium text-[#1f2933]">Cennik w biurze</p>
+                  <p className="mt-1 text-xs text-[#4b5563] sm:text-sm">
+                    Aktualne stawki ustalamy indywidualnie.
+                  </p>
                 </div>
 
                 <div className="space-y-1 mb-3 sm:space-y-1.5 sm:mb-4">
@@ -618,26 +652,37 @@ export default function HomePage() {
               </div>
 
               <div className="grid flex-1 gap-3 md:grid-cols-2">
-                {[20, 11, 13, 7].map((num) => (
-                  <button
-                    key={num}
-                    type="button"
-                    onClick={() => setGalleryZoomNum(num)}
-                    className="group relative w-full overflow-hidden rounded-2xl bg-gray-300/60 cursor-pointer transition-transform hover:scale-105 text-left aspect-[4/3] min-h-[10rem] md:min-h-0 md:h-40"
-                  >
-                    <ReloadableImage
-                      src={`/images/gallery/${num}.jpg`}
-                      alt={`Zdjęcie z zajęć ${num}`}
-                      fill
-                      className="object-contain md:object-cover"
+                {siteContentLoading ? (
+                  [1, 2, 3, 4].map((i) => (
+                    <div
+                      key={i}
+                      className="aspect-[4/3] min-h-[10rem] animate-pulse rounded-2xl bg-gray-200/90 md:min-h-0 md:h-40"
                     />
-                    <div className="absolute inset-0 flex items-center justify-center bg-[#175244]/0 transition-colors group-hover:bg-[#175244]/20">
-                      <span className="text-2xl text-white opacity-0 transition-opacity group-hover:opacity-100">
-                        🔍
-                      </span>
-                    </div>
-                  </button>
-                ))}
+                  ))
+                ) : (siteContent?.gallery ?? []).length === 0 ? (
+                  <p className="col-span-full text-sm text-[#5f6368]">Brak danych.</p>
+                ) : (
+                  (siteContent?.gallery ?? []).map((item, idx) => (
+                    <button
+                      key={`${item.image_path}-${idx}`}
+                      type="button"
+                      onClick={() => setGalleryZoomSrc(item.image_path)}
+                      className="group relative aspect-[4/3] min-h-[10rem] w-full cursor-pointer overflow-hidden rounded-2xl bg-gray-300/60 text-left transition-transform hover:scale-105 md:min-h-0 md:h-40"
+                    >
+                      <ReloadableImage
+                        src={item.image_path}
+                        alt={item.caption ?? "Zdjęcie z zajęć"}
+                        fill
+                        className="object-contain md:object-cover"
+                      />
+                      <div className="absolute inset-0 flex items-center justify-center bg-[#175244]/0 transition-colors group-hover:bg-[#175244]/20">
+                        <span className="text-2xl text-white opacity-0 transition-opacity group-hover:opacity-100">
+                          🔍
+                        </span>
+                      </div>
+                    </button>
+                  ))
+                )}
               </div>
             </div>
           </section>
@@ -657,171 +702,77 @@ export default function HomePage() {
               </p>
             </div>
 
-            <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-              {[
-                { name: "Anna Sznajder", image: "/images/teachers/anna_sznajder.jpg", desc: "Pedagog z wieloletnim doświadczeniem. Lektorka języka angielskiego, specjalizuje się w pracy z dziećmi w wieku przedszkolnym i wczesnoszkolnym." },
-                { name: "Anna Szydłowska", image: "/images/teachers/anna_szydlowska.jpg", desc: "Lektorka z doświadczeniem w pracy z najmłodszymi dziećmi, stawia na naturalną komunikację i budowanie pewności siebie." },
-                { name: "Natalia Nowożycka", image: "/images/teachers/natalia_nowozycka.jpg", desc: "Filolog z doświadczeniem zagranicznym, uwielbia pracę z dziećmi i doskonale dogaduje się z młodzieżą. Specjalizuje się również w skutecznym przygotowaniu uczniów do egzaminów." },
-                { name: "Shadia Abuzied", image: "/images/teachers/shadia_abuzied.jpg", desc: "Lektorka z doświadczeniem w pracy z najmłodszymi, skupia się na mówieniu i praktycznym użyciu języka." }
-              ].map((teacher) => (
-                <div key={teacher.name} className="rounded-2xl bg-white p-5 shadow-md hover:shadow-lg transition-shadow flex flex-col items-center text-center">
-                  <div className="relative mb-4 w-[160px] h-[200px] shrink-0 overflow-hidden rounded-xl bg-gray-300/60">
-                    <ReloadableImage
-                      src={teacher.image}
-                      alt={teacher.name}
-                      fill
-                      className="object-cover object-[50%_18%]"
-                    />
+            {siteContentLoading ? (
+              <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+                {[1, 2, 3, 4].map((i) => (
+                  <div key={i} className="h-56 animate-pulse rounded-2xl bg-gray-200/80" />
+                ))}
+              </div>
+            ) : (siteContent?.teachers ?? []).length === 0 ? (
+              <p className="mt-8 text-center text-sm text-[#5f6368]">Brak danych.</p>
+            ) : (
+              <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+                {(siteContent?.teachers ?? []).map((teacher) => (
+                  <div
+                    key={teacher.id}
+                    className="flex flex-col items-center rounded-2xl bg-white p-5 text-center shadow-md transition-shadow hover:shadow-lg"
+                  >
+                    <div className="mb-4 flex h-[200px] w-[160px] shrink-0 items-center justify-center overflow-hidden rounded-xl bg-[#175244]/10">
+                      <span className="text-3xl font-bold text-[#175244]">
+                        {(teacher.first_name?.[0] ?? "?").toUpperCase()}
+                        {(teacher.last_name?.[0] ?? "").toUpperCase()}
+                      </span>
+                    </div>
+                    <h3 className="text-sm font-semibold text-[#1f2933]">
+                      {teacher.first_name} {teacher.last_name}
+                    </h3>
                   </div>
-                  <h3 className="text-sm font-semibold text-[#1f2933]">
-                    {teacher.name}
-                  </h3>
-                  <p className="mt-1 text-xs text-[#4b5563]">
-                    {teacher.desc}
-                  </p>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </section>
 
-          {/* OPINIE RODZICÓW - GOOGLE STYLE */}
+          {/* OPINIE — marketing_testimonial */}
           <section className="mt-12 rounded-3xl bg-white px-6 py-10 shadow-xl shadow-black/20 lg:px-10">
-            <div className="space-y-4">
-              {/* Opinia 1 - Magdalena Straszak */}
-              <div className="bg-white border border-gray-200 rounded-xl p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12 h-12 rounded-full bg-[#175244] flex items-center justify-center text-white font-bold text-lg">
-                    M
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-start justify-between mb-2 flex-wrap gap-2">
-                      <div>
-                        <div className="font-semibold text-[#202124]">Magdalena Straszak</div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-[#5f6368]">Opinia z:</span>
-                          <span className="text-xs text-[#5f6368]">G</span>
-                          <svg className="w-4 h-4" viewBox="0 0 24 24">
-                            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                          </svg>
-                          <span className="text-xs font-medium text-[#5f6368]">Google</span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="flex items-center gap-1 text-sm text-[#5f6368]">
-                          <span>5</span>
-                          <span className="text-gray-400">/</span>
-                          <span>5</span>
-                        </div>
-                        <div className="text-xs text-[#5f6368] mt-1">2 tygodnie temu</div>
-                      </div>
-                    </div>
-                    <div className="mt-3">
-                      <span className="inline-block bg-black text-white px-2 py-1 rounded text-xs font-medium">NOWA</span>
-                    </div>
-                    <div className="mt-3 text-sm text-[#202124] leading-relaxed">
-                      Syn mega zadowolony z lekcji! Dużo zabawy, uśmiechu a przy okazji ogrom wiedzy 😊 Serdecznie polecam zajęcia z Harry English 💕
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Opinia 2 - Dominika Kilka */}
-              <div className="bg-white border border-gray-200 rounded-xl p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12 h-12 rounded-full bg-[#175244] flex items-center justify-center text-white font-bold text-lg">
-                    D
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-start justify-between mb-2 flex-wrap gap-2">
-                      <div>
-                        <div className="font-semibold text-[#202124]">Dominika Kilka</div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-[#5f6368]">Opinia z:</span>
-                          <span className="text-xs text-[#5f6368]">G</span>
-                          <svg className="w-4 h-4" viewBox="0 0 24 24">
-                            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                          </svg>
-                          <span className="text-xs font-medium text-[#5f6368]">Google</span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="flex items-center gap-1 text-sm text-[#5f6368]">
-                          <span>5</span>
-                          <span className="text-gray-400">/</span>
-                          <span>5</span>
-                        </div>
-                        <div className="text-xs text-[#5f6368] mt-1">2 tygodnie temu</div>
-                      </div>
-                    </div>
-                    <div className="mt-3">
-                      <span className="inline-block bg-black text-white px-2 py-1 rounded text-xs font-medium">NOWA</span>
-                    </div>
-                    <div className="mt-3 text-sm text-[#202124] leading-relaxed">
-                      Polecam szkołę z czystym sumieniem! Korzystamy z zajęć ok 10lat. Pełen profesjonalizm, ale przede wszystkim dzieci zadowolone 😊
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Opinia 3 - Edyta Cieślak */}
-              <div className="bg-white border border-gray-200 rounded-xl p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12 h-12 rounded-full bg-gray-400 flex items-center justify-center text-white font-bold text-lg">
-                    E
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-start justify-between mb-2 flex-wrap gap-2">
-                      <div>
-                        <div className="font-semibold text-[#202124]">Edyta Cieślak</div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-[#5f6368]">Opinia z:</span>
-                          <span className="text-xs text-[#5f6368]">G</span>
-                          <svg className="w-4 h-4" viewBox="0 0 24 24">
-                            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                          </svg>
-                          <span className="text-xs font-medium text-[#5f6368]">Google</span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="flex items-center gap-1 text-sm text-[#5f6368]">
-                          <span>5</span>
-                          <span className="text-gray-400">/</span>
-                          <span>5</span>
-                        </div>
-                        <div className="text-xs text-[#5f6368] mt-1">2 tygodnie temu</div>
-                      </div>
-                    </div>
-                    <div className="mt-3">
-                      <span className="inline-block bg-black text-white px-2 py-1 rounded text-xs font-medium">NOWA</span>
-                    </div>
-                    <div className="mt-3 text-sm text-[#202124] leading-relaxed">
-                      Super metody nauczania, świetne podejście do dzieciaków i rewelacyjne rezultaty, szczerze polecam 🥰
-                    </div>
-                  </div>
-                </div>
-              </div>
+            <div className="mb-6 text-center">
+              <h2 className="text-2xl font-bold text-[#1f2933]">Opinie</h2>
             </div>
-
-            <div className="mt-8 text-center">
-              <button 
-                onClick={() => setAllReviewsOpen(true)}
-                className="inline-flex items-center gap-2 text-sm text-[#1a73e8] hover:underline font-semibold"
-              >
-                Zobacz wszystkie opinie google
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-              </button>
-            </div>
+            {siteContentLoading ? (
+              <div className="space-y-4">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="h-32 animate-pulse rounded-xl bg-gray-100" />
+                ))}
+              </div>
+            ) : (siteContent?.testimonials ?? []).length === 0 ? (
+              <p className="text-center text-sm text-[#5f6368]">Brak danych.</p>
+            ) : (
+              <>
+                <div className="space-y-4">
+                  {(siteContent?.testimonials ?? []).slice(0, 3).map((t, idx) => (
+                    <TestimonialCard key={`${t.author_name}-${idx}`} t={t} idx={idx} />
+                  ))}
+                </div>
+                {(siteContent?.testimonials ?? []).length > 3 ? (
+                  <div className="mt-8 text-center">
+                    <button
+                      type="button"
+                      onClick={() => setAllReviewsOpen(true)}
+                      className="inline-flex items-center gap-2 text-sm font-semibold text-[#1a73e8] hover:underline"
+                    >
+                      Zobacz wszystkie opinie
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M9 5l7 7-7 7"
+                        />
+                      </svg>
+                    </button>
+                  </div>
+                ) : null}
+              </>
+            )}
           </section>
 
           {/* FAQ */}
@@ -835,22 +786,29 @@ export default function HomePage() {
               </p>
             </div>
 
-            <div className="max-w-3xl mx-auto space-y-3">
-              {[
-                { q: "Od jakiego wieku można zapisać dziecko?", a: "Nasze zajęcia są przeznaczone dla dzieci od 3 roku życia. Najmłodsi uczniowie uczestniczą w programie \"Let's walk\", który jest specjalnie dostosowany do potrzeb przedszkolaków." },
-                { q: "Ile trwają zajęcia?", a: "W zależności od wieku i poziomu: 40 minut dla przedszkolaków, 45-50 minut dla dzieci szkolnych, oraz 60 minut dla młodzieży i dorosłych w zajęciach indywidualnych." },
-                { q: "Czy można dołączyć w trakcie roku?", a: "Tak! Zawsze staramy się znaleźć odpowiednią grupę dla nowego ucznia. Skontaktuj się z nami, a dobierzemy najlepszą opcję." },
-                { q: "Jaka jest liczebność grup?", a: "Nasze grupy liczą średnio 6 osób, co pozwala na indywidualne podejście do każdego ucznia i aktywne uczestnictwo w zajęciach." },
-                { q: "Czy oferujecie lekcje próbne?", a: "Tak! Pierwsza lekcja jest bezpłatna. To świetna okazja, aby poznać naszą metodę nauczania i przekonać się, czy nasza szkoła jest odpowiednia dla Twojego dziecka." }
-              ].map((faq, idx) => (
-                <details key={idx} className="group bg-white rounded-xl p-5 shadow-sm border border-gray-200 hover:shadow-md transition-shadow">
-                  <summary className="cursor-pointer font-semibold text-[#1f2933] flex items-center justify-between list-none">
-                    <span className="pr-4">{faq.q}</span>
-                    <span className="text-[#175244] group-open:rotate-180 transition-transform flex-shrink-0">▼</span>
-                  </summary>
-                  <p className="mt-3 text-sm text-[#5f6368] leading-relaxed">{faq.a}</p>
-                </details>
-              ))}
+            <div className="mx-auto max-w-3xl space-y-3">
+              {siteContentLoading ? (
+                [1, 2, 3].map((i) => (
+                  <div key={i} className="h-16 animate-pulse rounded-xl bg-gray-200/80" />
+                ))
+              ) : (siteContent?.faqs ?? []).length === 0 ? (
+                <p className="text-center text-sm text-[#5f6368]">Brak danych.</p>
+              ) : (
+                (siteContent?.faqs ?? []).map((faq, idx) => (
+                  <details
+                    key={idx}
+                    className="group rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md"
+                  >
+                    <summary className="flex cursor-pointer list-none items-center justify-between font-semibold text-[#1f2933]">
+                      <span className="pr-4">{faq.question}</span>
+                      <span className="flex-shrink-0 text-[#175244] transition-transform group-open:rotate-180">
+                        ▼
+                      </span>
+                    </summary>
+                    <p className="mt-3 text-sm leading-relaxed text-[#5f6368]">{faq.answer}</p>
+                  </details>
+                ))
+              )}
             </div>
           </section>
 
@@ -967,36 +925,36 @@ export default function HomePage() {
       )}
 
       {/* GALERIA – POWIĘKSZONE ZDJĘCIE */}
-      {galleryZoomNum !== null && (
+      {galleryZoomSrc ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
-          onClick={() => setGalleryZoomNum(null)}
+          onClick={() => setGalleryZoomSrc(null)}
           role="dialog"
           aria-modal="true"
           aria-label="Powiększone zdjęcie z galerii"
         >
           <button
             type="button"
-            onClick={() => setGalleryZoomNum(null)}
+            onClick={() => setGalleryZoomSrc(null)}
             className="absolute top-4 right-4 z-10 rounded-full bg-white/90 p-2 text-[#1f2933] transition-colors hover:bg-white"
             aria-label="Zamknij"
           >
             <span className="text-xl leading-none">✕</span>
           </button>
           <div
-            className="relative max-h-[90vh] max-w-4xl w-full"
+            className="relative max-h-[90vh] w-full max-w-4xl"
             onClick={(e) => e.stopPropagation()}
           >
             <ReloadableImage
-              src={`/images/gallery/${galleryZoomNum}.jpg`}
-              alt={`Zdjęcie z zajęć ${galleryZoomNum} – powiększone`}
+              src={galleryZoomSrc}
+              alt="Zdjęcie z galerii — powiększone"
               width={1200}
               height={800}
               className="max-h-[90vh] w-auto rounded-lg object-contain"
             />
           </div>
         </div>
-      )}
+      ) : null}
 
       {/* PLAN DETAILS MODAL */}
       {selectedPlan && (
@@ -1024,135 +982,11 @@ export default function HomePage() {
             </div>
 
             <div className="p-4 sm:p-6">
-              {/* Informacja o częstotliwości */}
-              <div className="mb-4 sm:mb-6 p-3 sm:p-4 bg-blue-50 rounded-xl border border-blue-200">
-                <p className="text-xs sm:text-sm text-[#1f2933]">
-                  <strong>Częstotliwość zajęć:</strong> Poniższe ceny dotyczą zajęć <strong>1x w tygodniu</strong>. 
-                  W wersji intensywnej (<strong>2x w tygodniu</strong>) koszt miesięczny i roczny należy pomnożyć <strong>x2</strong>.
+              <div className="mb-6 rounded-xl border border-gray-200 bg-gray-50 p-4 sm:p-5">
+                <p className="text-sm leading-relaxed text-[#1f2933]">
+                  Szczegóły programu, terminy i warianty opłat ustalamy indywidualnie w biurze lub po kontakcie. Na stronie
+                  nie wyświetlamy kwot — dane finansowe muszą pochodzić z aktualnej oferty szkoły.
                 </p>
-              </div>
-
-              {/* Mobile: układ kartowy – bez scrollu na boki */}
-              <div className="space-y-3 md:hidden">
-                {[
-                  {
-                    label: "koszt 1 zajęć",
-                    rok: { walk: "41 zł", run: "47 zł", swim: "56 zł", fly: "190 zł" },
-                    ratalna: { walk: "45 zł", run: "51 zł", swim: "60 zł", fly: "—" },
-                    pojedyncze: { walk: "49 zł", run: "55 zł", swim: "64 zł", fly: "199 zł" },
-                  },
-                  {
-                    label: "koszt miesiąca",
-                    rok: { walk: "135 zł", run: "155 zł", swim: "185 zł", fly: "—" },
-                    ratalna: { walk: "149 zł", run: "168 zł", swim: "198 zł", fly: "—" },
-                    pojedyncze: { walk: "162 zł", run: "182 zł", swim: "211 zł", fly: "—" },
-                  },
-                  {
-                    label: "koszt roku",
-                    rok: { walk: "1 353 zł", run: "1 551 zł", swim: "1 848 zł", fly: "—" },
-                    ratalna: { walk: "1 485 zł", run: "1 683 zł", swim: "1 980 zł", fly: "—" },
-                    pojedyncze: { walk: "1 617 zł", run: "1 815 zł", swim: "2 112 zł", fly: "—" },
-                  },
-                ].map((row) => (
-                  <div key={row.label} className="rounded-xl border border-gray-200 bg-gray-50/50 p-3">
-                    <div className="text-sm font-semibold text-[#1f2933] mb-2">{row.label}</div>
-                    <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                      <div>
-                        <div className="text-[#4b5563]">rok z góry</div>
-                        <div className="font-bold text-[#1f2933]">{row.rok[selectedPlan!]}</div>
-                      </div>
-                      <div>
-                        <div className="text-[#4b5563]">ratalna (x10)</div>
-                        <div className="font-bold text-[#1f2933]">{row.ratalna[selectedPlan!]}</div>
-                      </div>
-                      <div>
-                        <div className="text-[#4b5563]">pojedyncze</div>
-                        <div className="font-bold text-[#1f2933]">{row.pojedyncze[selectedPlan!]}</div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Desktop: tabela */}
-              <div className="hidden md:block rounded-2xl border border-gray-200 bg-white overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="bg-gray-50 border-b border-gray-200">
-                        <th className="px-4 py-3 text-left text-sm font-semibold text-[#1f2933]"></th>
-                        <th className="px-4 py-3 text-center text-sm font-semibold text-[#1f2933]">opłata za rok z góry</th>
-                        <th className="px-4 py-3 text-center text-sm font-semibold text-[#1f2933]">opłata ratalna (x10)</th>
-                        <th className="px-4 py-3 text-center text-sm font-semibold text-[#1f2933]">opłata za pojedyncze zajęcia</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr className="border-b border-gray-200">
-                        <td className="px-4 py-3 text-sm font-medium text-[#4b5563]">koszt 1 zajęć</td>
-                        <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933]">
-                          {selectedPlan === "walk" && "41 zł"}
-                          {selectedPlan === "run" && "47 zł"}
-                          {selectedPlan === "swim" && "56 zł"}
-                          {selectedPlan === "fly" && "190 zł"}
-                        </td>
-                        <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933]">
-                          {selectedPlan === "walk" && "45 zł"}
-                          {selectedPlan === "run" && "51 zł"}
-                          {selectedPlan === "swim" && "60 zł"}
-                          {selectedPlan === "fly" && "—"}
-                        </td>
-                        <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933]">
-                          {selectedPlan === "walk" && "49 zł"}
-                          {selectedPlan === "run" && "55 zł"}
-                          {selectedPlan === "swim" && "64 zł"}
-                          {selectedPlan === "fly" && "199 zł"}
-                        </td>
-                      </tr>
-                      <tr className="border-b border-gray-200">
-                        <td className="px-4 py-3 text-sm font-medium text-[#4b5563]">koszt miesiąca</td>
-                        <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933]">
-                          {selectedPlan === "walk" && "135 zł"}
-                          {selectedPlan === "run" && "155 zł"}
-                          {selectedPlan === "swim" && "185 zł"}
-                          {selectedPlan === "fly" && "—"}
-                        </td>
-                        <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933]">
-                          {selectedPlan === "walk" && "149 zł"}
-                          {selectedPlan === "run" && "168 zł"}
-                          {selectedPlan === "swim" && "198 zł"}
-                          {selectedPlan === "fly" && "—"}
-                        </td>
-                        <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933]">
-                          {selectedPlan === "walk" && "162 zł"}
-                          {selectedPlan === "run" && "182 zł"}
-                          {selectedPlan === "swim" && "211 zł"}
-                          {selectedPlan === "fly" && "—"}
-                        </td>
-                      </tr>
-                      <tr>
-                        <td className="px-4 py-3 text-sm font-medium text-[#4b5563]">koszt roku</td>
-                        <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933]">
-                          {selectedPlan === "walk" && "1 353 zł"}
-                          {selectedPlan === "run" && "1 551 zł"}
-                          {selectedPlan === "swim" && "1 848 zł"}
-                          {selectedPlan === "fly" && "—"}
-                        </td>
-                        <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933]">
-                          {selectedPlan === "walk" && "1 485 zł"}
-                          {selectedPlan === "run" && "1 683 zł"}
-                          {selectedPlan === "swim" && "1 980 zł"}
-                          {selectedPlan === "fly" && "—"}
-                        </td>
-                        <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933]">
-                          {selectedPlan === "walk" && "1 617 zł"}
-                          {selectedPlan === "run" && "1 815 zł"}
-                          {selectedPlan === "swim" && "2 112 zł"}
-                          {selectedPlan === "fly" && "—"}
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
               </div>
 
               {/* Przycisk CTA – otwiera formularz „Napisz do nas” */}
@@ -1180,522 +1014,37 @@ export default function HomePage() {
 
       {/* ALL REVIEWS MODAL */}
       {allReviewsOpen && (
-        <div 
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
           onClick={() => setAllReviewsOpen(false)}
         >
-          <div 
-            className="bg-white rounded-3xl max-w-4xl w-full max-h-[90vh] overflow-y-auto shadow-2xl"
+          <div
+            className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-3xl bg-white shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between rounded-t-3xl z-10">
+            <div className="sticky top-0 z-10 flex items-center justify-between rounded-t-3xl border-b border-gray-200 bg-white px-6 py-4">
               <h2 className="text-2xl font-bold text-[#1f2933]">Wszystkie opinie</h2>
               <button
+                type="button"
                 onClick={() => setAllReviewsOpen(false)}
-                className="text-gray-400 hover:text-gray-600 text-2xl leading-none"
+                className="text-2xl leading-none text-gray-400 hover:text-gray-600"
               >
                 ×
               </button>
             </div>
 
-            <div className="p-6 space-y-4">
-              {/* Pozostałe opinie - w kolejności od najnowszych */}
-              {/* Anna Tyrka - 10 godzin temu */}
-              <div className="bg-white border border-gray-200 rounded-xl p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12 h-12 rounded-full bg-purple-600 flex items-center justify-center text-white font-bold text-lg">
-                    A
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-start justify-between mb-2 flex-wrap gap-2">
-                      <div>
-                        <div className="font-semibold text-[#202124]">Anna Tyrka</div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-[#5f6368]">Opinia z:</span>
-                          <span className="text-xs text-[#5f6368]">G</span>
-                          <svg className="w-4 h-4" viewBox="0 0 24 24">
-                            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                          </svg>
-                          <span className="text-xs font-medium text-[#5f6368]">Google</span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="flex items-center gap-1 text-sm text-[#5f6368]">
-                          <span>5</span>
-                          <span className="text-gray-400">/</span>
-                          <span>5</span>
-                        </div>
-                        <div className="text-xs text-[#5f6368] mt-1">10 godzin temu</div>
-                      </div>
-                    </div>
-                    <div className="mt-3">
-                      <span className="inline-block bg-black text-white px-2 py-1 rounded text-xs font-medium">NOWA</span>
-                    </div>
-                    <div className="mt-3 text-sm text-[#202124] leading-relaxed">
-                      Lekcje angielskiego z Harry English to absolutna przyjemność dla moich dzieci! Znamy Panią Anię od początku działalności szkoły. To niezwykle cierpliwa,...
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Martyna Bulik - tydzień temu */}
-              <div className="bg-white border border-gray-200 rounded-xl p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12 h-12 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold text-lg">
-                    M
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-start justify-between mb-2 flex-wrap gap-2">
-                      <div>
-                        <div className="font-semibold text-[#202124]">Martyna Bulik</div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-[#5f6368]">Opinia z:</span>
-                          <span className="text-xs text-[#5f6368]">G</span>
-                          <svg className="w-4 h-4" viewBox="0 0 24 24">
-                            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                          </svg>
-                          <span className="text-xs font-medium text-[#5f6368]">Google</span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="flex items-center gap-1 text-sm text-[#5f6368]">
-                          <span>5</span>
-                          <span className="text-gray-400">/</span>
-                          <span>5</span>
-                        </div>
-                        <div className="text-xs text-[#5f6368] mt-1">tydzień temu</div>
-                      </div>
-                    </div>
-                    <div className="mt-3">
-                      <span className="inline-block bg-black text-white px-2 py-1 rounded text-xs font-medium">NOWA</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* KRZYSZTOF KILKA - 2 tygodnie temu */}
-              <div className="bg-white border border-gray-200 rounded-xl p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12 h-12 rounded-full bg-gray-400 flex items-center justify-center text-white font-bold text-lg">
-                    K
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-start justify-between mb-2 flex-wrap gap-2">
-                      <div>
-                        <div className="font-semibold text-[#202124]">KRZYSZTOF KILKA</div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-[#5f6368]">Opinia z:</span>
-                          <span className="text-xs text-[#5f6368]">G</span>
-                          <svg className="w-4 h-4" viewBox="0 0 24 24">
-                            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                          </svg>
-                          <span className="text-xs font-medium text-[#5f6368]">Google</span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="flex items-center gap-1 text-sm text-[#5f6368]">
-                          <span>5</span>
-                          <span className="text-gray-400">/</span>
-                          <span>5</span>
-                        </div>
-                        <div className="text-xs text-[#5f6368] mt-1">2 tygodnie temu</div>
-                      </div>
-                    </div>
-                    <div className="mt-3">
-                      <span className="inline-block bg-black text-white px-2 py-1 rounded text-xs font-medium">NOWA</span>
-                    </div>
-                    <div className="mt-3 text-sm text-[#202124] leading-relaxed">
-                      Z całego serca polecam szkołę języka angielskiego Harry! Profesjonalni i zaangażowani lektorzy, świetna atmosfera oraz zajęcia prowadzone w bardzo przystępny i...
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Marta S - 2 tygodnie temu */}
-              <div className="bg-white border border-gray-200 rounded-xl p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12 h-12 rounded-full bg-gray-400 flex items-center justify-center text-white font-bold text-lg">
-                    M
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-start justify-between mb-2 flex-wrap gap-2">
-                      <div>
-                        <div className="font-semibold text-[#202124]">Marta S</div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-[#5f6368]">Opinia z:</span>
-                          <span className="text-xs text-[#5f6368]">G</span>
-                          <svg className="w-4 h-4" viewBox="0 0 24 24">
-                            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                          </svg>
-                          <span className="text-xs font-medium text-[#5f6368]">Google</span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="flex items-center gap-1 text-sm text-[#5f6368]">
-                          <span>5</span>
-                          <span className="text-gray-400">/</span>
-                          <span>5</span>
-                        </div>
-                        <div className="text-xs text-[#5f6368] mt-1">2 tygodnie temu</div>
-                      </div>
-                    </div>
-                    <div className="mt-3">
-                      <span className="inline-block bg-black text-white px-2 py-1 rounded text-xs font-medium">NOWA</span>
-                    </div>
-                    <div className="mt-3 text-sm text-[#202124] leading-relaxed">
-                      Serdecznie polecam angielski z Harry English. Zajęcia prowadzone bardzo ciekawie, z wykorzystaniem różnych metod, w tym moc zabawy. Dzięki tym lekcjom z łatwością przychodzi nauka w szkole. Dziecko zadowolone
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Maciej - 2 lata temu */}
-              <div className="bg-white border border-gray-200 rounded-xl p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12 h-12 rounded-full bg-purple-600 flex items-center justify-center text-white font-bold text-lg">
-                    M
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-start justify-between mb-2 flex-wrap gap-2">
-                      <div>
-                        <div className="font-semibold text-[#202124]">Maciej</div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-[#5f6368]">Opinia z:</span>
-                          <span className="text-xs text-[#5f6368]">G</span>
-                          <svg className="w-4 h-4" viewBox="0 0 24 24">
-                            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                          </svg>
-                          <span className="text-xs font-medium text-[#5f6368]">Google</span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="flex items-center gap-1 text-sm text-[#5f6368]">
-                          <span>5</span>
-                          <span className="text-gray-400">/</span>
-                          <span>5</span>
-                        </div>
-                        <div className="text-xs text-[#5f6368] mt-1">Edytowano 2 lata temu</div>
-                      </div>
-                    </div>
-                    <div className="mt-3 text-sm text-[#202124] leading-relaxed">
-                      Polecam! Szkoła ma rewelacyjne podejście (nauka przez zabawę) i znakomitą organizację (zajęcia są po przedszkolu w sali przedszkolnej) - nasz maluch wręcz czeka na zajęcia.
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Sylwia Nocoń - 2 lata temu */}
-              <div className="bg-white border border-gray-200 rounded-xl p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12 h-12 rounded-full bg-gray-400 flex items-center justify-center text-white font-bold text-lg">
-                    S
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-start justify-between mb-2 flex-wrap gap-2">
-                      <div>
-                        <div className="font-semibold text-[#202124]">Sylwia Nocoń</div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-[#5f6368]">Opinia z:</span>
-                          <span className="text-xs text-[#5f6368]">G</span>
-                          <svg className="w-4 h-4" viewBox="0 0 24 24">
-                            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                          </svg>
-                          <span className="text-xs font-medium text-[#5f6368]">Google</span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="flex items-center gap-1 text-sm text-[#5f6368]">
-                          <span>5</span>
-                          <span className="text-gray-400">/</span>
-                          <span>5</span>
-                        </div>
-                        <div className="text-xs text-[#5f6368] mt-1">2 lata temu</div>
-                      </div>
-                    </div>
-                    <div className="mt-3 text-sm text-[#202124] leading-relaxed">
-                      Zajęcia są prowadzone w sposób kreatywny, nauka połączona z zabawą, mój syn jest zadowolony z takiej formy edukacji, polecam :)
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Przemysław Łuć - 3 lata temu */}
-              <div className="bg-white border border-gray-200 rounded-xl p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12 h-12 rounded-full bg-teal-500 flex items-center justify-center text-white font-bold text-lg">
-                    P
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-start justify-between mb-2 flex-wrap gap-2">
-                      <div>
-                        <div className="font-semibold text-[#202124]">Przemysław Łuć</div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-[#5f6368]">Opinia z:</span>
-                          <span className="text-xs text-[#5f6368]">G</span>
-                          <svg className="w-4 h-4" viewBox="0 0 24 24">
-                            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                          </svg>
-                          <span className="text-xs font-medium text-[#5f6368]">Google</span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="flex items-center gap-1 text-sm text-[#5f6368]">
-                          <span>5</span>
-                          <span className="text-gray-400">/</span>
-                          <span>5</span>
-                        </div>
-                        <div className="text-xs text-[#5f6368] mt-1">3 lata temu</div>
-                      </div>
-                    </div>
-                    <div className="mt-3 text-sm text-[#202124] leading-relaxed">
-                      Polecam.
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Przemek - 3 lata temu */}
-              <div className="bg-white border border-gray-200 rounded-xl p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12 h-12 rounded-full bg-rose-700 flex items-center justify-center text-white font-bold text-lg">
-                    P
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-start justify-between mb-2 flex-wrap gap-2">
-                      <div>
-                        <div className="font-semibold text-[#202124]">Przemek</div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-[#5f6368]">Opinia z:</span>
-                          <span className="text-xs text-[#5f6368]">G</span>
-                          <svg className="w-4 h-4" viewBox="0 0 24 24">
-                            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                          </svg>
-                          <span className="text-xs font-medium text-[#5f6368]">Google</span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="flex items-center gap-1 text-sm text-[#5f6368]">
-                          <span>5</span>
-                          <span className="text-gray-400">/</span>
-                          <span>5</span>
-                        </div>
-                        <div className="text-xs text-[#5f6368] mt-1">3 lata temu</div>
-                      </div>
-                    </div>
-                    <div className="mt-3 text-sm text-[#202124] leading-relaxed">
-                      Bardzo polecam, "Harry Uczy" moich dwóch synów w różnym wieku, oboje zawsze chętni na zajęcia i zadowoleni po!
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Piotr Poloczek - 3 lata temu */}
-              <div className="bg-white border border-gray-200 rounded-xl p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12 h-12 rounded-full bg-orange-500 flex items-center justify-center text-white font-bold text-lg">
-                    P
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-start justify-between mb-2 flex-wrap gap-2">
-                      <div>
-                        <div className="font-semibold text-[#202124]">Piotr Poloczek</div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-[#5f6368]">Opinia z:</span>
-                          <span className="text-xs text-[#5f6368]">G</span>
-                          <svg className="w-4 h-4" viewBox="0 0 24 24">
-                            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                          </svg>
-                          <span className="text-xs font-medium text-[#5f6368]">Google</span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="flex items-center gap-1 text-sm text-[#5f6368]">
-                          <span>5</span>
-                          <span className="text-gray-400">/</span>
-                          <span>5</span>
-                        </div>
-                        <div className="text-xs text-[#5f6368] mt-1">3 lata temu</div>
-                      </div>
-                    </div>
-                    <div className="mt-3 text-sm text-[#202124] leading-relaxed">
-                      Super lekcje, super atmosfera, synek bardzo zadowolony, polecam
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Karol Skutela - 3 lata temu */}
-              <div className="bg-white border border-gray-200 rounded-xl p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12 h-12 rounded-full bg-pink-500 flex items-center justify-center text-white font-bold text-lg">
-                    K
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-start justify-between mb-2 flex-wrap gap-2">
-                      <div>
-                        <div className="font-semibold text-[#202124]">Karol Skutela</div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-[#5f6368]">Opinia z:</span>
-                          <span className="text-xs text-[#5f6368]">G</span>
-                          <svg className="w-4 h-4" viewBox="0 0 24 24">
-                            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                          </svg>
-                          <span className="text-xs font-medium text-[#5f6368]">Google</span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="flex items-center gap-1 text-sm text-[#5f6368]">
-                          <span>5</span>
-                          <span className="text-gray-400">/</span>
-                          <span>5</span>
-                        </div>
-                        <div className="text-xs text-[#5f6368] mt-1">3 lata temu</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Ewa Skutela - 3 lata temu */}
-              <div className="bg-white border border-gray-200 rounded-xl p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12 h-12 rounded-full bg-gray-600 flex items-center justify-center text-white font-bold text-lg">
-                    E
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-start justify-between mb-2 flex-wrap gap-2">
-                      <div>
-                        <div className="font-semibold text-[#202124]">Ewa Skutela</div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-[#5f6368]">Opinia z:</span>
-                          <span className="text-xs text-[#5f6368]">G</span>
-                          <svg className="w-4 h-4" viewBox="0 0 24 24">
-                            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                          </svg>
-                          <span className="text-xs font-medium text-[#5f6368]">Google</span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="flex items-center gap-1 text-sm text-[#5f6368]">
-                          <span>5</span>
-                          <span className="text-gray-400">/</span>
-                          <span>5</span>
-                        </div>
-                        <div className="text-xs text-[#5f6368] mt-1">3 lata temu</div>
-                      </div>
-                    </div>
-                    <div className="mt-3 text-sm text-[#202124] leading-relaxed">
-                      Zajęcia angielskiego prowadzone na najwyższym poziomie ! Kreatywność i zaangażowanie P. Anii sprawia ze dzieci z entuzjazmem i uśmiechem chodzą na lekcje! Polecam!!
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Michalina Krzysteczko - 3 lata temu */}
-              <div className="bg-white border border-gray-200 rounded-xl p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12 h-12 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold text-lg">
-                    M
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-start justify-between mb-2 flex-wrap gap-2">
-                      <div>
-                        <div className="font-semibold text-[#202124]">Michalina Krzysteczko</div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-[#5f6368]">Opinia z:</span>
-                          <span className="text-xs text-[#5f6368]">G</span>
-                          <svg className="w-4 h-4" viewBox="0 0 24 24">
-                            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                          </svg>
-                          <span className="text-xs font-medium text-[#5f6368]">Google</span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="flex items-center gap-1 text-sm text-[#5f6368]">
-                          <span>5</span>
-                          <span className="text-gray-400">/</span>
-                          <span>5</span>
-                        </div>
-                        <div className="text-xs text-[#5f6368] mt-1">3 lata temu</div>
-                      </div>
-                    </div>
-                    <div className="mt-3 text-sm text-[#202124] leading-relaxed">
-                      Zajęcia prowadzony są w bardzo kreatywny sposób. Jako mama dwójki dzieci uczęszczających na zajęcia z języka angielskiego do Harry English serdecznie polecam. 😊 Dzieci idą bardzo chętnie, a poziom wiedzy zaskakuje każdego dnia. 🙌
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Barbara Wrzesinska - 3 lata temu */}
-              <div className="bg-white border border-gray-200 rounded-xl p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12 h-12 rounded-full bg-purple-600 flex items-center justify-center text-white font-bold text-lg">
-                    B
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-start justify-between mb-2 flex-wrap gap-2">
-                      <div>
-                        <div className="font-semibold text-[#202124]">Barbara Wrzesinska</div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-[#5f6368]">Opinia z:</span>
-                          <span className="text-xs text-[#5f6368]">G</span>
-                          <svg className="w-4 h-4" viewBox="0 0 24 24">
-                            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                          </svg>
-                          <span className="text-xs font-medium text-[#5f6368]">Google</span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="flex items-center gap-1 text-sm text-[#5f6368]">
-                          <span>5</span>
-                          <span className="text-gray-400">/</span>
-                          <span>5</span>
-                        </div>
-                        <div className="text-xs text-[#5f6368] mt-1">3 lata temu</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
+            <div className="space-y-4 p-6">
+              {siteContentLoading ? (
+                [1, 2, 3, 4, 5].map((i) => (
+                  <div key={i} className="h-28 animate-pulse rounded-xl bg-gray-100" />
+                ))
+              ) : (siteContent?.testimonials ?? []).length === 0 ? (
+                <p className="text-center text-sm text-[#5f6368]">Brak danych.</p>
+              ) : (
+                (siteContent?.testimonials ?? []).map((t, idx) => (
+                  <TestimonialCard key={`modal-${t.author_name}-${idx}`} t={t} idx={idx} />
+                ))
+              )}
             </div>
           </div>
         </div>

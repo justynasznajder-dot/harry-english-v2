@@ -12,6 +12,8 @@ type TabKey =
   | 'payments';
 type MobileTab = 'organization' | 'users' | 'groups' | 'more';
 type OrganizationSubTab = 'schoolYear' | 'teachers' | 'locations' | 'history';
+type TeacherOrgSubTab = 'list' | 'add';
+type LocationOrgSubTab = 'list' | 'add';
 
 /** Zgodnie z kolumną `users.role` (TEXT): ADMIN, MANAGER, TEACHER, PARENT, CHILD */
 type AdminPortalUserRole = 'ADMIN' | 'MANAGER' | 'TEACHER' | 'PARENT' | 'CHILD';
@@ -25,6 +27,7 @@ interface AdminUser {
   confirmed: boolean;
   active: boolean;
   access_level?: 'PENDING' | 'PROPOSED' | 'CONTRACT_SENT' | 'ACTIVE';
+  phone?: string | null;
 }
 
 interface ChildRow {
@@ -107,6 +110,13 @@ interface SchoolHolidayRow {
   type: string;
 }
 
+interface SchoolLocationRow {
+  id: string;
+  name: string;
+  address: string | null;
+  active: boolean;
+}
+
 const topTabs: Array<{ key: TabKey; label: string }> = [
   { key: 'organization', label: 'Organizacja szkoły' },
   { key: 'users', label: 'Użytkownicy' },
@@ -131,16 +141,27 @@ const organizationTabs: Array<{ key: OrganizationSubTab; label: string }> = [
   { key: 'history', label: 'Historia' },
 ];
 
+const teacherOrgSubTabs: Array<{ key: TeacherOrgSubTab; label: string }> = [
+  { key: 'list', label: 'Lista nauczycieli' },
+  { key: 'add', label: 'Dodaj nauczyciela' },
+];
+
+const locationOrgSubTabs: Array<{ key: LocationOrgSubTab; label: string }> = [
+  { key: 'list', label: 'Lista lokalizacji' },
+  { key: 'add', label: 'Dodaj nową lokalizację' },
+];
+
 function SkeletonBlock() {
   return <div className="h-24 animate-pulse rounded-2xl bg-emerald-100/80" />;
 }
 
-function PlaceholderCard({ title, text }: { title: string; text: string }) {
+/** Brak danych z API — bez treści „placeholder” o przyszłych funkcjach. */
+function EmptyDataPanel({ title }: { title: string }) {
   return (
-    <div className="rounded-2xl border border-emerald-100 bg-white p-5">
-      <h3 className="text-lg font-semibold text-zinc-900">{title}</h3>
-      <p className="mt-2 text-sm text-zinc-600">{text}</p>
-    </div>
+    <section className="rounded-2xl border border-emerald-100 bg-white p-6 text-center">
+      <h3 className="text-lg font-semibold text-[#0f6e56]">{title}</h3>
+      <p className="mt-3 text-sm text-zinc-600">Brak danych.</p>
+    </section>
   );
 }
 
@@ -148,6 +169,11 @@ export default function AdminPortal() {
   const [activeTab, setActiveTab] = useState<TabKey>('organization');
   const [mobileTab, setMobileTab] = useState<MobileTab>('organization');
   const [organizationSubTab, setOrganizationSubTab] = useState<OrganizationSubTab>('schoolYear');
+  const [teacherOrgSubTab, setTeacherOrgSubTab] = useState<TeacherOrgSubTab>('list');
+  const [locationOrgSubTab, setLocationOrgSubTab] = useState<LocationOrgSubTab>('list');
+  const [schoolLocations, setSchoolLocations] = useState<SchoolLocationRow[]>([]);
+  const [locationsLoading, setLocationsLoading] = useState(false);
+  const [newLocationForm, setNewLocationForm] = useState({ name: '', address: '' });
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [children, setChildren] = useState<ChildRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -169,6 +195,13 @@ export default function AdminPortal() {
     lastName: string;
     birthDate: string;
   }>>([{ firstName: '', lastName: '', birthDate: '' }]);
+  const [newTeacherForm, setNewTeacherForm] = useState({
+    firstName: '',
+    lastName: '',
+    email: '',
+    password: '',
+    phone: '',
+  });
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [childModalOpen, setChildModalOpen] = useState(false);
   const [childForm, setChildForm] = useState({
@@ -336,11 +369,43 @@ export default function AdminPortal() {
     }
   }, []);
 
+  const loadLocations = useCallback(async () => {
+    setLocationsLoading(true);
+    try {
+      const res = await fetch('/api/admin/locations');
+      const data = (await res.json().catch(() => ({}))) as {
+        locations?: SchoolLocationRow[];
+        message?: string;
+      };
+      if (!res.ok) {
+        pushToast('error', data.message ?? 'Nie udało się pobrać lokalizacji');
+        setSchoolLocations([]);
+        return;
+      }
+      setSchoolLocations(Array.isArray(data.locations) ? data.locations : []);
+    } catch (e) {
+      console.error('loadLocations', e);
+      pushToast('error', 'Błąd pobierania lokalizacji');
+      setSchoolLocations([]);
+    } finally {
+      setLocationsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    if (activeTab === 'organization' && organizationSubTab === 'schoolYear') {
+    if (
+      activeTab === 'organization' &&
+      (organizationSubTab === 'schoolYear' || organizationSubTab === 'history')
+    ) {
       void loadSchoolYearData();
     }
   }, [activeTab, organizationSubTab, loadSchoolYearData]);
+
+  useEffect(() => {
+    if (activeTab === 'organization' && organizationSubTab === 'locations') {
+      void loadLocations();
+    }
+  }, [activeTab, organizationSubTab, loadLocations]);
 
   useEffect(() => {
     if (mobileTab === 'organization') setActiveTab('organization');
@@ -518,14 +583,6 @@ export default function AdminPortal() {
       setBusy(false);
     }
   };
-
-  const organizationLocationNames = useMemo(() => {
-    const set = new Set<string>();
-    for (const g of groups) {
-      if (g.location_name?.trim()) set.add(g.location_name.trim());
-    }
-    return [...set].sort((a, b) => a.localeCompare(b, 'pl'));
-  }, [groups]);
 
   const teachersList = useMemo(
     () =>
@@ -808,7 +865,11 @@ export default function AdminPortal() {
             <button
               key={t.key}
               type="button"
-              onClick={() => setOrganizationSubTab(t.key)}
+              onClick={() => {
+                setOrganizationSubTab(t.key);
+                if (t.key === 'teachers') setTeacherOrgSubTab('list');
+                if (t.key === 'locations') setLocationOrgSubTab('list');
+              }}
               className={`rounded-full border px-4 py-2.5 text-sm font-semibold transition ${tabBtn(organizationSubTab === t.key)}`}
             >
               {t.label}
@@ -818,6 +879,44 @@ export default function AdminPortal() {
 
         <div className="mt-6 rounded-2xl border border-emerald-100 bg-white p-4 sm:p-5">
           <h3 className="text-lg font-bold text-[#0f6e56] sm:text-xl">{orgTabLabel}</h3>
+
+          {organizationSubTab === 'teachers' && (
+            <div className="mt-3 flex flex-wrap gap-2 border-b border-emerald-50 pb-4">
+              {teacherOrgSubTabs.map((st) => (
+                <button
+                  key={st.key}
+                  type="button"
+                  onClick={() => setTeacherOrgSubTab(st.key)}
+                  className={`rounded-full border px-3 py-2 text-xs font-semibold transition sm:text-sm ${
+                    teacherOrgSubTab === st.key
+                      ? 'border-[#0f6e56] bg-emerald-50 text-[#0f6e56]'
+                      : 'border-emerald-100 bg-white text-zinc-700 hover:border-emerald-200 hover:bg-emerald-50/40'
+                  }`}
+                >
+                  {st.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {organizationSubTab === 'locations' && (
+            <div className="mt-3 flex flex-wrap gap-2 border-b border-emerald-50 pb-4">
+              {locationOrgSubTabs.map((st) => (
+                <button
+                  key={st.key}
+                  type="button"
+                  onClick={() => setLocationOrgSubTab(st.key)}
+                  className={`rounded-full border px-3 py-2 text-xs font-semibold transition sm:text-sm ${
+                    locationOrgSubTab === st.key
+                      ? 'border-[#0f6e56] bg-emerald-50 text-[#0f6e56]'
+                      : 'border-emerald-100 bg-white text-zinc-700 hover:border-emerald-200 hover:bg-emerald-50/40'
+                  }`}
+                >
+                  {st.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           {organizationSubTab === 'schoolYear' && (
             <div className="mt-4 space-y-4">
@@ -978,101 +1077,310 @@ export default function AdminPortal() {
           {organizationSubTab === 'teachers' && (
             <div className="mt-4 space-y-4">
               <p className="text-sm text-zinc-600">
-                Lista nauczycieli przypisanych do Harry English. Aktywni mogą być wybierani przy tworzeniu grup.
+                Nauczyciele Twojej szkoły — aktywni mogą być przypisywani do grup. Konto otrzymuje rolę TEACHER, potwierdzenie i dostęp ACTIVE.
               </p>
-              <div className="flex flex-wrap gap-2">
-                <span className="rounded-full bg-[#0f6e56] px-3 py-1 text-xs font-semibold text-white">Wszyscy</span>
-                <span className="rounded-full border border-emerald-100 bg-emerald-50/60 px-3 py-1 text-xs font-semibold text-zinc-700">
-                  Tylko aktywni
-                </span>
-              </div>
-              <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
-                {teachersList.length === 0 ? (
-                  <p className="text-sm text-zinc-600">Brak nauczycieli w bazie — dodaj konto z rolą „Nauczyciel” w zakładce Użytkownicy.</p>
-                ) : (
-                  teachersList.map((t) => (
-                    <div
-                      key={t.id}
-                      className="flex flex-col justify-between gap-2 rounded-xl border border-emerald-100 bg-white px-4 py-3 sm:flex-row sm:items-center"
-                    >
-                      <div>
-                        <p className="font-semibold text-zinc-900">
-                          {t.first_name} {t.last_name}
-                        </p>
-                        <p className="text-sm text-zinc-600">{t.email}</p>
-                      </div>
-                      <span
-                        className={`self-start rounded-full px-2 py-1 text-xs font-semibold sm:self-center ${
-                          t.active ? 'bg-emerald-100 text-emerald-800' : 'bg-zinc-100 text-zinc-600'
-                        }`}
+              {teacherOrgSubTab === 'list' && (
+                <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                  {teachersList.length === 0 ? (
+                    <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
+                      Brak nauczycieli — dodaj konto w zakładce „Dodaj nauczyciela”.
+                    </p>
+                  ) : (
+                    teachersList.map((t) => (
+                      <div
+                        key={t.id}
+                        className="flex flex-col justify-between gap-2 rounded-xl border border-emerald-100 bg-white px-4 py-3 sm:flex-row sm:items-center"
                       >
-                        {t.active ? 'Aktywny' : 'Nieaktywny'}
-                      </span>
-                    </div>
-                  ))
-                )}
-              </div>
+                        <div>
+                          <p className="font-semibold text-zinc-900">
+                            {t.first_name} {t.last_name}
+                          </p>
+                          <p className="text-sm text-zinc-600">{t.email}</p>
+                          {t.phone ? <p className="text-xs text-zinc-500">{t.phone}</p> : null}
+                        </div>
+                        <span
+                          className={`self-start rounded-full px-2 py-1 text-xs font-semibold sm:self-center ${
+                            t.active ? 'bg-emerald-100 text-emerald-800' : 'bg-zinc-100 text-zinc-600'
+                          }`}
+                        >
+                          {t.active ? 'Aktywny' : 'Nieaktywny'}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+              {teacherOrgSubTab === 'add' && (
+                <div className="rounded-xl border border-dashed border-emerald-200 bg-emerald-50/30 p-4 text-sm">
+                  <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-700">Nowy nauczyciel</p>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-semibold text-zinc-700">Imię</span>
+                      <input
+                        className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                        value={newTeacherForm.firstName}
+                        onChange={(e) => setNewTeacherForm((p) => ({ ...p, firstName: e.target.value }))}
+                        autoComplete="given-name"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-semibold text-zinc-700">Nazwisko</span>
+                      <input
+                        className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                        value={newTeacherForm.lastName}
+                        onChange={(e) => setNewTeacherForm((p) => ({ ...p, lastName: e.target.value }))}
+                        autoComplete="family-name"
+                      />
+                    </label>
+                    <label className="block sm:col-span-2">
+                      <span className="mb-1 block text-xs font-semibold text-zinc-700">Email (login)</span>
+                      <input
+                        type="email"
+                        className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                        value={newTeacherForm.email}
+                        onChange={(e) => setNewTeacherForm((p) => ({ ...p, email: e.target.value }))}
+                        autoComplete="off"
+                      />
+                    </label>
+                    <label className="block sm:col-span-2">
+                      <span className="mb-1 block text-xs font-semibold text-zinc-700">Hasło</span>
+                      <input
+                        type="password"
+                        className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                        value={newTeacherForm.password}
+                        onChange={(e) => setNewTeacherForm((p) => ({ ...p, password: e.target.value }))}
+                        autoComplete="new-password"
+                      />
+                    </label>
+                    <label className="block sm:col-span-2">
+                      <span className="mb-1 block text-xs font-semibold text-zinc-500">Telefon (opcjonalnie)</span>
+                      <input
+                        type="tel"
+                        className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                        placeholder="np. +48 …"
+                        value={newTeacherForm.phone}
+                        onChange={(e) => setNewTeacherForm((p) => ({ ...p, phone: e.target.value }))}
+                        autoComplete="tel"
+                      />
+                    </label>
+                  </div>
+                  <div className="mt-4 flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0c5a47] disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={async () => {
+                        const { firstName, lastName, email, password, phone } = newTeacherForm;
+                        if (!firstName.trim() || !lastName.trim() || !email.trim() || !password) {
+                          pushToast('error', 'Uzupełnij imię, nazwisko, email i hasło');
+                          return;
+                        }
+                        setBusy(true);
+                        try {
+                          const res = await fetch('/api/admin/users', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              firstName: firstName.trim(),
+                              lastName: lastName.trim(),
+                              email: email.trim().toLowerCase(),
+                              password,
+                              role: 'TEACHER',
+                              confirmed: true,
+                              accessLevel: 'ACTIVE',
+                              ...(phone.trim() ? { phone: phone.trim() } : {}),
+                            }),
+                          });
+                          const data = (await res.json().catch(() => ({}))) as {
+                            message?: string;
+                            detail?: string;
+                            pgMessage?: string;
+                          };
+                          if (!res.ok) {
+                            const base = data.message ?? 'Nie udało się dodać nauczyciela';
+                            const tech = [data.detail, data.pgMessage]
+                              .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+                              .join(' — ');
+                            throw new Error(tech ? `${base} — ${tech}` : base);
+                          }
+                          pushToast('success', 'Dodano nauczyciela');
+                          setNewTeacherForm({
+                            firstName: '',
+                            lastName: '',
+                            email: '',
+                            password: '',
+                            phone: '',
+                          });
+                          setTeacherOrgSubTab('list');
+                          await loadData();
+                        } catch (e) {
+                          pushToast('error', e instanceof Error ? e.message : 'Błąd');
+                        } finally {
+                          setBusy(false);
+                        }
+                      }}
+                    >
+                      Dodaj nauczyciela
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
           {organizationSubTab === 'locations' && (
             <div className="mt-4 space-y-4">
               <p className="text-sm text-zinc-600">
-                Lokalizacje zajęć — obecnie wykryte z przypisań grup. Docelowo pełna edycja (dodawanie, kolejność, wyłączanie).
+                Lokalizacje zajęć w Twojej szkole — używane przy zapisach i planowaniu grup. W formularzu podajesz nazwę i opcjonalnie adres;
+                identyfikator szkoły i status aktywny ustawia system.
               </p>
-              <div className="rounded-xl border border-dashed border-emerald-200 bg-emerald-50/30 p-4 text-sm text-zinc-600">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-                  <label className="flex-1">
-                    <span className="mb-1 block text-xs font-semibold text-zinc-700">Nowa lokalizacja</span>
-                    <input
-                      disabled
-                      placeholder="np. Paniówki — sala 2"
-                      className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-500"
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    disabled
-                    className="rounded-xl bg-[#0f6e56]/50 px-4 py-2 text-sm font-semibold text-white"
-                  >
-                    Dodaj
-                  </button>
+              {locationOrgSubTab === 'list' && (
+                <>
+                  {locationsLoading ? (
+                    <div className="h-32 animate-pulse rounded-2xl bg-emerald-100/70" />
+                  ) : (
+                    <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                      {schoolLocations.length === 0 ? (
+                        <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
+                          Brak lokalizacji — dodaj pierwszą w zakładce „Dodaj nową lokalizację”.
+                        </p>
+                      ) : (
+                        schoolLocations.map((loc) => (
+                          <div
+                            key={loc.id}
+                            className="flex flex-col justify-between gap-2 rounded-xl border border-emerald-100 bg-white px-4 py-3 sm:flex-row sm:items-center"
+                          >
+                            <div>
+                              <p className="font-semibold text-zinc-900">{loc.name}</p>
+                              {loc.address ? (
+                                <p className="text-sm text-zinc-600">{loc.address}</p>
+                              ) : (
+                                <p className="text-xs text-zinc-500">Bez adresu</p>
+                              )}
+                            </div>
+                            <span
+                              className={`self-start rounded-full px-2 py-1 text-xs font-semibold sm:self-center ${
+                                loc.active ? 'bg-emerald-100 text-emerald-800' : 'bg-zinc-100 text-zinc-600'
+                              }`}
+                            >
+                              {loc.active ? 'Aktywna' : 'Nieaktywna'}
+                            </span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+              {locationOrgSubTab === 'add' && (
+                <div className="rounded-xl border border-dashed border-emerald-200 bg-emerald-50/30 p-4 text-sm">
+                  <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-700">Nowa lokalizacja</p>
+                  <div className="grid grid-cols-1 gap-3">
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-semibold text-zinc-700">Nazwa</span>
+                      <input
+                        className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                        placeholder="np. Paniówki — sala 2"
+                        value={newLocationForm.name}
+                        onChange={(e) => setNewLocationForm((p) => ({ ...p, name: e.target.value }))}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-semibold text-zinc-500">Adres (opcjonalnie)</span>
+                      <input
+                        className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                        placeholder="np. ul. …"
+                        value={newLocationForm.address}
+                        onChange={(e) => setNewLocationForm((p) => ({ ...p, address: e.target.value }))}
+                      />
+                    </label>
+                  </div>
+                  <div className="mt-4 flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0c5a47] disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={async () => {
+                        const name = newLocationForm.name.trim();
+                        if (!name) {
+                          pushToast('error', 'Podaj nazwę lokalizacji');
+                          return;
+                        }
+                        setBusy(true);
+                        try {
+                          const body: { name: string; address?: string; schoolId?: string } = {
+                            name,
+                            ...(newLocationForm.address.trim()
+                              ? { address: newLocationForm.address.trim() }
+                              : {}),
+                          };
+                          if (sessionSchoolId) body.schoolId = sessionSchoolId;
+                          const res = await fetch('/api/admin/locations', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(body),
+                          });
+                          const data = (await res.json().catch(() => ({}))) as { message?: string };
+                          if (!res.ok) {
+                            throw new Error(data.message ?? 'Nie udało się dodać lokalizacji');
+                          }
+                          pushToast('success', 'Dodano lokalizację');
+                          setNewLocationForm({ name: '', address: '' });
+                          setLocationOrgSubTab('list');
+                          await loadLocations();
+                        } catch (e) {
+                          pushToast('error', e instanceof Error ? e.message : 'Błąd');
+                        } finally {
+                          setBusy(false);
+                        }
+                      }}
+                    >
+                      Dodaj lokalizację
+                    </button>
+                  </div>
                 </div>
-              </div>
-              <ul className="divide-y divide-emerald-100 rounded-xl border border-emerald-100">
-                {organizationLocationNames.length === 0 ? (
-                  <li className="px-4 py-6 text-sm text-zinc-600">Brak lokalizacji w danych grup — utwórz grupę z lokalizacją w module Grupy.</li>
-                ) : (
-                  organizationLocationNames.map((name) => (
-                    <li key={name} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
-                      <span className="font-medium text-zinc-900">{name}</span>
-                      <span className="text-xs text-zinc-500">tylko odczyt</span>
-                    </li>
-                  ))
-                )}
-              </ul>
+              )}
             </div>
           )}
 
           {organizationSubTab === 'history' && (
             <div className="mt-4 space-y-3">
-              <p className="text-sm text-zinc-600">
-                Archiwum lat szkolnych i istotnych zmian konfiguracji szkoły.
-              </p>
-              <div className="max-h-[380px] space-y-2 overflow-y-auto pr-1">
-                {[
-                  { title: 'Rok 2024/2025', status: 'nieaktywny', range: '2024-09-01 — 2025-08-31' },
-                  { title: 'Rok 2023/2024', status: 'nieaktywny', range: '2023-09-01 — 2024-08-31' },
-                ].map((row) => (
-                  <div key={row.title} className="rounded-xl border border-emerald-100 bg-white px-4 py-3">
-                    <p className="font-semibold text-[#0f6e56]">
-                      {row.title}{' '}
-                      <span className="font-normal text-zinc-500">· {row.status}</span>
+              <p className="text-sm text-zinc-600">Zakończone lata szkolne z bazy (nieaktywne).</p>
+              {schoolYearLoading ? (
+                <div className="space-y-2">
+                  <div className="h-20 animate-pulse rounded-xl bg-emerald-100/80" />
+                  <div className="h-20 animate-pulse rounded-xl bg-emerald-100/60" />
+                </div>
+              ) : (
+                <div className="max-h-[380px] space-y-2 overflow-y-auto pr-1">
+                  {schoolYears.filter((y) => !(y.isActive ?? y.active)).length === 0 ? (
+                    <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
+                      Brak danych — brak nieaktywnych lat szkolnych.
                     </p>
-                    <p className="mt-1 text-sm text-zinc-600">{row.range}</p>
-                  </div>
-                ))}
-              </div>
+                  ) : (
+                    schoolYears
+                      .filter((y) => !(y.isActive ?? y.active))
+                      .sort(
+                        (a, b) =>
+                          String(b.date_from).localeCompare(String(a.date_from), 'pl'),
+                      )
+                      .map((y) => (
+                        <div
+                          key={y.id}
+                          className="rounded-xl border border-emerald-100 bg-white px-4 py-3"
+                        >
+                          <p className="font-semibold text-[#0f6e56]">
+                            {y.name}{' '}
+                            <span className="font-normal text-zinc-500">· nieaktywny</span>
+                          </p>
+                          <p className="mt-1 text-sm text-zinc-600">
+                            {String(y.date_from).slice(0, 10)} — {String(y.date_to).slice(0, 10)}
+                          </p>
+                        </div>
+                      ))
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1291,51 +1599,49 @@ export default function AdminPortal() {
     if (activeTab === 'organization') return renderOrganization();
     if (activeTab === 'users') return renderUsers();
     if (activeTab === 'groups') return renderGroups();
-    if (activeTab === 'classes') return <PlaceholderCard title="Zajęcia" text="Tutaj będzie kalendarz i lista zajęć z możliwością tworzenia szablonów." />;
-    if (activeTab === 'payments')
-      return (
-        <PlaceholderCard
-          title="Płatności"
-          text="Historia wpłat, subskrypcji i przypomnień o terminach — moduł zostanie rozbudowany o listę transakcji i eksport."
-        />
+    if (activeTab === 'classes') return <EmptyDataPanel title="Zajęcia" />;
+    if (activeTab === 'payments') return <EmptyDataPanel title="Płatności" />;
+    if (activeTab === 'enrollment') {
+      const pending = enrollmentParents.filter(
+        (parent) => parent.accessLevel === 'PENDING' || parent.accessLevel === 'PROPOSED',
       );
-    if (activeTab === 'enrollment') return (
-      <section className="rounded-2xl border border-emerald-100 bg-white p-4 space-y-3">
-        {enrollmentParents
-          .filter((parent) => parent.accessLevel === 'PENDING' || parent.accessLevel === 'PROPOSED')
-          .map((parent) => (
-          <div key={parent.id} className="rounded-xl border border-emerald-100 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="font-semibold">{parent.firstName} {parent.lastName}</p>
-                <p className="text-sm text-zinc-600">{parent.email}</p>
-                <p className="text-xs text-zinc-500 mt-1">Status: {parent.accessLevel}</p>
+      if (pending.length === 0) {
+        return <EmptyDataPanel title="Zgłoszenia" />;
+      }
+      return (
+        <section className="rounded-2xl border border-emerald-100 bg-white space-y-3 p-4">
+          {pending.map((parent) => (
+            <div key={parent.id} className="rounded-xl border border-emerald-100 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-semibold">
+                    {parent.firstName} {parent.lastName}
+                  </p>
+                  <p className="text-sm text-zinc-600">{parent.email}</p>
+                  <p className="mt-1 text-xs text-zinc-500">Status: {parent.accessLevel}</p>
+                </div>
+                <button
+                  className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm text-white"
+                  onClick={() => {
+                    setProposalModalParentId(parent.id);
+                    setProposalForm({ groupId: '', priceMonthly: '0' });
+                  }}
+                >
+                  Zaproponuj grupę
+                </button>
               </div>
-              <button
-                className="rounded-xl bg-[#0f6e56] px-3 py-2 text-white text-sm"
-                onClick={() => {
-                  setProposalModalParentId(parent.id);
-                  setProposalForm({ groupId: '', priceMonthly: '0' });
-                }}
-              >
-                Zaproponuj grupę
-              </button>
+              <p className="mt-2 text-sm text-zinc-600">
+                Dzieci:{' '}
+                {parent.children.map((child) => `${child.firstName} ${child.lastName}`).join(', ') ||
+                  'brak'}
+              </p>
             </div>
-            <p className="mt-2 text-sm text-zinc-600">
-              Dzieci: {parent.children.map((child) => `${child.firstName} ${child.lastName}`).join(', ') || 'brak'}
-            </p>
-          </div>
-        ))}
-      </section>
-    );
-    if (activeTab === 'announcements')
-      return (
-        <PlaceholderCard
-          title="Wiadomości"
-          text="Wysyłka wiadomości do ról lub wszystkich użytkowników zostanie podłączona pod dedykowany endpoint."
-        />
+          ))}
+        </section>
       );
-    return <PlaceholderCard title="Panel" text="Nieznana zakładka." />;
+    }
+    if (activeTab === 'announcements') return <EmptyDataPanel title="Wiadomości" />;
+    return <EmptyDataPanel title="Panel" />;
   };
 
   return (

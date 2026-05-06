@@ -1,5 +1,10 @@
 import { randomUUID } from "crypto";
-import { Pool, type PoolClient, type QueryResultRow } from "pg";
+import {
+  Pool,
+  type PoolClient,
+  type QueryResult,
+  type QueryResultRow,
+} from "pg";
 
 /** Domyślna szkoła z env — multi-tenant (pusty string gdy brak `SCHOOL_ID`). */
 export const DEFAULT_SCHOOL_ID = process.env.SCHOOL_ID || "";
@@ -66,10 +71,21 @@ type DbShape = {
   childHasPreferredLocationId: boolean;
 };
 
+/** Odświeżanie po migracjach — bez tego stary kształt (np. brak `access_level` w cache) daje błędne INSERT-y aż do restartu. */
+const DB_SHAPE_CACHE_TTL_MS = 60_000;
 let dbShapeCache: DbShape | null = null;
+let dbShapeCacheAt = 0;
+
+/** Testy / ręczne unieważnienie po migracji bez czekania na TTL. */
+export function clearDbShapeCache(): void {
+  dbShapeCache = null;
+  dbShapeCacheAt = 0;
+}
 
 export async function getDbShape(): Promise<DbShape> {
-  if (dbShapeCache) return dbShapeCache;
+  if (dbShapeCache != null && Date.now() - dbShapeCacheAt < DB_SHAPE_CACHE_TTL_MS) {
+    return dbShapeCache;
+  }
   const r = await pool.query<{
     user_has_school_id: boolean;
     user_has_role: boolean;
@@ -131,6 +147,7 @@ export async function getDbShape(): Promise<DbShape> {
     childHasEnrollmentRequestId: Boolean(row?.child_has_enrollment_request_id),
     childHasPreferredLocationId: Boolean(row?.child_has_preferred_location_id),
   };
+  dbShapeCacheAt = Date.now();
   return dbShapeCache;
 }
 
@@ -549,44 +566,84 @@ export async function createUser(data: {
   }
 
   if (shape.userHasRole) {
-    const r = shape.userHasAccessLevel
-      ? await pool.query<UserRow>(
-          `INSERT INTO users (
-             id, school_id, email, password_hash, role,
-             first_name, last_name, phone, active, confirmed, access_level
-           ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9, $10)
-           RETURNING *`,
-          [
-            id,
-            insertSchoolId,
-            data.email,
-            data.passwordHash,
-            role,
-            data.firstName,
-            data.lastName,
-            data.phone ?? null,
-            confirmed,
-            accessLevel,
-          ]
-        )
-      : await pool.query<UserRow>(
-          `INSERT INTO users (
-             id, school_id, email, password_hash, role,
-             first_name, last_name, phone, active, confirmed
-           ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9)
-           RETURNING *`,
-          [
-            id,
-            insertSchoolId,
-            data.email,
-            data.passwordHash,
-            role,
-            data.firstName,
-            data.lastName,
-            data.phone ?? null,
-            confirmed,
-          ]
-        );
+    let r: QueryResult<UserRow>;
+    if (shape.userHasAccessLevel) {
+      r = shape.userHasPhone
+        ? await pool.query<UserRow>(
+            `INSERT INTO users (
+               id, school_id, email, password_hash, role,
+               first_name, last_name, phone, active, confirmed, access_level
+             ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9, $10)
+             RETURNING *`,
+            [
+              id,
+              insertSchoolId,
+              data.email,
+              data.passwordHash,
+              role,
+              data.firstName,
+              data.lastName,
+              data.phone ?? null,
+              confirmed,
+              accessLevel,
+            ]
+          )
+        : await pool.query<UserRow>(
+            `INSERT INTO users (
+               id, school_id, email, password_hash, role,
+               first_name, last_name, active, confirmed, access_level
+             ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, TRUE, $8, $9)
+             RETURNING *`,
+            [
+              id,
+              insertSchoolId,
+              data.email,
+              data.passwordHash,
+              role,
+              data.firstName,
+              data.lastName,
+              confirmed,
+              accessLevel,
+            ]
+          );
+    } else {
+      r = shape.userHasPhone
+        ? await pool.query<UserRow>(
+            `INSERT INTO users (
+               id, school_id, email, password_hash, role,
+               first_name, last_name, phone, active, confirmed
+             ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9)
+             RETURNING *`,
+            [
+              id,
+              insertSchoolId,
+              data.email,
+              data.passwordHash,
+              role,
+              data.firstName,
+              data.lastName,
+              data.phone ?? null,
+              confirmed,
+            ]
+          )
+        : await pool.query<UserRow>(
+            `INSERT INTO users (
+               id, school_id, email, password_hash, role,
+               first_name, last_name, active, confirmed
+             ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, TRUE, $8)
+             RETURNING *`,
+            [
+              id,
+              insertSchoolId,
+              data.email,
+              data.passwordHash,
+              role,
+              data.firstName,
+              data.lastName,
+              confirmed,
+            ]
+          );
+    }
     return mapUserRow(r.rows[0]);
   }
 
@@ -977,12 +1034,12 @@ async function ensureDefaultSchoolRow(
   executor: PgQueryable | PoolClient,
   schoolId: string
 ): Promise<void> {
-  // slug musi być unikalny — UUID szkoły jest deterministyczny i nie koliduje z innymi rekordami
+  // Osobne $1 / $3 dla id i slug — ten sam parametr dwa razy daje błąd „text vs varchar” przy $1, gdy kolumny mają różne typy.
   await executor.query(
     `INSERT INTO schools (id, name, slug, timezone, active)
-     VALUES ($1, $2, $1, 'Europe/Warsaw', TRUE)
+     VALUES ($1, $2, $3, 'Europe/Warsaw', TRUE)
      ON CONFLICT (id) DO NOTHING`,
-    [schoolId, "Harry English"]
+    [schoolId, "Harry English", schoolId]
   );
 }
 
@@ -1022,46 +1079,85 @@ export async function createParentUserWithChildren(data: {
       await ensureDefaultSchoolRow(client, schoolId);
     }
 
-    let ur;
+    let ur: QueryResult<UserRow>;
     if (shape.userHasRole) {
-      ur = shape.userHasAccessLevel
-        ? await client.query<UserRow>(
-            `INSERT INTO users (
-               id, school_id, email, password_hash, role,
-               first_name, last_name, phone, active, confirmed, access_level
-             ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9, $10)
-             RETURNING *`,
-            [
-              userId,
-              schoolId,
-              data.email,
-              data.passwordHash,
-              role,
-              data.firstName,
-              data.lastName,
-              data.phone ?? null,
-              confirmed,
-              accessLevel,
-            ]
-          )
-        : await client.query<UserRow>(
-            `INSERT INTO users (
-               id, school_id, email, password_hash, role,
-               first_name, last_name, phone, active, confirmed
-             ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9)
-             RETURNING *`,
-            [
-              userId,
-              schoolId,
-              data.email,
-              data.passwordHash,
-              role,
-              data.firstName,
-              data.lastName,
-              data.phone ?? null,
-              confirmed,
-            ]
-          );
+      if (shape.userHasAccessLevel) {
+        ur = shape.userHasPhone
+          ? await client.query<UserRow>(
+              `INSERT INTO users (
+                 id, school_id, email, password_hash, role,
+                 first_name, last_name, phone, active, confirmed, access_level
+               ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9, $10)
+               RETURNING *`,
+              [
+                userId,
+                schoolId,
+                data.email,
+                data.passwordHash,
+                role,
+                data.firstName,
+                data.lastName,
+                data.phone ?? null,
+                confirmed,
+                accessLevel,
+              ]
+            )
+          : await client.query<UserRow>(
+              `INSERT INTO users (
+                 id, school_id, email, password_hash, role,
+                 first_name, last_name, active, confirmed, access_level
+               ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, TRUE, $8, $9)
+               RETURNING *`,
+              [
+                userId,
+                schoolId,
+                data.email,
+                data.passwordHash,
+                role,
+                data.firstName,
+                data.lastName,
+                confirmed,
+                accessLevel,
+              ]
+            );
+      } else {
+        ur = shape.userHasPhone
+          ? await client.query<UserRow>(
+              `INSERT INTO users (
+                 id, school_id, email, password_hash, role,
+                 first_name, last_name, phone, active, confirmed
+               ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9)
+               RETURNING *`,
+              [
+                userId,
+                schoolId,
+                data.email,
+                data.passwordHash,
+                role,
+                data.firstName,
+                data.lastName,
+                data.phone ?? null,
+                confirmed,
+              ]
+            )
+          : await client.query<UserRow>(
+              `INSERT INTO users (
+                 id, school_id, email, password_hash, role,
+                 first_name, last_name, active, confirmed
+               ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, TRUE, $8)
+               RETURNING *`,
+              [
+                userId,
+                schoolId,
+                data.email,
+                data.passwordHash,
+                role,
+                data.firstName,
+                data.lastName,
+                confirmed,
+              ]
+            );
+      }
     } else {
       ur = await client.query<UserRow>(
         `INSERT INTO users (
