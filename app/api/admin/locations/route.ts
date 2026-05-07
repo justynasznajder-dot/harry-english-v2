@@ -83,6 +83,18 @@ export async function POST(request: NextRequest) {
 
     let insertSchoolId: string | null =
       tenant.role === "MANAGER" ? tenant.tenantSchoolId : null;
+    if (tenant.role === "MANAGER") {
+      const fromBody =
+        (typeof body?.school_id === "string" && body.school_id.trim()) ||
+        (typeof body?.schoolId === "string" && body.schoolId.trim()) ||
+        "";
+      if (fromBody && fromBody !== tenant.tenantSchoolId) {
+        return NextResponse.json(
+          { message: "Manager może dodać lokalizację tylko dla swojej szkoły" },
+          { status: 403 }
+        );
+      }
+    }
     if (tenant.role === "ADMIN") {
       const fromBody =
         (typeof body?.school_id === "string" && body.school_id.trim()) ||

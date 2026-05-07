@@ -11,9 +11,10 @@ type TabKey =
   | 'announcements'
   | 'payments';
 type MobileTab = 'organization' | 'users' | 'groups' | 'more';
+type UsersSubTab = 'list' | 'add';
 type OrganizationSubTab = 'schoolYear' | 'teachers' | 'locations' | 'history';
 type TeacherOrgSubTab = 'list' | 'add';
-type LocationOrgSubTab = 'list' | 'add';
+type LocationOrgSubTab = 'list' | 'add' | 'edit';
 
 /** Zgodnie z kolumną `users.role` (TEXT): ADMIN, MANAGER, TEACHER, PARENT, CHILD */
 type AdminPortalUserRole = 'ADMIN' | 'MANAGER' | 'TEACHER' | 'PARENT' | 'CHILD';
@@ -117,6 +118,22 @@ interface SchoolLocationRow {
   active: boolean;
 }
 
+/**
+ * Normalizuje polskie numery komórkowe do formatu: +48 xxx xxx xxx.
+ * Numery stacjonarne i niestandardowe pozostawia bez zmian.
+ */
+function normalizeMobilePhone(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+
+  const digits = trimmed.replace(/\D/g, '');
+  const mobileMatch = digits.match(/^(?:48)?([5-9]\d{8})$/);
+  if (!mobileMatch) return trimmed;
+
+  const mobile = mobileMatch[1];
+  return `+48 ${mobile.slice(0, 3)} ${mobile.slice(3, 6)} ${mobile.slice(6, 9)}`;
+}
+
 const topTabs: Array<{ key: TabKey; label: string }> = [
   { key: 'organization', label: 'Organizacja szkoły' },
   { key: 'users', label: 'Użytkownicy' },
@@ -150,6 +167,10 @@ const locationOrgSubTabs: Array<{ key: LocationOrgSubTab; label: string }> = [
   { key: 'list', label: 'Lista lokalizacji' },
   { key: 'add', label: 'Dodaj nową lokalizację' },
 ];
+const usersSubTabs: Array<{ key: UsersSubTab; label: string }> = [
+  { key: 'list', label: 'Lista użytkowników' },
+  { key: 'add', label: 'Dodaj nowego użytkownika' },
+];
 
 function SkeletonBlock() {
   return <div className="h-24 animate-pulse rounded-2xl bg-emerald-100/80" />;
@@ -174,6 +195,8 @@ export default function AdminPortal() {
   const [schoolLocations, setSchoolLocations] = useState<SchoolLocationRow[]>([]);
   const [locationsLoading, setLocationsLoading] = useState(false);
   const [newLocationForm, setNewLocationForm] = useState({ name: '', address: '' });
+  const [editLocationId, setEditLocationId] = useState<string | null>(null);
+  const [editLocationForm, setEditLocationForm] = useState({ name: '', address: '' });
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [children, setChildren] = useState<ChildRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -182,13 +205,14 @@ export default function AdminPortal() {
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<'ALL' | AdminPortalUserRole>('ALL');
   const [showInactive, setShowInactive] = useState(false);
-  const [newUserOpen, setNewUserOpen] = useState(false);
+  const [usersSubTab, setUsersSubTab] = useState<UsersSubTab>('list');
   const [newUser, setNewUser] = useState({
     firstName: '',
     lastName: '',
     email: '',
     password: '',
-    role: 'PARENT' as Exclude<AdminPortalUserRole, 'ADMIN'>,
+    phone: '',
+    role: '' as '' | Exclude<AdminPortalUserRole, 'ADMIN'>,
   });
   const [newParentChildren, setNewParentChildren] = useState<Array<{
     firstName: string;
@@ -276,6 +300,7 @@ export default function AdminPortal() {
   const [editYearModal, setEditYearModal] = useState<SchoolYearRow | null>(null);
   /** `school_id` zalogowanego użytkownika (ADMIN może mieć `null`). */
   const [sessionSchoolId, setSessionSchoolId] = useState<string | null>(null);
+  const [isManagerView, setIsManagerView] = useState(false);
 
   const pushToast = (kind: Toast['kind'], message: string) => {
     const id = Date.now() + Math.floor(Math.random() * 1000);
@@ -304,11 +329,13 @@ export default function AdminPortal() {
         const meJson = (await meRes.json()) as { user?: { schoolId?: string | null; role?: string } };
         const sid = meJson.user?.schoolId ?? null;
         setSessionSchoolId(sid);
+        setIsManagerView(meJson.user?.role === 'MANAGER');
         if (meJson.user?.role === 'MANAGER' && !sid) {
           pushToast('error', 'Konto zarządcy nie ma przypisanej szkoły — skontaktuj się z administratorem.');
         }
       } else {
         setSessionSchoolId(null);
+        setIsManagerView(false);
       }
       setUsers((uJson.users ?? []) as AdminUser[]);
       setChildren((cJson.children ?? []) as ChildRow[]);
@@ -415,6 +442,7 @@ export default function AdminPortal() {
 
   const filteredUsers = useMemo(() => {
     return users.filter((user) => {
+      if (isManagerView && user.role === 'ADMIN') return false;
       if (!showInactive && !user.active) return false;
       if (roleFilter !== 'ALL' && user.role !== roleFilter) return false;
       if (!search.trim()) return true;
@@ -425,7 +453,7 @@ export default function AdminPortal() {
         user.email.toLowerCase().includes(q)
       );
     });
-  }, [users, showInactive, roleFilter, search]);
+  }, [users, isManagerView, showInactive, roleFilter, search]);
 
   const parentOptions = useMemo(
     () =>
@@ -471,8 +499,8 @@ export default function AdminPortal() {
   }, [children, groupDetail, studentSearch]);
 
   const createUser = async () => {
-    if (!newUser.firstName || !newUser.lastName || !newUser.email || !newUser.password) {
-      pushToast('error', 'Uzupełnij wszystkie pola');
+    if (!newUser.firstName || !newUser.lastName || !newUser.email || !newUser.password || !newUser.role) {
+      pushToast('error', 'Uzupełnij wszystkie pola i wybierz rolę');
       return;
     }
     if (newUser.role === 'PARENT') {
@@ -483,6 +511,7 @@ export default function AdminPortal() {
     }
     setBusy(true);
     try {
+      const normalizedPhone = normalizeMobilePhone(newUser.phone ?? '');
       const res = await fetch('/api/admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -494,6 +523,7 @@ export default function AdminPortal() {
           role: newUser.role,
           confirmed: true,
           accessLevel: newUser.role === 'PARENT' ? 'PENDING' : 'ACTIVE',
+          ...(normalizedPhone ? { phone: normalizedPhone } : {}),
         }),
       });
       const data = await res.json();
@@ -521,8 +551,8 @@ export default function AdminPortal() {
         pushToast('success', 'Dodano użytkownika');
       }
 
-      setNewUserOpen(false);
-      setNewUser({ firstName: '', lastName: '', email: '', password: '', role: 'PARENT' });
+      setUsersSubTab('list');
+      setNewUser({ firstName: '', lastName: '', email: '', password: '', phone: '', role: '' });
       setNewParentChildren([{ firstName: '', lastName: '', birthDate: '' }]);
       await loadData();
     } catch (error) {
@@ -598,55 +628,70 @@ export default function AdminPortal() {
   const renderUsers = () => (
     <div className="space-y-4">
       <section className="rounded-2xl border border-emerald-100 bg-white p-4">
-        <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Szukaj po imieniu, nazwisku, emailu"
-            className="rounded-xl border border-emerald-200 px-3 py-2"
-          />
-          <select
-            value={roleFilter}
-            onChange={(e) => setRoleFilter(e.target.value as 'ALL' | AdminPortalUserRole)}
-            className="rounded-xl border border-emerald-200 px-3 py-2"
-          >
-            <option value="ALL">Wszystkie role</option>
-            <option value="PARENT">Rodzice</option>
-            <option value="TEACHER">Nauczyciele</option>
-            <option value="MANAGER">Zarządcy szkoły</option>
-            <option value="ADMIN">Super admin</option>
-            <option value="CHILD">Uczniowie (konto)</option>
-          </select>
-          <label className="flex items-center gap-2 rounded-xl border border-emerald-200 px-3 py-2 text-sm">
-            <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
-            Pokaż nieaktywnych
-          </label>
-          <button
-            onClick={() => setNewUserOpen((v) => !v)}
-            className="rounded-xl bg-[#0f6e56] px-3 py-2 font-semibold text-white"
-          >
-            {newUserOpen ? 'Zamknij formularz' : 'Dodaj użytkownika'}
-          </button>
+        <div className="mb-4 flex flex-wrap gap-2">
+          {usersSubTabs.map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setUsersSubTab(tab.key)}
+              className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                usersSubTab === tab.key
+                  ? 'border-[#0f6e56] bg-[#0f6e56] text-white shadow-sm'
+                  : 'border-emerald-100 bg-white text-zinc-700 hover:border-[#0f6e56]/40 hover:text-[#0f6e56]'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
 
-        {newUserOpen && (
+        {usersSubTab === 'list' && (
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Szukaj po imieniu, nazwisku, emailu"
+              className="rounded-xl border border-emerald-200 px-3 py-2"
+            />
+            <select
+              value={roleFilter}
+              onChange={(e) => setRoleFilter(e.target.value as 'ALL' | AdminPortalUserRole)}
+              className="rounded-xl border border-emerald-200 px-3 py-2"
+            >
+              <option value="ALL">Wszystkie role</option>
+              <option value="PARENT">Rodzice</option>
+              <option value="TEACHER">Nauczyciele</option>
+              <option value="MANAGER">Zarządcy szkoły</option>
+              {!isManagerView && <option value="ADMIN">Super admin</option>}
+              <option value="CHILD">Uczniowie (konto)</option>
+            </select>
+            <label className="flex items-center gap-2 rounded-xl border border-emerald-200 px-3 py-2 text-sm">
+              <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
+              Pokaż nieaktywnych
+            </label>
+          </div>
+        )}
+
+        {usersSubTab === 'add' && (
           <div className="mt-4 space-y-3">
-            <div className="grid grid-cols-1 gap-2 md:grid-cols-5">
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
             <input className="rounded-xl border border-emerald-200 px-3 py-2" placeholder="Imię" value={newUser.firstName} onChange={(e) => setNewUser((prev) => ({ ...prev, firstName: e.target.value }))} />
             <input className="rounded-xl border border-emerald-200 px-3 py-2" placeholder="Nazwisko" value={newUser.lastName} onChange={(e) => setNewUser((prev) => ({ ...prev, lastName: e.target.value }))} />
             <input className="rounded-xl border border-emerald-200 px-3 py-2" placeholder="Email" type="email" value={newUser.email} onChange={(e) => setNewUser((prev) => ({ ...prev, email: e.target.value }))} />
             <input className="rounded-xl border border-emerald-200 px-3 py-2" placeholder="Hasło" type="password" value={newUser.password} onChange={(e) => setNewUser((prev) => ({ ...prev, password: e.target.value }))} />
-            <div className="flex gap-2">
+            <input className="rounded-xl border border-emerald-200 px-3 py-2" placeholder="Telefon, np. +48 123 456 789" type="tel" value={newUser.phone} onChange={(e) => setNewUser((prev) => ({ ...prev, phone: e.target.value }))} />
+            <div className="md:col-span-2 flex gap-2">
               <select
                 className="flex-1 rounded-xl border border-emerald-200 px-3 py-2"
                 value={newUser.role}
                 onChange={(e) =>
-                  setNewUser((prev) => ({ ...prev, role: e.target.value as Exclude<AdminPortalUserRole, 'ADMIN'> }))
+                  setNewUser((prev) => ({ ...prev, role: e.target.value as '' | Exclude<AdminPortalUserRole, 'ADMIN'> }))
                 }
               >
+                <option value="">Wybierz rolę</option>
                 <option value="PARENT">Rodzic</option>
                 <option value="TEACHER">Nauczyciel</option>
-                <option value="MANAGER">Zarządca szkoły</option>
+                <option value="MANAGER">Manager</option>
                 <option value="CHILD">Uczeń (konto)</option>
               </select>
               <button disabled={busy} onClick={createUser} className="rounded-xl bg-emerald-600 px-4 py-2 text-white disabled:opacity-60">Dodaj</button>
@@ -717,6 +762,7 @@ export default function AdminPortal() {
         )}
       </section>
 
+      {usersSubTab === 'list' && (
       <section className="overflow-hidden rounded-2xl border border-emerald-100 bg-white">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[760px] text-sm">
@@ -764,9 +810,9 @@ export default function AdminPortal() {
                         >
                           <option value="PARENT">Rodzic</option>
                           <option value="TEACHER">Nauczyciel</option>
-                          <option value="MANAGER">Zarządca szkoły</option>
+                          {!isManagerView && <option value="MANAGER">Manager</option>}
                           <option value="CHILD">Uczeń</option>
-                          <option value="ADMIN">Super admin</option>
+                          {!isManagerView && <option value="ADMIN">Super admin</option>}
                         </select>
                       ) : (
                         <span>{user.role}</span>
@@ -801,7 +847,9 @@ export default function AdminPortal() {
           </table>
         </div>
       </section>
+      )}
 
+      {usersSubTab === 'list' && (
       <section className="overflow-hidden rounded-2xl border border-emerald-100 bg-white">
         <div className="flex items-center justify-between border-b border-emerald-50 px-4 py-3">
           <h3 className="font-semibold">Dzieci</h3>
@@ -843,6 +891,7 @@ export default function AdminPortal() {
           </table>
         </div>
       </section>
+      )}
     </div>
   );
 
@@ -1277,36 +1326,17 @@ export default function AdminPortal() {
                               <button
                                 type="button"
                                 disabled={busy}
-                                className={`rounded-lg px-3 py-1 text-xs font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                                  loc.active ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-600 hover:bg-emerald-700'
-                                }`}
-                                onClick={async () => {
-                                  setBusy(true);
-                                  try {
-                                    const res = await fetch(`/api/admin/locations/${encodeURIComponent(loc.id)}`, {
-                                      method: 'PUT',
-                                      headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify({ active: !loc.active }),
-                                    });
-                                    const data = (await res.json().catch(() => ({}))) as { message?: string };
-                                    if (!res.ok) {
-                                      throw new Error(data.message ?? 'Nie udało się zaktualizować lokalizacji');
-                                    }
-                                    pushToast(
-                                      'success',
-                                      loc.active
-                                        ? 'Lokalizacja została oznaczona jako nieaktywna'
-                                        : 'Lokalizacja została ponownie oznaczona jako aktywna',
-                                    );
-                                    await loadLocations();
-                                  } catch (e) {
-                                    pushToast('error', e instanceof Error ? e.message : 'Błąd aktualizacji lokalizacji');
-                                  } finally {
-                                    setBusy(false);
-                                  }
+                                className="rounded-lg bg-zinc-200 px-3 py-1 text-xs font-semibold text-zinc-800 transition hover:bg-zinc-300 disabled:cursor-not-allowed disabled:opacity-50"
+                                onClick={() => {
+                                  setEditLocationId(loc.id);
+                                  setEditLocationForm({
+                                    name: loc.name,
+                                    address: loc.address ?? '',
+                                  });
+                                  setLocationOrgSubTab('edit');
                                 }}
                               >
-                                {loc.active ? 'Dezaktywuj' : 'Aktywuj'}
+                                Edytuj
                               </button>
                             </div>
                           </div>
@@ -1382,6 +1412,129 @@ export default function AdminPortal() {
                       Dodaj lokalizację
                     </button>
                   </div>
+                </div>
+              )}
+              {locationOrgSubTab === 'edit' && (
+                <div className="rounded-xl border border-dashed border-emerald-200 bg-emerald-50/30 p-4 text-sm">
+                  <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-700">Edycja lokalizacji</p>
+                  {!editLocationId ? (
+                    <p className="rounded-lg border border-emerald-100 bg-white px-3 py-3 text-sm text-zinc-600">
+                      Wybierz lokalizację z listy i kliknij „Edytuj”.
+                    </p>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-1 gap-3">
+                        <label className="block">
+                          <span className="mb-1 block text-xs font-semibold text-zinc-700">Nazwa</span>
+                          <input
+                            className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                            placeholder="np. Paniówki — sala 2"
+                            value={editLocationForm.name}
+                            onChange={(e) => setEditLocationForm((p) => ({ ...p, name: e.target.value }))}
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-xs font-semibold text-zinc-500">Adres (opcjonalnie)</span>
+                          <input
+                            className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                            placeholder="np. ul. …"
+                            value={editLocationForm.address}
+                            onChange={(e) => setEditLocationForm((p) => ({ ...p, address: e.target.value }))}
+                          />
+                        </label>
+                      </div>
+                      <div className="mt-4 flex flex-wrap justify-end gap-2">
+                        <button
+                          type="button"
+                          disabled={busy || !editLocationId}
+                          className={`rounded-xl px-4 py-2 text-sm font-semibold text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                            schoolLocations.find((l) => l.id === editLocationId)?.active
+                              ? 'bg-red-600 hover:bg-red-700'
+                              : 'bg-emerald-600 hover:bg-emerald-700'
+                          }`}
+                          onClick={async () => {
+                            const current = schoolLocations.find((l) => l.id === editLocationId);
+                            if (!current || !editLocationId) return;
+                            setBusy(true);
+                            try {
+                              const res = await fetch(`/api/admin/locations/${encodeURIComponent(editLocationId)}`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ active: !current.active }),
+                              });
+                              const data = (await res.json().catch(() => ({}))) as { message?: string };
+                              if (!res.ok) {
+                                throw new Error(data.message ?? 'Nie udało się zaktualizować lokalizacji');
+                              }
+                              pushToast(
+                                'success',
+                                current.active
+                                  ? 'Lokalizacja została oznaczona jako nieaktywna'
+                                  : 'Lokalizacja została ponownie oznaczona jako aktywna',
+                              );
+                              await loadLocations();
+                            } catch (e) {
+                              pushToast('error', e instanceof Error ? e.message : 'Błąd aktualizacji lokalizacji');
+                            } finally {
+                              setBusy(false);
+                            }
+                          }}
+                        >
+                          {schoolLocations.find((l) => l.id === editLocationId)?.active ? 'Dezaktywuj' : 'Aktywuj'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          className="rounded-xl bg-zinc-200 px-4 py-2 text-sm font-semibold text-zinc-800 shadow-sm transition hover:bg-zinc-300 disabled:cursor-not-allowed disabled:opacity-50"
+                          onClick={() => {
+                            setEditLocationId(null);
+                            setEditLocationForm({ name: '', address: '' });
+                            setLocationOrgSubTab('list');
+                          }}
+                        >
+                          Anuluj
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0c5a47] disabled:cursor-not-allowed disabled:opacity-50"
+                          onClick={async () => {
+                            const name = editLocationForm.name.trim();
+                            if (!name || !editLocationId) {
+                              pushToast('error', 'Podaj nazwę lokalizacji');
+                              return;
+                            }
+                            setBusy(true);
+                            try {
+                              const res = await fetch(`/api/admin/locations/${encodeURIComponent(editLocationId)}`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                  name,
+                                  address: editLocationForm.address.trim() ? editLocationForm.address.trim() : null,
+                                }),
+                              });
+                              const data = (await res.json().catch(() => ({}))) as { message?: string };
+                              if (!res.ok) {
+                                throw new Error(data.message ?? 'Nie udało się zaktualizować lokalizacji');
+                              }
+                              pushToast('success', 'Zaktualizowano lokalizację');
+                              setEditLocationId(null);
+                              setEditLocationForm({ name: '', address: '' });
+                              setLocationOrgSubTab('list');
+                              await loadLocations();
+                            } catch (e) {
+                              pushToast('error', e instanceof Error ? e.message : 'Błąd');
+                            } finally {
+                              setBusy(false);
+                            }
+                          }}
+                        >
+                          Zapisz zmiany
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -1689,7 +1842,7 @@ export default function AdminPortal() {
   };
 
   return (
-    <div className="pb-24" data-session-school-id={sessionSchoolId ?? ''}>
+    <div className="manager-panel pb-24" data-session-school-id={sessionSchoolId ?? ''}>
       <div className="rounded-3xl border border-emerald-100 bg-white">
         <nav className="no-scrollbar overflow-x-auto border-b border-emerald-100">
           <div className="flex min-w-max gap-2 p-2">
@@ -2354,6 +2507,18 @@ export default function AdminPortal() {
           </div>
         </div>
       )}
+      <style jsx>{`
+        .manager-panel :global(button:not(:disabled)) {
+          transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease,
+            box-shadow 180ms ease;
+        }
+        .manager-panel :global(button:not(:disabled):hover) {
+          background-color: #d8f3ea;
+          border-color: #2f8f7b;
+          color: #0a4f3e;
+          box-shadow: 0 0 0 2px rgba(15, 110, 86, 0.18);
+        }
+      `}</style>
     </div>
   );
 }

@@ -74,12 +74,24 @@ function PortalHeaderLogout({
   loading: boolean;
   onLogout: () => void;
 }) {
+  const [isHovered, setIsHovered] = useState(false);
   return (
     <button
       type="button"
       onClick={onLogout}
       disabled={loading}
-      className="shrink-0 rounded-full border border-zinc-800/55 bg-white px-4 py-2.5 text-xs font-semibold text-[#1e3a4c] shadow-sm transition-all hover:border-zinc-800 hover:bg-zinc-50 disabled:opacity-50 sm:px-6 sm:py-3 sm:text-sm"
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      style={
+        isHovered
+          ? {
+              backgroundColor: "#d8f3ea",
+              borderColor: "#0f6e56",
+              color: "#0f6e56",
+            }
+          : undefined
+      }
+      className="shrink-0 rounded-full border border-zinc-800/55 bg-white px-4 py-2.5 text-xs font-semibold text-[#1e3a4c] shadow-sm transition-colors duration-200 disabled:opacity-50 sm:px-6 sm:py-3 sm:text-sm"
     >
       {loading ? 'Wylogowywanie...' : 'Wyloguj się'}
     </button>
@@ -89,6 +101,7 @@ function PortalHeaderLogout({
 export default function PortalPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [isHomeBtnHovered, setIsHomeBtnHovered] = useState(false);
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
   const [enrollmentData, setEnrollmentData] = useState<{
     proposal: {
@@ -198,7 +211,18 @@ export default function PortalPage() {
               {userInfo?.role === 'MANAGER' && (
                 <Link
                   href="/"
-                  className="rounded-full border border-zinc-800/55 bg-white px-4 py-2.5 text-center text-xs font-semibold text-[#1e3a4c] shadow-sm transition-all hover:border-zinc-800 hover:bg-zinc-50 sm:px-6 sm:py-3 sm:text-sm"
+                  onMouseEnter={() => setIsHomeBtnHovered(true)}
+                  onMouseLeave={() => setIsHomeBtnHovered(false)}
+                  style={
+                    isHomeBtnHovered
+                      ? {
+                          backgroundColor: "#d8f3ea",
+                          borderColor: "#0f6e56",
+                          color: "#0f6e56",
+                        }
+                      : undefined
+                  }
+                  className="rounded-full border border-zinc-800/55 bg-white px-4 py-2.5 text-center text-xs font-semibold text-[#1e3a4c] shadow-sm transition-colors duration-200 sm:px-6 sm:py-3 sm:text-sm"
                 >
                   Powrót na stronę główną
                 </Link>

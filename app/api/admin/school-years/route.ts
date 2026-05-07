@@ -87,6 +87,18 @@ export async function POST(request: NextRequest) {
 
     let insertSchoolId: string | null =
       tenant.role === "MANAGER" ? tenant.tenantSchoolId : null;
+    if (tenant.role === "MANAGER") {
+      const fromBody =
+        (typeof bodySchoolId === "string" && bodySchoolId.trim()) ||
+        (typeof bodySchoolIdCamel === "string" && bodySchoolIdCamel.trim()) ||
+        "";
+      if (fromBody && fromBody !== tenant.tenantSchoolId) {
+        return NextResponse.json(
+          { message: "Manager może tworzyć rok szkolny tylko dla swojej szkoły" },
+          { status: 403 }
+        );
+      }
+    }
     if (tenant.role === "ADMIN") {
       const fromBody =
         (typeof bodySchoolId === "string" && bodySchoolId.trim()) ||

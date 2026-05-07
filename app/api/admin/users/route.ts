@@ -8,6 +8,7 @@ import {
   getUsersByRole,
   isAdmin,
   parseUserRole,
+  resolveAdminPanelTenant,
   UserRole,
 } from "@/lib/db";
 import bcrypt from "bcryptjs";
@@ -28,13 +29,18 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
     }
 
+    const resolved = await resolveAdminPanelTenant(userId);
+    if (!resolved.ok) {
+      return NextResponse.json({ message: resolved.message }, { status: resolved.status });
+    }
+    const { tenant } = resolved;
+
     // Pobierz parametry filtrowania
     const { searchParams } = new URL(request.url);
     const filterConfirmed = searchParams.get('confirmed');
     const filterRole = searchParams.get("role") ?? searchParams.get("accountType");
 
     let users;
-
     if (filterRole) {
       const upper = filterRole.toUpperCase();
       const parsed = parseUserRole(upper);
@@ -43,6 +49,12 @@ export async function GET(request: NextRequest) {
       users = await getUsersByRole(role);
     } else {
       users = await getAllUsers();
+    }
+
+    if (tenant.role === "MANAGER") {
+      users = users.filter(
+        (u) => u.school_id === tenant.tenantSchoolId && u.role !== "ADMIN"
+      );
     }
 
     // Filtruj po confirmed jeśli podano
@@ -111,6 +123,23 @@ export async function POST(request: NextRequest) {
     } = body;
     const phone =
       phoneRaw != null && String(phoneRaw).trim() !== "" ? String(phoneRaw).trim() : null;
+
+    if (actor.role === "MANAGER") {
+      const requestedSchoolIdRaw =
+        body.schoolId ??
+        body.school_id ??
+        (typeof body.school === "object" && body.school?.id ? body.school.id : undefined);
+      const requestedSchoolId =
+        requestedSchoolIdRaw != null && String(requestedSchoolIdRaw).trim() !== ""
+          ? String(requestedSchoolIdRaw).trim()
+          : null;
+      if (requestedSchoolId && requestedSchoolId !== actor.school_id) {
+        return NextResponse.json(
+          { message: "Manager może tworzyć użytkowników wyłącznie w swojej szkole" },
+          { status: 403 }
+        );
+      }
+    }
 
     // Walidacja
     if (!email || !password || !firstName || !lastName) {
