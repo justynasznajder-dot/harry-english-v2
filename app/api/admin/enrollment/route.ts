@@ -60,7 +60,7 @@ export async function GET(request: NextRequest) {
                'confirmed', COALESCE(c.confirmed, FALSE),
                'status', UPPER(BTRIM(COALESCE(er.status::text, 'NEW'))),
                'birthDate', er.child_birth_date::text,
-               'preferredLocation', er.preferred_location,
+               'preferredLocation', COALESCE(loc.name, NULLIF(TRIM(er.preferred_location::text), '')),
                'preferredDays', er.preferred_days,
                'notes', er.notes,
                'proposedGroupId', er.proposed_group_id,
@@ -74,6 +74,9 @@ export async function GET(request: NextRequest) {
            '[]'::json
          )::text AS children_json
        FROM enrollment_requests er
+       LEFT JOIN locations loc
+         ON loc.school_id = er.school_id
+        AND loc.id::text = NULLIF(TRIM(BOTH FROM COALESCE(er.preferred_location::text, '')), '')
        LEFT JOIN users u
          ON (
            u.id = NULLIF(BTRIM(er.user_id), '')

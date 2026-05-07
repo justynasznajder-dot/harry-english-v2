@@ -1164,10 +1164,8 @@ export async function insertPublicEnrollmentRequests(data: {
     }
 
     for (const ch of data.children) {
-      const locId =
-        shape.childHasPreferredLocationId && shape.hasChildrenTable
-          ? String(ch.preferredLocationId ?? "").trim() || null
-          : null;
+      /* Lokalizacja jest w `enrollment_requests` — nie uzależnij od kształtu tabeli `children`. */
+      const locId = String(ch.preferredLocationId ?? "").trim() || null;
 
       await client.query(
         `INSERT INTO enrollment_requests (

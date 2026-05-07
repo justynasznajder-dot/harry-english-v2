@@ -321,12 +321,14 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
               {mode === "register" && "Zgłoszenie dziecka"}
               {mode === "forgot-password" && "Resetuj hasło"}
             </h2>
-            <p className="text-gray-600">
-              {mode === "login" && "Wprowadź swoje dane logowania"}
-              {mode === "register" &&
-                "Wypełnij formularz — administracja odezwie się po rozpatrzeniu zgłoszenia."}
-              {mode === "forgot-password" && "Wyślemy Ci link do ustawienia nowego hasła"}
-            </p>
+            {!(mode === "register" && registerSuccess) && (
+              <p className="text-gray-600">
+                {mode === "login" && "Wprowadź swoje dane logowania"}
+                {mode === "register" &&
+                  "Wypełnij formularz — administracja odezwie się po rozpatrzeniu zgłoszenia."}
+                {mode === "forgot-password" && "Wyślemy Ci link do ustawienia nowego hasła"}
+              </p>
+            )}
           </div>
 
           {/* Login Form */}

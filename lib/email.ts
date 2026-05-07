@@ -468,6 +468,121 @@ System automatycznego powiadamiania
   await transporter.sendMail(mailOptions);
 }
 
+function escapeHtmlForEmail(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** Kopie zapasowe zgłoszeń z formularza publicznego (tylko wywołanie z produkcji dla wybranej szkoły). */
+export type PublicEnrollmentBackupChild = {
+  index: number;
+  firstName: string;
+  lastName: string;
+  birthDate: string;
+  preferredLocationLabel: string;
+};
+
+export async function sendPublicEnrollmentBackupEmail(params: {
+  schoolId: string;
+  parentFirstName: string;
+  parentLastName: string;
+  parentEmail: string;
+  parentPhone: string;
+  rodoConsent: boolean;
+  children: PublicEnrollmentBackupChild[];
+  dbSaveOk: boolean;
+  dbErrorMessage?: string;
+}): Promise<void> {
+  const to = "kontakt@harry-english.pl";
+  const fromAddr = process.env.EMAIL_USER || "kontakt@harry-english.pl";
+  const subjectPrefix = params.dbSaveOk
+    ? "[ZGŁOSZENIE] Formularz (zapis w bazie OK)"
+    : "[ZGŁOSZENIE] UWAGA: błąd zapisu w bazie";
+
+  const rowsHtml = params.children
+    .map(
+      (ch) => `
+          <tr>
+            <td style="padding:8px;border:1px solid #ccc;">${ch.index}</td>
+            <td style="padding:8px;border:1px solid #ccc;">${escapeHtmlForEmail(ch.firstName)}</td>
+            <td style="padding:8px;border:1px solid #ccc;">${escapeHtmlForEmail(ch.lastName)}</td>
+            <td style="padding:8px;border:1px solid #ccc;">${escapeHtmlForEmail(ch.birthDate)}</td>
+            <td style="padding:8px;border:1px solid #ccc;">${escapeHtmlForEmail(ch.preferredLocationLabel)}</td>
+          </tr>`
+    )
+    .join("");
+
+  const dbNote = params.dbSaveOk
+    ? "<p><strong>Status:</strong> Zapis w bazie zakończył się powodzeniem (wiadomość informacyjna).</p>"
+    : `<p style="color:#b45309;"><strong>Status:</strong> Zapis w bazie nie powiódł się — sprawdź bazę i wpisz zgłoszenie ręcznie.</p>
+       <p style="font-size:13px;"><strong>Komunikat błędu (techniczny):</strong> ${escapeHtmlForEmail(params.dbErrorMessage ?? "(brak)")}</p>`;
+
+  const textChildren = params.children
+    .map(
+      (ch) =>
+        `${ch.index}. ${ch.firstName} ${ch.lastName}, ur. ${ch.birthDate}, lokalizacja: ${ch.preferredLocationLabel}`
+    )
+    .join("\n");
+
+  await transporter.sendMail({
+    from: {
+      name: "Harry English",
+      address: fromAddr,
+    },
+    to,
+    subject: `${subjectPrefix} — ${params.parentFirstName} ${params.parentLastName}`,
+    html: `
+      <!DOCTYPE html>
+      <html><head><meta charset="utf-8" /></head>
+      <body style="font-family:Arial,sans-serif;line-height:1.5;color:#333;max-width:720px;">
+        <h2 style="color:#175244;">Nowe zgłoszenie z formularza na stronie</h2>
+        ${dbNote}
+        <h3 style="color:#175244;">Szkoła (school_id)</h3>
+        <p style="font-family:monospace;">${escapeHtmlForEmail(params.schoolId)}</p>
+        <h3 style="color:#175244;">Rodzic</h3>
+        <ul>
+          <li><strong>Imię:</strong> ${escapeHtmlForEmail(params.parentFirstName)}</li>
+          <li><strong>Nazwisko:</strong> ${escapeHtmlForEmail(params.parentLastName)}</li>
+          <li><strong>Email:</strong> ${escapeHtmlForEmail(params.parentEmail)}</li>
+          <li><strong>Telefon:</strong> ${escapeHtmlForEmail(params.parentPhone)}</li>
+          <li><strong>Zgoda RODO:</strong> ${params.rodoConsent ? "tak" : "nie"}</li>
+        </ul>
+        <h3 style="color:#175244;">Dzieci</h3>
+        <table style="border-collapse:collapse;width:100%;font-size:14px;">
+          <thead>
+            <tr style="background:#f0f0f0;">
+              <th style="padding:8px;border:1px solid #ccc;text-align:left;">#</th>
+              <th style="padding:8px;border:1px solid #ccc;text-align:left;">Imię</th>
+              <th style="padding:8px;border:1px solid #ccc;text-align:left;">Nazwisko</th>
+              <th style="padding:8px;border:1px solid #ccc;text-align:left;">Data ur.</th>
+              <th style="padding:8px;border:1px solid #ccc;text-align:left;">Preferowana lokalizacja</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+        <p style="margin-top:24px;font-size:12px;color:#666;">Wiadomość wygenerowana automatycznie — kopia zapasowa treści formularza.</p>
+      </body></html>
+    `,
+    text: `
+${params.dbSaveOk ? "Zapis w bazie: OK" : "UWAGA: BŁĄD ZAPISU W BAZIE"}
+Szkoła (school_id): ${params.schoolId}
+${params.dbSaveOk ? "" : `Błąd: ${params.dbErrorMessage ?? ""}\n`}
+
+Rodzic:
+- ${params.parentFirstName} ${params.parentLastName}
+- Email: ${params.parentEmail}
+- Telefon: ${params.parentPhone}
+- Zgoda RODO: ${params.rodoConsent ? "tak" : "nie"}
+
+Dzieci:
+${textChildren}
+    `.trim(),
+  });
+}
+
 // Funkcja weryfikująca konfigurację emaila
 export async function verifyEmailConfig() {
   try {

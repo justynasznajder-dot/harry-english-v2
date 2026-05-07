@@ -10,6 +10,19 @@ import {
   insertPublicEnrollmentRequests,
   queryDb,
 } from "@/lib/db";
+import { sendPublicEnrollmentBackupEmail } from "@/lib/email";
+
+/** Produkcja: kopia mailowa zgłoszeń na kontakt@ dla tej szkoły (backup przy awarii zapisu). */
+const ENROLLMENT_BACKUP_EMAIL_SCHOOL_ID =
+  "c93d5ac1-fa59-497f-b450-a4e50e1fb50d";
+
+function shouldSendEnrollmentBackupEmail(schoolId: string): boolean {
+  return (
+    process.env.NODE_ENV === "production" &&
+    schoolId.trim().toLowerCase() ===
+      ENROLLMENT_BACKUP_EMAIL_SCHOOL_ID.toLowerCase()
+  );
+}
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
@@ -160,6 +173,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: phoneNorm.message }, { status: 400 });
     }
 
+    const schoolLocationsRes = await queryDb<{ ok: boolean }>(
+      `SELECT EXISTS(
+         SELECT 1 FROM locations WHERE school_id = $1 AND active = TRUE
+       ) AS ok`,
+      [schoolId]
+    );
+    const enrollmentRequiresLocation = Boolean(schoolLocationsRes.rows[0]?.ok);
+
     const today = new Date();
     today.setHours(23, 59, 59, 999);
     const minYear = 2000;
@@ -207,9 +228,9 @@ export async function POST(request: Request) {
         );
       }
 
-      if (shape.childHasPreferredLocationId && shape.hasChildrenTable) {
-        const locId = String(c.preferredLocationId ?? "").trim();
-        if (!locId || !LOCATION_ID_REGEX.test(locId)) {
+      const locIdRaw = String(c.preferredLocationId ?? "").trim();
+      if (enrollmentRequiresLocation) {
+        if (!locIdRaw || !LOCATION_ID_REGEX.test(locIdRaw)) {
           return NextResponse.json(
             { message: `Dziecko ${i + 1}: wybierz lokalizację` },
             { status: 400 }
@@ -220,7 +241,27 @@ export async function POST(request: Request) {
            FROM locations
            WHERE id = $1 AND school_id = $2 AND active = TRUE
            LIMIT 1`,
-          [locId, schoolId]
+          [locIdRaw, schoolId]
+        );
+        if (!locOk.rows[0]?.ok) {
+          return NextResponse.json(
+            { message: `Dziecko ${i + 1}: nieprawidłowa lokalizacja` },
+            { status: 400 }
+          );
+        }
+      } else if (locIdRaw) {
+        if (!LOCATION_ID_REGEX.test(locIdRaw)) {
+          return NextResponse.json(
+            { message: `Dziecko ${i + 1}: nieprawidłowa lokalizacja` },
+            { status: 400 }
+          );
+        }
+        const locOk = await queryDb<{ ok: boolean }>(
+          `SELECT TRUE AS ok
+           FROM locations
+           WHERE id = $1 AND school_id = $2 AND active = TRUE
+           LIMIT 1`,
+          [locIdRaw, schoolId]
         );
         if (!locOk.rows[0]?.ok) {
           return NextResponse.json(
@@ -235,20 +276,98 @@ export async function POST(request: Request) {
       firstName: c.firstName!.trim(),
       lastName: c.lastName!.trim(),
       birthDate: normalizeBirthDate(c.birthDate)!,
-      preferredLocationId:
-        shape.childHasPreferredLocationId && shape.hasChildrenTable
-          ? String(c.preferredLocationId ?? "").trim()
-          : null,
+      preferredLocationId: String(c.preferredLocationId ?? "").trim() || null,
     }));
 
-    await insertPublicEnrollmentRequests({
-      schoolId,
-      email: String(email).trim(),
-      firstName: String(firstName).trim(),
-      lastName: String(lastName).trim(),
-      phone: phoneNorm.value,
-      children: normalizedChildren,
-    });
+    let enrollmentBackupPayload: Parameters<
+      typeof sendPublicEnrollmentBackupEmail
+    >[0] | null = null;
+    if (shouldSendEnrollmentBackupEmail(schoolId)) {
+      const locationNameById = new Map<string, string>();
+      const locIds = [
+        ...new Set(
+          normalizedChildren
+            .map((c) => c.preferredLocationId)
+            .filter((id): id is string => Boolean(id && id.length > 0)),
+        ),
+      ];
+      if (locIds.length > 0) {
+        const locRes = await queryDb<{ id: string; name: string }>(
+          `SELECT id::text AS id, name FROM locations WHERE school_id = $1 AND id = ANY($2::uuid[])`,
+          [schoolId, locIds]
+        );
+        for (const row of locRes.rows) {
+          locationNameById.set(row.id, row.name);
+        }
+      }
+
+      const backupChildren = normalizedChildren.map((c, idx) => {
+        const lid = c.preferredLocationId;
+        const label = lid
+          ? (locationNameById.get(lid) ?? lid)
+          : "— (nie podano)";
+        return {
+          index: idx + 1,
+          firstName: c.firstName,
+          lastName: c.lastName,
+          birthDate: c.birthDate,
+          preferredLocationLabel: label,
+        };
+      });
+
+      enrollmentBackupPayload = {
+        schoolId,
+        parentFirstName: String(firstName).trim(),
+        parentLastName: String(lastName).trim(),
+        parentEmail: String(email).trim().toLowerCase(),
+        parentPhone: phoneNorm.value,
+        rodoConsent: true,
+        children: backupChildren,
+        dbSaveOk: true,
+      };
+    }
+
+    try {
+      await insertPublicEnrollmentRequests({
+        schoolId,
+        email: String(email).trim(),
+        firstName: String(firstName).trim(),
+        lastName: String(lastName).trim(),
+        phone: phoneNorm.value,
+        children: normalizedChildren,
+      });
+    } catch (insertErr) {
+      if (enrollmentBackupPayload) {
+        try {
+          await sendPublicEnrollmentBackupEmail({
+            ...enrollmentBackupPayload,
+            dbSaveOk: false,
+            dbErrorMessage:
+              insertErr instanceof Error
+                ? insertErr.message
+                : String(insertErr),
+          });
+        } catch (mailErr) {
+          console.error(
+            "Enrollment backup email after DB error failed:",
+            mailErr,
+          );
+        }
+      }
+      throw insertErr;
+    }
+
+    if (enrollmentBackupPayload) {
+      void sendPublicEnrollmentBackupEmail({
+        ...enrollmentBackupPayload,
+        dbSaveOk: true,
+      }).catch((mailErr) => {
+        console.error(
+          "Enrollment backup email after success failed:",
+          mailErr,
+        );
+      });
+    }
 
     return NextResponse.json({
       message:
