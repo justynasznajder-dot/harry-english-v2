@@ -2,16 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { getRegistrationSchoolId, queryDb } from "@/lib/db";
 import { sendContractEmail } from "@/lib/email";
-
-function getUserIdFromRequest(request: NextRequest): string | null {
-  const token = request.cookies.get("auth-token")?.value;
-  if (!token) return null;
-  try {
-    return Buffer.from(token, "base64").toString().split(":")[0] ?? null;
-  } catch {
-    return null;
-  }
-}
+import { getTokenFromRequest } from "@/lib/auth";
 
 function fillTemplate(html: string, vars: Record<string, string>) {
   return Object.entries(vars).reduce(
@@ -21,7 +12,8 @@ function fillTemplate(html: string, vars: Record<string, string>) {
 }
 
 export async function PUT(request: NextRequest) {
-  const parentId = getUserIdFromRequest(request);
+  const payload = await getTokenFromRequest(request);
+  const parentId = payload?.userId ?? null;
   if (!parentId) {
     return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
   }

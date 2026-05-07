@@ -1,19 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getChildById, getUserById, requestStudentResignation } from "@/lib/db";
 import { sendResignationEmail } from "@/lib/email";
+import { getTokenFromRequest } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
   try {
-    const authToken = request.cookies.get("auth-token");
-    if (!authToken) return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
-
-    let userId: string;
-    try {
-      const tokenData = Buffer.from(authToken.value, "base64").toString();
-      userId = tokenData.split(":")[0];
-    } catch {
-      return NextResponse.json({ message: "Nieprawidłowy token" }, { status: 401 });
-    }
+    const payload = await getTokenFromRequest(request);
+    const userId = payload?.userId;
+    if (!userId) return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
 
     const { childId, reason } = await request.json();
     if (!childId || !reason?.trim()) {

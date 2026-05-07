@@ -11,6 +11,7 @@ import {
   isAdmin,
   parseUserRole,
 } from "@/lib/db";
+import { getTokenFromRequest } from "@/lib/auth";
 
 /** Manager może działać wyłącznie na użytkownikach swojej szkoły (nie na ADMIN / bez school_id). */
 function managerSchoolScopeError(actor: User, target: User | null): NextResponse | null {
@@ -57,18 +58,10 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    // Sprawdź autoryzację admina
-    const authToken = request.cookies.get('auth-token');
-    if (!authToken) {
+    const payload = await getTokenFromRequest(request);
+    const userId = payload?.userId;
+    if (!userId) {
       return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-    }
-
-    let userId: string;
-    try {
-      const tokenData = Buffer.from(authToken.value, 'base64').toString();
-      userId = tokenData.split(':')[0];
-    } catch (error) {
-      return NextResponse.json({ message: "Nieprawidłowy token" }, { status: 401 });
     }
 
     const userCanStaff = await canAccessSchoolAdminApis(userId);
@@ -223,18 +216,10 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    // Sprawdź autoryzację admina
-    const authToken = request.cookies.get('auth-token');
-    if (!authToken) {
+    const payload = await getTokenFromRequest(request);
+    const userId = payload?.userId;
+    if (!userId) {
       return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-    }
-
-    let userId: string;
-    try {
-      const tokenData = Buffer.from(authToken.value, 'base64').toString();
-      userId = tokenData.split(':')[0];
-    } catch (error) {
-      return NextResponse.json({ message: "Nieprawidłowy token" }, { status: 401 });
     }
 
     const userCanStaff = await canAccessSchoolAdminApis(userId);

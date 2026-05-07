@@ -1,28 +1,27 @@
-import { NextResponse } from 'next/server';
-import type { NextRequest } from 'next/server';
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { verifyToken } from "@/lib/auth";
 
-export function middleware(request: NextRequest) {
-  // Sprawdź czy użytkownik próbuje wejść na chronioną stronę
+export async function middleware(request: NextRequest) {
   if (
-    request.nextUrl.pathname.startsWith('/portal') &&
-    !request.nextUrl.pathname.startsWith('/portal/login')
+    request.nextUrl.pathname.startsWith("/portal") &&
+    !request.nextUrl.pathname.startsWith("/portal/login")
   ) {
-    const token = request.cookies.get('auth-token')?.value;
-
+    const token = request.cookies.get("auth-token")?.value;
     if (!token) {
-      // Brak tokenu - przekieruj do logowania
-      const loginUrl = new URL('/portal/login', request.url);
-      return NextResponse.redirect(loginUrl);
+      return NextResponse.redirect(new URL("/portal/login", request.url));
     }
-
-    // Token istnieje - pozwól wejść
-    // Weryfikacja tokenu zostanie zrobiona po stronie API
+    const payload = await verifyToken(token);
+    if (!payload) {
+      const response = NextResponse.redirect(new URL("/portal/login", request.url));
+      response.cookies.delete("auth-token");
+      return response;
+    }
     return NextResponse.next();
   }
-
   return NextResponse.next();
 }
 
 export const config = {
-  matcher: '/portal/:path*',
+  matcher: "/portal/:path*",
 };

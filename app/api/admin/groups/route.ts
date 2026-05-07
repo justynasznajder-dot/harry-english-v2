@@ -6,19 +6,11 @@ import {
   queryDb,
   resolveAdminPanelTenant,
 } from "@/lib/db";
-
-function tokenToUserId(token: string): string | null {
-  try {
-    return Buffer.from(token, "base64").toString().split(":")[0] || null;
-  } catch {
-    return null;
-  }
-}
+import { getTokenFromRequest } from "@/lib/auth";
 
 async function ensureAdmin(request: NextRequest): Promise<string | null> {
-  const token = request.cookies.get("auth-token")?.value;
-  if (!token) return null;
-  const userId = tokenToUserId(token);
+  const payload = await getTokenFromRequest(request);
+  const userId = payload?.userId;
   if (!userId) return null;
   return (await canAccessSchoolAdminApis(userId)) ? userId : null;
 }

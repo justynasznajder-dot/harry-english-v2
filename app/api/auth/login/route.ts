@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { getUserByEmail, updateLastLogin } from "@/lib/db";
+import { signToken } from "@/lib/auth";
 
 export async function POST(request: Request) {
   try {
@@ -42,7 +43,12 @@ export async function POST(request: Request) {
 
     await updateLastLogin(user.id);
 
-    const token = Buffer.from(`${user.id}:${Date.now()}`).toString("base64");
+    const token = await signToken({
+      userId: user.id,
+      role: user.role,
+      schoolId: user.school_id ?? null,
+      accessLevel: user.access_level,
+    });
 
     const response = NextResponse.json({
       message: "Zalogowano pomyślnie",

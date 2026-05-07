@@ -1,5 +1,6 @@
 import { deleteChild, getAllChildren, canAccessSchoolAdminApis, restoreChild, updateChild } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
+import { getTokenFromRequest } from "@/lib/auth";
 
 // PUT - aktualizuj studenta
 export async function PUT(
@@ -7,9 +8,9 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const authToken = request.cookies.get("auth-token");
-    if (!authToken) return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-    const userId = Buffer.from(authToken.value, "base64").toString().split(":")[0];
+    const payload = await getTokenFromRequest(request);
+    const userId = payload?.userId;
+    if (!userId) return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
     if (!(await canAccessSchoolAdminApis(userId))) return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
 
     const { id } = await params;
@@ -44,9 +45,9 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const authToken = request.cookies.get("auth-token");
-    if (!authToken) return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-    const userId = Buffer.from(authToken.value, "base64").toString().split(":")[0];
+    const payload = await getTokenFromRequest(request);
+    const userId = payload?.userId;
+    if (!userId) return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
     if (!(await canAccessSchoolAdminApis(userId))) return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
     const { id } = await params;
     const deleted = await deleteChild(id);

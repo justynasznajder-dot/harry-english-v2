@@ -11,6 +11,7 @@ import {
   updateLastLogin,
 } from "@/lib/db";
 import { sendPasswordResetEmail, sendWelcomeEmail } from "@/lib/email";
+import { signToken } from "@/lib/auth";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
@@ -329,7 +330,12 @@ export async function POST(request: Request) {
       console.warn("updateLastLogin after register:", loginColErr);
     }
 
-    const token = Buffer.from(`${newUser.id}:${Date.now()}`).toString("base64");
+    const token = await signToken({
+      userId: newUser.id,
+      role: newUser.role,
+      schoolId: newUser.school_id ?? null,
+      accessLevel: newUser.access_level,
+    });
 
     const response = NextResponse.json({
       message: "Konto zostało utworzone pomyślnie",

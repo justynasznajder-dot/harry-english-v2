@@ -1,16 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getRegistrationSchoolId, queryDb } from "@/lib/db";
 import { sendSignedContractEmail } from "@/lib/email";
-
-function getUserIdFromRequest(request: NextRequest): string | null {
-  const token = request.cookies.get("auth-token")?.value;
-  if (!token) return null;
-  try {
-    return Buffer.from(token, "base64").toString().split(":")[0] ?? null;
-  } catch {
-    return null;
-  }
-}
+import { getTokenFromRequest } from "@/lib/auth";
 
 function extractIp(request: NextRequest): string {
   const forwarded = request.headers.get("x-forwarded-for");
@@ -20,7 +11,8 @@ function extractIp(request: NextRequest): string {
 }
 
 export async function POST(request: NextRequest) {
-  const parentId = getUserIdFromRequest(request);
+  const payload = await getTokenFromRequest(request);
+  const parentId = payload?.userId ?? null;
   if (!parentId) {
     return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
   }

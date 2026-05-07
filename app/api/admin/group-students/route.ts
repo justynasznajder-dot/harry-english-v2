@@ -1,19 +1,11 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { canAccessSchoolAdminApis, queryDb } from "@/lib/db";
-
-function tokenToUserId(token: string): string | null {
-  try {
-    return Buffer.from(token, "base64").toString().split(":")[0] || null;
-  } catch {
-    return null;
-  }
-}
+import { getTokenFromRequest } from "@/lib/auth";
 
 async function ensureAdmin(request: NextRequest): Promise<boolean> {
-  const token = request.cookies.get("auth-token")?.value;
-  if (!token) return false;
-  const userId = tokenToUserId(token);
+  const payload = await getTokenFromRequest(request);
+  const userId = payload?.userId;
   if (!userId) return false;
   return canAccessSchoolAdminApis(userId);
 }

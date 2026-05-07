@@ -2,20 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { canAccessSchoolAdminApis, queryDb, resolveAdminPanelTenant } from "@/lib/db";
 import { sendProposalEmail } from "@/lib/email";
-
-function getUserIdFromToken(token: string): string | null {
-  try {
-    return Buffer.from(token, "base64").toString().split(":")[0] || null;
-  } catch {
-    return null;
-  }
-}
+import { getTokenFromRequest } from "@/lib/auth";
 
 export async function GET(request: NextRequest) {
   try {
-    const authToken = request.cookies.get("auth-token");
-    if (!authToken) return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-    const userId = getUserIdFromToken(authToken.value);
+    const payload = await getTokenFromRequest(request);
+    const userId = payload?.userId;
     if (!userId) return NextResponse.json({ message: "Nieprawidłowy token" }, { status: 401 });
     if (!(await canAccessSchoolAdminApis(userId))) return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
 
@@ -114,9 +106,8 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const authToken = request.cookies.get("auth-token");
-    if (!authToken) return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-    const userId = getUserIdFromToken(authToken.value);
+    const payload = await getTokenFromRequest(request);
+    const userId = payload?.userId;
     if (!userId) return NextResponse.json({ message: "Nieprawidłowy token" }, { status: 401 });
     if (!(await canAccessSchoolAdminApis(userId))) return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
 

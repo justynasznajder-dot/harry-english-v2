@@ -1,12 +1,13 @@
 import { getAllChildren, getChildrenByParentId, createChild, updateChild, canAccessSchoolAdminApis } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
+import { getTokenFromRequest } from "@/lib/auth";
 
 // GET - pobierz studentów z filtrami
 export async function GET(request: NextRequest) {
   try {
-    const authToken = request.cookies.get("auth-token");
-    if (!authToken) return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-    const userId = Buffer.from(authToken.value, "base64").toString().split(":")[0];
+    const payload = await getTokenFromRequest(request);
+    const userId = payload?.userId;
+    if (!userId) return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
     if (!(await canAccessSchoolAdminApis(userId))) return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
 
     const { searchParams } = new URL(request.url);
@@ -39,9 +40,9 @@ export async function GET(request: NextRequest) {
 // POST - dodaj nowego studenta
 export async function POST(request: NextRequest) {
   try {
-    const authToken = request.cookies.get("auth-token");
-    if (!authToken) return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-    const userId = Buffer.from(authToken.value, "base64").toString().split(":")[0];
+    const payload = await getTokenFromRequest(request);
+    const userId = payload?.userId;
+    if (!userId) return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
     if (!(await canAccessSchoolAdminApis(userId))) return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
 
     const body = await request.json();
