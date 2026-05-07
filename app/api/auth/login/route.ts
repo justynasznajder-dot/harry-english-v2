@@ -53,6 +53,16 @@ export async function POST(request: Request) {
       );
     }
 
+    if (user.role === "PARENT") {
+      return NextResponse.json(
+        {
+          message:
+            "Panel rodzica jest w przygotowaniu. W sprawie zgłoszenia skontaktuj się z biurem szkoły.",
+        },
+        { status: 403 }
+      );
+    }
+
     if (!user.active) {
       return NextResponse.json(
         { message: "To konto jest nieaktywne. Skontaktuj się z administracją szkoły." },

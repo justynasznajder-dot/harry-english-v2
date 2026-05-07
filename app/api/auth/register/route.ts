@@ -1,36 +1,20 @@
 import { NextResponse } from "next/server";
-import bcrypt from "bcryptjs";
-import crypto from "crypto";
+/**
+ * Publiczne zgłoszenie dziecka — zapis do `enrollment_requests` (bez tworzenia konta).
+ * Przy tworzeniu konta PARENT (np. POST /api/admin/users) w `lib/db.createUser` w tej samej
+ * transakcji wykonywany jest INSERT do `parent_profiles` (pusty wiersz + school_id).
+ */
 import {
-  createParentUserWithChildren,
-  emailExists,
   getDbShape,
   getRegistrationSchoolId,
+  insertPublicEnrollmentRequests,
   queryDb,
-  setResetToken,
-  updateLastLogin,
 } from "@/lib/db";
-import { sendPasswordResetEmail, sendWelcomeEmail } from "@/lib/email";
-import { signToken } from "@/lib/auth";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const LOCATION_ID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function isPasswordStrong(password: string): boolean {
-  if (password.length < 8) return false;
-  if (!/[A-Z]/.test(password)) return false;
-  if (!/[a-z]/.test(password)) return false;
-  if (!/[0-9]/.test(password)) return false;
-  if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) return false;
-  return true;
-}
-
-/** Hasło generowane przy zgłoszeniu bez pola hasła w formularzu — spełnia reguły siły. */
-function generateTemporaryPassword(): string {
-  return `Aa9!${crypto.randomBytes(20).toString("hex")}`;
-}
 
 function parseIsoDateOnly(s: string): Date | null {
   if (!ISO_DATE_REGEX.test(s)) return null;
@@ -74,7 +58,6 @@ function normalizeBirthDate(value: string | Date | undefined): string | null {
   const raw = String(value).trim();
   if (!raw) return null;
 
-  // Format DD.MM.YYYY
   const plMatch = raw.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
   if (plMatch) {
     const [, dd, mm, yyyy] = plMatch;
@@ -89,7 +72,6 @@ function normalizeBirthDate(value: string | Date | undefined): string | null {
     return null;
   }
 
-  // ISO-like or Date string supported by JS Date parser
   const parsed = new Date(raw);
   if (!Number.isNaN(parsed.getTime())) {
     return parsed.toISOString().split("T")[0];
@@ -98,11 +80,12 @@ function normalizeBirthDate(value: string | Date | undefined): string | null {
   return null;
 }
 
+/** Publiczne zgłoszenie dziecka — zapis wyłącznie do `enrollment_requests` (bez konta rodzica). */
 export async function POST(request: Request) {
   try {
     if (process.env.NODE_ENV === "production" && !process.env.SCHOOL_ID?.trim()) {
       return NextResponse.json(
-        { message: "Brak zmiennej środowiskowej SCHOOL_ID — rejestracja niedostępna." },
+        { message: "Brak zmiennej środowiskowej SCHOOL_ID — formularz niedostępny." },
         { status: 500 }
       );
     }
@@ -115,8 +98,6 @@ export async function POST(request: Request) {
     }
     const shape = await getDbShape();
     if (shape.hasChildrenTable && !shape.hasStudentsTable) {
-      // W nowym schemacie oczekujemy tabeli children z kolumną birth_date.
-      // Szybki check zapewnia czytelny komunikat zamiast ogólnego 500.
       const hasBirthDateColumn = await queryDb<{
         exists: boolean;
       }>(
@@ -139,8 +120,6 @@ export async function POST(request: Request) {
     const body = await request.json();
     const {
       email,
-      password,
-      confirmPassword,
       firstName,
       lastName,
       phone,
@@ -169,29 +148,6 @@ export async function POST(request: Request) {
       );
     }
 
-    const passwordRaw =
-      typeof password === "string" && password.trim().length > 0
-        ? password.trim()
-        : null;
-
-    if (passwordRaw != null) {
-      if (passwordRaw !== String(confirmPassword ?? "").trim()) {
-        return NextResponse.json(
-          { message: "Hasła nie są identyczne" },
-          { status: 400 }
-        );
-      }
-      if (!isPasswordStrong(passwordRaw)) {
-        return NextResponse.json(
-          {
-            message:
-              "Hasło musi mieć min. 8 znaków oraz: wielką literę, małą literę, cyfrę i znak specjalny",
-          },
-          { status: 400 }
-        );
-      }
-    }
-
     if (!EMAIL_REGEX.test(String(email))) {
       return NextResponse.json(
         { message: "Nieprawidłowy adres email" },
@@ -216,7 +172,9 @@ export async function POST(request: Request) {
 
       if (!fn || !ln || !bd) {
         return NextResponse.json(
-          { message: `Dziecko ${i + 1}: wymagane imię, nazwisko i data urodzenia (YYYY-MM-DD)` },
+          {
+            message: `Dziecko ${i + 1}: wymagane imię, nazwisko i data urodzenia (YYYY-MM-DD)`,
+          },
           { status: 400 }
         );
       }
@@ -224,21 +182,27 @@ export async function POST(request: Request) {
       const parsed = parseIsoDateOnly(bd);
       if (!parsed) {
         return NextResponse.json(
-          { message: `Dziecko ${i + 1}: nieprawidłowa data urodzenia (oczekiwany format YYYY-MM-DD)` },
+          {
+            message: `Dziecko ${i + 1}: nieprawidłowa data urodzenia (oczekiwany format YYYY-MM-DD)`,
+          },
           { status: 400 }
         );
       }
 
       if (parsed.getFullYear() < minYear) {
         return NextResponse.json(
-          { message: `Dziecko ${i + 1}: rok urodzenia nie może być wcześniejszy niż ${minYear}` },
+          {
+            message: `Dziecko ${i + 1}: rok urodzenia nie może być wcześniejszy niż ${minYear}`,
+          },
           { status: 400 }
         );
       }
 
       if (parsed > today) {
         return NextResponse.json(
-          { message: `Dziecko ${i + 1}: data urodzenia nie może być w przyszłości` },
+          {
+            message: `Dziecko ${i + 1}: data urodzenia nie może być w przyszłości`,
+          },
           { status: 400 }
         );
       }
@@ -267,20 +231,6 @@ export async function POST(request: Request) {
       }
     }
 
-    const exists = await emailExists(email, schoolId);
-    if (exists) {
-      return NextResponse.json(
-        { message: "Użytkownik z tym adresem email już istnieje" },
-        { status: 409 }
-      );
-    }
-
-    const effectivePassword = passwordRaw ?? generateTemporaryPassword();
-    const passwordWasGenerated = passwordRaw == null;
-
-    const salt = await bcrypt.genSalt(10);
-    const passwordHash = await bcrypt.hash(effectivePassword, salt);
-
     const normalizedChildren = (children as ChildInput[]).map((c) => ({
       firstName: c.firstName!.trim(),
       lastName: c.lastName!.trim(),
@@ -291,101 +241,33 @@ export async function POST(request: Request) {
           : null,
     }));
 
-    const { user: newUser } = await createParentUserWithChildren({
-      email,
-      passwordHash,
+    await insertPublicEnrollmentRequests({
+      schoolId,
+      email: String(email).trim(),
       firstName: String(firstName).trim(),
       lastName: String(lastName).trim(),
-      schoolId,
       phone: phoneNorm.value,
-      parentPhone: phoneNorm.value,
-      accessLevel: "PENDING",
-      createEnrollmentRequests: true,
       children: normalizedChildren,
     });
 
-    try {
-      await sendWelcomeEmail(
-        email,
-        newUser.first_name,
-        newUser.last_name,
-        normalizedChildren[0].firstName
-      );
-    } catch (emailError) {
-      console.error("Failed to send welcome email:", emailError);
-    }
-
-    if (passwordWasGenerated) {
-      try {
-        const resetToken = crypto.randomBytes(32).toString("hex");
-        const resetTokenExpiry = new Date(Date.now() + 3600000);
-        await setResetToken(email, resetToken, resetTokenExpiry);
-        await sendPasswordResetEmail(email, resetToken, newUser.first_name);
-      } catch (e) {
-        console.error("Failed to send set-password email after registration:", e);
-      }
-    }
-
-    try {
-      await updateLastLogin(newUser.id);
-    } catch (loginColErr) {
-      console.warn("updateLastLogin after register:", loginColErr);
-    }
-
-    const token = await signToken({
-      userId: newUser.id,
-      role: newUser.role,
-      schoolId: newUser.school_id ?? null,
-      accessLevel: newUser.access_level,
+    return NextResponse.json({
+      message:
+        "Zgłoszenie zostało zapisane. Skontaktujemy się z Tobą po weryfikacji.",
     });
-
-    const response = NextResponse.json({
-      message: "Konto zostało utworzone pomyślnie",
-      token,
-      userName: `${newUser.first_name} ${newUser.last_name}`,
-      user: {
-        id: newUser.id,
-        email: newUser.email,
-        role: newUser.role,
-        accessLevel: newUser.access_level,
-        firstName: newUser.first_name,
-        lastName: newUser.last_name,
-      },
-    });
-
-    response.cookies.set("auth-token", token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 60 * 60 * 24 * 7,
-      path: "/",
-    });
-
-    return response;
   } catch (error: unknown) {
-    console.error("Registration error:", error);
+    console.error("Public enrollment error:", error);
     const msg = error instanceof Error ? error.message : "";
-    if (
-      msg.includes("unique") ||
-      msg.includes("UNIQUE") ||
-      msg.includes("duplicate key")
-    ) {
-      return NextResponse.json(
-        { message: "Użytkownik z tym adresem email już istnieje" },
-        { status: 409 }
-      );
-    }
     if (/foreign key|violates foreign key/i.test(msg)) {
       return NextResponse.json(
         {
           message:
-            "Nie można zapisać konta — problem z powiązaniami w bazie (np. szkoła lub uprawnienia). Skontaktuj się z administratorem.",
+            "Nie można zapisać zgłoszenia — problem z konfiguracją szkoły w bazie. Skontaktuj się z administratorem.",
         },
         { status: 500 }
       );
     }
     return NextResponse.json(
-      { message: "Wystąpił błąd podczas tworzenia konta" },
+      { message: "Wystąpił błąd podczas wysyłania zgłoszenia" },
       { status: 500 }
     );
   }

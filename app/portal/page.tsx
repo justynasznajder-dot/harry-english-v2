@@ -6,9 +6,6 @@ import { useState, useEffect } from 'react';
 import UserPortal from '@/src/components/UserPortal';
 import LektorPortal from '@/src/components/LektorPortal';
 import AdminPortal from '@/src/components/AdminPortal';
-import PendingPortal from '@/src/components/PendingPortal';
-import ProposedPortal from '@/src/components/ProposedPortal';
-import ContractPortal from '@/src/components/ContractPortal';
 import ChildPortal from '@/src/components/ChildPortal';
 
 interface UserInfo {
@@ -103,30 +100,6 @@ export default function PortalPage() {
   const [loading, setLoading] = useState(false);
   const [isHomeBtnHovered, setIsHomeBtnHovered] = useState(false);
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
-  const [enrollmentData, setEnrollmentData] = useState<{
-    proposal: {
-      group_name: string;
-      location_name: string;
-      schedule: string;
-      price_monthly?: number | null;
-    } | null;
-    contract: {
-      id: string;
-      content_html: string;
-      status: string;
-    } | null;
-  } | null>(null);
-
-  const fetchEnrollmentStatus = async () => {
-    try {
-      const res = await fetch('/api/enrollment/status');
-      if (!res.ok) return;
-      const data = await res.json();
-      setEnrollmentData(data);
-    } catch (error) {
-      console.error('Enrollment status error:', error);
-    }
-  };
 
   const fetchUserData = async () => {
     try {
@@ -134,9 +107,6 @@ export default function PortalPage() {
       if (response.ok) {
         const data = await response.json();
         setUserInfo(data.user);
-        if (data.user.role === 'PARENT' && data.user.accessLevel !== 'ACTIVE') {
-          fetchEnrollmentStatus();
-        }
         localStorage.setItem('userInfo', JSON.stringify(data.user));
         if (data.user.email) {
           localStorage.setItem('userEmail', data.user.email);
@@ -235,28 +205,20 @@ export default function PortalPage() {
         {/* Render odpowiedniego portalu w zależności od typu konta */}
         {userInfo?.role === "ADMIN" || userInfo?.role === "MANAGER" ? (
           <AdminPortal />
+        ) : userInfo?.role === "PARENT" ? (
+          <div className="rounded-3xl border border-zinc-200 bg-[#f8f6f3] p-8 text-center shadow-xl">
+            <p className="text-lg font-semibold text-[#1e3a4c]">
+              Panel rodzica jest w przygotowaniu
+            </p>
+            <p className="mt-3 text-sm text-zinc-600">
+              Nowe zgłoszenia zapisujemy wyłącznie przez formularz na stronie głównej — administracja
+              odezwie się po weryfikacji. Jeśli masz pytania, napisz lub zadzwoń do biura szkoły.
+            </p>
+          </div>
         ) : userInfo?.role === "TEACHER" ? (
           <LektorPortal />
         ) : userInfo?.role === "CHILD" ? (
           <ChildPortal />
-        ) : userInfo?.role === "PARENT" && userInfo.accessLevel === "PENDING" ? (
-          <PendingPortal children={userInfo.children ?? []} />
-        ) : userInfo?.role === "PARENT" && userInfo.accessLevel === "PROPOSED" ? (
-          <ProposedPortal
-            proposal={enrollmentData?.proposal ?? null}
-            onAccepted={async () => {
-              await fetchUserData();
-              await fetchEnrollmentStatus();
-            }}
-          />
-        ) : userInfo?.role === "PARENT" && userInfo.accessLevel === "CONTRACT_SENT" ? (
-          <ContractPortal
-            contract={enrollmentData?.contract ?? null}
-            onSigned={async () => {
-              await fetchUserData();
-              await fetchEnrollmentStatus();
-            }}
-          />
         ) : userInfo ? (
           <UserPortal userInfo={userInfo} onUserInfoUpdate={setUserInfo} />
         ) : (

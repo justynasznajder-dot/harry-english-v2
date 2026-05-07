@@ -31,12 +31,14 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [registerSuccess, setRegisterSuccess] = useState(false);
   const [forgotPasswordSuccess, setForgotPasswordSuccess] = useState(false);
 
   // Resetuj tryb do initialMode gdy modal się otwiera
   useEffect(() => {
     if (isOpen) {
       setMode(initialMode);
+      setRegisterSuccess(false);
     }
   }, [isOpen, initialMode]);
 
@@ -192,18 +194,9 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
       const data = await response.json();
 
       if (response.ok) {
-        // Zapisz token/sesję
-        localStorage.setItem("userToken", data.token);
-        localStorage.setItem("userName", data.userName);
-        if (data.user) {
-          localStorage.setItem("userEmail", data.user.email);
-          localStorage.setItem("userInfo", JSON.stringify(data.user));
-        }
-        
-        // Przekieruj do portalu
-        window.location.href = "/portal";
+        setRegisterSuccess(true);
       } else {
-        setErrors({ form: data.message || "Nie udało się utworzyć konta" });
+        setErrors({ form: data.message || "Nie udało się wysłać zgłoszenia" });
       }
     } catch (error) {
       setErrors({ form: "Wystąpił błąd. Spróbuj ponownie." });
@@ -258,6 +251,7 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
     });
     setErrors({});
     setForgotPasswordSuccess(false);
+    setRegisterSuccess(false);
   };
 
   const addStudent = () => {
@@ -324,12 +318,13 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
           <div className="text-center mb-8">
             <h2 className="text-3xl font-bold text-gray-900 mb-2">
               {mode === "login" && "Zaloguj się"}
-              {mode === "register" && "Utwórz konto"}
+              {mode === "register" && "Zgłoszenie dziecka"}
               {mode === "forgot-password" && "Resetuj hasło"}
             </h2>
             <p className="text-gray-600">
               {mode === "login" && "Wprowadź swoje dane logowania"}
-              {mode === "register" && "Dołącz do nas już dziś!"}
+              {mode === "register" &&
+                "Wypełnij formularz — administracja odezwie się po rozpatrzeniu zgłoszenia."}
               {mode === "forgot-password" && "Wyślemy Ci link do ustawienia nowego hasła"}
             </p>
           </div>
@@ -470,8 +465,23 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
             </form>
           )}
 
-          {/* Register Form */}
-          {mode === "register" && (
+          {/* Register Form — zgłoszenie bez zakładania konta */}
+          {mode === "register" && registerSuccess && (
+            <div className="space-y-6 text-center">
+              <div className="p-4 bg-green-50 border border-green-200 rounded-lg text-green-800 text-sm">
+                Dziękujemy! Zgłoszenie zostało zapisane. Wkrótce skontaktujemy się z Tobą e-mailem lub
+                telefonicznie.
+              </div>
+              <button
+                type="button"
+                onClick={handleClose}
+                className="w-full rounded-full bg-[#ffc94a] px-6 py-3 text-[#3b2a10] font-semibold hover:bg-[#ffd76f] transition-colors"
+              >
+                Zamknij
+              </button>
+            </div>
+          )}
+          {mode === "register" && !registerSuccess && (
             <form onSubmit={handleRegister} className="space-y-6">
               {errors.form && (
                 <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
@@ -675,11 +685,11 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
                     required
                   />
                   <span className="text-sm text-gray-700">
-                    Wyrażam zgodę na przetwarzanie moich danych osobowych zgodnie z{" "}
+                    Wyrażam zgodę na przetwarzanie moich danych osobowych oraz danych dziecka zgodnie z{" "}
                     <a href="/rodo" target="_blank" className="text-[#175244] hover:underline font-medium">
                       polityką prywatności
-                    </a>{" "}
-                    w celu utworzenia konta i korzystania z usług Harry English. *
+                    </a>
+                    , w zakresie niezbędnym do rozpatrzenia zgłoszenia na zajęcia Harry English. *
                   </span>
                 </label>
                 {errors.rodoConsent && <p className="mt-1 text-xs text-red-600">{errors.rodoConsent}</p>}
@@ -690,7 +700,7 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
                 disabled={isLoading}
                 className="w-full rounded-full bg-[#ffc94a] px-6 py-3 text-[#3b2a10] font-semibold hover:bg-[#ffd76f] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isLoading ? "Tworzenie konta..." : "Utwórz konto"}
+                {isLoading ? "Wysyłanie..." : "Zgłoszenie dziecka"}
               </button>
 
               <button

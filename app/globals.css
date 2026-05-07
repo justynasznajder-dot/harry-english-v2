@@ -24,3 +24,37 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Domyślnie kursor „palec” nad przyciskami w całej aplikacji */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+input[type="button"]:not(:disabled),
+input[type="submit"]:not(:disabled),
+input[type="reset"]:not(:disabled) {
+  cursor: pointer;
+}
+
+button:disabled,
+[role="button"][aria-disabled="true"],
+input[type="button"]:disabled,
+input[type="submit"]:disabled,
+input[type="reset"]:disabled {
+  cursor: not-allowed;
+}
+
+/* Aktywuj / Dezaktywuj — jak na liście: czerwień domyślnie, hover jasna mięta + ciemna zieleń (bez @media (hover) z Tailwinda) */
+.admin-user-toggle-danger {
+  background-color: #dc2626;
+  color: #fff;
+}
+.admin-user-toggle-danger:hover:not(:disabled) {
+  background-color: #d1fae5;
+  color: #047857;
+}
+.admin-user-toggle-success {
+  background-color: #059669;
+  color: #fff;
+}
+.admin-user-toggle-success:hover:not(:disabled) {
+  background-color: #047857;
+}

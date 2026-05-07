@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import type { EnrollmentStatus } from '@/lib/enrollment-status';
 
 type TabKey =
@@ -705,9 +706,7 @@ export default function AdminPortal() {
                 <option value="PARENT">Rodzic</option>
                 <option value="TEACHER">Nauczyciel</option>
                 <option value="MANAGER">Manager</option>
-                <option value="CHILD">Uczeń (konto)</option>
               </select>
-              <button disabled={busy} onClick={createUser} className="rounded-xl bg-emerald-600 px-4 py-2 text-white disabled:opacity-60">Dodaj</button>
             </div>
             </div>
 
@@ -771,6 +770,15 @@ export default function AdminPortal() {
                 </button>
               </div>
             )}
+            <div className="flex justify-end">
+              <button
+                disabled={busy}
+                onClick={createUser}
+                className="rounded-xl bg-emerald-600 px-4 py-2 text-white disabled:opacity-60"
+              >
+                Dodaj
+              </button>
+            </div>
           </div>
         )}
       </section>
@@ -791,6 +799,46 @@ export default function AdminPortal() {
             <tbody>
               {roleScopedUsers.map((user) => {
                 const editing = editingUserId === user.id;
+
+                if (user.role === 'PARENT') {
+                  return (
+                    <tr key={user.id} className="border-t border-emerald-50">
+                      <td className="px-4 py-3">
+                        <span>{user.first_name} {user.last_name}</span>
+                      </td>
+                      <td className="px-4 py-3">{user.email}</td>
+                      <td className="px-4 py-3">
+                        <span>{user.role}</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`rounded-full px-2 py-1 text-xs font-semibold ${user.active ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-700'}`}>
+                          {user.active ? 'aktywny' : 'nieaktywny'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-wrap gap-2">
+                          <Link
+                            href={`/portal/parents/${user.id}`}
+                            className="inline-flex rounded-lg bg-zinc-200 px-3 py-1 text-center text-zinc-900 hover:bg-zinc-300"
+                          >
+                            Edytuj
+                          </Link>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => toggleUserActive(user)}
+                            className={`rounded-lg px-3 py-1 text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                              user.active ? 'admin-user-toggle-danger' : 'admin-user-toggle-success'
+                            }`}
+                          >
+                            {user.active ? 'Dezaktywuj' : 'Aktywuj'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                }
+
                 return (
                   <tr key={user.id} className="border-t border-emerald-50">
                     <td className="px-4 py-3">
@@ -840,19 +888,22 @@ export default function AdminPortal() {
                       <div className="flex gap-2">
                         {editing ? (
                           <>
-                            <button onClick={() => setEditingUserId(null)} className="rounded-lg bg-zinc-200 px-3 py-1">Anuluj</button>
+                            <button type="button" onClick={() => setEditingUserId(null)} className="rounded-lg bg-zinc-200 px-3 py-1">Anuluj</button>
                             <button
+                              type="button"
                               disabled={busy}
                               onClick={() => toggleUserActive(user)}
-                              className={`rounded-lg px-3 py-1 text-white ${user.active ? 'bg-red-600' : 'bg-emerald-600'}`}
+                              className={`rounded-lg px-3 py-1 text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                user.active ? 'admin-user-toggle-danger' : 'admin-user-toggle-success'
+                              }`}
                             >
                               {user.active ? 'Dezaktywuj' : 'Aktywuj'}
                             </button>
-                            <button disabled={busy} onClick={() => saveUser(user)} className="rounded-lg bg-emerald-600 px-3 py-1 text-white">Zapisz</button>
+                            <button type="button" disabled={busy} onClick={() => saveUser(user)} className="rounded-lg bg-emerald-600 px-3 py-1 text-white">Zapisz</button>
                           </>
                         ) : (
                           <>
-                            <button onClick={() => setEditingUserId(user.id)} className="rounded-lg bg-zinc-200 px-3 py-1">Edytuj</button>
+                            <button type="button" onClick={() => setEditingUserId(user.id)} className="rounded-lg bg-zinc-200 px-3 py-1">Edytuj</button>
                           </>
                         )}
                       </div>
@@ -1178,7 +1229,7 @@ export default function AdminPortal() {
                             disabled={busy}
                             onClick={() => toggleUserActive(t)}
                             className={`rounded-lg px-3 py-1 text-xs font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                              t.active ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                              t.active ? 'admin-user-toggle-danger' : 'admin-user-toggle-success'
                             }`}
                           >
                             {t.active ? 'Dezaktywuj' : 'Aktywuj'}
@@ -1467,8 +1518,8 @@ export default function AdminPortal() {
                           disabled={busy || !editLocationId}
                           className={`rounded-xl px-4 py-2 text-sm font-semibold text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
                             schoolLocations.find((l) => l.id === editLocationId)?.active
-                              ? 'bg-red-600 hover:bg-red-700'
-                              : 'bg-emerald-600 hover:bg-emerald-700'
+                              ? 'admin-user-toggle-danger'
+                              : 'admin-user-toggle-success'
                           }`}
                           onClick={async () => {
                             const current = schoolLocations.find((l) => l.id === editLocationId);

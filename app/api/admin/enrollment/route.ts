@@ -88,7 +88,10 @@ export async function GET(request: NextRequest) {
         AND c.first_name = er.child_first_name
         AND c.last_name = er.child_last_name
        WHERE UPPER(BTRIM(COALESCE(er.status::text, ''))) IN ('NEW', 'PROPOSED')
-         AND COALESCE(u.id, NULLIF(BTRIM(er.user_id), '')) IS NOT NULL
+         AND (
+           COALESCE(u.id, NULLIF(BTRIM(er.user_id::text), '')) IS NOT NULL
+           OR NULLIF(BTRIM(COALESCE(er.parent_email::text, '')), '') IS NOT NULL
+         )
          ${parentsSchoolClause}
        GROUP BY COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id, er.parent_email),
                 COALESCE(NULLIF(u.first_name, ''), er.parent_first_name),

@@ -52,6 +52,64 @@ function managerForbiddenSchoolFields(actor: User, body: Record<string, unknown>
   return null;
 }
 
+// GET — szczegóły użytkownika (panel admina)
+export async function GET(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const payload = await getTokenFromRequest(_request);
+    const actorId = payload?.userId;
+    if (!actorId) {
+      return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
+    }
+
+    const userCanStaff = await canAccessSchoolAdminApis(actorId);
+    if (!userCanStaff) {
+      return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
+    }
+
+    const actor = await getUserById(actorId);
+    if (!actor) {
+      return NextResponse.json({ message: "Nie znaleziono użytkownika" }, { status: 401 });
+    }
+
+    const { id: targetUserId } = await params;
+    const target = await getUserById(targetUserId);
+    const scopeErr = managerSchoolScopeError(actor, target);
+    if (scopeErr) return scopeErr;
+
+    if (!target) {
+      return NextResponse.json({ message: "Użytkownik nie został znaleziony" }, { status: 404 });
+    }
+
+    return NextResponse.json({
+      user: {
+        id: target.id,
+        first_name: target.first_name,
+        last_name: target.last_name,
+        email: target.email,
+        role: target.role,
+        account_type: target.account_type,
+        confirmed: target.confirmed,
+        active: target.active,
+        access_level: target.access_level,
+        phone: target.phone,
+        school_id: target.school_id,
+        resignation_date: target.resignation_date,
+        created_at: target.created_at,
+        last_login: target.last_login,
+      },
+    });
+  } catch (error) {
+    console.error("Get user error:", error);
+    return NextResponse.json(
+      { message: "Wystąpił błąd podczas pobierania użytkownika" },
+      { status: 500 }
+    );
+  }
+}
+
 // PUT - aktualizuj użytkownika
 export async function PUT(
   request: NextRequest,
@@ -159,6 +217,11 @@ export async function PUT(
       updateData.account_type = body.account_type;
     }
     if (body.confirmed !== undefined) updateData.confirmed = body.confirmed;
+    if (body.phone !== undefined) {
+      const p = body.phone;
+      updateData.phone =
+        p == null || String(p).trim() === "" ? null : String(p).trim();
+    }
 
     if (Object.keys(updateData).length === 0) {
       return NextResponse.json({ message: "Brak danych do aktualizacji" }, { status: 400 });
@@ -189,6 +252,8 @@ export async function PUT(
       account_type: user.account_type,
       confirmed: user.confirmed,
       active: user.active,
+      phone: user.phone,
+      access_level: user.access_level,
       resignation_date: user.resignation_date,
       created_at: user.created_at,
       last_login: user.last_login,
