@@ -57,10 +57,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const groupRow = await queryDb<{ school_id: string; school_year_id: string | null }>(
+      `SELECT school_id, school_year_id FROM groups WHERE id = $1 LIMIT 1`,
+      [groupId]
+    );
+    const schoolId = groupRow.rows[0]?.school_id;
+    const schoolYearId = groupRow.rows[0]?.school_year_id ?? null;
+
     await queryDb(
-      `INSERT INTO schedule_templates (id, group_id, location_id, day_of_week, start_time, duration_min)
-       VALUES ($1, $2, $3, $4, $5::time, $6)`,
-      [randomUUID(), groupId, locationId, dayOfWeek, startTime, durationMin]
+      `INSERT INTO schedule_templates (id, group_id, location_id, day_of_week, start_time, duration_min, school_year_id)
+       VALUES ($1, $2, $3, $4, $5::time, $6, $7::uuid)`,
+      [randomUUID(), groupId, locationId, dayOfWeek, startTime, durationMin, schoolYearId]
     );
 
     return NextResponse.json({ message: "Termin został dodany" });

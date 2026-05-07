@@ -52,7 +52,7 @@ export async function GET(request: NextRequest) {
        FROM groups g
        LEFT JOIN users t ON t.id = g.teacher_id
        LEFT JOIN schedule_templates st ON st.group_id = g.id
-       LEFT JOIN locations l ON l.id = st.location_id
+      LEFT JOIN locations l ON l.id = st.location_id
        LEFT JOIN group_students gs ON gs.group_id = g.id
        WHERE 1=1 ${schoolClause}
        GROUP BY g.id, t.id

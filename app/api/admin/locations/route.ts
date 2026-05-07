@@ -48,6 +48,7 @@ export async function GET(request: NextRequest) {
           }>(
             `SELECT id, name, address, active
              FROM locations
+             WHERE active = TRUE
              ORDER BY name ASC`
           );
 

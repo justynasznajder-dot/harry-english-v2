@@ -588,7 +588,10 @@ export default function AdminPortal() {
     () =>
       users
         .filter((u) => u.role === 'TEACHER')
-        .sort((a, b) => a.last_name.localeCompare(b.last_name, 'pl')),
+        .sort((a, b) => {
+          if (a.active !== b.active) return a.active ? -1 : 1;
+          return a.last_name.localeCompare(b.last_name, 'pl');
+        }),
     [users]
   );
 
@@ -1076,9 +1079,6 @@ export default function AdminPortal() {
 
           {organizationSubTab === 'teachers' && (
             <div className="mt-4 space-y-4">
-              <p className="text-sm text-zinc-600">
-                Nauczyciele Twojej szkoły — aktywni mogą być przypisywani do grup. Konto otrzymuje rolę TEACHER, potwierdzenie i dostęp ACTIVE.
-              </p>
               {teacherOrgSubTab === 'list' && (
                 <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
                   {teachersList.length === 0 ? (
@@ -1098,13 +1098,25 @@ export default function AdminPortal() {
                           <p className="text-sm text-zinc-600">{t.email}</p>
                           {t.phone ? <p className="text-xs text-zinc-500">{t.phone}</p> : null}
                         </div>
-                        <span
-                          className={`self-start rounded-full px-2 py-1 text-xs font-semibold sm:self-center ${
-                            t.active ? 'bg-emerald-100 text-emerald-800' : 'bg-zinc-100 text-zinc-600'
-                          }`}
-                        >
-                          {t.active ? 'Aktywny' : 'Nieaktywny'}
-                        </span>
+                        <div className="flex items-center gap-2 self-start sm:self-center">
+                          <span
+                            className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                              t.active ? 'bg-emerald-100 text-emerald-800' : 'bg-zinc-100 text-zinc-600'
+                            }`}
+                          >
+                            {t.active ? 'Aktywny' : 'Nieaktywny'}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => toggleUserActive(t)}
+                            className={`rounded-lg px-3 py-1 text-xs font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                              t.active ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                            }`}
+                          >
+                            {t.active ? 'Dezaktywuj' : 'Aktywuj'}
+                          </button>
+                        </div>
                       </div>
                     ))
                   )}
@@ -1230,10 +1242,6 @@ export default function AdminPortal() {
 
           {organizationSubTab === 'locations' && (
             <div className="mt-4 space-y-4">
-              <p className="text-sm text-zinc-600">
-                Lokalizacje zajęć w Twojej szkole — używane przy zapisach i planowaniu grup. W formularzu podajesz nazwę i opcjonalnie adres;
-                identyfikator szkoły i status aktywny ustawia system.
-              </p>
               {locationOrgSubTab === 'list' && (
                 <>
                   {locationsLoading ? (
@@ -1258,13 +1266,49 @@ export default function AdminPortal() {
                                 <p className="text-xs text-zinc-500">Bez adresu</p>
                               )}
                             </div>
-                            <span
-                              className={`self-start rounded-full px-2 py-1 text-xs font-semibold sm:self-center ${
-                                loc.active ? 'bg-emerald-100 text-emerald-800' : 'bg-zinc-100 text-zinc-600'
-                              }`}
-                            >
-                              {loc.active ? 'Aktywna' : 'Nieaktywna'}
-                            </span>
+                            <div className="flex items-center gap-2 self-start sm:self-center">
+                              <span
+                                className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                                  loc.active ? 'bg-emerald-100 text-emerald-800' : 'bg-zinc-100 text-zinc-600'
+                                }`}
+                              >
+                                {loc.active ? 'Aktywna' : 'Nieaktywna'}
+                              </span>
+                              <button
+                                type="button"
+                                disabled={busy}
+                                className={`rounded-lg px-3 py-1 text-xs font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                  loc.active ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                                }`}
+                                onClick={async () => {
+                                  setBusy(true);
+                                  try {
+                                    const res = await fetch(`/api/admin/locations/${encodeURIComponent(loc.id)}`, {
+                                      method: 'PUT',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ active: !loc.active }),
+                                    });
+                                    const data = (await res.json().catch(() => ({}))) as { message?: string };
+                                    if (!res.ok) {
+                                      throw new Error(data.message ?? 'Nie udało się zaktualizować lokalizacji');
+                                    }
+                                    pushToast(
+                                      'success',
+                                      loc.active
+                                        ? 'Lokalizacja została oznaczona jako nieaktywna'
+                                        : 'Lokalizacja została ponownie oznaczona jako aktywna',
+                                    );
+                                    await loadLocations();
+                                  } catch (e) {
+                                    pushToast('error', e instanceof Error ? e.message : 'Błąd aktualizacji lokalizacji');
+                                  } finally {
+                                    setBusy(false);
+                                  }
+                                }}
+                              >
+                                {loc.active ? 'Dezaktywuj' : 'Aktywuj'}
+                              </button>
+                            </div>
                           </div>
                         ))
                       )}

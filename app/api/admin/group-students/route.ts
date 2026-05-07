@@ -27,10 +27,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: "Uczeń jest już aktywnie przypisany do grupy" }, { status: 409 });
     }
 
+    const groupRow = await queryDb<{ school_year_id: string | null }>(
+      `SELECT school_year_id FROM groups WHERE id = $1 LIMIT 1`,
+      [groupId]
+    );
+    const schoolYearId = groupRow.rows[0]?.school_year_id ?? null;
+
     await queryDb(
-      `INSERT INTO group_students (id, group_id, child_id, enrolled_at)
-       VALUES ($1, $2, $3, NOW())`,
-      [randomUUID(), groupId, childId]
+      `INSERT INTO group_students (id, group_id, child_id, enrolled_at, school_year_id)
+       VALUES ($1, $2, $3, NOW(), $4::uuid)`,
+      [randomUUID(), groupId, childId, schoolYearId]
     );
     return NextResponse.json({ message: "Uczeń został dodany do grupy" });
   } catch (error) {
