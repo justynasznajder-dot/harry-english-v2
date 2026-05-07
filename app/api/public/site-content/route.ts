@@ -36,6 +36,7 @@ export async function GET() {
       });
     }
 
+    /* school_id może być uuid lub text — porównanie przez ::text (uniknięcie „operator does not exist”). */
     const teachers = await optionalQuery<{
       id: string;
       first_name: string;
@@ -43,7 +44,7 @@ export async function GET() {
     }>(
       `SELECT id, first_name, last_name
        FROM users
-       WHERE school_id = $1 AND role = 'TEACHER' AND active = TRUE
+       WHERE school_id::text = $1 AND role = 'TEACHER' AND active = TRUE
        ORDER BY last_name ASC, first_name ASC`,
       [schoolId]
     );
@@ -54,7 +55,7 @@ export async function GET() {
     }>(
       `SELECT image_path, caption
        FROM marketing_gallery
-       WHERE school_id = $1
+       WHERE school_id::text = $1
        ORDER BY sort_order ASC, created_at ASC`,
       [schoolId]
     );
@@ -62,7 +63,7 @@ export async function GET() {
     const faqs = await optionalQuery<{ question: string; answer: string }>(
       `SELECT question, answer
        FROM marketing_faq
-       WHERE school_id = $1
+       WHERE school_id::text = $1
        ORDER BY sort_order ASC, created_at ASC`,
       [schoolId]
     );
@@ -75,7 +76,7 @@ export async function GET() {
     }>(
       `SELECT author_name, body, sort_label, rating
        FROM marketing_testimonial
-       WHERE school_id = $1
+       WHERE school_id::text = $1
        ORDER BY sort_order ASC, created_at ASC`,
       [schoolId]
     );
