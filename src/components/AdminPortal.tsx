@@ -827,15 +827,19 @@ export default function AdminPortal() {
                       <div className="flex gap-2">
                         {editing ? (
                           <>
-                            <button disabled={busy} onClick={() => saveUser(user)} className="rounded-lg bg-emerald-600 px-3 py-1 text-white">Zapisz</button>
                             <button onClick={() => setEditingUserId(null)} className="rounded-lg bg-zinc-200 px-3 py-1">Anuluj</button>
+                            <button
+                              disabled={busy}
+                              onClick={() => toggleUserActive(user)}
+                              className={`rounded-lg px-3 py-1 text-white ${user.active ? 'bg-red-600' : 'bg-emerald-600'}`}
+                            >
+                              {user.active ? 'Dezaktywuj' : 'Aktywuj'}
+                            </button>
+                            <button disabled={busy} onClick={() => saveUser(user)} className="rounded-lg bg-emerald-600 px-3 py-1 text-white">Zapisz</button>
                           </>
                         ) : (
                           <>
                             <button onClick={() => setEditingUserId(user.id)} className="rounded-lg bg-zinc-200 px-3 py-1">Edytuj</button>
-                            <button disabled={busy} onClick={() => toggleUserActive(user)} className={`rounded-lg px-3 py-1 text-white ${user.active ? 'bg-red-600' : 'bg-emerald-600'}`}>
-                              {user.active ? 'Soft-delete' : 'Przywróć'}
-                            </button>
                           </>
                         )}
                       </div>
