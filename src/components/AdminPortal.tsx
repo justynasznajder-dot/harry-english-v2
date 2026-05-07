@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { EnrollmentStatus } from '@/lib/enrollment-status';
 
 type TabKey =
   | 'organization'
@@ -11,7 +12,7 @@ type TabKey =
   | 'announcements'
   | 'payments';
 type MobileTab = 'organization' | 'users' | 'groups' | 'more';
-type UsersSubTab = 'list' | 'add';
+type UsersSubTab = 'parents' | 'children' | 'teachers' | 'managers' | 'add';
 type OrganizationSubTab = 'schoolYear' | 'teachers' | 'locations' | 'history';
 type TeacherOrgSubTab = 'list' | 'add';
 type LocationOrgSubTab = 'list' | 'add' | 'edit';
@@ -168,7 +169,10 @@ const locationOrgSubTabs: Array<{ key: LocationOrgSubTab; label: string }> = [
   { key: 'add', label: 'Dodaj nową lokalizację' },
 ];
 const usersSubTabs: Array<{ key: UsersSubTab; label: string }> = [
-  { key: 'list', label: 'Lista użytkowników' },
+  { key: 'parents', label: 'Lista rodziców' },
+  { key: 'children', label: 'Lista dzieci' },
+  { key: 'teachers', label: 'Lista nauczycieli' },
+  { key: 'managers', label: 'Lista managerów' },
   { key: 'add', label: 'Dodaj nowego użytkownika' },
 ];
 
@@ -203,9 +207,8 @@ export default function AdminPortal() {
   const [busy, setBusy] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [search, setSearch] = useState('');
-  const [roleFilter, setRoleFilter] = useState<'ALL' | AdminPortalUserRole>('ALL');
   const [showInactive, setShowInactive] = useState(false);
-  const [usersSubTab, setUsersSubTab] = useState<UsersSubTab>('list');
+  const [usersSubTab, setUsersSubTab] = useState<UsersSubTab>('parents');
   const [newUser, setNewUser] = useState({
     firstName: '',
     lastName: '',
@@ -240,8 +243,21 @@ export default function AdminPortal() {
     firstName: string;
     lastName: string;
     email: string;
-    accessLevel: string;
-    children: Array<{ id: string; firstName: string; lastName: string; confirmed: boolean }>;
+    accessLevel: EnrollmentStatus;
+    children: Array<{
+      id: string;
+      requestId: string;
+      firstName: string;
+      lastName: string;
+      confirmed: boolean;
+      status: EnrollmentStatus;
+      birthDate: string | null;
+      preferredLocation: string | null;
+      preferredDays: string | null;
+      notes: string | null;
+      proposedGroupId: string | null;
+      proposedAt: string | null;
+    }>;
   }>>([]);
   const [enrollmentGroups, setEnrollmentGroups] = useState<Array<{
     id: string;
@@ -250,7 +266,7 @@ export default function AdminPortal() {
     schedule: string;
   }>>([]);
   const [proposalModalParentId, setProposalModalParentId] = useState<string | null>(null);
-  const [proposalForm, setProposalForm] = useState({ groupId: '', priceMonthly: '0' });
+  const [proposalDrafts, setProposalDrafts] = useState<Record<string, { groupId: string }>>({});
   const [groups, setGroups] = useState<GroupRow[]>([]);
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [groupForm, setGroupForm] = useState({
@@ -444,7 +460,6 @@ export default function AdminPortal() {
     return users.filter((user) => {
       if (isManagerView && user.role === 'ADMIN') return false;
       if (!showInactive && !user.active) return false;
-      if (roleFilter !== 'ALL' && user.role !== roleFilter) return false;
       if (!search.trim()) return true;
       const q = search.toLowerCase();
       return (
@@ -453,7 +468,7 @@ export default function AdminPortal() {
         user.email.toLowerCase().includes(q)
       );
     });
-  }, [users, isManagerView, showInactive, roleFilter, search]);
+  }, [users, isManagerView, showInactive, search]);
 
   const parentOptions = useMemo(
     () =>
@@ -551,7 +566,7 @@ export default function AdminPortal() {
         pushToast('success', 'Dodano użytkownika');
       }
 
-      setUsersSubTab('list');
+      setUsersSubTab('parents');
       setNewUser({ firstName: '', lastName: '', email: '', password: '', phone: '', role: '' });
       setNewParentChildren([{ firstName: '', lastName: '', birthDate: '' }]);
       await loadData();
@@ -625,7 +640,17 @@ export default function AdminPortal() {
     [users]
   );
 
-  const renderUsers = () => (
+  const renderUsers = () => {
+    const roleScopedUsers =
+      usersSubTab === 'parents'
+        ? filteredUsers.filter((user) => user.role === 'PARENT')
+        : usersSubTab === 'teachers'
+          ? filteredUsers.filter((user) => user.role === 'TEACHER')
+          : usersSubTab === 'managers'
+            ? filteredUsers.filter((user) => user.role === 'MANAGER')
+            : filteredUsers;
+
+    return (
     <div className="space-y-4">
       <section className="rounded-2xl border border-emerald-100 bg-white p-4">
         <div className="mb-4 flex flex-wrap gap-2">
@@ -645,26 +670,14 @@ export default function AdminPortal() {
           ))}
         </div>
 
-        {usersSubTab === 'list' && (
-          <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+        {usersSubTab !== 'add' && (
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Szukaj po imieniu, nazwisku, emailu"
               className="rounded-xl border border-emerald-200 px-3 py-2"
             />
-            <select
-              value={roleFilter}
-              onChange={(e) => setRoleFilter(e.target.value as 'ALL' | AdminPortalUserRole)}
-              className="rounded-xl border border-emerald-200 px-3 py-2"
-            >
-              <option value="ALL">Wszystkie role</option>
-              <option value="PARENT">Rodzice</option>
-              <option value="TEACHER">Nauczyciele</option>
-              <option value="MANAGER">Zarządcy szkoły</option>
-              {!isManagerView && <option value="ADMIN">Super admin</option>}
-              <option value="CHILD">Uczniowie (konto)</option>
-            </select>
             <label className="flex items-center gap-2 rounded-xl border border-emerald-200 px-3 py-2 text-sm">
               <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
               Pokaż nieaktywnych
@@ -762,7 +775,7 @@ export default function AdminPortal() {
         )}
       </section>
 
-      {usersSubTab === 'list' && (
+      {(usersSubTab === 'parents' || usersSubTab === 'teachers' || usersSubTab === 'managers') && (
       <section className="overflow-hidden rounded-2xl border border-emerald-100 bg-white">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[760px] text-sm">
@@ -776,7 +789,7 @@ export default function AdminPortal() {
               </tr>
             </thead>
             <tbody>
-              {filteredUsers.map((user) => {
+              {roleScopedUsers.map((user) => {
                 const editing = editingUserId === user.id;
                 return (
                   <tr key={user.id} className="border-t border-emerald-50">
@@ -853,7 +866,7 @@ export default function AdminPortal() {
       </section>
       )}
 
-      {usersSubTab === 'list' && (
+      {usersSubTab === 'children' && (
       <section className="overflow-hidden rounded-2xl border border-emerald-100 bg-white">
         <div className="flex items-center justify-between border-b border-emerald-50 px-4 py-3">
           <h3 className="font-semibold">Dzieci</h3>
@@ -898,6 +911,7 @@ export default function AdminPortal() {
       )}
     </div>
   );
+  };
 
   const orgTabLabel = organizationTabs.find((t) => t.key === organizationSubTab)?.label ?? '';
 
@@ -1804,7 +1818,7 @@ export default function AdminPortal() {
     if (activeTab === 'payments') return <EmptyDataPanel title="Płatności" />;
     if (activeTab === 'enrollment') {
       const pending = enrollmentParents.filter(
-        (parent) => parent.accessLevel === 'PENDING' || parent.accessLevel === 'PROPOSED',
+        (parent) => parent.accessLevel === 'NEW' || parent.accessLevel === 'PROPOSED',
       );
       if (pending.length === 0) {
         return <EmptyDataPanel title="Zgłoszenia" />;
@@ -1825,10 +1839,18 @@ export default function AdminPortal() {
                   className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm text-white"
                   onClick={() => {
                     setProposalModalParentId(parent.id);
-                    setProposalForm({ groupId: '', priceMonthly: '0' });
+                    setProposalDrafts(() => {
+                      const next: Record<string, { groupId: string }> = {};
+                      for (const child of parent.children) {
+                        next[child.requestId] = {
+                          groupId: child.proposedGroupId ?? '',
+                        };
+                      }
+                      return next;
+                    });
                   }}
                 >
-                  Zaproponuj grupę
+                  Zobacz szczegóły
                 </button>
               </div>
               <p className="mt-2 text-sm text-zinc-600">
@@ -1844,6 +1866,10 @@ export default function AdminPortal() {
     if (activeTab === 'announcements') return <EmptyDataPanel title="Wiadomości" />;
     return <EmptyDataPanel title="Panel" />;
   };
+  const proposalParent =
+    proposalModalParentId == null
+      ? null
+      : enrollmentParents.find((parent) => parent.id === proposalModalParentId) ?? null;
 
   return (
     <div className="manager-panel pb-24" data-session-school-id={sessionSchoolId ?? ''}>
@@ -2449,64 +2475,94 @@ export default function AdminPortal() {
 
       {proposalModalParentId && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-5">
-            <h3 className="text-lg font-semibold">Zaproponuj grupę</h3>
-            <div className="mt-4 space-y-3">
-              <select
-                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-                value={proposalForm.groupId}
-                onChange={(e) => setProposalForm((prev) => ({ ...prev, groupId: e.target.value }))}
-              >
-                <option value="">Wybierz grupę</option>
-                {enrollmentGroups.map((group) => (
-                  <option key={group.id} value={group.id}>
-                    {group.name} - {group.location_name} - {group.schedule}
-                  </option>
-                ))}
-              </select>
-              <input
-                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-                type="number"
-                min="0"
-                value={proposalForm.priceMonthly}
-                onChange={(e) => setProposalForm((prev) => ({ ...prev, priceMonthly: e.target.value }))}
-                placeholder="Cena miesięczna"
-              />
-              <div className="flex gap-2 justify-end">
-                <button
-                  className="rounded-xl bg-zinc-200 px-3 py-2"
-                  onClick={() => setProposalModalParentId(null)}
-                >
-                  Anuluj
-                </button>
-                <button
-                  className="rounded-xl bg-emerald-600 px-3 py-2 text-white"
-                  onClick={async () => {
-                    if (!proposalForm.groupId) {
-                      pushToast('error', 'Wybierz grupę');
-                      return;
-                    }
-                    const res = await fetch('/api/admin/enrollment', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        parentId: proposalModalParentId,
-                        groupId: proposalForm.groupId,
-                        priceMonthly: Number(proposalForm.priceMonthly || 0),
-                      }),
-                    });
-                    if (!res.ok) {
-                      pushToast('error', 'Nie udało się wysłać propozycji');
-                      return;
-                    }
-                    pushToast('success', 'Propozycja wysłana');
-                    setProposalModalParentId(null);
-                    await loadData();
-                  }}
-                >
-                  Wyślij propozycję
-                </button>
+          <div className="w-full max-w-4xl rounded-2xl bg-white p-5">
+            <h3 className="text-lg font-semibold">Szczegóły zgłoszenia</h3>
+            {proposalParent ? (
+              <div className="mt-3">
+                <p className="font-semibold">
+                  {proposalParent.firstName} {proposalParent.lastName}
+                </p>
+                <p className="text-sm text-zinc-600">{proposalParent.email}</p>
+                <div className="mt-4 space-y-3">
+                  {proposalParent.children.map((child) => (
+                    <div key={child.requestId} className="rounded-xl border border-emerald-100 p-4">
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                        <div>
+                          <p className="font-semibold">
+                            {child.firstName} {child.lastName}
+                          </p>
+                          <p className="text-sm text-zinc-600">Status: {child.status}</p>
+                          <p className="text-sm text-zinc-600">Data urodzenia: {child.birthDate ?? 'brak'}</p>
+                          <p className="text-sm text-zinc-600">
+                            Preferowana lokalizacja: {child.preferredLocation ?? 'brak'}
+                          </p>
+                          <p className="text-sm text-zinc-600">
+                            Preferowane dni: {child.preferredDays ?? 'brak'}
+                          </p>
+                        </div>
+                        <div className="space-y-2">
+                          <select
+                            className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                            value={proposalDrafts[child.requestId]?.groupId ?? ''}
+                            onChange={(e) =>
+                              setProposalDrafts((prev) => ({
+                                ...prev,
+                                [child.requestId]: {
+                                  groupId: e.target.value,
+                                },
+                              }))
+                            }
+                          >
+                            <option value="">Wybierz grupę</option>
+                            {enrollmentGroups.map((group) => (
+                              <option key={group.id} value={group.id}>
+                                {group.name} - {group.location_name} - {group.schedule}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            className="rounded-xl bg-emerald-600 px-3 py-2 text-white"
+                            onClick={async () => {
+                              const draft = proposalDrafts[child.requestId];
+                              const groupId = draft?.groupId ?? child.proposedGroupId ?? '';
+                              if (!groupId) {
+                                pushToast('error', 'Wybierz grupę');
+                                return;
+                              }
+                              const res = await fetch('/api/admin/enrollment', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                  requestId: child.requestId,
+                                  groupId,
+                                }),
+                              });
+                              if (!res.ok) {
+                                pushToast('error', 'Nie udało się wysłać propozycji');
+                                return;
+                              }
+                              pushToast('success', `Wysłano propozycję dla: ${child.firstName} ${child.lastName}`);
+                              await loadData();
+                            }}
+                          >
+                            Wyślij propozycję dla dziecka
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
+            ) : (
+              <p className="mt-3 text-sm text-zinc-600">Nie znaleziono szczegółów zgłoszenia.</p>
+            )}
+            <div className="mt-4 flex justify-end">
+              <button
+                className="rounded-xl bg-zinc-200 px-3 py-2"
+                onClick={() => setProposalModalParentId(null)}
+              >
+                Zamknij
+              </button>
             </div>
           </div>
         </div>

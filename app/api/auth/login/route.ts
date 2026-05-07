@@ -1,15 +1,13 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { getRegistrationSchoolId, getUserByEmail, updateLastLogin } from "@/lib/db";
+import { getUserByEmail, updateLastLogin } from "@/lib/db";
 import { signToken } from "@/lib/auth";
 
 export async function POST(request: Request) {
   try {
-    const isDev = process.env.NODE_ENV !== "production";
     const body = await request.json();
     const email = typeof body?.email === "string" ? body.email.trim().toLowerCase() : "";
     const password = typeof body?.password === "string" ? body.password : "";
-    const schoolId = getRegistrationSchoolId();
 
     if (!email || !password) {
       return NextResponse.json(
@@ -21,28 +19,36 @@ export async function POST(request: Request) {
     const user = await getUserByEmail(email);
 
     if (!user) {
-      console.warn("Login denied: user not found in tenant", {
-        email,
-        schoolId,
-      });
       return NextResponse.json(
-        { message: isDev ? "Nie znaleziono użytkownika o podanym emailu" : "Nieprawidłowy email lub hasło" },
+        { message: "Nieprawidłowy email lub hasło" },
         { status: 401 }
       );
     }
 
-    const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+    const rawHash = typeof user.password_hash === "string" ? user.password_hash : "";
+    const hashCandidates = Array.from(
+      new Set([
+        rawHash,
+        rawHash.trim(),
+        rawHash.trim().replace(/^\$2y\$/, "$2b$"),
+      ])
+    ).filter((candidate) => candidate.length > 0);
+
+    let isPasswordValid = false;
+    for (const candidate of hashCandidates) {
+      try {
+        if (await bcrypt.compare(password, candidate)) {
+          isPasswordValid = true;
+          break;
+        }
+      } catch {
+        // Ignore malformed candidate and continue with next one.
+      }
+    }
 
     if (!isPasswordValid) {
-      console.warn("Login denied: password mismatch", {
-        email,
-        schoolId,
-        userId: user.id,
-        userSchoolId: user.school_id,
-        hashPrefix: user.password_hash?.slice(0, 4),
-      });
       return NextResponse.json(
-        { message: isDev ? "Hasło nie pasuje do użytkownika" : "Nieprawidłowy email lub hasło" },
+        { message: "Nieprawidłowy email lub hasło" },
         { status: 401 }
       );
     }

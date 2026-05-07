@@ -1052,8 +1052,10 @@ export async function createParentUserWithChildren(data: {
   /** Wymagane — zwykle `process.env.SCHOOL_ID` / `getRegistrationSchoolId()`; rodzic nigdy bez szkoły. */
   schoolId: string;
   phone?: string | null;
+  parentPhone?: string | null;
   confirmed?: boolean;
   accessLevel?: AccessLevel;
+  createEnrollmentRequests?: boolean;
   children: Array<{
     firstName: string;
     lastName: string;
@@ -1070,6 +1072,8 @@ export async function createParentUserWithChildren(data: {
   const role: UserRole = "PARENT";
   const confirmed = data.confirmed ?? false;
   const accessLevel = data.accessLevel ?? "PENDING";
+  const shouldCreateEnrollmentRequests = data.createEnrollmentRequests ?? false;
+  const parentPhone = data.parentPhone ?? data.phone ?? null;
 
   const client = await pool.connect();
   try {
@@ -1223,7 +1227,46 @@ export async function createParentUserWithChildren(data: {
             [String(ch.preferredLocationId).trim(), cid, schoolId]
           );
         }
-        children.push(mapChildRow(cr.rows[0]));
+        const mappedChild = mapChildRow(cr.rows[0]);
+        children.push(mappedChild);
+        if (shouldCreateEnrollmentRequests) {
+          await client.query(
+            `INSERT INTO enrollment_requests (
+               id,
+               school_id,
+               parent_first_name,
+               parent_last_name,
+               parent_email,
+               parent_phone,
+               child_first_name,
+               child_last_name,
+               child_birth_date,
+               preferred_location,
+               preferred_days,
+               notes,
+               status,
+               user_id,
+               created_at
+             ) VALUES (
+               $1, $2, $3, $4, $5, $6, $7, $8, $9::date, $10, NULL, NULL, 'NEW', $11, NOW()
+             )`,
+            [
+              randomUUID(),
+              schoolId,
+              data.firstName.trim(),
+              data.lastName.trim(),
+              String(data.email).trim().toLowerCase(),
+              parentPhone,
+              mappedChild.first_name,
+              mappedChild.last_name,
+              mappedChild.birth_date,
+              ch.preferredLocationId != null && String(ch.preferredLocationId).trim() !== ""
+                ? String(ch.preferredLocationId).trim()
+                : null,
+              userId,
+            ]
+          );
+        }
       }
     } else if (shape.hasStudentsTable) {
       for (const ch of data.children) {
@@ -1239,7 +1282,43 @@ export async function createParentUserWithChildren(data: {
           `SELECT * FROM students WHERE student_id = $1`,
           [sid]
         );
-        children.push(studentRowToChild(sr.rows[0]));
+        const mappedChild = studentRowToChild(sr.rows[0]);
+        children.push(mappedChild);
+        if (shouldCreateEnrollmentRequests) {
+          await client.query(
+            `INSERT INTO enrollment_requests (
+               id,
+               school_id,
+               parent_first_name,
+               parent_last_name,
+               parent_email,
+               parent_phone,
+               child_first_name,
+               child_last_name,
+               child_birth_date,
+               preferred_location,
+               preferred_days,
+               notes,
+               status,
+               user_id,
+               created_at
+             ) VALUES (
+               $1, $2, $3, $4, $5, $6, $7, $8, $9::date, NULL, NULL, NULL, 'NEW', $10, NOW()
+             )`,
+            [
+              randomUUID(),
+              schoolId,
+              data.firstName.trim(),
+              data.lastName.trim(),
+              String(data.email).trim().toLowerCase(),
+              parentPhone,
+              mappedChild.first_name,
+              mappedChild.last_name,
+              mappedChild.birth_date,
+              userId,
+            ]
+          );
+        }
       }
     } else {
       throw new Error("Brak tabeli children ani students — nie można zapisać dzieci.");

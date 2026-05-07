@@ -298,7 +298,9 @@ export async function POST(request: Request) {
       lastName: String(lastName).trim(),
       schoolId,
       phone: phoneNorm.value,
+      parentPhone: phoneNorm.value,
       accessLevel: "PENDING",
+      createEnrollmentRequests: true,
       children: normalizedChildren,
     });
 

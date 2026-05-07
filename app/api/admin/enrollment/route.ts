@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { randomUUID } from "crypto";
 import { canAccessSchoolAdminApis, queryDb, resolveAdminPanelTenant } from "@/lib/db";
 import { sendProposalEmail } from "@/lib/email";
 import { getTokenFromRequest } from "@/lib/auth";
+import type { EnrollmentStatus } from "@/lib/enrollment-status";
 
 export async function GET(request: NextRequest) {
   try {
@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
     const { tenant } = resolved;
 
     const parentsSchoolClause =
-      tenant.role === "MANAGER" ? `AND u.school_id = $1` : "";
+      tenant.role === "MANAGER" ? `AND er.school_id = $1` : "";
     const parentsParams = tenant.role === "MANAGER" ? [tenant.tenantSchoolId] : [];
 
     const parentsRes = await queryDb<{
@@ -26,34 +26,75 @@ export async function GET(request: NextRequest) {
       first_name: string;
       last_name: string;
       email: string;
-      access_level: string;
+      access_level: EnrollmentStatus;
       children_json: string;
     }>(
       `SELECT
-         u.id,
-         u.first_name,
-         u.last_name,
-         u.email,
-         u.access_level,
+         COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id, er.parent_email) AS id,
+         COALESCE(NULLIF(u.first_name, ''), er.parent_first_name) AS first_name,
+         COALESCE(NULLIF(u.last_name, ''), er.parent_last_name) AS last_name,
+         COALESCE(NULLIF(u.email, ''), er.parent_email) AS email,
+         CASE
+           WHEN MAX(
+             CASE
+               WHEN UPPER(BTRIM(COALESCE(er.status::text, ''))) IN ('PROPOSED', 'ACCEPTED', 'SIGNED') THEN 3
+               WHEN UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'NEW' THEN 1
+               ELSE 1
+             END
+           ) >= 3 THEN 'PROPOSED'
+           WHEN MAX(
+             CASE
+               WHEN UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'NEW' THEN 1
+               ELSE 0
+             END
+           ) = 1 THEN 'NEW'
+           ELSE 'NEW'
+         END AS access_level,
          COALESCE(
            JSON_AGG(
-             JSON_BUILD_OBJECT(
-               'id', c.id,
-               'firstName', c.first_name,
-               'lastName', c.last_name,
-               'confirmed', c.confirmed
+             DISTINCT JSONB_BUILD_OBJECT(
+               'id', COALESCE(c.id, er.id),
+               'requestId', er.id,
+               'firstName', COALESCE(c.first_name, er.child_first_name),
+               'lastName', COALESCE(c.last_name, er.child_last_name),
+               'confirmed', COALESCE(c.confirmed, FALSE),
+               'status', UPPER(BTRIM(COALESCE(er.status::text, 'NEW'))),
+               'birthDate', er.child_birth_date::text,
+               'preferredLocation', er.preferred_location,
+               'preferredDays', er.preferred_days,
+               'notes', er.notes,
+               'proposedGroupId', er.proposed_group_id,
+               'proposedAt', er.proposed_at
              )
-           ) FILTER (WHERE c.id IS NOT NULL),
+           ) FILTER (
+             WHERE COALESCE(c.id, er.id) IS NOT NULL
+               AND COALESCE(c.first_name, er.child_first_name, '') <> ''
+               AND COALESCE(c.last_name, er.child_last_name, '') <> ''
+           ),
            '[]'::json
          )::text AS children_json
-       FROM users u
+       FROM enrollment_requests er
+       LEFT JOIN users u
+         ON (
+           u.id = NULLIF(BTRIM(er.user_id), '')
+           OR (
+             u.school_id = er.school_id
+             AND LOWER(u.email::text) = LOWER(er.parent_email::text)
+           )
+         )
        LEFT JOIN children c
-         ON c.parent_id = u.id AND c.school_id = u.school_id
-       WHERE u.role = 'PARENT'
-         AND u.access_level <> 'ACTIVE'
+         ON c.parent_id = COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id)
+        AND c.school_id = er.school_id
+        AND c.first_name = er.child_first_name
+        AND c.last_name = er.child_last_name
+       WHERE UPPER(BTRIM(COALESCE(er.status::text, ''))) IN ('NEW', 'PROPOSED')
+         AND COALESCE(u.id, NULLIF(BTRIM(er.user_id), '')) IS NOT NULL
          ${parentsSchoolClause}
-       GROUP BY u.id
-       ORDER BY u.created_at DESC`,
+       GROUP BY COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id, er.parent_email),
+                COALESCE(NULLIF(u.first_name, ''), er.parent_first_name),
+                COALESCE(NULLIF(u.last_name, ''), er.parent_last_name),
+                COALESCE(NULLIF(u.email, ''), er.parent_email)
+       ORDER BY MAX(er.created_at) DESC`,
       parentsParams
     );
 
@@ -118,49 +159,72 @@ export async function POST(request: NextRequest) {
     const { tenant } = resolved;
 
     const body = await request.json();
-    const { parentId, groupId, priceMonthly } = body as {
-      parentId?: string;
+    const { requestId, groupId } = body as {
+      requestId?: string;
       groupId?: string;
-      priceMonthly?: number;
     };
-    if (!parentId || !groupId || typeof priceMonthly !== "number") {
+    if (!requestId || !groupId) {
       return NextResponse.json({ message: "Brak wymaganych pól" }, { status: 400 });
     }
 
-    const parentRes =
+    const enrollmentRes =
       tenant.role === "MANAGER"
         ? await queryDb<{
             id: string;
+            user_id: string;
             first_name: string;
             last_name: string;
             email: string;
             school_id: string;
+            child_first_name: string;
+            child_last_name: string;
           }>(
-            `SELECT id, first_name, last_name, email, school_id
-             FROM users
-             WHERE id = $1 AND school_id = $2 AND role = 'PARENT'
+            `SELECT er.id,
+                    u.id AS user_id,
+                    u.first_name,
+                    u.last_name,
+                    u.email,
+                    er.school_id,
+                    er.child_first_name,
+                    er.child_last_name
+             FROM enrollment_requests er
+             JOIN users u ON u.id = er.user_id
+             WHERE er.id = $1
+               AND er.school_id = $2
+               AND UPPER(BTRIM(COALESCE(er.status::text, ''))) IN ('NEW', 'PROPOSED')
+               AND u.role = 'PARENT'
              LIMIT 1`,
-            [parentId, tenant.tenantSchoolId]
+            [requestId, tenant.tenantSchoolId]
           )
         : await queryDb<{
             id: string;
+            user_id: string;
             first_name: string;
             last_name: string;
             email: string;
             school_id: string;
+            child_first_name: string;
+            child_last_name: string;
           }>(
-            `SELECT id, first_name, last_name, email, school_id
-             FROM users
-             WHERE id = $1 AND role = 'PARENT'
+            `SELECT er.id,
+                    u.id AS user_id,
+                    u.first_name,
+                    u.last_name,
+                    u.email,
+                    er.school_id,
+                    er.child_first_name,
+                    er.child_last_name
+             FROM enrollment_requests er
+             JOIN users u ON u.id = er.user_id
+             WHERE er.id = $1
+               AND UPPER(BTRIM(COALESCE(er.status::text, ''))) IN ('NEW', 'PROPOSED')
+               AND u.role = 'PARENT'
              LIMIT 1`,
-            [parentId]
+            [requestId]
           );
-    const parent = parentRes.rows[0];
-    if (!parent) return NextResponse.json({ message: "Nie znaleziono rodzica" }, { status: 404 });
-    if (!parent.school_id) {
-      return NextResponse.json({ message: "Rodzic nie ma przypisanej szkoły" }, { status: 400 });
-    }
-    const parentSchoolId = parent.school_id;
+    const enrollment = enrollmentRes.rows[0];
+    if (!enrollment) return NextResponse.json({ message: "Nie znaleziono zgłoszenia" }, { status: 404 });
+    const parentSchoolId = enrollment.school_id;
 
     const groupRes = await queryDb<{ id: string; name: string; location_name: string; schedule: string }>(
       `SELECT g.id,
@@ -183,35 +247,30 @@ export async function POST(request: NextRequest) {
     const group = groupRes.rows[0];
     if (!group) return NextResponse.json({ message: "Nie znaleziono grupy" }, { status: 404 });
 
-    const requestId = randomUUID();
     await queryDb(
-      `INSERT INTO enrollment_requests (
-        id, school_id, parent_first_name, parent_last_name, parent_email,
-        child_first_name, child_last_name, notes, status, proposed_group_id, proposed_at, user_id
-      )
-      SELECT
-        $1, $2, u.first_name, u.last_name, u.email,
-        c.first_name, c.last_name, $5, 'PROPOSED', $3, NOW(), u.id
-      FROM users u
-      LEFT JOIN children c ON c.parent_id = u.id AND c.school_id = u.school_id
-      WHERE u.id = $4
-      ORDER BY c.created_at ASC
-      LIMIT 1`,
-      [requestId, parentSchoolId, groupId, parentId, String(priceMonthly)]
+      `UPDATE enrollment_requests
+       SET status = 'PROPOSED',
+           proposed_group_id = $2,
+           proposed_at = NOW()
+       WHERE id = $1`,
+      [requestId, groupId]
     );
-    await queryDb(`UPDATE users SET access_level = 'PROPOSED' WHERE id = $1`, [parentId]);
+    await queryDb(`UPDATE users SET access_level = 'PROPOSED' WHERE id = $1`, [enrollment.user_id]);
     await queryDb(
       `UPDATE children
-       SET enrollment_request_id = $2
-       WHERE parent_id = $1 AND school_id = $3`,
-      [parentId, requestId, parentSchoolId]
+       SET enrollment_request_id = $1
+       WHERE parent_id = $2
+         AND school_id = $3
+         AND first_name = $4
+         AND last_name = $5`,
+      [requestId, enrollment.user_id, parentSchoolId, enrollment.child_first_name, enrollment.child_last_name]
     );
 
-    await sendProposalEmail(parent.email, `${parent.first_name} ${parent.last_name}`, {
+    await sendProposalEmail(enrollment.email, `${enrollment.first_name} ${enrollment.last_name}`, {
       groupName: group.name,
       locationName: group.location_name,
       schedule: group.schedule,
-      priceMonthly,
+      priceMonthly: 0,
     });
 
     return NextResponse.json({ message: "Propozycja została wysłana" });
