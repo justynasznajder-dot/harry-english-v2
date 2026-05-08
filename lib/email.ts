@@ -485,8 +485,161 @@ export type PublicEnrollmentBackupChild = {
   preferredLocationLabel: string;
 };
 
+export async function sendEnrollmentConfirmationToParent(params: {
+  parentFirstName: string;
+  parentLastName: string;
+  parentEmail: string;
+  children: PublicEnrollmentBackupChild[];
+}): Promise<void> {
+  const fromAddr = process.env.EMAIL_USER || "kontakt@harry-english.pl";
+  const logoCid = "harry-english-zyrafa-logo";
+
+  const childrenBlocks = params.children
+    .map(
+      (ch) => `
+        <tr>
+          <td style="padding:0 0 12px 0;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+              <tr>
+                <td style="border:1px solid #d9e0db;background:#ffffff;padding:14px 16px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#1f2937;">
+                  <strong>Dziecko ${ch.index}</strong><br />
+                  Imię: ${escapeHtmlForEmail(ch.firstName)}<br />
+                  Nazwisko: ${escapeHtmlForEmail(ch.lastName)}<br />
+                  Data urodzenia: ${escapeHtmlForEmail(ch.birthDate)}<br />
+                  Preferowana lokalizacja: ${escapeHtmlForEmail(ch.preferredLocationLabel)}
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>`
+    )
+    .join("");
+
+  const textChildren = params.children
+    .map(
+      (ch) =>
+        `${ch.index}. ${ch.firstName} ${ch.lastName}, ur. ${ch.birthDate}, preferowana lokalizacja: ${ch.preferredLocationLabel}`
+    )
+    .join("\n");
+
+  await transporter.sendMail({
+    from: {
+      name: "Harry English",
+      address: fromAddr,
+    },
+    to: params.parentEmail,
+    subject: "Potwierdzenie otrzymania zgłoszenia - Harry English",
+    html: `
+      <!DOCTYPE html>
+      <html>
+        <body style="margin:0;padding:0;background:#f3f5f4;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;background:#f3f5f4;">
+            <tr>
+              <td align="center" style="padding:24px 12px;">
+                <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;border-collapse:collapse;background:#ffffff;">
+                  <tr>
+                    <td style="background:#1e3d2f;padding:16px 20px;">
+                      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+                        <tr>
+                          <td align="left" valign="middle">
+                            <img src="cid:${logoCid}" alt="Harry English" width="56" style="display:block;border:0;outline:none;text-decoration:none;" />
+                          </td>
+                          <td align="right" valign="middle" style="font-family:Arial,Helvetica,sans-serif;color:#ffffff;font-size:22px;line-height:1.2;font-weight:700;">
+                            Harry English
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="height:6px;background:#f5c518;font-size:0;line-height:0;">&nbsp;</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:24px 22px 18px 22px;font-family:Arial,Helvetica,sans-serif;color:#1f2937;">
+                      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+                        <tr>
+                          <td style="font-size:22px;line-height:1.3;font-weight:700;color:#1e3d2f;padding:0 0 12px 0;">
+                            Potwierdzenie otrzymania zgłoszenia
+                          </td>
+                        </tr>
+                        <tr>
+                          <td style="font-size:15px;line-height:1.6;padding:0 0 16px 0;">
+                            Dziękujemy — Twoje zgłoszenie dotarło. Odezwiemy się do Ciebie wkrótce, aby ustalić szczegóły.
+                          </td>
+                        </tr>
+                        <tr>
+                          <td style="padding:0 0 16px 0;">
+                            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+                              <tr>
+                                <td style="border:1px solid #d9e0db;background:#f8faf8;padding:14px 16px;font-size:14px;line-height:1.6;">
+                                  <strong>Dane rodzica</strong><br />
+                                  Imię: ${escapeHtmlForEmail(params.parentFirstName)}<br />
+                                  Nazwisko: ${escapeHtmlForEmail(params.parentLastName)}
+                                </td>
+                              </tr>
+                            </table>
+                          </td>
+                        </tr>
+                        <tr>
+                          <td style="font-size:18px;line-height:1.4;font-weight:700;color:#1e3d2f;padding:0 0 10px 0;">
+                            Lista dzieci
+                          </td>
+                        </tr>
+                        ${childrenBlocks}
+                        <tr>
+                          <td style="font-size:14px;line-height:1.7;color:#374151;padding:4px 0 0 0;">
+                            Kontakt: <a href="mailto:kontakt@harry-english.pl" style="color:#1e3d2f;">kontakt@harry-english.pl</a><br />
+                            Strona: <a href="https://www.harry-english.pl" style="color:#1e3d2f;">www.harry-english.pl</a>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="background:#f8f8f8;border-top:1px solid #e5e7eb;padding:14px 22px;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.6;color:#6b7280;">
+                      Harry English<br />
+                      kontakt@harry-english.pl<br />
+                      www.harry-english.pl
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+      </html>
+    `,
+    text: `
+Potwierdzenie otrzymania zgłoszenia
+
+Dziękujemy — Twoje zgłoszenie dotarło.
+
+Dane rodzica:
+- Imię: ${params.parentFirstName}
+- Nazwisko: ${params.parentLastName}
+
+Lista dzieci:
+${textChildren}
+
+Odezwiemy się do Ciebie wkrótce, aby ustalić szczegóły.
+
+Kontakt:
+- kontakt@harry-english.pl
+- www.harry-english.pl
+    `.trim(),
+    attachments: [
+      {
+        filename: "zyrafa.svg",
+        path: `${process.cwd()}/public/images/2zyrafa2.svg`,
+        cid: logoCid,
+      },
+    ],
+  });
+}
+
 export async function sendPublicEnrollmentBackupEmail(params: {
   schoolId: string;
+  schoolName: string;
   parentFirstName: string;
   parentLastName: string;
   parentEmail: string;
@@ -540,8 +693,9 @@ export async function sendPublicEnrollmentBackupEmail(params: {
       <body style="font-family:Arial,sans-serif;line-height:1.5;color:#333;max-width:720px;">
         <h2 style="color:#175244;">Nowe zgłoszenie z formularza na stronie</h2>
         ${dbNote}
-        <h3 style="color:#175244;">Szkoła (school_id)</h3>
-        <p style="font-family:monospace;">${escapeHtmlForEmail(params.schoolId)}</p>
+        <h3 style="color:#175244;">Szkoła</h3>
+        <p><strong>Nazwa:</strong> ${escapeHtmlForEmail(params.schoolName)}</p>
+        <p style="font-family:monospace;"><strong>ID:</strong> ${escapeHtmlForEmail(params.schoolId)}</p>
         <h3 style="color:#175244;">Rodzic</h3>
         <ul>
           <li><strong>Imię:</strong> ${escapeHtmlForEmail(params.parentFirstName)}</li>
@@ -568,7 +722,8 @@ export async function sendPublicEnrollmentBackupEmail(params: {
     `,
     text: `
 ${params.dbSaveOk ? "Zapis w bazie: OK" : "UWAGA: BŁĄD ZAPISU W BAZIE"}
-Szkoła (school_id): ${params.schoolId}
+Szkoła: ${params.schoolName}
+Szkoła ID: ${params.schoolId}
 ${params.dbSaveOk ? "" : `Błąd: ${params.dbErrorMessage ?? ""}\n`}
 
 Rodzic:

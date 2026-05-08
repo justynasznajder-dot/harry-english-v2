@@ -2526,7 +2526,7 @@ export default function AdminPortal() {
 
       {proposalModalParentId && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
-          <div className="w-full max-w-4xl rounded-2xl bg-white p-5">
+          <div className="max-h-[85vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-5">
             <h3 className="text-lg font-semibold">Szczegóły zgłoszenia</h3>
             {proposalParent ? (
               <div className="mt-3">

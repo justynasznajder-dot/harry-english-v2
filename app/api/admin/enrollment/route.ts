@@ -31,9 +31,21 @@ export async function GET(request: NextRequest) {
     }>(
       `SELECT
          COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id, er.parent_email) AS id,
-         COALESCE(NULLIF(u.first_name, ''), er.parent_first_name) AS first_name,
-         COALESCE(NULLIF(u.last_name, ''), er.parent_last_name) AS last_name,
-         COALESCE(NULLIF(u.email, ''), er.parent_email) AS email,
+         COALESCE(
+           MAX(NULLIF(BTRIM(u.first_name), '')),
+           MAX(NULLIF(BTRIM(er.parent_first_name), '')),
+           ''
+         ) AS first_name,
+         COALESCE(
+           MAX(NULLIF(BTRIM(u.last_name), '')),
+           MAX(NULLIF(BTRIM(er.parent_last_name), '')),
+           ''
+         ) AS last_name,
+         COALESCE(
+           MAX(NULLIF(BTRIM(u.email), '')),
+           MAX(NULLIF(BTRIM(er.parent_email), '')),
+           ''
+         ) AS email,
          CASE
            WHEN MAX(
              CASE
@@ -96,10 +108,7 @@ export async function GET(request: NextRequest) {
            OR NULLIF(BTRIM(COALESCE(er.parent_email::text, '')), '') IS NOT NULL
          )
          ${parentsSchoolClause}
-       GROUP BY COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id, er.parent_email),
-                COALESCE(NULLIF(u.first_name, ''), er.parent_first_name),
-                COALESCE(NULLIF(u.last_name, ''), er.parent_last_name),
-                COALESCE(NULLIF(u.email, ''), er.parent_email)
+      GROUP BY COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id, er.parent_email)
        ORDER BY MAX(er.created_at) DESC`,
       parentsParams
     );

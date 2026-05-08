@@ -325,7 +325,7 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
               <p className="text-gray-600">
                 {mode === "login" && "Wprowadź swoje dane logowania"}
                 {mode === "register" &&
-                  "Wypełnij formularz — administracja odezwie się po rozpatrzeniu zgłoszenia."}
+                  "Wypełnij formularz — odezwiemy się do Ciebie żeby ustalić szczegóły"}
                 {mode === "forgot-password" && "Wyślemy Ci link do ustawienia nowego hasła"}
               </p>
             )}

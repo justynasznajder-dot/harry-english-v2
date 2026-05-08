@@ -10,17 +10,20 @@ import {
   insertPublicEnrollmentRequests,
   queryDb,
 } from "@/lib/db";
-import { sendPublicEnrollmentBackupEmail } from "@/lib/email";
+import {
+  sendEnrollmentConfirmationToParent,
+  sendPublicEnrollmentBackupEmail,
+} from "@/lib/email";
 
-/** Produkcja: kopia mailowa zgłoszeń na kontakt@ dla tej szkoły (backup przy awarii zapisu). */
-const ENROLLMENT_BACKUP_EMAIL_SCHOOL_ID =
-  "c93d5ac1-fa59-497f-b450-a4e50e1fb50d";
+/** Kopia mailowa zgłoszeń na kontakt@ dla wskazanych szkół (prod + dev). */
+const ENROLLMENT_BACKUP_EMAIL_SCHOOL_IDS = new Set([
+  "c93d5ac1-fa59-497f-b450-a4e50e1fb50d", // PROD
+  "efcb641a-e5bd-4e59-aa39-c08fd1b318e9", // DEV
+]);
 
 function shouldSendEnrollmentBackupEmail(schoolId: string): boolean {
-  return (
-    process.env.NODE_ENV === "production" &&
-    schoolId.trim().toLowerCase() ===
-      ENROLLMENT_BACKUP_EMAIL_SCHOOL_ID.toLowerCase()
+  return ENROLLMENT_BACKUP_EMAIL_SCHOOL_IDS.has(
+    schoolId.trim().toLowerCase(),
   );
 }
 
@@ -108,6 +111,19 @@ export async function POST(request: Request) {
         { message: "Nie skonfigurowano identyfikatora szkoły (SCHOOL_ID)." },
         { status: 500 }
       );
+    }
+    let schoolName = schoolId;
+    try {
+      const schoolRes = await queryDb<{ name: string }>(
+        `SELECT name
+         FROM schools
+         WHERE id::text = $1
+         LIMIT 1`,
+        [schoolId]
+      );
+      schoolName = schoolRes.rows[0]?.name?.trim() || schoolId;
+    } catch (schoolErr) {
+      console.error("Enrollment email: school name lookup failed:", schoolErr);
     }
     const shape = await getDbShape();
     if (shape.hasChildrenTable && !shape.hasStudentsTable) {
@@ -280,58 +296,66 @@ export async function POST(request: Request) {
       preferredLocationId: String(c.preferredLocationId ?? "").trim() || null,
     }));
 
+    const locationNameById = new Map<string, string>();
+    const locIds = [
+      ...new Set(
+        normalizedChildren
+          .map((c) => c.preferredLocationId)
+          .filter((id): id is string => Boolean(id && id.length > 0)),
+      ),
+    ];
+    if (locIds.length > 0) {
+      try {
+        const placeholders = locIds.map((_, j) => `$${j + 2}`).join(", ");
+        const locRes = await queryDb<{ id: string; name: string }>(
+          `SELECT id::text AS id, name FROM locations WHERE school_id::text = $1 AND id::text IN (${placeholders})`,
+          [schoolId, ...locIds]
+        );
+        for (const row of locRes.rows) {
+          locationNameById.set(row.id, row.name);
+        }
+      } catch (locLookupErr) {
+        console.error(
+          "Enrollment email: lookup location names failed:",
+          locLookupErr,
+        );
+      }
+    }
+
+    const enrollmentChildren = normalizedChildren.map((c, idx) => {
+      const lid = c.preferredLocationId;
+      const label = lid
+        ? (locationNameById.get(lid) ?? lid)
+        : "— (nie podano)";
+      return {
+        index: idx + 1,
+        firstName: c.firstName,
+        lastName: c.lastName,
+        birthDate: c.birthDate,
+        preferredLocationLabel: label,
+      };
+    });
+
+    const enrollmentEmailPayload = {
+      parentFirstName: String(firstName).trim(),
+      parentLastName: String(lastName).trim(),
+      parentEmail: String(email).trim().toLowerCase(),
+      children: enrollmentChildren,
+    };
+
     let enrollmentBackupPayload: Parameters<
       typeof sendPublicEnrollmentBackupEmail
     >[0] | null = null;
     if (shouldSendEnrollmentBackupEmail(schoolId)) {
-      const locationNameById = new Map<string, string>();
-      const locIds = [
-        ...new Set(
-          normalizedChildren
-            .map((c) => c.preferredLocationId)
-            .filter((id): id is string => Boolean(id && id.length > 0)),
-        ),
-      ];
-      if (locIds.length > 0) {
-        try {
-          const placeholders = locIds.map((_, j) => `$${j + 2}`).join(", ");
-          const locRes = await queryDb<{ id: string; name: string }>(
-            `SELECT id::text AS id, name FROM locations WHERE school_id::text = $1 AND id::text IN (${placeholders})`,
-            [schoolId, ...locIds]
-          );
-          for (const row of locRes.rows) {
-            locationNameById.set(row.id, row.name);
-          }
-        } catch (locLookupErr) {
-          console.error(
-            "Enrollment backup: lookup location names failed:",
-            locLookupErr,
-          );
-        }
-      }
-
-      const backupChildren = normalizedChildren.map((c, idx) => {
-        const lid = c.preferredLocationId;
-        const label = lid
-          ? (locationNameById.get(lid) ?? lid)
-          : "— (nie podano)";
-        return {
-          index: idx + 1,
-          firstName: c.firstName,
-          lastName: c.lastName,
-          birthDate: c.birthDate,
-          preferredLocationLabel: label,
-        };
-      });
-
       enrollmentBackupPayload = {
         schoolId,
-        parentFirstName: String(firstName).trim(),
-        parentLastName: String(lastName).trim(),
-        parentEmail: String(email).trim().toLowerCase(),
+        schoolName,
+        parentFirstName: enrollmentEmailPayload.parentFirstName,
+        parentLastName: enrollmentEmailPayload.parentLastName,
+        parentEmail: enrollmentEmailPayload.parentEmail,
         parentPhone: phoneNorm.value,
         rodoConsent: true,
-        children: backupChildren,
+        children: enrollmentEmailPayload.children,
         dbSaveOk: true,
       };
     }
@@ -377,6 +401,18 @@ export async function POST(request: Request) {
         );
       });
     }
+
+    void sendEnrollmentConfirmationToParent({
+      parentFirstName: enrollmentEmailPayload.parentFirstName,
+      parentLastName: enrollmentEmailPayload.parentLastName,
+      parentEmail: enrollmentEmailPayload.parentEmail,
+      children: enrollmentEmailPayload.children,
+    }).catch((mailErr) => {
+      console.error(
+        "Enrollment confirmation email to parent failed:",
+        mailErr,
+      );
+    });
 
     return NextResponse.json({
       message:
