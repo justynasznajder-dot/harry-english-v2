@@ -14,6 +14,90 @@ export const transporter = nodemailer.createTransport({
   },
 });
 
+const BRAND_GREEN_DARK = "#0f3c33";
+const BRAND_GREEN = "#175244";
+const BRAND_YELLOW = "#ffc94a";
+const BRAND_TEXT = "#1f2937";
+const BRAND_MUTED = "#6b7280";
+const BRAND_BG = "#f3f5f4";
+const BRAND_CARD_BG = "#ffffff";
+const BRAND_FONT = "Geist, Arial, Helvetica, sans-serif";
+
+function getAppBaseUrl(): string {
+  const raw = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  if (!raw) return "https://www.harry-english.pl";
+  return raw.replace(/\/$/, "");
+}
+
+function getPublicEmailAssetBaseUrl(): string {
+  const appUrl = getAppBaseUrl();
+  if (/localhost|127\.0\.0\.1|0\.0\.0\.0/i.test(appUrl)) {
+    return "https://www.harry-english.pl";
+  }
+  return appUrl;
+}
+
+function buildEmailShell(params: {
+  title: string;
+  intro?: string;
+  contentHtml: string;
+  footerHtml?: string;
+}): string {
+  const logoUrl = `${getPublicEmailAssetBaseUrl()}/images/2zyrafa2.svg`;
+  const footer =
+    params.footerHtml ??
+    `<p style="margin:0;">Harry English</p>
+     <p style="margin:4px 0 0 0;">kontakt@harry-english.pl</p>
+     <p style="margin:2px 0 0 0;">www.harry-english.pl</p>`;
+
+  return `<!DOCTYPE html>
+<html>
+  <body style="margin:0;padding:0;background:${BRAND_BG};">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;background:${BRAND_BG};">
+      <tr>
+        <td align="center" style="padding:24px 12px;">
+          <table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:640px;border-collapse:collapse;background:${BRAND_CARD_BG};border-radius:16px;overflow:hidden;">
+            <tr>
+              <td style="background:linear-gradient(180deg,#073229 0%,${BRAND_GREEN_DARK} 100%);padding:16px 20px;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+                  <tr>
+                    <td align="left" valign="middle">
+                      <img src="${logoUrl}" alt="Harry English" width="56" style="display:block;border:0;outline:none;text-decoration:none;" />
+                    </td>
+                    <td align="right" valign="middle" style="font-family:${BRAND_FONT};font-size:42px;line-height:1.1;font-weight:700;color:${BRAND_YELLOW};">
+                      Harry English
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="height:6px;background:${BRAND_YELLOW};font-size:0;line-height:0;">&nbsp;</td>
+            </tr>
+            <tr>
+              <td style="padding:24px 22px 18px 22px;font-family:${BRAND_FONT};color:${BRAND_TEXT};">
+                <h1 style="margin:0 0 12px 0;font-size:24px;line-height:1.3;color:${BRAND_GREEN};">${params.title}</h1>
+                ${
+                  params.intro
+                    ? `<p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;color:${BRAND_TEXT};">${params.intro}</p>`
+                    : ""
+                }
+                ${params.contentHtml}
+              </td>
+            </tr>
+            <tr>
+              <td style="background:#f8f8f8;border-top:1px solid #e5e7eb;padding:14px 22px;font-family:${BRAND_FONT};font-size:12px;line-height:1.6;color:${BRAND_MUTED};">
+                ${footer}
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+}
+
 // Funkcja do wysyłania emaila powitalnego
 export async function sendWelcomeEmail(
   to: string,
@@ -21,6 +105,7 @@ export async function sendWelcomeEmail(
   parentLastName: string,
   childFirstName: string
 ) {
+  const appUrl = getAppBaseUrl();
   const mailOptions = {
     from: {
       name: 'Harry English',
@@ -28,122 +113,34 @@ export async function sendWelcomeEmail(
     },
     to,
     subject: '🦒 Witamy w Harry English!',
-    html: `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <style>
-          body {
-            font-family: Arial, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            max-width: 600px;
-            margin: 0 auto;
-            padding: 20px;
-          }
-          .header {
-            background: linear-gradient(135deg, #0f3c33 0%, #175244 100%);
-            color: white;
-            padding: 30px;
-            border-radius: 10px;
-            text-align: center;
-            margin-bottom: 30px;
-          }
-          .content {
-            background: #f8f6f3;
-            padding: 30px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-          }
-          .button {
-            display: inline-block;
-            background: #ffc94a;
-            color: #3b2a10;
-            padding: 12px 30px;
-            text-decoration: none;
-            border-radius: 25px;
-            font-weight: bold;
-            margin: 20px 0;
-          }
-          .footer {
-            text-align: center;
-            color: #666;
-            font-size: 12px;
-            margin-top: 30px;
-            padding-top: 20px;
-            border-top: 1px solid #ddd;
-          }
-          h1 {
-            margin: 0;
-            font-size: 28px;
-          }
-          h2 {
-            color: #175244;
-            margin-top: 0;
-          }
-          ul {
-            list-style: none;
-            padding: 0;
-          }
-          li {
-            padding: 8px 0;
-            padding-left: 25px;
-            position: relative;
-          }
-          li:before {
-            content: "✓";
-            position: absolute;
-            left: 0;
-            color: #175244;
-            font-weight: bold;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <h1>🦒 Harry English</h1>
-          <p style="margin: 10px 0 0 0; font-size: 16px;">Witamy w naszej społeczności!</p>
-        </div>
-        
-        <div class="content">
-          <h2>Dzień dobry ${parentFirstName} ${parentLastName}!</h2>
-          
-          <p>Cieszymy się, że dołączyliście do Harry English wraz z <strong>${childFirstName}</strong>! 🎉</p>
-          
-          <p>Twoje konto zostało pomyślnie utworzone. Czekamy na kontakt z naszej strony i przygotowujemy dla Was spersonalizowany plan zajęć.</p>
-          
-          <h3>Co dalej?</h3>
-          <ul>
-            <li>Nasz lektor skontaktuje się z Tobą w ciągu 24-48 godzin</li>
-            <li>Ustalimy dogodne terminy zajęć dla ${childFirstName}</li>
-            <li>Otrzymasz harmonogram i materiały do nauki</li>
-            <li>Już wkrótce będziecie mogli korzystać z pełni możliwości portalu</li>
-          </ul>
-          
-          <p><strong>Prosimy o cierpliwość</strong> – skontaktujemy się z Tobą wkrótce, aby potwierdzić możliwe terminy zajęć i omówić szczegóły kursu.</p>
-          
-          <p>W międzyczasie możesz zalogować się do portalu i zapoznać się z interfejsem:</p>
-          
-          <center>
-            <a href="${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/portal" class="button">
-              Przejdź do portalu
-            </a>
-          </center>
-        </div>
-        
-        <div class="footer">
-          <p><strong>Harry English</strong></p>
-          <p>Masz pytania? Skontaktuj się z nami:<br>
-          📧 kontakt@harry-english.pl<br>
-          📱 +48 123 123 123</p>
-          <p style="margin-top: 15px;">
-            <a href="https://www.facebook.com/Zyrafa.Harry/?locale=pl_PL" style="color: #175244; text-decoration: none;">Facebook</a>
-          </p>
-        </div>
-      </body>
-      </html>
-    `,
+    html: buildEmailShell({
+      title: `Dzień dobry ${escapeHtmlForEmail(parentFirstName)} ${escapeHtmlForEmail(parentLastName)}!`,
+      intro: `Cieszymy się, że dołączyliście do Harry English wraz z ${escapeHtmlForEmail(childFirstName)}.`,
+      contentHtml: `
+        <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;">
+          Twoje konto zostało pomyślnie utworzone. Czekamy na kontakt z naszej strony i przygotowujemy dla Was spersonalizowany plan zajęć.
+        </p>
+        <p style="margin:0 0 8px 0;font-size:16px;line-height:1.5;font-weight:700;color:${BRAND_GREEN};">Co dalej?</p>
+        <ul style="margin:0 0 14px 18px;padding:0;font-size:15px;line-height:1.6;color:${BRAND_TEXT};">
+          <li>Nasz lektor skontaktuje się z Tobą w ciągu 24-48 godzin.</li>
+          <li>Ustalimy dogodne terminy zajęć dla ${escapeHtmlForEmail(childFirstName)}.</li>
+          <li>Otrzymasz harmonogram i materiały do nauki.</li>
+          <li>Już wkrótce będziecie mogli korzystać z pełni możliwości portalu.</li>
+        </ul>
+        <p style="margin:0 0 14px 0;font-size:15px;line-height:1.6;">
+          <strong>Prosimy o cierpliwość</strong> - skontaktujemy się z Tobą wkrótce, aby potwierdzić możliwe terminy zajęć i omówić szczegóły kursu.
+        </p>
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+          <tr>
+            <td style="border-radius:999px;background:${BRAND_YELLOW};">
+              <a href="${appUrl}/portal" style="display:inline-block;padding:12px 24px;font-family:${BRAND_FONT};font-size:14px;font-weight:700;color:#3b2a10;text-decoration:none;">
+                Przejdź do portalu
+              </a>
+            </td>
+          </tr>
+        </table>
+      `,
+    }),
     text: `
 Witaj ${parentFirstName} ${parentLastName}!
 
@@ -178,7 +175,7 @@ export async function sendPasswordResetEmail(
   resetToken: string,
   parentFirstName: string
 ) {
-  const resetUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/reset-password?token=${resetToken}`;
+  const resetUrl = `${getAppBaseUrl()}/reset-password?token=${resetToken}`;
   
   const mailOptions = {
     from: {
@@ -187,110 +184,34 @@ export async function sendPasswordResetEmail(
     },
     to,
     subject: '🔐 Reset hasła - Harry English',
-    html: `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <style>
-          body {
-            font-family: Arial, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            max-width: 600px;
-            margin: 0 auto;
-            padding: 20px;
-          }
-          .header {
-            background: linear-gradient(135deg, #0f3c33 0%, #175244 100%);
-            color: white;
-            padding: 30px;
-            border-radius: 10px;
-            text-align: center;
-            margin-bottom: 30px;
-          }
-          .content {
-            background: #f8f6f3;
-            padding: 30px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-          }
-          .button {
-            display: inline-block;
-            background: #ffc94a;
-            color: #3b2a10;
-            padding: 12px 30px;
-            text-decoration: none;
-            border-radius: 25px;
-            font-weight: bold;
-            margin: 20px 0;
-          }
-          .warning {
-            background: #fff3cd;
-            border-left: 4px solid #ffc107;
-            padding: 15px;
-            margin: 20px 0;
-            border-radius: 5px;
-          }
-          .footer {
-            text-align: center;
-            color: #666;
-            font-size: 12px;
-            margin-top: 30px;
-            padding-top: 20px;
-            border-top: 1px solid #ddd;
-          }
-          h1 {
-            margin: 0;
-            font-size: 28px;
-          }
-          h2 {
-            color: #175244;
-            margin-top: 0;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <h1>🦒 Harry English</h1>
-          <p style="margin: 10px 0 0 0; font-size: 16px;">Reset hasła</p>
+    html: buildEmailShell({
+      title: `Dzień dobry ${escapeHtmlForEmail(parentFirstName)}!`,
+      intro: "Otrzymaliśmy prośbę o zresetowanie hasła do Twojego konta w Harry English.",
+      contentHtml: `
+        <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;">Aby ustawić nowe hasło, kliknij poniższy przycisk:</p>
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-bottom:14px;">
+          <tr>
+            <td style="border-radius:999px;background:${BRAND_YELLOW};">
+              <a href="${resetUrl}" style="display:inline-block;padding:12px 24px;font-family:${BRAND_FONT};font-size:14px;font-weight:700;color:#3b2a10;text-decoration:none;">
+                Ustaw nowe hasło
+              </a>
+            </td>
+          </tr>
+        </table>
+        <p style="margin:0 0 14px 0;font-size:14px;line-height:1.6;color:${BRAND_MUTED};">
+          Lub skopiuj i wklej ten link do przeglądarki:<br />
+          <a href="${resetUrl}" style="color:${BRAND_GREEN};word-break:break-all;">${resetUrl}</a>
+        </p>
+        <div style="background:#fff3cd;border-left:4px solid #f59e0b;padding:14px;border-radius:8px;">
+          <p style="margin:0 0 8px 0;font-size:14px;line-height:1.5;font-weight:700;">Ważne informacje:</p>
+          <ul style="margin:0 0 0 18px;padding:0;font-size:14px;line-height:1.6;">
+            <li>Link jest ważny przez 1 godzinę.</li>
+            <li>Jeśli nie prosiłeś/aś o reset hasła, zignoruj tę wiadomość.</li>
+            <li>Twoje obecne hasło pozostaje aktywne do momentu ustawienia nowego.</li>
+          </ul>
         </div>
-        
-        <div class="content">
-          <h2>Dzień dobry ${parentFirstName}!</h2>
-          
-          <p>Otrzymaliśmy prośbę o zresetowanie hasła do Twojego konta w Harry English.</p>
-          
-          <p>Aby ustawić nowe hasło, kliknij poniższy przycisk:</p>
-          
-          <center>
-            <a href="${resetUrl}" class="button">
-              Ustaw nowe hasło
-            </a>
-          </center>
-          
-          <p style="color: #666; font-size: 14px;">Lub skopiuj i wklej ten link do przeglądarki:<br>
-          <a href="${resetUrl}" style="color: #175244; word-break: break-all;">${resetUrl}</a></p>
-          
-          <div class="warning">
-            <strong>⚠️ Ważne informacje:</strong>
-            <ul style="margin: 10px 0 0 0; padding-left: 20px;">
-              <li>Link jest ważny przez 1 godzinę</li>
-              <li>Jeśli nie prosiłeś/aś o reset hasła, zignoruj tę wiadomość</li>
-              <li>Twoje obecne hasło pozostaje aktywne do momentu ustawienia nowego</li>
-            </ul>
-          </div>
-        </div>
-        
-        <div class="footer">
-          <p><strong>Harry English</strong></p>
-          <p>Masz pytania? Skontaktuj się z nami:<br>
-          📧 kontakt@harry-english.pl<br>
-          📱 +48 123 123 123</p>
-        </div>
-      </body>
-      </html>
-    `,
+      `,
+    }),
     text: `
 Reset hasła - Harry English
 
@@ -334,117 +255,25 @@ export async function sendResignationEmail(
     },
     to: process.env.EMAIL_USER || 'kontakt@harry-english.pl',
     subject: `🚨 Rezygnacja z kursu - ${childFirstName} ${childLastName}`,
-    html: `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <style>
-          body {
-            font-family: Arial, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            max-width: 600px;
-            margin: 0 auto;
-            padding: 20px;
-          }
-          .header {
-            background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
-            color: white;
-            padding: 30px;
-            border-radius: 10px;
-            text-align: center;
-            margin-bottom: 30px;
-          }
-          .content {
-            background: #f8f6f3;
-            padding: 30px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-          }
-          .info-box {
-            background: #fff3cd;
-            border-left: 4px solid #ffc107;
-            padding: 15px;
-            margin: 20px 0;
-            border-radius: 5px;
-          }
-          .reason-box {
-            background: white;
-            border: 2px solid #dc2626;
-            padding: 20px;
-            margin: 20px 0;
-            border-radius: 5px;
-          }
-          .footer {
-            text-align: center;
-            color: #666;
-            font-size: 12px;
-            margin-top: 30px;
-            padding-top: 20px;
-            border-top: 1px solid #ddd;
-          }
-          h1 {
-            margin: 0;
-            font-size: 28px;
-          }
-          h2 {
-            color: #175244;
-            margin-top: 0;
-          }
-          .student-info {
-            background: white;
-            padding: 15px;
-            border-radius: 5px;
-            margin: 15px 0;
-          }
-          .student-info p {
-            margin: 5px 0;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <h1>🚨 Rezygnacja z kursu</h1>
-          <p style="margin: 10px 0 0 0; font-size: 16px;">Nowa zgłoszona rezygnacja</p>
+    html: buildEmailShell({
+      title: "Rezygnacja z kursu",
+      intro: "Rodzic zgłosił chęć rezygnacji z kursu dla swojego dziecka.",
+      contentHtml: `
+        <div style="border:1px solid #d9e0db;background:#ffffff;padding:14px 16px;border-radius:10px;margin-bottom:12px;">
+          <p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;"><strong>Dziecko:</strong> ${escapeHtmlForEmail(childFirstName)} ${escapeHtmlForEmail(childLastName)}</p>
+          <p style="margin:0;font-size:14px;line-height:1.6;"><strong>ID studenta:</strong> ${escapeHtmlForEmail(studentId)}</p>
         </div>
-        
-        <div class="content">
-          <h2>Informacje o rezygnacji</h2>
-          
-          <div class="info-box">
-            <strong>⚠️ Rodzic zgłosił chęć rezygnacji z kursu dla swojego dziecka.</strong>
-          </div>
-          
-          <div class="student-info">
-            <h3 style="margin-top: 0; color: #175244;">Dane dziecka:</h3>
-            <p><strong>Imię i nazwisko:</strong> ${childFirstName} ${childLastName}</p>
-            <p><strong>ID studenta:</strong> ${studentId}</p>
-          </div>
-          
-          <div class="student-info">
-            <h3 style="margin-top: 0; color: #175244;">Dane rodzica:</h3>
-            <p><strong>Imię i nazwisko:</strong> ${parentFirstName} ${parentLastName}</p>
-            <p><strong>Email:</strong> ${parentEmail}</p>
-          </div>
-          
-          <div class="reason-box">
-            <h3 style="margin-top: 0; color: #dc2626;">Powód rezygnacji:</h3>
-            <p style="white-space: pre-wrap; margin: 0;">${reason}</p>
-          </div>
-          
-          <p style="margin-top: 20px; color: #666; font-size: 14px;">
-            Prosimy o kontakt z rodzicem w celu potwierdzenia rezygnacji i omówienia szczegółów.
-          </p>
+        <div style="border:1px solid #d9e0db;background:#ffffff;padding:14px 16px;border-radius:10px;margin-bottom:12px;">
+          <p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;"><strong>Rodzic:</strong> ${escapeHtmlForEmail(parentFirstName)} ${escapeHtmlForEmail(parentLastName)}</p>
+          <p style="margin:0;font-size:14px;line-height:1.6;"><strong>Email:</strong> ${escapeHtmlForEmail(parentEmail)}</p>
         </div>
-        
-        <div class="footer">
-          <p><strong>Harry English</strong></p>
-          <p>System automatycznego powiadamiania</p>
+        <div style="border:2px solid #dc2626;background:#fff;padding:14px 16px;border-radius:10px;">
+          <p style="margin:0 0 8px 0;font-size:14px;font-weight:700;color:#b91c1c;">Powód rezygnacji</p>
+          <p style="margin:0;font-size:14px;line-height:1.6;white-space:pre-wrap;">${escapeHtmlForEmail(reason)}</p>
         </div>
-      </body>
-      </html>
-    `,
+      `,
+      footerHtml: `<p style="margin:0;">Harry English</p><p style="margin:4px 0 0 0;">System automatycznego powiadamiania</p>`,
+    }),
     text: `
 Rezygnacja z kursu - ${childFirstName} ${childLastName}
 
@@ -495,8 +324,6 @@ export async function sendEnrollmentConfirmationToParent(params: {
   children: PublicEnrollmentBackupChild[];
 }): Promise<void> {
   const fromAddr = process.env.EMAIL_USER || "kontakt@harry-english.pl";
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://www.harry-english.pl";
-  const logoUrl = `${appUrl.replace(/\/$/, "")}/images/2zyrafa2.svg`;
 
   const childrenBlocks = params.children
     .map(
@@ -533,86 +360,23 @@ export async function sendEnrollmentConfirmationToParent(params: {
     },
     to: params.parentEmail,
     subject: "Potwierdzenie otrzymania zgłoszenia - Harry English",
-    html: `
-      <!DOCTYPE html>
-      <html>
-        <body style="margin:0;padding:0;background:#f3f5f4;">
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;background:#f3f5f4;">
-            <tr>
-              <td align="center" style="padding:24px 12px;">
-                <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;border-collapse:collapse;background:#ffffff;">
-                  <tr>
-                    <td style="background:#1e3d2f;padding:16px 20px;">
-                      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
-                        <tr>
-                          <td align="left" valign="middle">
-                            <img src="${logoUrl}" alt="Harry English" width="56" style="display:block;border:0;outline:none;text-decoration:none;" />
-                          </td>
-                          <td align="right" valign="middle" style="font-family:Arial,Helvetica,sans-serif;color:#ffffff;font-size:22px;line-height:1.2;font-weight:700;">
-                            Harry English
-                          </td>
-                        </tr>
-                      </table>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td style="height:6px;background:#f5c518;font-size:0;line-height:0;">&nbsp;</td>
-                  </tr>
-                  <tr>
-                    <td style="padding:24px 22px 18px 22px;font-family:Arial,Helvetica,sans-serif;color:#1f2937;">
-                      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
-                        <tr>
-                          <td style="font-size:22px;line-height:1.3;font-weight:700;color:#1e3d2f;padding:0 0 12px 0;">
-                            Potwierdzenie otrzymania zgłoszenia
-                          </td>
-                        </tr>
-                        <tr>
-                          <td style="font-size:15px;line-height:1.6;padding:0 0 16px 0;">
-                            Dziękujemy — Twoje zgłoszenie dotarło. Odezwiemy się do Ciebie wkrótce, aby ustalić szczegóły.
-                          </td>
-                        </tr>
-                        <tr>
-                          <td style="padding:0 0 16px 0;">
-                            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
-                              <tr>
-                                <td style="border:1px solid #d9e0db;background:#f8faf8;padding:14px 16px;font-size:14px;line-height:1.6;">
-                                  <strong>Dane rodzica</strong><br />
-                                  Imię: ${escapeHtmlForEmail(params.parentFirstName)}<br />
-                                  Nazwisko: ${escapeHtmlForEmail(params.parentLastName)}
-                                </td>
-                              </tr>
-                            </table>
-                          </td>
-                        </tr>
-                        <tr>
-                          <td style="font-size:18px;line-height:1.4;font-weight:700;color:#1e3d2f;padding:0 0 10px 0;">
-                            Lista dzieci
-                          </td>
-                        </tr>
-                        ${childrenBlocks}
-                        <tr>
-                          <td style="font-size:14px;line-height:1.7;color:#374151;padding:4px 0 0 0;">
-                            Kontakt: <a href="mailto:kontakt@harry-english.pl" style="color:#1e3d2f;">kontakt@harry-english.pl</a><br />
-                            Strona: <a href="https://www.harry-english.pl" style="color:#1e3d2f;">www.harry-english.pl</a>
-                          </td>
-                        </tr>
-                      </table>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td style="background:#f8f8f8;border-top:1px solid #e5e7eb;padding:14px 22px;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.6;color:#6b7280;">
-                      Harry English<br />
-                      kontakt@harry-english.pl<br />
-                      www.harry-english.pl
-                    </td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
-          </table>
-        </body>
-      </html>
-    `,
+    html: buildEmailShell({
+      title: "Potwierdzenie otrzymania zgłoszenia",
+      intro: "Dziękujemy - Twoje zgłoszenie dotarło. Odezwiemy się do Ciebie wkrótce, aby ustalić szczegóły.",
+      contentHtml: `
+        <div style="border:1px solid #d9e0db;background:#f8faf8;padding:14px 16px;border-radius:10px;margin-bottom:14px;font-size:14px;line-height:1.6;">
+          <strong>Dane rodzica</strong><br />
+          Imię: ${escapeHtmlForEmail(params.parentFirstName)}<br />
+          Nazwisko: ${escapeHtmlForEmail(params.parentLastName)}
+        </div>
+        <p style="margin:0 0 10px 0;font-size:18px;line-height:1.4;font-weight:700;color:${BRAND_GREEN};">
+          Lista dzieci
+        </p>
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+          ${childrenBlocks}
+        </table>
+      `,
+    }),
     text: `
 Potwierdzenie otrzymania zgłoszenia
 
@@ -684,24 +448,22 @@ export async function sendPublicEnrollmentBackupEmail(params: {
     },
     to,
     subject: `${subjectPrefix} — ${params.parentFirstName} ${params.parentLastName}`,
-    html: `
-      <!DOCTYPE html>
-      <html><head><meta charset="utf-8" /></head>
-      <body style="font-family:Arial,sans-serif;line-height:1.5;color:#333;max-width:720px;">
-        <h2 style="color:#175244;">Nowe zgłoszenie z formularza na stronie</h2>
+    html: buildEmailShell({
+      title: "Nowe zgłoszenie z formularza na stronie",
+      contentHtml: `
         ${dbNote}
-        <h3 style="color:#175244;">Szkoła</h3>
-        <p><strong>Nazwa:</strong> ${escapeHtmlForEmail(params.schoolName)}</p>
-        <h3 style="color:#175244;">Rodzic</h3>
-        <ul>
+        <p style="margin:12px 0 6px 0;font-size:16px;line-height:1.5;font-weight:700;color:${BRAND_GREEN};">Szkoła</p>
+        <p style="margin:0 0 12px 0;font-size:14px;line-height:1.6;"><strong>Nazwa:</strong> ${escapeHtmlForEmail(params.schoolName)}</p>
+        <p style="margin:0 0 6px 0;font-size:16px;line-height:1.5;font-weight:700;color:${BRAND_GREEN};">Rodzic</p>
+        <ul style="margin:0 0 12px 18px;padding:0;font-size:14px;line-height:1.6;">
           <li><strong>Imię:</strong> ${escapeHtmlForEmail(params.parentFirstName)}</li>
           <li><strong>Nazwisko:</strong> ${escapeHtmlForEmail(params.parentLastName)}</li>
           <li><strong>Email:</strong> ${escapeHtmlForEmail(params.parentEmail)}</li>
           <li><strong>Telefon:</strong> ${escapeHtmlForEmail(params.parentPhone)}</li>
           <li><strong>Zgoda RODO:</strong> ${params.rodoConsent ? "tak" : "nie"}</li>
         </ul>
-        <h3 style="color:#175244;">Dzieci</h3>
-        <table style="border-collapse:collapse;width:100%;font-size:14px;">
+        <p style="margin:0 0 8px 0;font-size:16px;line-height:1.5;font-weight:700;color:${BRAND_GREEN};">Dzieci</p>
+        <table role="presentation" style="border-collapse:collapse;width:100%;font-size:14px;">
           <thead>
             <tr style="background:#f0f0f0;">
               <th style="padding:8px;border:1px solid #ccc;text-align:left;">#</th>
@@ -713,9 +475,9 @@ export async function sendPublicEnrollmentBackupEmail(params: {
           </thead>
           <tbody>${rowsHtml}</tbody>
         </table>
-        <p style="margin-top:24px;font-size:12px;color:#666;">Wiadomość wygenerowana automatycznie — kopia zapasowa treści formularza.</p>
-      </body></html>
-    `,
+        <p style="margin:14px 0 0 0;font-size:12px;color:${BRAND_MUTED};">Wiadomość wygenerowana automatycznie — kopia zapasowa treści formularza.</p>
+      `,
+    }),
     text: `
 ${params.dbSaveOk ? "Zapis w bazie: OK" : "UWAGA: BŁĄD ZAPISU W BAZIE"}
 Szkoła: ${params.schoolName}
@@ -762,17 +524,19 @@ export async function sendProposalEmail(
     },
     to,
     subject: "Nowa propozycja grupy - Harry English",
-    html: `
-      <p>Dzień dobry ${parentName},</p>
-      <p>Przygotowaliśmy propozycję grupy dla Twojego dziecka:</p>
-      <ul>
-        <li><strong>Grupa:</strong> ${proposal.groupName}</li>
-        <li><strong>Lokalizacja:</strong> ${proposal.locationName}</li>
-        <li><strong>Termin:</strong> ${proposal.schedule}</li>
-        <li><strong>Cena miesięczna:</strong> ${proposal.priceMonthly} zł</li>
-      </ul>
-      <p>Zaloguj się do portalu, aby zaakceptować termin lub poprosić o inny.</p>
-    `,
+    html: buildEmailShell({
+      title: `Dzień dobry ${escapeHtmlForEmail(parentName)},`,
+      intro: "Przygotowaliśmy propozycję grupy dla Twojego dziecka.",
+      contentHtml: `
+        <ul style="margin:0 0 12px 18px;padding:0;font-size:15px;line-height:1.6;">
+          <li><strong>Grupa:</strong> ${escapeHtmlForEmail(proposal.groupName)}</li>
+          <li><strong>Lokalizacja:</strong> ${escapeHtmlForEmail(proposal.locationName)}</li>
+          <li><strong>Termin:</strong> ${escapeHtmlForEmail(proposal.schedule)}</li>
+          <li><strong>Cena miesięczna:</strong> ${proposal.priceMonthly} zł</li>
+        </ul>
+        <p style="margin:0;font-size:15px;line-height:1.6;">Zaloguj się do portalu, aby zaakceptować termin lub poprosić o inny.</p>
+      `,
+    }),
     text: `Dzień dobry ${parentName},
 Przygotowaliśmy propozycję grupy:
 - Grupa: ${proposal.groupName}
@@ -795,12 +559,14 @@ export async function sendContractEmail(
     },
     to,
     subject: "Umowa gotowa do podpisu - Harry English",
-    html: `
-      <p>Dzień dobry ${parentName},</p>
-      <p>Twoja umowa została przygotowana. Zapoznaj się z nią i podpisz ją w portalu.</p>
-      <hr />
-      ${contractHtml}
-    `,
+    html: buildEmailShell({
+      title: `Dzień dobry ${escapeHtmlForEmail(parentName)},`,
+      intro: "Twoja umowa została przygotowana. Zapoznaj się z nią i podpisz ją w portalu.",
+      contentHtml: `
+        <hr style="border:none;border-top:1px solid #e5e7eb;margin:0 0 12px 0;" />
+        ${contractHtml}
+      `,
+    }),
     text: `Dzień dobry ${parentName}, Twoja umowa została przygotowana. Zaloguj się do portalu i podpisz ją elektronicznie.`,
   });
 }
@@ -817,11 +583,14 @@ export async function sendSignedContractEmail(
     },
     to: recipients.join(", "),
     subject: "Podpisana umowa - Harry English",
-    html: `
-      <p>Umowa została podpisana elektronicznie.</p>
-      <hr />
-      ${contractHtml}
-    `,
+    html: buildEmailShell({
+      title: "Podpisana umowa",
+      intro: "Umowa została podpisana elektronicznie.",
+      contentHtml: `
+        <hr style="border:none;border-top:1px solid #e5e7eb;margin:0 0 12px 0;" />
+        ${contractHtml}
+      `,
+    }),
     text: "Umowa została podpisana elektronicznie. Szczegóły znajdują się w wersji HTML wiadomości.",
   });
 }

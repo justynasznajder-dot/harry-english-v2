@@ -69,7 +69,7 @@ export default function HomePage() {
                   className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-[#ffc94a] focus-visible:ring-offset-2 focus-visible:ring-offset-[#073229] rounded"
                 >
                   <ReloadableImage
-                    src="/images/harry_english_napis.png"
+                    src="/images/2zyrafa2.svg"
                     alt="Harry English logo"
                     width={220}
                     height={120}
