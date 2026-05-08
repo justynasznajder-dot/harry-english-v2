@@ -5,6 +5,9 @@ export const transporter = nodemailer.createTransport({
   host: 'smtppro.zoho.eu',
   port: 587,
   secure: false,
+  connectionTimeout: 10_000,
+  greetingTimeout: 10_000,
+  socketTimeout: 10_000,
   auth: {
     user: process.env.EMAIL_USER,
     pass: (process.env.EMAIL_PASS ?? '').trim(),

@@ -2527,7 +2527,15 @@ export default function AdminPortal() {
       {proposalModalParentId && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
           <div className="max-h-[85vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-5">
-            <h3 className="text-lg font-semibold">Szczegóły zgłoszenia</h3>
+            <div className="sticky top-0 z-10 -mx-5 -mt-5 mb-3 flex items-center justify-between border-b border-emerald-100 bg-white px-5 py-3">
+              <h3 className="text-lg font-semibold">Szczegóły zgłoszenia</h3>
+              <button
+                className="rounded-xl bg-zinc-200 px-3 py-2 text-sm"
+                onClick={() => setProposalModalParentId(null)}
+              >
+                Zamknij
+              </button>
+            </div>
             {proposalParent ? (
               <div className="mt-3">
                 <p className="font-semibold">
@@ -2607,7 +2615,7 @@ export default function AdminPortal() {
             ) : (
               <p className="mt-3 text-sm text-zinc-600">Nie znaleziono szczegółów zgłoszenia.</p>
             )}
-            <div className="mt-4 flex justify-end">
+            <div className="sticky bottom-0 z-10 -mx-5 -mb-5 mt-4 flex justify-end border-t border-emerald-100 bg-white px-5 py-3">
               <button
                 className="rounded-xl bg-zinc-200 px-3 py-2"
                 onClick={() => setProposalModalParentId(null)}

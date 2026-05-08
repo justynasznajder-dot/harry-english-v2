@@ -390,28 +390,28 @@ export async function POST(request: Request) {
       throw insertErr;
     }
 
+    const postSaveEmailJobs: Array<Promise<void>> = [];
     if (enrollmentBackupPayload) {
-      void sendPublicEnrollmentBackupEmail({
-        ...enrollmentBackupPayload,
-        dbSaveOk: true,
-      }).catch((mailErr) => {
-        console.error(
-          "Enrollment backup email after success failed:",
-          mailErr,
-        );
-      });
-    }
-
-    void sendEnrollmentConfirmationToParent({
-      parentFirstName: enrollmentEmailPayload.parentFirstName,
-      parentLastName: enrollmentEmailPayload.parentLastName,
-      parentEmail: enrollmentEmailPayload.parentEmail,
-      children: enrollmentEmailPayload.children,
-    }).catch((mailErr) => {
-      console.error(
-        "Enrollment confirmation email to parent failed:",
-        mailErr,
+      postSaveEmailJobs.push(
+        sendPublicEnrollmentBackupEmail({
+          ...enrollmentBackupPayload,
+          dbSaveOk: true,
+        })
       );
+    }
+    postSaveEmailJobs.push(
+      sendEnrollmentConfirmationToParent({
+        parentFirstName: enrollmentEmailPayload.parentFirstName,
+        parentLastName: enrollmentEmailPayload.parentLastName,
+        parentEmail: enrollmentEmailPayload.parentEmail,
+        children: enrollmentEmailPayload.children,
+      })
+    );
+    const postSaveEmailResults = await Promise.allSettled(postSaveEmailJobs);
+    postSaveEmailResults.forEach((result) => {
+      if (result.status === "rejected") {
+        console.error("Enrollment post-save email failed:", result.reason);
+      }
     });
 
     return NextResponse.json({
