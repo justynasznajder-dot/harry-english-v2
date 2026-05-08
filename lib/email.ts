@@ -43,7 +43,7 @@ function buildEmailShell(params: {
   contentHtml: string;
   footerHtml?: string;
 }): string {
-  const logoUrl = `${getPublicEmailAssetBaseUrl()}/images/2zyrafa2.svg`;
+  const logoUrl = `${getPublicEmailAssetBaseUrl()}/images/2zyrafa2.png`;
   const footer =
     params.footerHtml ??
     `<p style="margin:0;">Harry English</p>
@@ -62,7 +62,7 @@ function buildEmailShell(params: {
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
                   <tr>
                     <td align="left" valign="middle">
-                      <img src="${logoUrl}" alt="Harry English" width="56" style="display:block;border:0;outline:none;text-decoration:none;" />
+                      <img src="${logoUrl}" alt="" width="56" style="display:block;border:0;outline:none;text-decoration:none;" />
                     </td>
                     <td align="right" valign="middle" style="font-family:${BRAND_FONT};font-size:42px;line-height:1.1;font-weight:700;color:${BRAND_YELLOW};">
                       Harry English
