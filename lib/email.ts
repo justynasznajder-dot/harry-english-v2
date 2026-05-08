@@ -495,7 +495,8 @@ export async function sendEnrollmentConfirmationToParent(params: {
   children: PublicEnrollmentBackupChild[];
 }): Promise<void> {
   const fromAddr = process.env.EMAIL_USER || "kontakt@harry-english.pl";
-  const logoCid = "harry-english-zyrafa-logo";
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://www.harry-english.pl";
+  const logoUrl = `${appUrl.replace(/\/$/, "")}/images/2zyrafa2.svg`;
 
   const childrenBlocks = params.children
     .map(
@@ -545,7 +546,7 @@ export async function sendEnrollmentConfirmationToParent(params: {
                       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
                         <tr>
                           <td align="left" valign="middle">
-                            <img src="cid:${logoCid}" alt="Harry English" width="56" style="display:block;border:0;outline:none;text-decoration:none;" />
+                            <img src="${logoUrl}" alt="Harry English" width="56" style="display:block;border:0;outline:none;text-decoration:none;" />
                           </td>
                           <td align="right" valign="middle" style="font-family:Arial,Helvetica,sans-serif;color:#ffffff;font-size:22px;line-height:1.2;font-weight:700;">
                             Harry English
@@ -630,13 +631,6 @@ Kontakt:
 - kontakt@harry-english.pl
 - www.harry-english.pl
     `.trim(),
-    attachments: [
-      {
-        filename: "zyrafa.svg",
-        path: `${process.cwd()}/public/images/2zyrafa2.svg`,
-        cid: logoCid,
-      },
-    ],
   });
 }
 
@@ -698,7 +692,6 @@ export async function sendPublicEnrollmentBackupEmail(params: {
         ${dbNote}
         <h3 style="color:#175244;">Szkoła</h3>
         <p><strong>Nazwa:</strong> ${escapeHtmlForEmail(params.schoolName)}</p>
-        <p style="font-family:monospace;"><strong>ID:</strong> ${escapeHtmlForEmail(params.schoolId)}</p>
         <h3 style="color:#175244;">Rodzic</h3>
         <ul>
           <li><strong>Imię:</strong> ${escapeHtmlForEmail(params.parentFirstName)}</li>
@@ -726,7 +719,6 @@ export async function sendPublicEnrollmentBackupEmail(params: {
     text: `
 ${params.dbSaveOk ? "Zapis w bazie: OK" : "UWAGA: BŁĄD ZAPISU W BAZIE"}
 Szkoła: ${params.schoolName}
-Szkoła ID: ${params.schoolId}
 ${params.dbSaveOk ? "" : `Błąd: ${params.dbErrorMessage ?? ""}\n`}
 
 Rodzic:
