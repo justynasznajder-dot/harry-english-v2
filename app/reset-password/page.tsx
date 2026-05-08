@@ -1,7 +1,7 @@
 'use client';
 
 import { useSearchParams, useRouter } from 'next/navigation';
-import { useState, Suspense } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 
 function ResetPasswordContent() {
   const searchParams = useSearchParams();
@@ -17,6 +17,8 @@ function ResetPasswordContent() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [isTokenValidating, setIsTokenValidating] = useState(true);
+  const [isTokenValid, setIsTokenValid] = useState(false);
 
   const validatePassword = (password: string): string[] => {
     const errors: string[] = [];
@@ -93,17 +95,53 @@ function ResetPasswordContent() {
 
   const passwordStrength = getPasswordStrength(formData.password);
 
-  if (!token) {
+  useEffect(() => {
+    const validateToken = async () => {
+      if (!token) {
+        setIsTokenValid(false);
+        setIsTokenValidating(false);
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/auth/reset-password?token=${encodeURIComponent(token)}`);
+        setIsTokenValid(response.ok);
+      } catch {
+        setIsTokenValid(false);
+      } finally {
+        setIsTokenValidating(false);
+      }
+    };
+
+    void validateToken();
+  }, [token]);
+
+  if (isTokenValidating) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-[#0f3c33] to-[#175244] flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
+          <div className="text-center">
+            <div className="flex items-center justify-center gap-2 text-sm text-gray-500">
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-[#175244]"></div>
+              Sprawdzanie linku...
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!token || !isTokenValid) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#0f3c33] to-[#175244] flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
           <div className="text-center">
             <div className="text-6xl mb-4">⚠️</div>
             <h1 className="text-2xl font-bold text-gray-900 mb-4">
-              Nieprawidłowy link
+              Link wygasł lub został już użyty
             </h1>
             <p className="text-gray-600 mb-6">
-              Link do resetowania hasła jest nieprawidłowy lub wygasł.
+              Link do resetowania hasła jest nieprawidłowy, wygasł lub został już wykorzystany.
             </p>
             <button
               onClick={() => router.push('/')}
@@ -143,7 +181,13 @@ function ResetPasswordContent() {
     <div className="min-h-screen bg-gradient-to-br from-[#0f3c33] to-[#175244] flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
         <div className="text-center mb-8">
-          <div className="text-5xl mb-4">🦒</div>
+          <div className="mb-4 flex justify-center">
+            <img
+              src="/images/2zyrafa2.svg"
+              alt="Harry English"
+              className="h-20 w-20 object-contain"
+            />
+          </div>
           <h1 className="text-3xl font-bold text-gray-900 mb-2">
             Ustaw nowe hasło
           </h1>

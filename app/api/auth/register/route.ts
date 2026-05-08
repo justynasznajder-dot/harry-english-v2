@@ -14,6 +14,7 @@ import {
   sendEnrollmentConfirmationToParent,
   sendPublicEnrollmentBackupEmail,
 } from "@/lib/email";
+import { normalizePolishPhone } from "@/lib/phone";
 
 /** Kopia mailowa zgłoszeń na kontakt@ dla wskazanych szkół (prod + dev). */
 const ENROLLMENT_BACKUP_EMAIL_SCHOOL_IDS = new Set([
@@ -62,7 +63,7 @@ function normalizeParentPhone(raw: unknown):
   if (digits.length < 9) {
     return { ok: false, message: "Podaj numer telefonu z co najmniej 9 cyframi" };
   }
-  return { ok: true, value: s };
+  return { ok: true, value: normalizePolishPhone(s) };
 }
 
 function normalizeBirthDate(value: string | Date | undefined): string | null {

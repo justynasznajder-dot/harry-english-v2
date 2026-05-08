@@ -37,7 +37,7 @@ function getPublicEmailAssetBaseUrl(): string {
   return appUrl;
 }
 
-function buildEmailShell(params: {
+export function buildEmailShell(params: {
   title: string;
   intro?: string;
   contentHtml: string;
@@ -300,7 +300,7 @@ System automatycznego powiadamiania
   await transporter.sendMail(mailOptions);
 }
 
-function escapeHtmlForEmail(s: string): string {
+export function escapeHtmlForEmail(s: string): string {
   return s
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")

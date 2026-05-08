@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { normalizePolishPhone } from "@/lib/phone";
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -33,6 +34,14 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
   const [isLoading, setIsLoading] = useState(false);
   const [registerSuccess, setRegisterSuccess] = useState(false);
   const [forgotPasswordSuccess, setForgotPasswordSuccess] = useState(false);
+
+  useEffect(() => {
+    if (!forgotPasswordSuccess) return;
+    const timer = setTimeout(() => {
+      setForgotPasswordSuccess(false);
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [forgotPasswordSuccess]);
 
   // Resetuj tryb do initialMode gdy modal się otwiera
   useEffect(() => {
@@ -121,7 +130,8 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
       newErrors.lastName = "Pole wymagane";
     }
 
-    const phoneDigits = formData.phone.replace(/\D/g, "");
+    const normalizedPhone = normalizePolishPhone(formData.phone);
+    const phoneDigits = normalizedPhone.replace(/\D/g, "");
     if (!formData.phone.trim()) {
       newErrors.phone = "Pole wymagane";
     } else if (phoneDigits.length < 9) {
@@ -180,7 +190,7 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
           email: formData.email,
           firstName: formData.firstName,
           lastName: formData.lastName,
-          phone: formData.phone.trim(),
+          phone: normalizedPhone,
           children: formData.students.map((s) => ({
             firstName: s.firstName.trim(),
             lastName: s.lastName.trim(),
@@ -549,7 +559,12 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
                   inputMode="tel"
                   autoComplete="tel"
                   value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  onChange={(e) =>
+                    setFormData({ ...formData, phone: normalizePolishPhone(e.target.value) })
+                  }
+                  onBlur={(e) =>
+                    setFormData({ ...formData, phone: normalizePolishPhone(e.target.value) })
+                  }
                   className={`w-full rounded-lg border ${errors.phone ? "border-red-300" : "border-gray-300"} px-4 py-2.5 text-gray-900 focus:border-[#175244] focus:ring-2 focus:ring-[#175244]/20 outline-none transition-all`}
                   placeholder="+48 600 000 000"
                   required

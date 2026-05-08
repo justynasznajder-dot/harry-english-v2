@@ -30,6 +30,7 @@ export default function AdminParentEditPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [user, setUser] = useState<AdminUserDetail | null>(null);
 
   const [firstName, setFirstName] = useState('');
@@ -89,11 +90,18 @@ export default function AdminParentEditPage() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    if (!successMessage) return;
+    const timer = setTimeout(() => setSuccessMessage(null), 3000);
+    return () => clearTimeout(timer);
+  }, [successMessage]);
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!id || !user) return;
     setSaving(true);
     setError(null);
+    setSuccessMessage(null);
     try {
       const uRes = await fetch(`/api/admin/users/${id}`, {
         method: 'PUT',
@@ -134,6 +142,7 @@ export default function AdminParentEditPage() {
             }
           : prev
       );
+      setSuccessMessage('Zmiany zapisane.');
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Błąd zapisu');
@@ -146,12 +155,14 @@ export default function AdminParentEditPage() {
     if (!id || !user) return;
     setSaving(true);
     setError(null);
+    setSuccessMessage(null);
     try {
       if (user.active) {
         const res = await fetch(`/api/admin/users/${id}`, { method: 'DELETE' });
         const data = await res.json();
         if (!res.ok) throw new Error(data.message ?? 'Nie udało się dezaktywować');
         setUser({ ...user, active: false });
+        setSuccessMessage('Konto zostało dezaktywowane.');
       } else {
         const res = await fetch(`/api/admin/users/${id}`, {
           method: 'PUT',
@@ -161,6 +172,7 @@ export default function AdminParentEditPage() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.message ?? 'Nie udało się przywrócić');
         setUser({ ...user, active: true });
+        setSuccessMessage('Konto zostało aktywowane.');
       }
       router.refresh();
     } catch (e) {
@@ -316,6 +328,11 @@ export default function AdminParentEditPage() {
                 {user.active ? 'Dezaktywuj konto' : 'Aktywuj konto'}
               </button>
             </div>
+            {successMessage ? (
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+                {successMessage}
+              </div>
+            ) : null}
           </form>
         ) : null}
       </div>

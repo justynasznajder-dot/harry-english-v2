@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import type { EnrollmentStatus } from '@/lib/enrollment-status';
+import { normalizePolishPhone } from '@/lib/phone';
 
 type TabKey =
   | 'organization'
@@ -118,22 +119,6 @@ interface SchoolLocationRow {
   name: string;
   address: string | null;
   active: boolean;
-}
-
-/**
- * Normalizuje polskie numery komórkowe do formatu: +48 xxx xxx xxx.
- * Numery stacjonarne i niestandardowe pozostawia bez zmian.
- */
-function normalizeMobilePhone(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return '';
-
-  const digits = trimmed.replace(/\D/g, '');
-  const mobileMatch = digits.match(/^(?:48)?([5-9]\d{8})$/);
-  if (!mobileMatch) return trimmed;
-
-  const mobile = mobileMatch[1];
-  return `+48 ${mobile.slice(0, 3)} ${mobile.slice(3, 6)} ${mobile.slice(6, 9)}`;
 }
 
 const topTabs: Array<{ key: TabKey; label: string }> = [
@@ -527,7 +512,7 @@ export default function AdminPortal() {
     }
     setBusy(true);
     try {
-      const normalizedPhone = normalizeMobilePhone(newUser.phone ?? '');
+      const normalizedPhone = normalizePolishPhone(newUser.phone ?? '');
       const res = await fetch('/api/admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -693,21 +678,19 @@ export default function AdminPortal() {
             <input className="rounded-xl border border-emerald-200 px-3 py-2" placeholder="Nazwisko" value={newUser.lastName} onChange={(e) => setNewUser((prev) => ({ ...prev, lastName: e.target.value }))} />
             <input className="rounded-xl border border-emerald-200 px-3 py-2" placeholder="Email" type="email" value={newUser.email} onChange={(e) => setNewUser((prev) => ({ ...prev, email: e.target.value }))} />
             <input className="rounded-xl border border-emerald-200 px-3 py-2" placeholder="Hasło" type="password" value={newUser.password} onChange={(e) => setNewUser((prev) => ({ ...prev, password: e.target.value }))} />
-            <input className="rounded-xl border border-emerald-200 px-3 py-2" placeholder="Telefon, np. +48 123 456 789" type="tel" value={newUser.phone} onChange={(e) => setNewUser((prev) => ({ ...prev, phone: e.target.value }))} />
-            <div className="md:col-span-2 flex gap-2">
-              <select
-                className="flex-1 rounded-xl border border-emerald-200 px-3 py-2"
-                value={newUser.role}
-                onChange={(e) =>
-                  setNewUser((prev) => ({ ...prev, role: e.target.value as '' | Exclude<AdminPortalUserRole, 'ADMIN'> }))
-                }
-              >
-                <option value="">Wybierz rolę</option>
-                <option value="PARENT">Rodzic</option>
-                <option value="TEACHER">Nauczyciel</option>
-                <option value="MANAGER">Manager</option>
-              </select>
-            </div>
+            <input className="rounded-xl border border-emerald-200 px-3 py-2" placeholder="Telefon, np. +48 123 456 789" type="tel" value={newUser.phone} onChange={(e) => setNewUser((prev) => ({ ...prev, phone: normalizePolishPhone(e.target.value) }))} onBlur={(e) => setNewUser((prev) => ({ ...prev, phone: normalizePolishPhone(e.target.value) }))} />
+            <select
+              className="rounded-xl border border-emerald-200 px-3 py-2"
+              value={newUser.role}
+              onChange={(e) =>
+                setNewUser((prev) => ({ ...prev, role: e.target.value as '' | Exclude<AdminPortalUserRole, 'ADMIN'> }))
+              }
+            >
+              <option value="">Wybierz rolę</option>
+              <option value="PARENT">Rodzic</option>
+              <option value="TEACHER">Nauczyciel</option>
+              <option value="MANAGER">Manager</option>
+            </select>
             </div>
 
             {newUser.role === 'PARENT' && (
@@ -1289,7 +1272,8 @@ export default function AdminPortal() {
                         className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
                         placeholder="np. +48 …"
                         value={newTeacherForm.phone}
-                        onChange={(e) => setNewTeacherForm((p) => ({ ...p, phone: e.target.value }))}
+                        onChange={(e) => setNewTeacherForm((p) => ({ ...p, phone: normalizePolishPhone(e.target.value) }))}
+                        onBlur={(e) => setNewTeacherForm((p) => ({ ...p, phone: normalizePolishPhone(e.target.value) }))}
                         autoComplete="tel"
                       />
                     </label>
@@ -1318,7 +1302,7 @@ export default function AdminPortal() {
                               role: 'TEACHER',
                               confirmed: true,
                               accessLevel: 'ACTIVE',
-                              ...(phone.trim() ? { phone: phone.trim() } : {}),
+                              ...(phone.trim() ? { phone: normalizePolishPhone(phone) } : {}),
                             }),
                           });
                           const data = (await res.json().catch(() => ({}))) as {
@@ -2529,19 +2513,18 @@ export default function AdminPortal() {
           <div className="max-h-[85vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-5">
             <div className="sticky top-0 z-10 -mx-5 -mt-5 mb-3 flex items-center justify-between border-b border-emerald-100 bg-white px-5 py-3">
               <h3 className="text-lg font-semibold">Szczegóły zgłoszenia</h3>
-              <button
-                className="rounded-xl bg-zinc-200 px-3 py-2 text-sm"
-                onClick={() => setProposalModalParentId(null)}
-              >
-                Zamknij
-              </button>
             </div>
             {proposalParent ? (
               <div className="mt-3">
-                <p className="font-semibold">
-                  {proposalParent.firstName} {proposalParent.lastName}
-                </p>
-                <p className="text-sm text-zinc-600">{proposalParent.email}</p>
+                <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                    Rodzic
+                  </p>
+                  <p className="mt-1 break-words text-lg font-semibold leading-tight text-zinc-900">
+                    {proposalParent.firstName} {proposalParent.lastName}
+                  </p>
+                  <p className="mt-1 break-all text-sm text-zinc-600">{proposalParent.email}</p>
+                </div>
                 <div className="mt-4 space-y-3">
                   {proposalParent.children.map((child) => (
                     <div key={child.requestId} className="rounded-xl border border-emerald-100 p-4">

@@ -942,6 +942,31 @@ export async function setResetToken(
   }
 }
 
+export async function setResetTokenByUserId(
+  userId: string,
+  token: string,
+  expiry: Date
+): Promise<boolean> {
+  const r = await pool.query(
+    `UPDATE users
+     SET reset_token = $1, reset_token_expiry = $2
+     WHERE id = $3
+     RETURNING id`,
+    [token, expiry, userId]
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+export async function clearResetTokenByUserId(userId: string): Promise<void> {
+  await pool.query(
+    `UPDATE users
+     SET reset_token = NULL,
+         reset_token_expiry = NULL
+     WHERE id = $1`,
+    [userId]
+  );
+}
+
 export async function getUserByResetToken(token: string): Promise<User | null> {
   const r = await pool.query<UserRow>(
     `SELECT * FROM users

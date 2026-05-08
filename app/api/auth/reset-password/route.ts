@@ -2,6 +2,36 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { getUserByResetToken, resetPassword } from "@/lib/db";
 
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const token = searchParams.get("token");
+
+    if (!token) {
+      return NextResponse.json(
+        { valid: false, message: "Brak tokenu resetowania hasła" },
+        { status: 400 }
+      );
+    }
+
+    const user = await getUserByResetToken(token);
+    if (!user) {
+      return NextResponse.json(
+        { valid: false, message: "Nieprawidłowy lub wykorzystany link resetowania hasła" },
+        { status: 400 }
+      );
+    }
+
+    return NextResponse.json({ valid: true });
+  } catch (error) {
+    console.error("Password reset token validation error:", error);
+    return NextResponse.json(
+      { valid: false, message: "Wystąpił błąd podczas walidacji linku resetowania hasła" },
+      { status: 500 }
+    );
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
