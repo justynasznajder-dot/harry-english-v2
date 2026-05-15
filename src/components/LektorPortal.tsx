@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import MessagesPanel from '@/src/components/messages/MessagesPanel';
+import MessagesTabLabel from '@/src/components/messages/MessagesTabLabel';
+import { useUnreadMessagesCount } from '@/src/components/messages/useUnreadMessagesCount';
 
 type LektorTab = 'materials' | 'groups' | 'messages';
 
@@ -13,6 +15,9 @@ const tabs: Array<{ key: LektorTab; label: string }> = [
 
 export default function LektorPortal() {
   const [activeTab, setActiveTab] = useState<LektorTab>('messages');
+  const [messagesListResetToken, setMessagesListResetToken] = useState(0);
+  const { unreadCount: messagesUnreadCount, refresh: refreshMessagesUnreadCount } =
+    useUnreadMessagesCount(messagesListResetToken);
   const [userId, setUserId] = useState('');
 
   useEffect(() => {
@@ -32,21 +37,39 @@ export default function LektorPortal() {
             <button
               key={tab.key}
               type="button"
-              onClick={() => setActiveTab(tab.key)}
+              onClick={() => {
+                if (tab.key === 'messages' && activeTab === 'messages') {
+                  setMessagesListResetToken((t) => t + 1);
+                }
+                setActiveTab(tab.key);
+              }}
               className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
                 activeTab === tab.key
                   ? 'bg-[#175244] text-white'
                   : 'bg-white text-[#1f2933] hover:bg-emerald-50'
               }`}
             >
-              {tab.label}
+              {tab.key === 'messages' ? (
+                <MessagesTabLabel
+                  label={tab.label}
+                  unreadCount={messagesUnreadCount}
+                  isActive={activeTab === 'messages'}
+                />
+              ) : (
+                tab.label
+              )}
             </button>
           ))}
         </div>
       </nav>
 
       {activeTab === 'messages' && (
-        <MessagesPanel mode="teacher" currentUserId={userId || undefined} />
+        <MessagesPanel
+          mode="teacher"
+          currentUserId={userId || undefined}
+          listResetToken={messagesListResetToken}
+          onInboxChange={refreshMessagesUnreadCount}
+        />
       )}
 
       {activeTab === 'materials' && (

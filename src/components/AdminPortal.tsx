@@ -6,6 +6,8 @@ import type { EnrollmentStatus } from '@/lib/enrollment-status';
 import { normalizePolishPhone } from '@/lib/phone';
 import ClassesCalendarPanel from '@/src/components/admin/ClassesCalendarPanel';
 import MessagesPanel from '@/src/components/messages/MessagesPanel';
+import MessagesTabLabel from '@/src/components/messages/MessagesTabLabel';
+import { useUnreadMessagesCount } from '@/src/components/messages/useUnreadMessagesCount';
 
 type TabKey =
   | 'organization'
@@ -33,7 +35,7 @@ interface AdminUser {
   role?: AdminPortalUserRole;
   confirmed: boolean;
   active: boolean;
-  access_level?: 'PENDING' | 'PROPOSED' | 'CONTRACT_SENT' | 'ACTIVE';
+  access_level?: 'PENDING' | 'ACTIVE';
   phone?: string | null;
 }
 
@@ -242,6 +244,9 @@ function EmptyDataPanel({ title }: { title: string }) {
 export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [activeTab, setActiveTab] = useState<TabKey>(initialGroupId ? 'groups' : 'organization');
   const [mobileTab, setMobileTab] = useState<MobileTab>(initialGroupId ? 'groups' : 'organization');
+  const [messagesListResetToken, setMessagesListResetToken] = useState(0);
+  const { unreadCount: messagesUnreadCount, refresh: refreshMessagesUnreadCount } =
+    useUnreadMessagesCount(messagesListResetToken);
   const [organizationSubTab, setOrganizationSubTab] = useState<OrganizationSubTab>('schoolYear');
   const [teacherOrgSubTab, setTeacherOrgSubTab] = useState<TeacherOrgSubTab>('list');
   const [locationOrgSubTab, setLocationOrgSubTab] = useState<LocationOrgSubTab>('list');
@@ -286,6 +291,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     firstName: '',
     lastName: '',
     birthDate: '',
+    accessLevel: 'NEW' as 'NEW' | 'PROPOSED' | 'SIGNED' | 'COMPLETED',
     parentSearch: '',
   });
   const [enrollmentParents, setEnrollmentParents] = useState<Array<{
@@ -301,6 +307,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       lastName: string;
       confirmed: boolean;
       status: EnrollmentStatus;
+      childAccessLevel?: EnrollmentStatus;
       birthDate: string | null;
       preferredLocation: string | null;
       preferredDays: string | null;
@@ -2571,7 +2578,15 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         </section>
       );
     }
-    if (activeTab === 'announcements') return <MessagesPanel mode="manager" />;
+    if (activeTab === 'announcements') {
+      return (
+        <MessagesPanel
+          mode="manager"
+          listResetToken={messagesListResetToken}
+          onInboxChange={refreshMessagesUnreadCount}
+        />
+      );
+    }
     return <EmptyDataPanel title="Panel" />;
   };
   const proposalParent =
@@ -2594,14 +2609,27 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               <button
                 key={tab.key}
                 type="button"
-                onClick={() => setActiveTab(tab.key)}
+                onClick={() => {
+                  if (tab.key === 'announcements' && activeTab === 'announcements') {
+                    setMessagesListResetToken((t) => t + 1);
+                  }
+                  setActiveTab(tab.key);
+                }}
                 className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
                   activeTab === tab.key
                     ? 'border-[#0f6e56] bg-[#0f6e56] text-white shadow-sm'
                     : 'border-transparent bg-emerald-50/60 text-zinc-800 hover:border-emerald-200 hover:bg-emerald-50'
                 }`}
               >
-                {tab.label}
+                {tab.key === 'announcements' ? (
+                  <MessagesTabLabel
+                    label={tab.label}
+                    unreadCount={messagesUnreadCount}
+                    isActive={activeTab === 'announcements'}
+                  />
+                ) : (
+                  tab.label
+                )}
               </button>
             ))}
           </div>
@@ -3250,6 +3278,21 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 value={childForm.birthDate}
                 onChange={(e) => setChildForm((prev) => ({ ...prev, birthDate: e.target.value }))}
               />
+              <select
+                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                value={childForm.accessLevel}
+                onChange={(e) =>
+                  setChildForm((prev) => ({
+                    ...prev,
+                    accessLevel: e.target.value as typeof prev.accessLevel,
+                  }))
+                }
+              >
+                <option value="NEW">Nowe (NEW)</option>
+                <option value="PROPOSED">Propozycja (PROPOSED)</option>
+                <option value="SIGNED">Umowa podpisana (SIGNED)</option>
+                <option value="COMPLETED">Zakończone (COMPLETED)</option>
+              </select>
               <div className="flex justify-end gap-2">
                 <button
                   className="rounded-xl bg-zinc-200 px-3 py-2"
@@ -3272,6 +3315,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         firstName: childForm.firstName,
                         lastName: childForm.lastName,
                         birthDate: childForm.birthDate,
+                        accessLevel: childForm.accessLevel,
                       }),
                     });
                     if (!res.ok) {
@@ -3280,7 +3324,14 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       return;
                     }
                     pushToast('success', 'Dziecko zostało dodane');
-                    setChildForm({ parentId: '', firstName: '', lastName: '', birthDate: '', parentSearch: '' });
+                    setChildForm({
+                      parentId: '',
+                      firstName: '',
+                      lastName: '',
+                      birthDate: '',
+                      accessLevel: 'NEW',
+                      parentSearch: '',
+                    });
                     setChildModalOpen(false);
                     await loadData();
                   }}
@@ -3295,10 +3346,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
 
       {proposalModalParentId && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
-          <div className="max-h-[85vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-5">
-            <div className="sticky top-0 z-10 -mx-5 -mt-5 mb-3 flex items-center justify-between border-b border-emerald-100 bg-white px-5 py-3">
+          <div className="flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white">
+            <div className="shrink-0 border-b border-emerald-100 px-5 py-3">
               <h3 className="text-lg font-semibold">Szczegóły zgłoszenia</h3>
             </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3">
             {proposalParent ? (
               <div className="mt-3">
                 <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-4">
@@ -3357,12 +3409,24 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                           <p className="font-semibold">
                             {child.firstName} {child.lastName}
                           </p>
-                          <p className="mt-1">
+                          <p className="mt-1 flex flex-wrap gap-2">
                             <span
                               className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${statusColors[child.status] ?? 'bg-zinc-100 text-zinc-700'}`}
                             >
-                              {statusLabels[child.status] ?? child.status}
+                              Zgłoszenie: {statusLabels[child.status] ?? child.status}
                             </span>
+                            {child.childAccessLevel && child.childAccessLevel !== child.status && (
+                              <span
+                                className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${statusColors[child.childAccessLevel] ?? 'bg-zinc-100 text-zinc-700'}`}
+                              >
+                                Dziecko: {statusLabels[child.childAccessLevel] ?? child.childAccessLevel}
+                              </span>
+                            )}
+                            {child.childAccessLevel && child.childAccessLevel === child.status && (
+                              <span className="inline-block rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-semibold text-zinc-600">
+                                Dziecko: {statusLabels[child.childAccessLevel] ?? child.childAccessLevel}
+                              </span>
+                            )}
                           </p>
                           <p className="mt-2 text-sm text-zinc-600">Data urodzenia: {child.birthDate ?? 'brak'}</p>
                           <p className="text-sm text-zinc-600">
@@ -3575,7 +3639,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             ) : (
               <p className="mt-3 text-sm text-zinc-600">Nie znaleziono szczegółów zgłoszenia.</p>
             )}
-            <div className="sticky bottom-0 z-10 -mx-5 -mb-5 mt-4 flex justify-end border-t border-emerald-100 bg-white px-5 py-3">
+            </div>
+            <div className="shrink-0 flex justify-end border-t border-emerald-100 px-5 py-3">
               <button
                 className="rounded-xl bg-zinc-200 px-3 py-2"
                 onClick={() => setProposalModalParentId(null)}

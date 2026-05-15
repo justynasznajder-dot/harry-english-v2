@@ -36,6 +36,7 @@ export type ThreadRootRow = {
   recipient_last_name: string;
   recipient_role_col: string;
   reply_count: string;
+  unread_count: string;
   last_reply_at: Date | null;
 };
 
@@ -142,11 +143,30 @@ export async function fetchThreadRoots(params: {
 }): Promise<{ threads: ThreadRootRow[]; total: number }> {
   const offset = (params.page - 1) * params.limit;
   const search = params.search?.trim();
-  const searchClause =
-    search && search.length > 0
-      ? `AND (m.subject ILIKE $4 OR m.content ILIKE $4)`
-      : "";
-  const searchVal = search ? `%${search}%` : null;
+  const searchVal = search && search.length > 0 ? `%${search}%` : null;
+
+  const searchClauseCount = searchVal
+    ? `AND (
+         m.subject ILIKE $3
+         OR m.content ILIKE $3
+         OR EXISTS (
+           SELECT 1 FROM messages rep
+           WHERE rep.parent_message_id = m.id AND rep.content ILIKE $3
+         )
+       )`
+    : "";
+
+  const searchClauseList = searchVal
+    ? `AND (
+         m.subject ILIKE $4
+         OR m.content ILIKE $4
+         OR EXISTS (
+           SELECT 1 FROM messages rep
+           WHERE rep.parent_message_id = m.id AND rep.content ILIKE $4
+         )
+       )`
+    : "";
+
   const baseParams: unknown[] = [params.schoolId, params.userId, params.limit, offset];
   const listParams = searchVal
     ? [params.schoolId, params.userId, params.limit, searchVal, offset]
@@ -162,7 +182,7 @@ export async function fetchThreadRoots(params: {
     WHERE m.school_id = $1
       AND m.parent_message_id IS NULL
       AND (m.sender_id = $2 OR m.recipient_id = $2)
-      ${searchClause}`;
+      ${searchClauseCount}`;
 
   const listSql = `
     SELECT
@@ -183,6 +203,7 @@ export async function fetchThreadRoots(params: {
       r.last_name AS recipient_last_name,
       r.role AS recipient_role_col,
       COALESCE(rc.cnt, 0)::text AS reply_count,
+      COALESCE(ur.cnt, 0)::text AS unread_count,
       lr.last_at AS last_reply_at
     FROM messages m
     JOIN users s ON s.id = m.sender_id
@@ -193,6 +214,13 @@ export async function fetchThreadRoots(params: {
       WHERE rep.parent_message_id = m.id
     ) rc ON TRUE
     LEFT JOIN LATERAL (
+      SELECT COUNT(*)::int AS cnt
+      FROM messages um
+      WHERE (um.id = m.id OR um.parent_message_id = m.id)
+        AND um.recipient_id = $2
+        AND um.read_at IS NULL
+    ) ur ON TRUE
+    LEFT JOIN LATERAL (
       SELECT MAX(rep.created_at) AS last_at
       FROM messages rep
       WHERE rep.parent_message_id = m.id
@@ -200,7 +228,7 @@ export async function fetchThreadRoots(params: {
     WHERE m.school_id = $1
       AND m.parent_message_id IS NULL
       AND (m.sender_id = $2 OR m.recipient_id = $2)
-      ${searchClause}
+      ${searchClauseList}
     ORDER BY COALESCE(lr.last_at, m.created_at) DESC
     LIMIT $3 OFFSET ${searchVal ? "$5" : "$4"}`;
 
@@ -210,6 +238,21 @@ export async function fetchThreadRoots(params: {
   ]);
 
   return { threads: listRes.rows, total: countRes.rows[0]?.total ?? 0 };
+}
+
+export async function countUnreadMessagesForUser(params: {
+  userId: string;
+  schoolId: string;
+}): Promise<number> {
+  const r = await queryDb<{ total: number }>(
+    `SELECT COUNT(*)::int AS total
+     FROM messages
+     WHERE school_id = $1
+       AND recipient_id = $2
+       AND read_at IS NULL`,
+    [params.schoolId, params.userId]
+  );
+  return r.rows[0]?.total ?? 0;
 }
 
 export async function fetchThreadMessages(rootId: string): Promise<ThreadMessageRow[]> {
@@ -319,7 +362,8 @@ export async function canMessageRecipient(params: {
     [params.recipientId]
   );
   const recipient = userRes.rows[0];
-  if (!recipient || recipient.school_id !== params.schoolId) return false;
+  if (!recipient || recipient.role === "ADMIN") return false;
+  if (recipient.school_id !== params.schoolId) return false;
 
   if (params.senderRole === "MANAGER") {
     return recipient.role === "PARENT" || recipient.role === "TEACHER";
@@ -342,12 +386,16 @@ export async function canMessageRecipient(params: {
   }
 
   if (params.senderRole === "PARENT") {
+    if (recipient.role === "MANAGER") {
+      return recipient.school_id === params.schoolId;
+    }
     if (recipient.role !== "TEACHER") return false;
     const r = await queryDb<{ ok: number }>(
       `SELECT 1 AS ok
        FROM children c
        JOIN group_students gs ON gs.child_id = c.id AND gs.left_at IS NULL
        JOIN groups g ON g.id = gs.group_id AND g.school_id = $2
+       JOIN school_years sy ON sy.id = g.school_year_id AND sy.active = TRUE
        WHERE c.parent_id = $1 AND c.school_id = $2 AND c.active = TRUE AND g.teacher_id = $3
        LIMIT 1`,
       [params.senderId, params.schoolId, params.recipientId]
@@ -360,25 +408,31 @@ export async function canMessageRecipient(params: {
 
 export type RecipientFilters = {
   groupId?: string;
-  locationId?: string;
+  groupIds?: string[];
+  locationIds?: string[];
   schoolYearId?: string;
   teacherId?: string;
   enrollmentStatus?: string;
   all?: boolean;
   search?: string;
+  /** Tylko dla zarządcy: lista nauczycieli zamiast rodziców. */
+  audience?: "parents" | "teachers";
+  /** Tylko dla zarządcy: wszyscy rodzice ze szkoły (poza filtrami grup). */
+  bulkParents?: "active" | "all";
 };
 
 function hasGroupFilters(filters: RecipientFilters): boolean {
   return !!(
     filters.groupId ||
-    filters.locationId ||
+    (filters.groupIds && filters.groupIds.length > 0) ||
+    (filters.locationIds && filters.locationIds.length > 0) ||
     filters.schoolYearId ||
     filters.teacherId ||
     filters.enrollmentStatus
   );
 }
 
-function parentSearchClause(alias: string, paramIndex: number): string {
+function userSearchClause(alias: string, paramIndex: number): string {
   return `AND (
     ${alias}.first_name ILIKE $${paramIndex}
     OR ${alias}.last_name ILIKE $${paramIndex}
@@ -386,6 +440,8 @@ function parentSearchClause(alias: string, paramIndex: number): string {
     OR CONCAT(${alias}.first_name, ' ', ${alias}.last_name) ILIKE $${paramIndex}
   )`;
 }
+
+const parentSearchClause = userSearchClause;
 
 export type ParentRecipient = MessageUserRow & {
   child_names?: string;
@@ -398,16 +454,23 @@ export async function fetchRecipientsForRole(params: {
   filters: RecipientFilters;
 }): Promise<{ parents: ParentRecipient[]; teachers: MessageUserRow[] }> {
   if (params.role === "TEACHER") {
-    const parents = await queryTeacherParents(
+    const parents = await queryParentsForTeacher(
       params.userId,
       params.schoolId,
-      params.filters.search
+      params.filters
     );
     return { parents, teachers: [] };
   }
   if (params.role === "PARENT") {
-    const teachers = await queryParentTeachers(params.userId, params.schoolId);
-    return { parents: [], teachers };
+    const [managers, teachers] = await Promise.all([
+      querySchoolManagers(params.schoolId, params.filters.search),
+      queryParentTeachers(params.userId, params.schoolId, params.filters.search),
+    ]);
+    const managerIds = new Set(managers.map((m) => m.id));
+    return {
+      parents: [],
+      teachers: [...managers, ...teachers.filter((t) => !managerIds.has(t.id))],
+    };
   }
   return queryManagerRecipients(params.schoolId, params.filters);
 }
@@ -449,7 +512,8 @@ async function queryTeacherParents(
 
 async function queryAllSchoolParents(
   schoolId: string,
-  search?: string
+  search?: string,
+  activeOnly = true
 ): Promise<ParentRecipient[]> {
   const searchTrim = search?.trim();
   const values: unknown[] = [schoolId];
@@ -458,10 +522,11 @@ async function queryAllSchoolParents(
     values.push(`%${searchTrim}%`);
     searchSql = parentSearchClause("u", 2);
   }
+  const activeSql = activeOnly ? "AND u.active = TRUE" : "";
   const r = await queryDb<ParentRecipient>(
     `SELECT id, first_name, last_name, email, role, access_level
      FROM users u
-     WHERE u.school_id = $1 AND u.role = 'PARENT' AND u.active = TRUE
+     WHERE u.school_id = $1 AND u.role = 'PARENT' ${activeSql}
        ${searchSql}
      ORDER BY u.last_name, u.first_name`,
     values
@@ -469,46 +534,44 @@ async function queryAllSchoolParents(
   return r.rows;
 }
 
-async function queryParentTeachers(
-  parentId: string,
-  schoolId: string
+async function querySchoolManagers(
+  schoolId: string,
+  search?: string
 ): Promise<MessageUserRow[]> {
+  const searchTrim = search?.trim();
+  const values: unknown[] = [schoolId];
+  let searchSql = "";
+  if (searchTrim) {
+    values.push(`%${searchTrim}%`);
+    searchSql = userSearchClause("u", 2);
+  }
   const r = await queryDb<MessageUserRow>(
-    `SELECT DISTINCT
-       t.id,
-       t.first_name,
-       t.last_name,
-       t.email,
-       t.role
-     FROM children c
-     JOIN group_students gs ON gs.child_id = c.id AND gs.left_at IS NULL
-     JOIN groups g ON g.id = gs.group_id AND g.school_id = $2
-     JOIN users t ON t.id = g.teacher_id
-     WHERE c.parent_id = $1 AND c.school_id = $2 AND c.active = TRUE
-       AND t.id IS NOT NULL
-     ORDER BY t.last_name, t.first_name`,
-    [parentId, schoolId]
+    `SELECT u.id, u.first_name, u.last_name, u.email, u.role
+     FROM users u
+     WHERE u.school_id = $1 AND u.role = 'MANAGER' AND u.active = TRUE
+       ${searchSql}
+     ORDER BY u.last_name, u.first_name`,
+    values
   );
   return r.rows;
 }
 
-async function queryManagerRecipients(
+async function queryParentsForTeacher(
+  teacherId: string,
   schoolId: string,
   filters: RecipientFilters
-): Promise<{ parents: ParentRecipient[]; teachers: MessageUserRow[] }> {
-  const teachersRes = await queryDb<MessageUserRow>(
-    `SELECT id, first_name, last_name, email, role
-     FROM users
-     WHERE school_id = $1 AND role = 'TEACHER' AND active = TRUE
-     ORDER BY last_name, first_name`,
-    [schoolId]
-  );
-
-  if (filters.all || !hasGroupFilters(filters)) {
-    const parents = await queryAllSchoolParents(schoolId, filters.search);
-    return { parents, teachers: teachersRes.rows };
+): Promise<ParentRecipient[]> {
+  if (!hasGroupFilters(filters)) {
+    return queryTeacherParents(teacherId, schoolId, filters.search);
   }
+  return queryFilteredParents(schoolId, filters, teacherId);
+}
 
+async function queryFilteredParents(
+  schoolId: string,
+  filters: RecipientFilters,
+  scopeTeacherId?: string
+): Promise<ParentRecipient[]> {
   const conditions: string[] = [
     "u.school_id = $1",
     "u.role = 'PARENT'",
@@ -521,33 +584,64 @@ async function queryManagerRecipients(
   const values: unknown[] = [schoolId];
   let idx = 2;
 
-  if (filters.groupId) {
+  if (scopeTeacherId) {
+    conditions.push(`g.teacher_id = $${idx++}`);
+    values.push(scopeTeacherId);
+    conditions.push("sy.active = TRUE");
+  }
+
+  if (filters.groupIds && filters.groupIds.length > 0) {
+    conditions.push(`g.id = ANY($${idx}::text[])`);
+    values.push(filters.groupIds);
+    idx++;
+  } else if (filters.groupId) {
     conditions.push(`g.id = $${idx++}`);
     values.push(filters.groupId);
   }
-  if (filters.locationId) {
-    conditions.push(`(g.location_id = $${idx} OR st.location_id = $${idx})`);
-    values.push(filters.locationId);
+  if (filters.locationIds && filters.locationIds.length > 0) {
+    conditions.push(
+      `(g.location_id = ANY($${idx}::text[]) OR st.location_id = ANY($${idx}::text[]))`
+    );
+    values.push(filters.locationIds);
     idx++;
   }
   if (filters.schoolYearId) {
     conditions.push(`g.school_year_id = $${idx++}`);
     values.push(filters.schoolYearId);
   }
-  if (filters.teacherId) {
+  if (filters.teacherId && !scopeTeacherId) {
     conditions.push(`g.teacher_id = $${idx++}`);
     values.push(filters.teacherId);
   }
   if (filters.enrollmentStatus) {
-    conditions.push(`u.access_level = $${idx++}`);
-    values.push(filters.enrollmentStatus);
+    if (filters.enrollmentStatus.startsWith("account:")) {
+      conditions.push(`UPPER(BTRIM(COALESCE(u.access_level::text, 'PENDING'))) = $${idx++}`);
+      values.push(filters.enrollmentStatus.slice("account:".length).toUpperCase());
+    } else {
+      conditions.push(
+        `UPPER(BTRIM(COALESCE(c.access_level::text, 'NEW'))) = UPPER(BTRIM($${idx++}::text))`
+      );
+      values.push(filters.enrollmentStatus);
+    }
   }
   if (filters.search?.trim()) {
     values.push(`%${filters.search.trim()}%`);
     conditions.push(parentSearchClause("u", idx++).replace(/^AND /, ""));
   }
 
-  const parentsRes = await queryDb<ParentRecipient>(
+  const schoolYearJoin = scopeTeacherId
+    ? "JOIN school_years sy ON sy.id = g.school_year_id"
+    : "";
+
+  const childNamesSelect = scopeTeacherId
+    ? ", STRING_AGG(DISTINCT CONCAT(c.first_name, ' ', c.last_name), ', ') AS child_names"
+    : "";
+
+  const groupBy = scopeTeacherId
+    ? "GROUP BY u.id, u.first_name, u.last_name, u.email, u.role, u.access_level"
+    : "";
+
+  const r = await queryDb<ParentRecipient>(
     `SELECT DISTINCT ON (u.id)
        u.id,
        u.first_name,
@@ -555,17 +649,109 @@ async function queryManagerRecipients(
        u.email,
        u.role,
        u.access_level
+       ${childNamesSelect}
      FROM users u
      JOIN children c ON c.parent_id = u.id
      JOIN group_students gs ON gs.child_id = c.id
      JOIN groups g ON g.id = gs.group_id
+     ${schoolYearJoin}
      LEFT JOIN schedule_templates st ON st.group_id = g.id
      WHERE ${conditions.join(" AND ")}
+     ${groupBy}
      ORDER BY u.id, u.last_name, u.first_name`,
     values
   );
+  return r.rows;
+}
 
-  return { parents: parentsRes.rows, teachers: teachersRes.rows };
+async function queryParentTeachers(
+  parentId: string,
+  schoolId: string,
+  search?: string
+): Promise<MessageUserRow[]> {
+  const searchTrim = search?.trim();
+  const values: unknown[] = [parentId, schoolId];
+  let searchSql = "";
+  if (searchTrim) {
+    values.push(`%${searchTrim}%`);
+    searchSql = userSearchClause("t", 3);
+  }
+  const r = await queryDb<MessageUserRow>(
+    `SELECT DISTINCT
+       t.id,
+       t.first_name,
+       t.last_name,
+       t.email,
+       t.role
+     FROM children c
+     JOIN group_students gs ON gs.child_id = c.id AND gs.left_at IS NULL
+     JOIN groups g ON g.id = gs.group_id AND g.school_id = $2
+     JOIN school_years sy ON sy.id = g.school_year_id AND sy.active = TRUE
+     JOIN users t ON t.id = g.teacher_id AND t.active = TRUE
+     WHERE c.parent_id = $1 AND c.school_id = $2 AND c.active = TRUE
+       AND t.id IS NOT NULL
+       ${searchSql}
+     ORDER BY t.last_name, t.first_name`,
+    values
+  );
+  return r.rows;
+}
+
+async function querySchoolTeachers(
+  schoolId: string,
+  search?: string
+): Promise<MessageUserRow[]> {
+  const searchTrim = search?.trim();
+  const values: unknown[] = [schoolId];
+  let searchSql = "";
+  if (searchTrim) {
+    values.push(`%${searchTrim}%`);
+    searchSql = userSearchClause("u", 2);
+  }
+  const r = await queryDb<MessageUserRow>(
+    `SELECT u.id, u.first_name, u.last_name, u.email, u.role
+     FROM users u
+     WHERE u.school_id = $1 AND u.role = 'TEACHER' AND u.active = TRUE
+       ${searchSql}
+     ORDER BY u.last_name, u.first_name`,
+    values
+  );
+  return r.rows;
+}
+
+async function queryManagerRecipients(
+  schoolId: string,
+  filters: RecipientFilters
+): Promise<{ parents: ParentRecipient[]; teachers: MessageUserRow[] }> {
+  if (filters.audience === "teachers") {
+    const teachers = await querySchoolTeachers(schoolId, filters.search);
+    return { parents: [], teachers };
+  }
+
+  const teachersRes = await queryDb<MessageUserRow>(
+    `SELECT id, first_name, last_name, email, role
+     FROM users
+     WHERE school_id = $1 AND role = 'TEACHER' AND active = TRUE
+     ORDER BY last_name, first_name`,
+    [schoolId]
+  );
+
+  if (filters.bulkParents === "all") {
+    const parents = await queryAllSchoolParents(schoolId, filters.search, false);
+    return { parents, teachers: teachersRes.rows };
+  }
+  if (filters.bulkParents === "active") {
+    const parents = await queryAllSchoolParents(schoolId, filters.search, true);
+    return { parents, teachers: teachersRes.rows };
+  }
+
+  if (filters.all || !hasGroupFilters(filters)) {
+    const parents = await queryAllSchoolParents(schoolId, filters.search);
+    return { parents, teachers: teachersRes.rows };
+  }
+
+  const parents = await queryFilteredParents(schoolId, filters);
+  return { parents, teachers: teachersRes.rows };
 }
 
 export async function insertMessages(

@@ -50,6 +50,7 @@ export async function GET(request: NextRequest) {
         readAt: t.read_at,
         createdAt: t.created_at,
         replyCount: parseInt(t.reply_count, 10) || 0,
+        unreadCount: parseInt(t.unread_count, 10) || 0,
         lastReplyAt: t.last_reply_at,
         sender: {
           id: t.sender_id,
@@ -149,7 +150,6 @@ export async function POST(request: NextRequest) {
 
   const uniqueRecipients = [...new Set(effectiveRecipientIds)];
   const broadcastId = uniqueRecipients.length > 1 ? randomUUID() : null;
-  const isNewThread = !parentMessageId;
 
   const recipientUsers = await getUsersForEmail(uniqueRecipients);
   const recipientMap = new Map(recipientUsers.map((u) => [u.id, u]));
@@ -179,9 +179,7 @@ export async function POST(request: NextRequest) {
       return insertMessages(client, rows);
     });
 
-    const shouldSendEmail =
-      isNewThread &&
-      (actor.user.role === "MANAGER" || actor.user.role === "TEACHER");
+    const shouldSendEmail = actor.user.role === "MANAGER" || actor.user.role === "TEACHER";
 
     if (shouldSendEmail) {
       const senderName = `${actor.user.firstName} ${actor.user.lastName}`.trim();

@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
@@ -47,8 +48,12 @@ export default function LoginPage() {
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-block mb-4">
-            <span className="text-6xl">🦒</span>
+          <div className="mb-4 flex justify-center">
+            <img
+              src="/images/2zyrafa2.svg"
+              alt="Harry English"
+              className="h-20 w-20 object-contain"
+            />
           </div>
           <h1 className="text-3xl font-bold text-[#fdfaf3] mb-2">
             Portal Harry English
@@ -129,9 +134,9 @@ export default function LoginPage() {
         {/* Pomoc */}
         <div className="mt-6 text-center text-sm text-[#fdfaf3]/60">
           Nie pamiętasz hasła?{' '}
-          <a href="#contact" className="text-[#ffc94a] hover:underline">
-            Skontaktuj się z nami
-          </a>
+          <Link href="/portal/zapomniane-haslo" className="text-[#ffc94a] hover:underline">
+            Zresetuj je
+          </Link>
         </div>
       </div>
     </div>

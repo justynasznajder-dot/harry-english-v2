@@ -14,7 +14,7 @@ interface UserInfo {
   firstName: string;
   lastName: string;
   role?: string;
-  accessLevel?: 'PENDING' | 'PROPOSED' | 'CONTRACT_SENT' | 'ACTIVE';
+  accessLevel?: 'PENDING' | 'ACTIVE';
   mustChangePassword?: boolean;
   children?: Array<{
     childId?: string;

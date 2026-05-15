@@ -5,8 +5,20 @@ import {
   canAccessSchoolAdminApis,
   queryDb,
   getRegistrationSchoolId,
+  type ChildAccessLevel,
 } from "@/lib/db";
 import { getTokenFromRequest } from "@/lib/auth";
+import { syncParentUserAccessLevel } from "@/lib/enrollment-sync";
+
+const MANUAL_CHILD_ACCESS_LEVELS = ["NEW", "PROPOSED", "SIGNED", "COMPLETED"] as const;
+
+function parseManualChildAccessLevel(raw: unknown): ChildAccessLevel | null {
+  if (typeof raw !== "string") return null;
+  const v = raw.trim().toUpperCase();
+  return (MANUAL_CHILD_ACCESS_LEVELS as readonly string[]).includes(v)
+    ? (v as ChildAccessLevel)
+    : null;
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -57,6 +69,7 @@ export async function GET(request: NextRequest) {
       birth_date: string;
       active: boolean;
       confirmed: boolean;
+      access_level: string | null;
       enrollment_request_id: string | null;
       parent_first_name: string;
       parent_last_name: string;
@@ -72,6 +85,7 @@ export async function GET(request: NextRequest) {
          c.birth_date::text AS birth_date,
          c.active,
          c.confirmed,
+         c.access_level,
          c.enrollment_request_id,
          u.first_name AS parent_first_name,
          u.last_name AS parent_last_name,
@@ -107,10 +121,12 @@ export async function POST(request: NextRequest) {
     if (!actor) return NextResponse.json({ message: "Nie znaleziono użytkownika" }, { status: 401 });
 
     const body = await request.json();
-    const { parentId, firstName, lastName, birthDate } = body;
+    const { parentId, firstName, lastName, birthDate, accessLevel: accessLevelRaw } = body;
     if (!parentId || !firstName || !lastName || !birthDate) {
       return NextResponse.json({ message: "Wszystkie pola są wymagane" }, { status: 400 });
     }
+
+    const accessLevel = parseManualChildAccessLevel(accessLevelRaw) ?? "NEW";
 
     const parent = await getUserById(parentId);
     if (!parent || parent.role !== "PARENT" || !parent.school_id) {
@@ -135,7 +151,10 @@ export async function POST(request: NextRequest) {
       lastName,
       birthDate: String(birthDate).slice(0, 10),
       schoolId: parent.school_id,
+      accessLevel,
     });
+
+    await syncParentUserAccessLevel(parentId);
 
     return NextResponse.json({
       child: {
@@ -146,6 +165,7 @@ export async function POST(request: NextRequest) {
         birth_date: child.birth_date,
         active: true,
         confirmed: false,
+        access_level: child.access_level,
         parent_first_name: parent.first_name,
         parent_last_name: parent.last_name,
         parent_email: parent.email,

@@ -1,6 +1,229 @@
 'use client';
 
+import { useEffect, useRef, useState } from 'react';
+
 export type ComposePanelMode = 'manager' | 'teacher' | 'parent';
+
+const COMPOSE_FILTER_FIELD =
+  'flex w-full min-h-[2.375rem] items-center justify-between rounded-lg border border-zinc-300 bg-white px-3 py-2 text-left text-sm outline-none transition focus:border-[#0f6e56] focus:ring-2 focus:ring-[#0f6e56]/20';
+
+const COMPOSE_FILTER_CHEVRON = 'pointer-events-none shrink-0 text-xs text-zinc-400';
+
+function ComposeFilterMultiSelect({
+  items,
+  selectedIds,
+  placeholder,
+  emptyListMessage,
+  pluralLabel,
+  onFilterChange,
+  onConfirm,
+}: {
+  items: Array<{ id: string; name: string }>;
+  selectedIds: string[];
+  placeholder: string;
+  emptyListMessage: string;
+  pluralLabel: string;
+  onFilterChange: (ids: string[]) => void;
+  onConfirm: (ids: string[]) => void | Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pendingIds, setPendingIds] = useState<string[]>(selectedIds);
+  const [confirming, setConfirming] = useState(false);
+  const [menuStyle, setMenuStyle] = useState<{ top: number; left: number; width: number } | null>(
+    null
+  );
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const openMenu = () => {
+    setPendingIds(selectedIds);
+    setOpen(true);
+    updateMenuPosition();
+  };
+
+  const closeMenu = () => {
+    setOpen(false);
+    setMenuStyle(null);
+  };
+
+  const applyFilterAndClose = (ids: string[]) => {
+    onFilterChange(ids);
+    closeMenu();
+  };
+
+  const confirmSelection = async () => {
+    if (pendingIds.length === 0 || confirming) return;
+    setConfirming(true);
+    try {
+      await onConfirm(pendingIds);
+      closeMenu();
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  const clearAndClose = () => {
+    setPendingIds([]);
+    applyFilterAndClose([]);
+  };
+
+  const updateMenuPosition = () => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setMenuStyle({
+      top: rect.bottom + 4,
+      left: rect.left,
+      width: rect.width,
+    });
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    updateMenuPosition();
+    const onReposition = () => updateMenuPosition();
+    window.addEventListener('resize', onReposition);
+    window.addEventListener('scroll', onReposition, true);
+    return () => {
+      window.removeEventListener('resize', onReposition);
+      window.removeEventListener('scroll', onReposition, true);
+    };
+  }, [open, items.length]);
+
+  useEffect(() => {
+    if (!open) setPendingIds(selectedIds);
+  }, [selectedIds, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (
+        rootRef.current?.contains(target) ||
+        menuRef.current?.contains(target)
+      ) {
+        return;
+      }
+      applyFilterAndClose(pendingIds);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open, pendingIds, onFilterChange]);
+
+  const selectedNames = items
+    .filter((item) => selectedIds.includes(item.id))
+    .map((item) => item.name);
+
+  const triggerLabel =
+    selectedIds.length === 0
+      ? placeholder
+      : selectedIds.length === 1
+        ? selectedNames[0]
+        : `${selectedIds.length} ${pluralLabel}`;
+
+  const allPendingSelected =
+    items.length > 0 && items.every((item) => pendingIds.includes(item.id));
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => {
+          if (open) applyFilterAndClose(pendingIds);
+          else openMenu();
+        }}
+        className={COMPOSE_FILTER_FIELD}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+      >
+        <span
+          className={`min-w-0 flex-1 truncate ${selectedIds.length === 0 ? 'text-zinc-500' : 'text-zinc-900'}`}
+        >
+          {triggerLabel}
+        </span>
+        <span className={COMPOSE_FILTER_CHEVRON} aria-hidden>
+          {open ? '▲' : '▼'}
+        </span>
+      </button>
+      {open && menuStyle && (
+        <div
+          ref={menuRef}
+          className="fixed z-[60] flex max-h-[min(280px,50vh)] flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-lg"
+          style={{
+            top: menuStyle.top,
+            left: menuStyle.left,
+            width: menuStyle.width,
+          }}
+        >
+          {items.length > 0 && (
+            <div className="flex shrink-0 items-center justify-end border-b border-zinc-100 px-2 py-1">
+              <button
+                type="button"
+                onClick={() => {
+                  const ids = items.map((item) => item.id);
+                  setPendingIds(allPendingSelected ? [] : ids);
+                }}
+                className="text-[11px] font-semibold text-[#0f6e56] underline decoration-emerald-300 underline-offset-2 hover:text-emerald-800"
+              >
+                {allPendingSelected ? 'Odznacz wszystkie' : 'Zaznacz wszystkie'}
+              </button>
+            </div>
+          )}
+          <div
+            className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-1.5"
+            role="listbox"
+            aria-multiselectable="true"
+          >
+            {items.length === 0 ? (
+              <p className="px-1 py-2 text-xs text-zinc-500">{emptyListMessage}</p>
+            ) : (
+              items.map((item) => (
+                <label
+                  key={item.id}
+                  role="option"
+                  aria-selected={pendingIds.includes(item.id)}
+                  className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1.5 text-sm hover:bg-zinc-50"
+                >
+                  <input
+                    type="checkbox"
+                    checked={pendingIds.includes(item.id)}
+                    onChange={() => {
+                      setPendingIds(
+                        pendingIds.includes(item.id)
+                          ? pendingIds.filter((id) => id !== item.id)
+                          : [...pendingIds, item.id]
+                      );
+                    }}
+                    className="rounded border-zinc-300 text-[#0f6e56]"
+                  />
+                  <span className="min-w-0 truncate">{item.name}</span>
+                </label>
+              ))
+            )}
+          </div>
+          <div className="flex shrink-0 gap-2 border-t border-zinc-100 p-2">
+            <button
+              type="button"
+              onClick={clearAndClose}
+              className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
+            >
+              Wyczyść
+            </button>
+            <button
+              type="button"
+              disabled={pendingIds.length === 0 || confirming}
+              onClick={() => void confirmSelection()}
+              className="flex-1 rounded-lg bg-[#0f6e56] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0b5a46] disabled:opacity-50"
+            >
+              {confirming ? 'Dodawanie…' : 'Wybierz'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export interface ComposeRecipientOption {
   id: string;
@@ -12,25 +235,18 @@ export interface ComposeRecipientOption {
 }
 
 export interface ComposeFilterMeta {
-  groups: Array<{ id: string; name: string }>;
+  groups: Array<{ id: string; name: string; locationId: string | null }>;
   locations: Array<{ id: string; name: string }>;
   schoolYears: Array<{ id: string; name: string }>;
   teachers: Array<{ id: string; name: string }>;
 }
-
-const ACCESS_LEVEL_OPTIONS = [
-  { value: '', label: 'Wszystkie statusy' },
-  { value: 'PENDING', label: 'Oczekujący' },
-  { value: 'PROPOSED', label: 'Propozycja grupy' },
-  { value: 'CONTRACT_SENT', label: 'Umowa wysłana' },
-  { value: 'ACTIVE', label: 'Aktywny' },
-];
 
 export interface ComposeMessageModalProps {
   open: boolean;
   onClose: () => void;
   mode: ComposePanelMode;
   canPickIndividuals: boolean;
+  recipientsLoading?: boolean;
   recipients: ComposeRecipientOption[];
   recipientSearch: string;
   onRecipientSearchChange: (value: string) => void;
@@ -46,20 +262,17 @@ export interface ComposeMessageModalProps {
   showGroupFilters: boolean;
   onToggleGroupFilters: () => void;
   filterMeta: ComposeFilterMeta | null;
-  filterGroupId: string;
-  onFilterGroupIdChange: (value: string) => void;
-  filterLocationId: string;
-  onFilterLocationIdChange: (value: string) => void;
-  filterSchoolYearId: string;
-  onFilterSchoolYearIdChange: (value: string) => void;
-  filterTeacherId: string;
-  onFilterTeacherIdChange: (value: string) => void;
-  filterEnrollmentStatus: string;
-  onFilterEnrollmentStatusChange: (value: string) => void;
-  includeTeachers: boolean;
-  onIncludeTeachersChange: (value: boolean) => void;
-  onApplyManagerFilters: () => void;
+  filterGroupIds: string[];
+  onGroupFilterChange: (groupIds: string[]) => void;
+  onConfirmGroupFilter: (groupIds: string[]) => void | Promise<void>;
+  filterLocationIds: string[];
+  onLocationFilterChange: (locationIds: string[]) => void;
+  onConfirmLocationFilter: (locationIds: string[]) => void | Promise<void>;
   onAddAllFromList: () => void;
+  showBulkParentAddButtons?: boolean;
+  onAddAllFromDatabase?: () => void;
+  onAddAllActiveClients?: () => void;
+  bulkAddLoading?: 'all' | 'active' | null;
   composeSubject: string;
   onComposeSubjectChange: (value: string) => void;
   composeContent: string;
@@ -67,6 +280,9 @@ export interface ComposeMessageModalProps {
   sendingCompose: boolean;
   onSend: () => void;
   onClearForm: () => void;
+  composeAudience?: 'parents' | 'teachers';
+  onComposeAudienceChange?: (audience: 'parents' | 'teachers') => void;
+  showAudienceToggle?: boolean;
 }
 
 export default function ComposeMessageModal(props: ComposeMessageModalProps) {
@@ -78,52 +294,153 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
       ? [props.singleRecipientId]
       : [];
 
+  const audience = props.composeAudience ?? 'parents';
+  const isTeachersAudience = props.showAudienceToggle && audience === 'teachers';
+
   const searchPlaceholder =
     props.mode === 'parent'
-      ? 'Szukaj nauczyciela…'
+      ? 'Szukaj zarządcy lub nauczyciela po imieniu, nazwisku lub e-mailu…'
       : props.mode === 'teacher'
         ? 'Szukaj rodzica po imieniu, nazwisku lub e-mailu…'
-        : 'Szukaj rodzica lub nauczyciela…';
+        : isTeachersAudience
+          ? 'Szukaj nauczyciela po imieniu, nazwisku lub e-mailu…'
+          : 'Szukaj rodzica po imieniu, nazwisku lub e-mailu…';
+
+  const visibleGroups = props.filterMeta
+    ? props.filterLocationIds.length === 0
+      ? props.filterMeta.groups
+      : props.filterMeta.groups.filter(
+          (g) => g.locationId && props.filterLocationIds.includes(g.locationId)
+        )
+    : [];
+
+  const groupPlaceholder =
+    props.filterLocationIds.length > 0
+      ? 'Wybierz grupę (z wybranej lokalizacji)'
+      : 'Wybierz grupę';
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center"
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-2 sm:items-center sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="compose-modal-title"
     >
-      <div className="flex max-h-[min(90vh,720px)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
-        <div className="flex shrink-0 items-center justify-between border-b border-zinc-200 px-5 py-4">
-          <h3 id="compose-modal-title" className="text-lg font-bold text-zinc-900">
-            Nowa wiadomość
-          </h3>
+      <div className="flex h-[min(92vh,720px)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-zinc-200 px-4 py-3 md:px-5 md:py-3">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
+            <h3 id="compose-modal-title" className="text-lg font-bold text-zinc-900">
+              Nowa wiadomość
+            </h3>
+            {props.showAudienceToggle && props.onComposeAudienceChange && (
+              <div className="flex rounded-full bg-zinc-100 p-0.5" role="tablist" aria-label="Odbiorcy wiadomości">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={audience === 'parents'}
+                  onClick={() => props.onComposeAudienceChange!('parents')}
+                  className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                    audience === 'parents'
+                      ? 'bg-white text-[#0f6e56] shadow-sm'
+                      : 'text-zinc-600 hover:text-zinc-900'
+                  }`}
+                >
+                  Do rodziców
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={audience === 'teachers'}
+                  onClick={() => props.onComposeAudienceChange!('teachers')}
+                  className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                    audience === 'teachers'
+                      ? 'bg-white text-[#0f6e56] shadow-sm'
+                      : 'text-zinc-600 hover:text-zinc-900'
+                  }`}
+                >
+                  Do nauczycieli
+                </button>
+              </div>
+            )}
+          </div>
           <button
             type="button"
             onClick={props.onClose}
-            className="rounded-full p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
+            className="shrink-0 rounded-full p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
             aria-label="Zamknij"
           >
             ✕
           </button>
         </div>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden md:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)]">
-          {/* Lewa kolumna — wybór adresatów */}
-          <div className="flex min-h-[220px] flex-col border-b border-zinc-200 bg-zinc-50/80 p-4 md:min-h-0 md:border-b-0 md:border-r">
-            <p className="mb-2 text-sm font-semibold text-zinc-800">Wybierz adresatów</p>
+        <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] overflow-hidden md:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] md:grid-rows-1">
+          {/* Lewa kolumna — filtry i wybór adresatów */}
+          <div className="flex min-h-0 flex-col overflow-hidden border-b border-zinc-200 bg-zinc-50/80 p-3 md:border-b-0 md:border-r md:p-4">
+            {props.canPickIndividuals &&
+              !isTeachersAudience &&
+              (props.mode === 'manager' || props.mode === 'teacher') && (
+              <div className="mb-2 shrink-0 rounded-xl border border-zinc-200 bg-white">
+                <button
+                  type="button"
+                  onClick={props.onToggleGroupFilters}
+                  className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-semibold text-zinc-700"
+                >
+                  {props.mode === 'teacher'
+                    ? 'Filtry moich grup'
+                    : 'Wysyłka do grupy (filtry masowe)'}
+                  <span className="text-zinc-400">{props.showGroupFilters ? '▲' : '▼'}</span>
+                </button>
+                {props.showGroupFilters && (
+                  <div className="max-h-48 space-y-2 overflow-y-auto border-t border-zinc-200 p-3">
+                    {props.filterMeta && (
+                      <>
+                        <ComposeFilterMultiSelect
+                          items={props.filterMeta.locations}
+                          selectedIds={props.filterLocationIds}
+                          placeholder="Wybierz lokalizację"
+                          emptyListMessage="Brak lokalizacji"
+                          pluralLabel="lokalizacje"
+                          onFilterChange={props.onLocationFilterChange}
+                          onConfirm={props.onConfirmLocationFilter}
+                        />
+                        <ComposeFilterMultiSelect
+                          items={visibleGroups}
+                          selectedIds={props.filterGroupIds}
+                          placeholder={groupPlaceholder}
+                          emptyListMessage="Brak grup"
+                          pluralLabel="grupy"
+                          onFilterChange={props.onGroupFilterChange}
+                          onConfirm={props.onConfirmGroupFilter}
+                        />
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <p className="mb-1.5 shrink-0 text-sm font-semibold text-zinc-800">Wyszukaj adresatów</p>
             <input
               type="search"
               value={props.recipientSearch}
               onChange={(e) => props.onRecipientSearchChange(e.target.value)}
               placeholder={searchPlaceholder}
-              className="mb-3 w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm"
+              className="mb-2 w-full shrink-0 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm"
             />
-            <div className="min-h-[120px] flex-1 overflow-y-auto rounded-lg border border-zinc-200 bg-white md:min-h-[200px]">
-              {props.recipients.length === 0 ? (
+            <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-zinc-200 bg-white">
+              {props.recipientsLoading ? (
+                <p className="px-3 py-4 text-xs text-zinc-500">Ładowanie listy…</p>
+              ) : props.recipients.length === 0 ? (
                 <p className="px-3 py-4 text-xs text-zinc-500">
                   {props.recipientSearchDebounced
                     ? 'Brak wyników — zmień wyszukiwanie'
-                    : 'Ładowanie listy…'}
+                    : props.mode === 'parent'
+                      ? 'Brak dostępnych odbiorców.'
+                      : props.mode === 'teacher'
+                        ? 'Brak rodziców w Twoich grupach. Użyj filtrów lub poczekaj na przypisanie uczniów.'
+                        : isTeachersAudience
+                          ? 'Brak nauczycieli w szkole.'
+                          : 'Wybierz filtry lub wyszukaj rodzica.'}
                 </p>
               ) : (
                 props.recipients.map((r) => {
@@ -158,122 +475,58 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
               )}
             </div>
 
-            {props.canPickIndividuals && props.mode === 'manager' && (
-              <div className="mt-3 shrink-0 rounded-xl border border-zinc-200 bg-white">
-                <button
-                  type="button"
-                  onClick={props.onToggleGroupFilters}
-                  className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-semibold text-zinc-700"
-                >
-                  Wysyłka do grupy (filtry masowe)
-                  <span className="text-zinc-400">{props.showGroupFilters ? '▲' : '▼'}</span>
-                </button>
-                {props.showGroupFilters && (
-                  <div className="max-h-48 space-y-2 overflow-y-auto border-t border-zinc-200 p-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                      Filtry grupy
-                    </p>
-                    {props.filterMeta && (
-                      <>
-                        <select
-                          value={props.filterGroupId}
-                          onChange={(e) => props.onFilterGroupIdChange(e.target.value)}
-                          className="w-full rounded-lg border border-zinc-300 px-2 py-1.5 text-sm"
-                        >
-                          <option value="">Wybierz grupę</option>
-                          {props.filterMeta.groups.map((g) => (
-                            <option key={g.id} value={g.id}>
-                              {g.name}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          value={props.filterLocationId}
-                          onChange={(e) => props.onFilterLocationIdChange(e.target.value)}
-                          className="w-full rounded-lg border border-zinc-300 px-2 py-1.5 text-sm"
-                        >
-                          <option value="">Lokalizacja</option>
-                          {props.filterMeta.locations.map((l) => (
-                            <option key={l.id} value={l.id}>
-                              {l.name}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          value={props.filterSchoolYearId}
-                          onChange={(e) => props.onFilterSchoolYearIdChange(e.target.value)}
-                          className="w-full rounded-lg border border-zinc-300 px-2 py-1.5 text-sm"
-                        >
-                          <option value="">Rok szkolny</option>
-                          {props.filterMeta.schoolYears.map((y) => (
-                            <option key={y.id} value={y.id}>
-                              {y.name}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          value={props.filterTeacherId}
-                          onChange={(e) => props.onFilterTeacherIdChange(e.target.value)}
-                          className="w-full rounded-lg border border-zinc-300 px-2 py-1.5 text-sm"
-                        >
-                          <option value="">Nauczyciel (grupa)</option>
-                          {props.filterMeta.teachers.map((t) => (
-                            <option key={t.id} value={t.id}>
-                              {t.name}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          value={props.filterEnrollmentStatus}
-                          onChange={(e) => props.onFilterEnrollmentStatusChange(e.target.value)}
-                          className="w-full rounded-lg border border-zinc-300 px-2 py-1.5 text-sm"
-                        >
-                          {ACCESS_LEVEL_OPTIONS.map((o) => (
-                            <option key={o.value || 'all'} value={o.value}>
-                              {o.label}
-                            </option>
-                          ))}
-                        </select>
-                      </>
-                    )}
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={props.includeTeachers}
-                        onChange={(e) => props.onIncludeTeachersChange(e.target.checked)}
-                      />
-                      Pokaż też nauczycieli
-                    </label>
-                    <button
-                      type="button"
-                      onClick={props.onApplyManagerFilters}
-                      className="w-full rounded-lg border border-[#0f6e56] py-2 text-sm font-semibold text-[#0f6e56]"
-                    >
-                      Zastosuj filtry grupy
-                    </button>
-                    {props.recipients.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={props.onAddAllFromList}
-                        className="w-full rounded-lg bg-emerald-50 py-2 text-sm font-semibold text-[#0f6e56]"
-                      >
-                        Dodaj wszystkich z listy ({props.recipients.length})
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
+            {props.canPickIndividuals && !isTeachersAudience && (
+              props.showBulkParentAddButtons ? (
+                <div className="mt-2 flex shrink-0 flex-col gap-1.5 border-t border-zinc-200/80 pt-2 md:flex-row">
+                  <button
+                    type="button"
+                    disabled={!!props.bulkAddLoading}
+                    onClick={props.onAddAllFromDatabase}
+                    className="flex-1 rounded-lg bg-emerald-50 px-2 py-1.5 text-[11px] font-semibold leading-tight text-[#0f6e56] hover:bg-emerald-100 disabled:opacity-50 md:text-xs"
+                  >
+                    {props.bulkAddLoading === 'all' ? 'Ładowanie…' : 'Dodaj wszystkich z bazy'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!!props.bulkAddLoading}
+                    onClick={props.onAddAllActiveClients}
+                    className="flex-1 rounded-lg bg-emerald-50 px-2 py-1.5 text-[11px] font-semibold leading-tight text-[#0f6e56] hover:bg-emerald-100 disabled:opacity-50 md:text-xs"
+                  >
+                    {props.bulkAddLoading === 'active'
+                      ? 'Ładowanie…'
+                      : 'Dodaj aktualnych klientów'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={props.recipients.length === 0}
+                    onClick={props.onAddAllFromList}
+                    className="flex-1 rounded-lg bg-emerald-50 px-2 py-1.5 text-[11px] font-semibold leading-tight text-[#0f6e56] hover:bg-emerald-100 disabled:opacity-50 md:text-xs"
+                  >
+                    Z listy ({props.recipients.length})
+                  </button>
+                </div>
+              ) : (
+                props.recipients.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={props.onAddAllFromList}
+                    className="mt-3 w-full shrink-0 rounded-lg bg-emerald-50 py-2 text-sm font-semibold text-[#0f6e56] hover:bg-emerald-100"
+                  >
+                    Dodaj wszystkich z listy ({props.recipients.length})
+                  </button>
+                )
+              )
             )}
           </div>
 
           {/* Prawa kolumna — treść wiadomości */}
-          <div className="flex min-h-0 flex-col overflow-y-auto p-5">
-            <div className="flex flex-1 flex-col gap-4">
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-zinc-800">
+          <div className="flex min-h-0 flex-col overflow-hidden p-3 md:p-4">
+            <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden md:gap-3">
+              <div className="shrink-0">
+                <label className="mb-1 block text-sm font-medium text-zinc-800">
                   Adresat / Adresaci
                 </label>
-                <div className="min-h-[80px] rounded-xl border border-zinc-300 bg-zinc-50/50 px-3 py-2.5">
+                <div className="max-h-20 overflow-y-auto rounded-xl border border-zinc-300 bg-zinc-50/50 px-3 py-2 md:max-h-24">
                   {adresatIds.length === 0 ? (
                     <p className="text-sm text-zinc-400">
                       Wybierz odbiorców z listy po lewej stronie
@@ -309,8 +562,8 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
                 </div>
               </div>
 
-              <div>
-                <label htmlFor="compose-subject" className="mb-1.5 block text-sm font-medium text-zinc-800">
+              <div className="shrink-0">
+                <label htmlFor="compose-subject" className="mb-1 block text-sm font-medium text-zinc-800">
                   Temat
                 </label>
                 <input
@@ -323,41 +576,40 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
               </div>
 
               <div className="flex min-h-0 flex-1 flex-col">
-                <label htmlFor="compose-body" className="mb-1.5 block text-sm font-medium text-zinc-800">
+                <label htmlFor="compose-body" className="mb-1 block shrink-0 text-sm font-medium text-zinc-800">
                   Treść wiadomości
                 </label>
                 <textarea
                   id="compose-body"
                   value={props.composeContent}
                   onChange={(e) => props.onComposeContentChange(e.target.value)}
-                  rows={10}
-                  className="min-h-[160px] w-full flex-1 resize-y rounded-xl border border-zinc-300 px-3 py-2 text-sm"
+                  className="min-h-0 w-full flex-1 resize-none rounded-xl border border-zinc-300 px-3 py-2 text-sm"
                   placeholder="Napisz wiadomość…"
                 />
               </div>
+            </div>
 
-              <div className="mt-auto flex shrink-0 flex-col gap-2 sm:flex-row">
-                <button
-                  type="button"
-                  disabled={props.sendingCompose}
-                  onClick={props.onClearForm}
-                  className="w-full rounded-full border border-zinc-300 bg-white py-2.5 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-50 disabled:opacity-50 sm:w-auto sm:px-5"
-                >
-                  Wyczyść formularz
-                </button>
-                <button
-                  type="button"
-                  disabled={props.sendingCompose}
-                  onClick={props.onSend}
-                  className="w-full flex-1 rounded-full bg-[#0f6e56] py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:opacity-50"
-                >
-                  {props.sendingCompose
-                    ? 'Wysyłanie…'
-                    : props.canPickIndividuals && props.selectedRecipientIds.length > 1
-                      ? `Wyślij do ${props.selectedRecipientIds.length} osób`
-                      : 'Wyślij'}
-                </button>
-              </div>
+            <div className="mt-2 flex shrink-0 flex-col gap-2 border-t border-zinc-200 pt-2 sm:flex-row md:mt-3">
+              <button
+                type="button"
+                disabled={props.sendingCompose}
+                onClick={props.onClearForm}
+                className="w-full rounded-full border border-zinc-300 bg-white py-2 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-50 disabled:opacity-50 sm:w-auto sm:px-5"
+              >
+                Wyczyść formularz
+              </button>
+              <button
+                type="button"
+                disabled={props.sendingCompose}
+                onClick={props.onSend}
+                className="w-full flex-1 rounded-full bg-[#0f6e56] py-2 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:opacity-50"
+              >
+                {props.sendingCompose
+                  ? 'Wysyłanie…'
+                  : props.canPickIndividuals && props.selectedRecipientIds.length > 1
+                    ? `Wyślij do ${props.selectedRecipientIds.length} osób`
+                    : 'Wyślij'}
+              </button>
             </div>
           </div>
         </div>

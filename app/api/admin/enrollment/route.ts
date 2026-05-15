@@ -15,6 +15,10 @@ import { sendProposalEmail } from "@/lib/email";
 import { getTokenFromRequest } from "@/lib/auth";
 import type { EnrollmentStatus } from "@/lib/enrollment-status";
 import { generateTempPassword } from "@/lib/password";
+import {
+  syncChildrenAccessLevelForEnrollment,
+  syncParentUserAccessLevel,
+} from "@/lib/enrollment-sync";
 
 export async function GET(request: NextRequest) {
   try {
@@ -77,6 +81,7 @@ export async function GET(request: NextRequest) {
                'lastName', COALESCE(c.last_name, er.child_last_name),
                'confirmed', COALESCE(c.confirmed, FALSE),
                'status', UPPER(BTRIM(COALESCE(er.status::text, 'NEW'))),
+               'childAccessLevel', UPPER(BTRIM(COALESCE(c.access_level::text, er.status::text, 'NEW'))),
                'birthDate', er.child_birth_date::text,
                'preferredLocation', COALESCE(loc.name, NULLIF(TRIM(er.preferred_location::text), '')),
                'preferredDays', er.preferred_days,
@@ -334,7 +339,7 @@ export async function POST(request: NextRequest) {
           schoolId: parentSchoolId,
           phone: enrollment.parent_phone ?? null,
           confirmed: false,
-          accessLevel: "PROPOSED",
+          accessLevel: "PENDING",
           mustChangePassword: true,
         });
         parentUserId = newUser.id;
@@ -421,17 +426,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 6) Bezpiecznie ustaw access_level=PROPOSED tylko jeśli user nie jest dalej w procesie
-    //    (np. ma już ACTIVE/CONTRACT_SENT dla innego dziecka — wtedy nie cofamy).
-    await queryDb(
-      `UPDATE users
-       SET access_level = 'PROPOSED'
-       WHERE id = $1
-         AND COALESCE(access_level::text, 'PENDING') IN ('PENDING', 'PROPOSED')`,
-      [parentUserId]
-    );
-
-    // 7) Upewnij się, że dziecko z tego zgłoszenia istnieje w `children` (active=TRUE, confirmed=FALSE)
+    // 6) Upewnij się, że dziecko z tego zgłoszenia istnieje w `children` (active=TRUE, confirmed=FALSE)
     //    i jest dowiązane do enrollment_request_id. Tworzymy TYLKO to jedno dziecko.
     if (shape.hasChildrenTable) {
       const childFirst = (enrollment.child_first_name ?? "").trim();
@@ -450,14 +445,21 @@ export async function POST(request: NextRequest) {
       const existingChildId = existingChildRes.rows[0]?.id ?? null;
 
       if (existingChildId) {
+        const setParts = ["active = TRUE"];
+        const setVals: unknown[] = [existingChildId];
+        let pi = 2;
         if (shape.childHasEnrollmentRequestId) {
-          await queryDb(
-            `UPDATE children SET active = TRUE, enrollment_request_id = $2 WHERE id = $1`,
-            [existingChildId, requestId]
-          );
-        } else {
-          await queryDb(`UPDATE children SET active = TRUE WHERE id = $1`, [existingChildId]);
+          setParts.push(`enrollment_request_id = $${pi++}`);
+          setVals.push(requestId);
         }
+        if (shape.childHasAccessLevel) {
+          setParts.push(`access_level = $${pi++}`);
+          setVals.push("PROPOSED");
+        }
+        await queryDb(
+          `UPDATE children SET ${setParts.join(", ")} WHERE id = $1`,
+          setVals
+        );
       } else {
         const childId = randomUUID();
         const cols: string[] = [
@@ -486,6 +488,10 @@ export async function POST(request: NextRequest) {
           cols.push("enrollment_request_id");
           vals.push(requestId);
         }
+        if (shape.childHasAccessLevel) {
+          cols.push("access_level");
+          vals.push("PROPOSED");
+        }
         if (
           shape.childHasPreferredLocationId &&
           enrollment.preferred_location != null &&
@@ -507,7 +513,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 8) Wyślij maila z propozycją (z danymi logowania tylko dla świeżo utworzonego konta).
+    await syncChildrenAccessLevelForEnrollment(requestId, "PROPOSED");
+    await syncParentUserAccessLevel(parentUserId);
+
+    // 7) Wyślij maila z propozycją (z danymi logowania tylko dla świeżo utworzonego konta).
     await sendProposalEmail(
       parentEmail,
       `${parentFirstName} ${parentLastName}`.trim(),

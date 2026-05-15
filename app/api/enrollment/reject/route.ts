@@ -8,6 +8,10 @@ import {
 } from "@/lib/db";
 import { getTokenFromRequest } from "@/lib/auth";
 import { sendProposalRejectedEmail } from "@/lib/email";
+import {
+  syncChildrenAccessLevelForEnrollment,
+  syncParentUserAccessLevel,
+} from "@/lib/enrollment-sync";
 
 /**
  * Rodzic odrzuca **aktywną** propozycję grupy (`enrollment_proposals.status = PENDING`).
@@ -171,6 +175,8 @@ export async function POST(request: NextRequest) {
               { status: 409 }
             );
           }
+          await syncChildrenAccessLevelForEnrollment(enrollmentRequestId, "NEGOTIATING");
+          await syncParentUserAccessLevel(parentId);
           try {
             await sendProposalRejectedEmail({
               parentFirstName: orphan.parent_first_name ?? "",
@@ -219,6 +225,9 @@ export async function POST(request: NextRequest) {
           [enrollmentRequestId, parentId]
         );
       });
+
+      await syncChildrenAccessLevelForEnrollment(enrollmentRequestId, "NEGOTIATING");
+      await syncParentUserAccessLevel(parentId);
 
       try {
         await sendProposalRejectedEmail({
@@ -311,6 +320,9 @@ export async function POST(request: NextRequest) {
     if ((upd.rowCount ?? 0) === 0) {
       return NextResponse.json({ message: "Propozycja jest już nieaktywna" }, { status: 409 });
     }
+
+    await syncChildrenAccessLevelForEnrollment(enrollmentRequestId, "REJECTED");
+    await syncParentUserAccessLevel(parentId);
 
     try {
       await sendProposalRejectedEmail({

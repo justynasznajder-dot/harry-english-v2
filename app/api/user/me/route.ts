@@ -33,6 +33,7 @@ export async function GET(request: NextRequest) {
         birthDate: c.birth_date,
         active: c.active,
         confirmed: c.confirmed,
+        accessLevel: c.access_level,
         enrollmentRequestId: c.enrollment_request_id,
         resignationRequested: c.resignation_requested || false,
         resignationReason: c.resignation_reason || null,

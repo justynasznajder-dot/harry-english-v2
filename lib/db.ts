@@ -43,7 +43,18 @@ export function parseUserRole(raw: string | null | undefined): UserRole | null {
   return (USER_ROLES as readonly string[]).includes(u) ? (u as UserRole) : null;
 }
 
-export type AccessLevel = "PENDING" | "PROPOSED" | "CONTRACT_SENT" | "ACTIVE";
+/** Poziom dostępu konta rodzica — uproszczony model (aktywacja konta). */
+export type AccessLevel = "PENDING" | "ACTIVE";
+
+/** Stan dziecka w procesie zapisu (`children.access_level`). */
+export type ChildAccessLevel =
+  | "NEW"
+  | "PROPOSED"
+  | "NEGOTIATING"
+  | "ACCEPTED"
+  | "SIGNED"
+  | "COMPLETED"
+  | "REJECTED";
 
 /** @deprecated Stary model UI / API — mapowany na `UserRole` */
 export type AccountType = "user" | "admin" | "lektor";
@@ -88,6 +99,7 @@ type DbShape = {
   childHasConfirmed: boolean;
   childHasEnrollmentRequestId: boolean;
   childHasPreferredLocationId: boolean;
+  childHasAccessLevel: boolean;
   enrollmentHasRejectionComment: boolean;
   enrollmentHasRejectedAt: boolean;
   /** Tabela `enrollment_proposals` — historia propozycji grup. */
@@ -120,6 +132,7 @@ export async function getDbShape(): Promise<DbShape> {
     child_has_confirmed: boolean;
     child_has_enrollment_request_id: boolean;
     child_has_preferred_location_id: boolean;
+    child_has_access_level: boolean;
     enrollment_has_rejection_comment: boolean;
     enrollment_has_rejected_at: boolean;
     has_enrollment_proposals: boolean;
@@ -167,6 +180,10 @@ export async function getDbShape(): Promise<DbShape> {
        ) AS child_has_preferred_location_id,
        EXISTS(
          SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'children' AND column_name = 'access_level'
+       ) AS child_has_access_level,
+       EXISTS(
+         SELECT 1 FROM information_schema.columns
          WHERE table_schema = 'public' AND table_name = 'enrollment_requests' AND column_name = 'rejection_comment'
        ) AS enrollment_has_rejection_comment,
        EXISTS(
@@ -190,6 +207,7 @@ export async function getDbShape(): Promise<DbShape> {
     childHasConfirmed: Boolean(row?.child_has_confirmed),
     childHasEnrollmentRequestId: Boolean(row?.child_has_enrollment_request_id),
     childHasPreferredLocationId: Boolean(row?.child_has_preferred_location_id),
+    childHasAccessLevel: Boolean(row?.child_has_access_level),
     enrollmentHasRejectionComment: Boolean(row?.enrollment_has_rejection_comment),
     enrollmentHasRejectedAt: Boolean(row?.enrollment_has_rejected_at),
     hasEnrollmentProposalsTable: Boolean(row?.has_enrollment_proposals),
@@ -247,6 +265,7 @@ export interface Child {
   active: boolean;
   confirmed: boolean;
   enrollment_request_id: string | null;
+  access_level: ChildAccessLevel;
   resignation_requested: boolean;
   resignation_reason: string | null;
   resignation_date: Date | null;
@@ -365,6 +384,7 @@ type ChildRow = QueryResultRow & {
   active: boolean;
   confirmed: boolean;
   enrollment_request_id: string | null;
+  access_level?: string | null;
   resignation_requested: boolean;
   resignation_reason: string | null;
   resignation_date: Date | null;
@@ -386,7 +406,7 @@ function mapUserRow(row: QueryResultRow): User {
     email: row.email as string,
     password_hash: row.password_hash as string,
     role,
-    access_level: (row.access_level as AccessLevel | undefined) ?? "ACTIVE",
+    access_level: (row.access_level as AccessLevel | undefined) ?? "PENDING",
     account_type: userRoleToAccountType(role),
     first_name: row.first_name as string,
     last_name: row.last_name as string,
@@ -452,6 +472,7 @@ function mapChildRow(row: ChildRow): Child {
     active: row.active,
     confirmed: row.confirmed ?? false,
     enrollment_request_id: row.enrollment_request_id ?? null,
+    access_level: (row.access_level as ChildAccessLevel | undefined) ?? "NEW",
     resignation_requested: row.resignation_requested,
     resignation_reason: row.resignation_reason,
     resignation_date: row.resignation_date,
@@ -478,6 +499,7 @@ function studentRowToChild(row: QueryResultRow): Child {
     active: row.active !== false,
     confirmed: false,
     enrollment_request_id: null,
+    access_level: "NEW",
     resignation_requested: Boolean(row.resignation_requested),
     resignation_reason: (row.resignation_reason as string | null) ?? null,
     resignation_date: (row.resignation_date as Date | null) ?? null,
@@ -597,7 +619,8 @@ export async function createUser(data: {
       ? accountTypeToUserRole(data.accountType)
       : "PARENT");
   const confirmed = data.confirmed ?? false;
-  const accessLevel = data.accessLevel ?? "ACTIVE";
+  const accessLevel =
+    data.accessLevel ?? (role === "PARENT" ? "PENDING" : "ACTIVE");
   const mustChangePassword = data.mustChangePassword ?? false;
   const shape = await getDbShape();
 
@@ -1112,43 +1135,50 @@ export async function createChild(data: {
   lastName: string;
   birthDate: string;
   avatarUrl?: string | null;
+  accessLevel?: ChildAccessLevel;
 }): Promise<Child> {
   const shape = await getDbShape();
   const id = randomUUID();
   const schoolId = data.schoolId ?? DEFAULT_SCHOOL_ID;
+  const accessLevel = data.accessLevel ?? "NEW";
 
   if (shape.hasChildrenTable) {
-    const r = shape.childHasConfirmed
-      ? await pool.query<ChildRow>(
-          `INSERT INTO children (
-             id, school_id, parent_id, first_name, last_name, birth_date, avatar_url, confirmed
-           ) VALUES ($1, $2, $3, $4, $5, $6::date, $7, FALSE)
-           RETURNING *`,
-          [
-            id,
-            schoolId,
-            data.parentId,
-            data.firstName,
-            data.lastName,
-            data.birthDate.slice(0, 10),
-            data.avatarUrl ?? null,
-          ]
-        )
-      : await pool.query<ChildRow>(
-          `INSERT INTO children (
-             id, school_id, parent_id, first_name, last_name, birth_date, avatar_url
-           ) VALUES ($1, $2, $3, $4, $5, $6::date, $7)
-           RETURNING *`,
-          [
-            id,
-            schoolId,
-            data.parentId,
-            data.firstName,
-            data.lastName,
-            data.birthDate.slice(0, 10),
-            data.avatarUrl ?? null,
-          ]
-        );
+    const cols = [
+      "id",
+      "school_id",
+      "parent_id",
+      "first_name",
+      "last_name",
+      "birth_date",
+      "avatar_url",
+    ];
+    const vals: unknown[] = [
+      id,
+      schoolId,
+      data.parentId,
+      data.firstName,
+      data.lastName,
+      data.birthDate.slice(0, 10),
+      data.avatarUrl ?? null,
+    ];
+    if (shape.childHasConfirmed) {
+      cols.push("confirmed");
+      vals.push(false);
+    }
+    if (shape.childHasAccessLevel) {
+      cols.push("access_level");
+      vals.push(accessLevel);
+    }
+    const placeholders = vals
+      .map((_, i) => {
+        const col = cols[i];
+        return col === "birth_date" ? `$${i + 1}::date` : `$${i + 1}`;
+      })
+      .join(", ");
+    const r = await pool.query<ChildRow>(
+      `INSERT INTO children (${cols.join(", ")}) VALUES (${placeholders}) RETURNING *`,
+      vals
+    );
     return mapChildRow(r.rows[0]);
   }
 

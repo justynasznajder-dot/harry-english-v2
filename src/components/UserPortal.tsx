@@ -2,19 +2,24 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import MessagesPanel from '@/src/components/messages/MessagesPanel';
+import MessagesTabLabel from '@/src/components/messages/MessagesTabLabel';
+import { useUnreadMessagesCount } from '@/src/components/messages/useUnreadMessagesCount';
+
+type ChildEnrollmentLevel = 'NEW' | 'PROPOSED' | 'NEGOTIATING' | 'ACCEPTED' | 'SIGNED' | 'COMPLETED' | 'REJECTED';
 
 interface UserInfo {
   id: string;
   email: string;
   firstName: string;
   lastName: string;
-  accessLevel?: 'PENDING' | 'PROPOSED' | 'CONTRACT_SENT' | 'ACTIVE';
+  accessLevel?: 'PENDING' | 'ACTIVE';
   children?: Array<{
     childId?: string;
     firstName: string;
     lastName: string;
     birthDate: string;
     active?: boolean;
+    accessLevel?: ChildEnrollmentLevel;
     resignationRequested?: boolean;
     resignationReason?: string | null;
   }>;
@@ -26,14 +31,42 @@ interface UserPortalProps {
 }
 
 interface EnrollmentProposal {
+  child_id?: string;
   request_id: string;
-  request_status: 'PROPOSED' | 'NEGOTIATING' | 'ACCEPTED' | 'SIGNED';
+  access_level: ChildEnrollmentLevel;
+  /** @deprecated alias — użyj `access_level` */
+  request_status?: ChildEnrollmentLevel;
   child_first_name: string;
   child_last_name: string;
   group_name: string | null;
   location_name: string;
   schedule: string;
   proposed_at?: string | null;
+}
+
+function childAccessLevel(p: EnrollmentProposal): ChildEnrollmentLevel {
+  return p.access_level ?? p.request_status ?? 'NEW';
+}
+
+function deriveEnrollmentStepIndex(
+  proposals: EnrollmentProposal[],
+  children: UserInfo['children'],
+  accountAccessLevel: UserInfo['accessLevel']
+): number {
+  const levels = [
+    ...proposals.map((p) => childAccessLevel(p)),
+    ...(children ?? [])
+      .filter((c) => c.active !== false)
+      .map((c) => c.accessLevel)
+      .filter((v): v is ChildEnrollmentLevel => Boolean(v)),
+  ];
+
+  if (levels.some((s) => s === 'SIGNED' || s === 'COMPLETED') || accountAccessLevel === 'ACTIVE') {
+    return 3;
+  }
+  if (levels.some((s) => s === 'ACCEPTED')) return 2;
+  if (levels.some((s) => s === 'PROPOSED' || s === 'NEGOTIATING')) return 1;
+  return 0;
 }
 
 type ProposalHistoryRow = {
@@ -88,6 +121,9 @@ function EmptyState({ message }: { message: string }) {
 
 export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalProps) {
   const [activeTab, setActiveTab] = useState<PortalTab>('enrollment');
+  const [messagesListResetToken, setMessagesListResetToken] = useState(0);
+  const { unreadCount: messagesUnreadCount, refresh: refreshMessagesUnreadCount } =
+    useUnreadMessagesCount(messagesListResetToken);
   /** Multi-child: który `request_id` ma rozwiniętą textarea odrzucenia. */
   const [rejectOpenFor, setRejectOpenFor] = useState<Record<string, boolean>>({});
   /** Multi-child: komentarz odrzucenia per `request_id`. */
@@ -110,13 +146,11 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
    */
   const enrollmentActionBusyRef = useRef(false);
   const [flash, setFlash] = useState<Flash | null>(null);
-  const currentStepIndexByAccessLevel: Record<'PENDING' | 'PROPOSED' | 'CONTRACT_SENT' | 'ACTIVE', number> = {
-    PENDING: 0,
-    PROPOSED: 1,
-    CONTRACT_SENT: 2,
-    ACTIVE: 3,
-  };
-  const currentStepIndex = currentStepIndexByAccessLevel[userInfo.accessLevel ?? 'PENDING'];
+  const currentStepIndex = deriveEnrollmentStepIndex(
+    proposals,
+    userInfo.children,
+    userInfo.accessLevel
+  );
 
   const refreshUserAccessLevel = useCallback(async () => {
     try {
@@ -322,8 +356,9 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
               {proposals.map((p) => {
                 const isAccepting = acceptingId === p.request_id;
                 const isRejecting = rejectingId === p.request_id;
-                const isActionable = p.request_status === 'PROPOSED';
-                const isNegotiating = p.request_status === 'NEGOTIATING';
+                const level = childAccessLevel(p);
+                const isActionable = level === 'PROPOSED';
+                const isNegotiating = level === 'NEGOTIATING';
                 const history = (proposalHistoryByRequestId[p.request_id] ?? []).filter(
                   (h) => h.status !== 'PENDING',
                 );
@@ -341,20 +376,20 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
                       </p>
                       <span
                         className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${
-                          p.request_status === 'PROPOSED'
+                          level === 'PROPOSED'
                             ? 'bg-sky-100 text-sky-800'
-                            : p.request_status === 'NEGOTIATING'
+                            : level === 'NEGOTIATING'
                               ? 'bg-amber-100 text-amber-900'
-                              : p.request_status === 'ACCEPTED'
+                              : level === 'ACCEPTED'
                                 ? 'bg-emerald-100 text-emerald-800'
                                 : 'bg-emerald-200 text-emerald-900'
                         }`}
                       >
-                        {p.request_status === 'PROPOSED'
+                        {level === 'PROPOSED'
                           ? 'Do decyzji'
-                          : p.request_status === 'NEGOTIATING'
+                          : level === 'NEGOTIATING'
                             ? 'Oczekuje na nową propozycję szkoły'
-                            : p.request_status === 'ACCEPTED'
+                            : level === 'ACCEPTED'
                               ? 'Zaakceptowana — czekaj na umowę'
                               : 'Umowa podpisana'}
                       </span>
@@ -603,7 +638,12 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
   );
 
   const renderMessagesTab = () => (
-    <MessagesPanel mode="parent" currentUserId={userInfo.id} />
+    <MessagesPanel
+      mode="parent"
+      currentUserId={userInfo.id}
+      listResetToken={messagesListResetToken}
+      onInboxChange={refreshMessagesUnreadCount}
+    />
   );
 
   const renderGroupTab = () => (
@@ -677,14 +717,27 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
               <button
                 key={tab.key}
                 type="button"
-                onClick={() => setActiveTab(tab.key)}
+                onClick={() => {
+                  if (tab.key === 'messages' && activeTab === 'messages') {
+                    setMessagesListResetToken((t) => t + 1);
+                  }
+                  setActiveTab(tab.key);
+                }}
                 className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
                   activeTab === tab.key
                     ? 'border-[#0f6e56] bg-[#0f6e56] text-white shadow-sm'
                     : 'border-transparent bg-emerald-50/60 text-zinc-800 hover:border-emerald-200 hover:bg-emerald-50'
                 }`}
               >
-                {tab.label}
+                {tab.key === 'messages' ? (
+                  <MessagesTabLabel
+                    label={tab.label}
+                    unreadCount={messagesUnreadCount}
+                    isActive={activeTab === 'messages'}
+                  />
+                ) : (
+                  tab.label
+                )}
               </button>
             ))}
           </div>

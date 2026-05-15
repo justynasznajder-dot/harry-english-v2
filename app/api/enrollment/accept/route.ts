@@ -9,6 +9,10 @@ import {
 } from "@/lib/db";
 import { sendContractEmail } from "@/lib/email";
 import { getTokenFromRequest } from "@/lib/auth";
+import {
+  syncChildrenAccessLevelForEnrollment,
+  syncParentUserAccessLevel,
+} from "@/lib/enrollment-sync";
 
 function fillTemplate(html: string, vars: Record<string, string>) {
   return Object.entries(vars).reduce(
@@ -28,10 +32,8 @@ function fillTemplate(html: string, vars: Record<string, string>) {
  * - `enrollment_requests.status = 'ACCEPTED'`, `accepted_at = NOW()` — tylko dla
  *   tego konkretnego zgłoszenia,
  * - generujemy umowę w `contracts` i wysyłamy maila z umową rodzicowi,
- * - `users.access_level` zmieniamy na `CONTRACT_SENT` DOPIERO gdy rodzic nie ma
- *   już żadnych innych zgłoszeń w statusie `PROPOSED` (multi-child: stepper
- *   pozostaje w fazie „Propozycja grupy", dopóki rodzic nie podejmie decyzji o
- *   wszystkich propozycjach).
+ * - `children.access_level` → `ACCEPTED` (równolegle z `enrollment_requests`),
+ * - `users.access_level` pozostaje `PENDING` do podpisania umowy (ACTIVE dopiero przy SIGNED/COMPLETED).
  */
 export async function PUT(request: NextRequest) {
   const payload = await getTokenFromRequest(request);
@@ -247,22 +249,19 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    /*
-     * `access_level` rodzica przesuwamy do CONTRACT_SENT TYLKO gdy nic już
-     * nie czeka w PROPOSED. Inaczej rodzic z dwójką dzieci straciłby
-     * stepper w fazie propozycji, mimo że drugie dziecko jeszcze nie ma
-     * decyzji.
-     */
+    await syncChildrenAccessLevelForEnrollment(enrollment.id, "ACCEPTED");
+    await syncParentUserAccessLevel(parentId);
+
     const remainingRes = await queryDb<{ remaining: string }>(
       `SELECT COUNT(*)::text AS remaining
-       FROM enrollment_requests
-       WHERE user_id = $1 AND school_id = $2 AND UPPER(BTRIM(COALESCE(status::text, ''))) = 'PROPOSED'`,
+       FROM children
+       WHERE parent_id = $1
+         AND school_id = $2
+         AND active = TRUE
+         AND UPPER(BTRIM(COALESCE(access_level::text, ''))) = 'PROPOSED'`,
       [parentId, SCHOOL_ID]
     );
     const remaining = Number(remainingRes.rows[0]?.remaining ?? "0");
-    if (remaining === 0) {
-      await queryDb(`UPDATE users SET access_level = 'CONTRACT_SENT' WHERE id = $1`, [parentId]);
-    }
 
     await sendContractEmail(parent.email, `${parent.first_name} ${parent.last_name}`, contractHtml);
     return NextResponse.json({

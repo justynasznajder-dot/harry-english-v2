@@ -22,6 +22,9 @@ const BRAND_MUTED = "#6b7280";
 const BRAND_BG = "#f3f5f4";
 const BRAND_CARD_BG = "#ffffff";
 const BRAND_FONT = "Geist, Arial, Helvetica, sans-serif";
+const BRAND_FOOTER_TEXT = "#d8e8e3";
+const BRAND_FOOTER_LINK = "#ecf7f2";
+const FACEBOOK_URL = "https://www.facebook.com/Zyrafa.Harry";
 
 function getAppBaseUrl(): string {
   const raw = process.env.NEXT_PUBLIC_APP_URL?.trim();
@@ -37,6 +40,44 @@ function getPublicEmailAssetBaseUrl(): string {
   return appUrl;
 }
 
+function buildDefaultEmailFooter(): string {
+  const siteUrl = getAppBaseUrl();
+  return `
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+      <tr>
+        <td align="center" style="font-family:${BRAND_FONT};">
+          <p style="margin:0;font-size:16px;font-weight:700;color:${BRAND_YELLOW};">Harry English</p>
+          <p style="margin:10px 0 0 0;font-size:13px;line-height:1.75;color:${BRAND_FOOTER_TEXT};">
+            <a href="mailto:kontakt@harry-english.pl" style="color:${BRAND_FOOTER_LINK};text-decoration:underline;">kontakt@harry-english.pl</a><br />
+            <a href="${siteUrl}" style="color:${BRAND_FOOTER_LINK};text-decoration:underline;">www.harry-english.pl</a>
+          </p>
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:16px auto 0 auto;">
+            <tr>
+              <td style="border:1px solid #8fb5ab;border-radius:999px;">
+                <a href="${FACEBOOK_URL}" style="display:inline-block;padding:9px 20px;font-family:${BRAND_FONT};font-size:13px;font-weight:600;color:${BRAND_FOOTER_TEXT};text-decoration:none;">
+                  Facebook
+                </a>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>`;
+}
+
+/** Stopka w zielonym pasku — bgcolor + solid color dla Outlooka i Gmaila. */
+function buildEmailFooterRows(footerHtml: string): string {
+  return `
+            <tr>
+              <td bgcolor="${BRAND_YELLOW}" style="height:6px;background-color:${BRAND_YELLOW};font-size:0;line-height:0;mso-line-height-rule:exactly;">&nbsp;</td>
+            </tr>
+            <tr>
+              <td bgcolor="${BRAND_GREEN_DARK}" style="background-color:${BRAND_GREEN_DARK};padding:22px 22px 24px 22px;font-family:${BRAND_FONT};font-size:13px;line-height:1.6;color:${BRAND_FOOTER_TEXT};">
+                ${footerHtml}
+              </td>
+            </tr>`;
+}
+
 export function buildEmailShell(params: {
   title: string;
   intro?: string;
@@ -44,11 +85,7 @@ export function buildEmailShell(params: {
   footerHtml?: string;
 }): string {
   const logoUrl = `${getPublicEmailAssetBaseUrl()}/images/2zyrafa2.png`;
-  const footer =
-    params.footerHtml ??
-    `<p style="margin:0;">Harry English</p>
-     <p style="margin:4px 0 0 0;">kontakt@harry-english.pl</p>
-     <p style="margin:2px 0 0 0;">www.harry-english.pl</p>`;
+  const footer = params.footerHtml ?? buildDefaultEmailFooter();
 
   return `<!DOCTYPE html>
 <html>
@@ -85,11 +122,7 @@ export function buildEmailShell(params: {
                 ${params.contentHtml}
               </td>
             </tr>
-            <tr>
-              <td style="background:#f8f8f8;border-top:1px solid #e5e7eb;padding:14px 22px;font-family:${BRAND_FONT};font-size:12px;line-height:1.6;color:${BRAND_MUTED};">
-                ${footer}
-              </td>
-            </tr>
+            ${buildEmailFooterRows(footer)}
           </table>
         </td>
       </tr>
@@ -272,7 +305,7 @@ export async function sendResignationEmail(
           <p style="margin:0;font-size:14px;line-height:1.6;white-space:pre-wrap;">${escapeHtmlForEmail(reason)}</p>
         </div>
       `,
-      footerHtml: `<p style="margin:0;">Harry English</p><p style="margin:4px 0 0 0;">System automatycznego powiadamiania</p>`,
+      footerHtml: `<p style="margin:0 0 4px 0;font-size:15px;font-weight:700;color:${BRAND_YELLOW};">Harry English</p><p style="margin:0;font-size:12px;color:${BRAND_FOOTER_TEXT};">System automatycznego powiadamiania</p>`,
     }),
     text: `
 Rezygnacja z kursu - ${childFirstName} ${childLastName}
@@ -394,6 +427,7 @@ Odezwiemy się do Ciebie wkrótce, aby ustalić szczegóły.
 Kontakt:
 - kontakt@harry-english.pl
 - www.harry-english.pl
+- Facebook: ${FACEBOOK_URL}
     `.trim(),
   });
 }
@@ -538,8 +572,8 @@ export async function sendMessageNotificationEmail(params: {
           </tr>
         </table>
       `,
-      footerHtml: `<p style="margin:0;">Aby odpowiedzieć, zaloguj się do panelu. Nie odpowiadaj na tę wiadomość.</p>
-        <p style="margin:8px 0 0 0;">Harry English</p>`,
+      footerHtml: `<p style="margin:0;font-size:12px;color:${BRAND_FOOTER_TEXT};">Aby odpowiedzieć, zaloguj się do panelu. Nie odpowiadaj na tę wiadomość.</p>
+        <p style="margin:10px 0 0 0;font-size:15px;font-weight:700;color:${BRAND_YELLOW};">Harry English</p>`,
     }),
     text: `Dzień dobry ${params.recipientName},
 
@@ -739,7 +773,7 @@ export async function sendProposalRejectedEmail(params: {
           Zgłoszenie wróciło do statusu REJECTED — w panelu admina możesz zaproponować inną grupę.
         </p>
       `,
-      footerHtml: `<p style="margin:0;">Harry English</p><p style="margin:4px 0 0 0;">System automatycznego powiadamiania</p>`,
+      footerHtml: `<p style="margin:0 0 4px 0;font-size:15px;font-weight:700;color:${BRAND_YELLOW};">Harry English</p><p style="margin:0;font-size:12px;color:${BRAND_FOOTER_TEXT};">System automatycznego powiadamiania</p>`,
     }),
     text: `Rodzic odrzucił propozycję grupy
 
