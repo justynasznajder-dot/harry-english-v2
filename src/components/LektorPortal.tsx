@@ -1,47 +1,71 @@
 'use client';
 
+import { useEffect, useState } from 'react';
+import MessagesPanel from '@/src/components/messages/MessagesPanel';
+
+type LektorTab = 'materials' | 'groups' | 'messages';
+
+const tabs: Array<{ key: LektorTab; label: string }> = [
+  { key: 'materials', label: 'Materiały' },
+  { key: 'groups', label: 'Moje grupy' },
+  { key: 'messages', label: 'Wiadomości' },
+];
+
 export default function LektorPortal() {
+  const [activeTab, setActiveTab] = useState<LektorTab>('messages');
+  const [userId, setUserId] = useState('');
+
+  useEffect(() => {
+    fetch('/api/user/me', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.user?.id) setUserId(data.user.id);
+      })
+      .catch(() => {});
+  }, []);
+
   return (
-    <>
-      <div className="bg-[#f8f6f3] rounded-3xl p-8 shadow-xl mb-8">
-        <h2 className="text-2xl font-bold text-[#1f2933] mb-6">📚 Materiały do nauki</h2>
-        <p className="text-gray-600 mb-4">
-          Tutaj znajdziesz materiały edukacyjne, ćwiczenia i zasoby do prowadzenia zajęć.
-        </p>
-        
-        <div className="grid md:grid-cols-3 gap-4 mt-6">
-          <div className="bg-white rounded-xl p-6 shadow-md">
-            <h3 className="font-semibold text-[#1f2933] mb-2">Materiały dla dzieci</h3>
-            <p className="text-sm text-gray-600 mb-4">Pliki PDF, prezentacje, ćwiczenia</p>
-            <button className="px-4 py-2 bg-[#175244] text-white rounded-lg hover:bg-[#144a37] transition-colors text-sm">
-              Zobacz materiały
+    <div className="space-y-4">
+      <nav className="no-scrollbar overflow-x-auto rounded-3xl border border-emerald-100 bg-[#f8f6f3] p-2 shadow-xl">
+        <div className="flex min-w-max gap-2">
+          {tabs.map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setActiveTab(tab.key)}
+              className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+                activeTab === tab.key
+                  ? 'bg-[#175244] text-white'
+                  : 'bg-white text-[#1f2933] hover:bg-emerald-50'
+              }`}
+            >
+              {tab.label}
             </button>
-          </div>
-
-          <div className="bg-white rounded-xl p-6 shadow-md">
-            <h3 className="font-semibold text-[#1f2933] mb-2">Gry i zabawy</h3>
-            <p className="text-sm text-gray-600 mb-4">Interaktywne ćwiczenia dla uczniów</p>
-            <button className="px-4 py-2 bg-[#175244] text-white rounded-lg hover:bg-[#144a37] transition-colors text-sm">
-              Zobacz gry
-            </button>
-          </div>
-
-          <div className="bg-white rounded-xl p-6 shadow-md">
-            <h3 className="font-semibold text-[#1f2933] mb-2">Zadania domowe</h3>
-            <p className="text-sm text-gray-600 mb-4">Przygotowane zadania do wysłania</p>
-            <button className="px-4 py-2 bg-[#175244] text-white rounded-lg hover:bg-[#144a37] transition-colors text-sm">
-              Zarządzaj zadaniami
-            </button>
-          </div>
+          ))}
         </div>
-      </div>
+      </nav>
 
-      <div className="bg-[#f8f6f3] rounded-3xl p-8 shadow-xl">
-        <h2 className="text-2xl font-bold text-[#1f2933] mb-6">📋 Moje grupy</h2>
-        <p className="text-gray-600">
-          Przeglądaj listy uczniów w swoich grupach i zarządzaj ich postępami.
-        </p>
-      </div>
-    </>
+      {activeTab === 'messages' && (
+        <MessagesPanel mode="teacher" currentUserId={userId || undefined} />
+      )}
+
+      {activeTab === 'materials' && (
+        <div className="rounded-3xl bg-[#f8f6f3] p-8 shadow-xl">
+          <h2 className="mb-6 text-2xl font-bold text-[#1f2933]">Materiały do nauki</h2>
+          <p className="text-gray-600">
+            Tutaj znajdziesz materiały edukacyjne, ćwiczenia i zasoby do prowadzenia zajęć.
+          </p>
+        </div>
+      )}
+
+      {activeTab === 'groups' && (
+        <div className="rounded-3xl bg-[#f8f6f3] p-8 shadow-xl">
+          <h2 className="mb-6 text-2xl font-bold text-[#1f2933]">Moje grupy</h2>
+          <p className="text-gray-600">
+            Przeglądaj listy uczniów w swoich grupach i zarządzaj ich postępami.
+          </p>
+        </div>
+      )}
+    </div>
   );
 }

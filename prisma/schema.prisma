@@ -118,8 +118,9 @@ model User {
   taughtGroups  Group[]         @relation("TeacherGroups")
   uploadedMaterials Material[]  @relation("UploadedMaterials")
   progressNotes ProgressNote[]  @relation("TeacherNotes")
-  sentMessages     Message[]    @relation("SenderMessages")
-  parentMessages   Message[]    @relation("ParentMessages")
+  sentMessages       Message[]  @relation("SenderMessages")
+  parentMessages     Message[]  @relation("ParentMessages")
+  receivedMessages   Message[]  @relation("RecipientMessages")
   enrollmentRequests EnrollmentRequest[]
   enrollmentProposalsAuthored EnrollmentProposal[] @relation("EnrollmentProposalProposedBy")
   contracts          Contract[]
@@ -483,24 +484,35 @@ enum PaymentStatus {
 
 // Wiadomości 1:1
 model Message {
-  id                  String   @id @default(cuid())
-  schoolId            String   @map("school_id")
-  parentId            String   @map("parent_id")
-  senderId            String   @map("sender_id")
-  senderRole          String   @map("sender_role") @db.Text
-  enrollmentRequestId String?  @map("enrollment_request_id")
-  content             String   @db.Text
+  id                  String    @id @default(cuid())
+  schoolId            String    @map("school_id")
+  parentId            String?   @map("parent_id")
+  senderId            String    @map("sender_id")
+  senderRole          String    @map("sender_role") @db.Text
+  recipientId         String?   @map("recipient_id")
+  parentMessageId     String?   @map("parent_message_id")
+  broadcastId         String?   @map("broadcast_id")
+  subject             String?   @db.VarChar(255)
+  emailStatus         String?   @default("PENDING") @map("email_status") @db.Text
+  enrollmentRequestId String?   @map("enrollment_request_id")
+  content             String    @db.Text
   readAt              DateTime? @map("read_at")
-  createdAt           DateTime @default(now()) @map("created_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
 
-  school            School            @relation(fields: [schoolId], references: [id])
-  parent            User              @relation("ParentMessages", fields: [parentId], references: [id])
-  sender            User              @relation("SenderMessages", fields: [senderId], references: [id])
+  school            School             @relation(fields: [schoolId], references: [id])
+  parent            User?              @relation("ParentMessages", fields: [parentId], references: [id])
+  sender            User               @relation("SenderMessages", fields: [senderId], references: [id])
+  recipient         User?              @relation("RecipientMessages", fields: [recipientId], references: [id])
+  parentMessage     Message?           @relation("MessageThread", fields: [parentMessageId], references: [id])
+  replies           Message[]          @relation("MessageThread")
   enrollmentRequest EnrollmentRequest? @relation(fields: [enrollmentRequestId], references: [id])
 
   @@index([schoolId])
   @@index([parentId])
   @@index([senderId])
+  @@index([recipientId])
+  @@index([parentMessageId])
+  @@index([broadcastId])
   @@index([enrollmentRequestId])
   @@map("messages")
 }

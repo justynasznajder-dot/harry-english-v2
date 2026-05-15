@@ -1,4 +1,4 @@
-# HarryEnglish v2 — Kontekst projektu dla AI
+# HarryEnglish v2 — Kontekst projektu dla AI (v15)
 
 Ten plik służy do przekazania kontekstu do nowego czatu AI. Wklej go na początku rozmowy.
 
@@ -80,22 +80,28 @@ app/
       add/route.ts
       resign/route.ts
     contact/route.ts
+    messages/
+      route.ts                     # GET lista watkow + POST nowa wiadomosc / odpowiedz
+      [id]/thread/route.ts         # GET caly watek (root + odpowiedzi)
+      recipients/route.ts          # GET odbiorcy (+ POST meta filtrow dla managera)
 
 src/components/
-  AdminPortal.tsx                  # Panel managera/admina szkoly
+  AdminPortal.tsx                  # Panel managera/admina szkoly (zakladka Wiadomosci)
   UserPortal.tsx                   # Portal rodzica (pelny dostep)
+  LektorPortal.tsx                 # Portal nauczyciela (zakladki: materialy, grupy, wiadomosci)
+  messages/MessagesPanel.tsx       # Wspolny panel wiadomosci (manager | teacher | parent)
   PendingPortal.tsx                # Rodzic czeka na propozycje grupy
   ProposedPortal.tsx               # Rodzic akceptuje termin
   ContractPortal.tsx               # Rodzic podpisuje umowe
-  TeacherPortal.tsx                # Portal nauczyciela (w budowie)
   ChildPortal.tsx                  # Portal dziecka (w budowie)
 
 lib/
   db.ts                            # Polaczenie z baza + funkcje pomocnicze
+  messages.ts                      # Logika wiadomosci: odbiorcy, watki, walidacja uprawnien
   auth.ts                          # JWT: signToken, verifyToken, getTokenFromRequest
   enrollment-status.ts             # ENROLLMENT_STATUSES (+ NEGOTIATING)
   enrollment-proposals-list-sql.ts # wspólne SQL listy propozycji (admin + parent)
-  email.ts                         # Szablony maili i wysylka (m.in. sendProposalRejectedEmail)
+  email.ts                         # Szablony maili (m.in. sendMessageNotificationEmail)
   password.ts                      # generateTempPassword + validateStrongPassword
 middleware.ts                      # Ochrona /portal/* — weryfikacja JWT
 
@@ -293,18 +299,32 @@ ADMIN, MANAGER i TEACHER zawsze maja `access_level = ACTIVE`.
 Tabele modułów: materiały edukacyjne, postępy, nagrody — szczegóły bez zmian od v9.
 
 ### messages
-Wiadomości między rodzicem a managerem w ramach aplikacji.
+Wiadomości 1:1 w panelu (MANAGER, TEACHER, PARENT). Wątek = rekord korzenia (`parent_message_id IS NULL`) + odpowiedzi (`parent_message_id` = id korzenia). Broadcast = wiele rekordów z tym samym `broadcast_id`.
 | Kolumna | Typ | Opis |
 |---------|-----|------|
 | id | TEXT PK | UUID |
 | school_id | TEXT FK | Szkola |
-| parent_id | TEXT FK | Rodzic (users.id) |
+| parent_id | TEXT FK | Rodzic w rozmowie (users.id rodzica; NULL gdy tylko manager↔nauczyciel) |
 | sender_id | TEXT FK | Nadawca (users.id) |
-| sender_role | TEXT | MANAGER / PARENT |
-| enrollment_request_id | TEXT FK | Powiazane zgloszenie |
+| sender_role | TEXT | MANAGER / TEACHER / PARENT |
+| recipient_id | TEXT FK | Odbiorca (users.id) — jeden na rekord |
+| parent_message_id | TEXT FK | Id wiadomosci korzenia watku (NULL = korzen) |
+| broadcast_id | TEXT | UUID grupujacy wysylke masowa (NULL = pojedyncza) |
+| subject | VARCHAR(255) | Temat |
 | content | TEXT | Tresc wiadomosci |
-| read_at | TIMESTAMP | Data odczytania |
+| email_status | TEXT | PENDING / SENT / FAILED (notyfikacja SMTP) |
+| enrollment_request_id | TEXT FK | Opcjonalne powiazanie ze zgloszeniem (legacy) |
+| read_at | TIMESTAMP | Data odczytania przez odbiorce |
 | created_at | TIMESTAMP | Data utworzenia |
+
+**Uprawnienia:**
+- MANAGER: pisze do rodzicow (filtry: grupa, lokalizacja, rok szkolny, nauczyciel, access_level, wszyscy) i do nauczycieli; widzi wszystkie watki szkoly, w ktorych uczestniczy.
+- TEACHER: pisze tylko do rodzicow dzieci ze swoich grup (aktywny rok szkolny); widzi wlasne watki.
+- PARENT: pisze tylko do nauczyciela grupy swojego dziecka; widzi wlasne watki.
+
+**API:** `GET/POST /api/messages`, `GET /api/messages/[id]/thread`, `GET /api/messages/recipients` (+ `POST` meta filtrow dla managera).
+
+**Mail:** `sendMessageNotificationEmail` — tylko przy **nowym** watku od MANAGER/TEACHER do odbiorcy PARENT lub TEACHER (nie przy odpowiedzi rodzica; nie do MANAGER).
 
 ### payments
 Lista platnosci rodzica za zajecia.
@@ -613,7 +633,7 @@ NODE_ENV=            # development / production
 - [ ] Portal nauczyciela (grupy, obecnosci, postepy)
 - [~] Pelny enrollment flow — propozycja z historią (`enrollment_proposals`), akceptacja/odrzucenie przez rodzica, NEGOTIATING — gotowe; dane do umowy / podpisywanie — w czesci gotowe
 - [ ] System platnosci — generowanie platnosci z umowy, historia platnosci
-- [ ] Wiadomosci 1:1 — endpointy API dla tabeli messages
+- [x] Wiadomosci 1:1 — panel + API (`/api/messages`, watki, broadcast, filtry odbiorcow, mail notyfikacyjny)
 - [ ] Selector roku szkolnego w UI (admin, manager, nauczyciel, rodzic, dziecko)
 - [ ] Endpointy z filtrowaniem po school_year_id
 - [ ] Mail potwierdzajacy zgloszenie dziecka do rodzica (HTML template, Zoho SMTP)
@@ -692,3 +712,10 @@ NODE_ENV=            # development / production
   - `AdminPortal.tsx`: timeline propozycji, blokada wysylki przy PENDING, ostrzezenie >= 3 propozycji
   - `UserPortal.tsx`: NEGOTIATING, reject z komentarzem, accordion historii
   - Po wdrozeniu: uruchomic `sql/enrollment_proposals.sql` + `npx prisma generate`; wyczyscic stare PROPOSED bez wiersza PENDING (recznie w DB)
+- **Panel wiadomosci (messages):**
+  - migracja Neon (wykonana): `parent_message_id`, `recipient_id`, `broadcast_id`, `subject`, `email_status` + indeksy
+  - `lib/messages.ts`, `src/components/messages/MessagesPanel.tsx`
+  - API: `GET/POST /api/messages`, `GET /api/messages/[id]/thread`, `GET/POST /api/messages/recipients`
+  - UI: zakladka Wiadomosci w `AdminPortal`, `UserPortal`, `LektorPortal`
+  - `sendMessageNotificationEmail` w `lib/email.ts` (Zoho SMTP, CTA do `/portal`)
+  - Snapshot przed praca: tag git `snapshot/before-messages-module`

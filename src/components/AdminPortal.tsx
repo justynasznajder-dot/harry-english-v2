@@ -5,6 +5,7 @@ import Link from 'next/link';
 import type { EnrollmentStatus } from '@/lib/enrollment-status';
 import { normalizePolishPhone } from '@/lib/phone';
 import ClassesCalendarPanel from '@/src/components/admin/ClassesCalendarPanel';
+import MessagesPanel from '@/src/components/messages/MessagesPanel';
 
 type TabKey =
   | 'organization'
@@ -2570,7 +2571,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         </section>
       );
     }
-    if (activeTab === 'announcements') return <EmptyDataPanel title="Wiadomości" />;
+    if (activeTab === 'announcements') return <MessagesPanel mode="manager" />;
     return <EmptyDataPanel title="Panel" />;
   };
   const proposalParent =

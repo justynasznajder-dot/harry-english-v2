@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import MessagesPanel from '@/src/components/messages/MessagesPanel';
 
 interface UserInfo {
   id: string;
@@ -91,7 +92,6 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
   const [rejectOpenFor, setRejectOpenFor] = useState<Record<string, boolean>>({});
   /** Multi-child: komentarz odrzucenia per `request_id`. */
   const [rejectComments, setRejectComments] = useState<Record<string, string>>({});
-  const [newMessage, setNewMessage] = useState('');
   const [proposals, setProposals] = useState<EnrollmentProposal[]>([]);
   const [proposalHistoryByRequestId, setProposalHistoryByRequestId] = useState<
     Record<string, ProposalHistoryRow[]>
@@ -603,30 +603,7 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
   );
 
   const renderMessagesTab = () => (
-    <section className="space-y-4 rounded-3xl border border-emerald-100 bg-white p-5 md:p-6">
-      <h2 className="text-xl font-bold text-zinc-900 md:text-2xl">Wiadomości</h2>
-      <EmptyState message="Brak wiadomości." />
-      <div className="space-y-3 rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
-        <label htmlFor="new-message" className="text-sm font-medium text-zinc-800">
-          Nowa wiadomość
-        </label>
-        <textarea
-          id="new-message"
-          value={newMessage}
-          onChange={(event) => setNewMessage(event.target.value)}
-          placeholder="Wpisz wiadomość do managera szkoły..."
-          className="min-h-28 w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-        />
-        <div>
-          <button
-            type="button"
-            className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46]"
-          >
-            Wyślij
-          </button>
-        </div>
-      </div>
-    </section>
+    <MessagesPanel mode="parent" currentUserId={userInfo.id} />
   );
 
   const renderGroupTab = () => (

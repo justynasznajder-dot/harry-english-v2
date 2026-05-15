@@ -496,6 +496,67 @@ ${textChildren}
 }
 
 // Funkcja weryfikująca konfigurację emaila
+export async function sendMessageNotificationEmail(params: {
+  to: string;
+  recipientName: string;
+  senderName: string;
+  senderRole: "MANAGER" | "TEACHER";
+  subject: string;
+  contentPreview: string;
+  portalUrl: string;
+}): Promise<void> {
+  const preview =
+    params.contentPreview.length > 200
+      ? `${params.contentPreview.slice(0, 200)}…`
+      : params.contentPreview;
+  const roleLabel =
+    params.senderRole === "MANAGER" ? "Zarządca szkoły" : "Nauczyciel";
+  const portalLink = params.portalUrl.replace(/\/$/, "");
+
+  await transporter.sendMail({
+    from: {
+      name: "Harry English",
+      address: process.env.EMAIL_USER || "kontakt@harry-english.pl",
+    },
+    to: params.to,
+    subject: `Nowa wiadomość: ${params.subject}`,
+    html: buildEmailShell({
+      title: `Dzień dobry ${escapeHtmlForEmail(params.recipientName)},`,
+      intro: `Otrzymałeś/aś nową wiadomość od ${escapeHtmlForEmail(params.senderName)} (${roleLabel}).`,
+      contentHtml: `
+        <p style="margin:0 0 8px 0;font-size:15px;line-height:1.6;"><strong>Temat:</strong> ${escapeHtmlForEmail(params.subject)}</p>
+        <div style="border:1px solid #d9e0db;background:#f8faf8;padding:14px 16px;border-radius:10px;margin:0 0 16px 0;">
+          <p style="margin:0;font-size:14px;line-height:1.6;white-space:pre-wrap;color:${BRAND_TEXT};">${escapeHtmlForEmail(preview)}</p>
+        </div>
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+          <tr>
+            <td style="border-radius:999px;background:${BRAND_YELLOW};">
+              <a href="${portalLink}/portal" style="display:inline-block;padding:12px 24px;font-family:${BRAND_FONT};font-size:14px;font-weight:700;color:#3b2a10;text-decoration:none;">
+                Przejdź do panelu
+              </a>
+            </td>
+          </tr>
+        </table>
+      `,
+      footerHtml: `<p style="margin:0;">Aby odpowiedzieć, zaloguj się do panelu. Nie odpowiadaj na tę wiadomość.</p>
+        <p style="margin:8px 0 0 0;">Harry English</p>`,
+    }),
+    text: `Dzień dobry ${params.recipientName},
+
+Otrzymałeś/aś nową wiadomość od ${params.senderName} (${roleLabel}).
+
+Temat: ${params.subject}
+
+${preview}
+
+Przejdź do panelu: ${portalLink}/portal
+
+Aby odpowiedzieć, zaloguj się do panelu. Nie odpowiadaj na tę wiadomość.
+
+Harry English`,
+  });
+}
+
 export async function verifyEmailConfig() {
   try {
     await transporter.verify();
