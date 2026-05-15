@@ -19,14 +19,17 @@ export default function LoginPage() {
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: username, password }),
+        body: JSON.stringify({ email: username.trim(), password: password.trim() }),
       });
 
       const data = await response.json();
 
       if (response.ok) {
-        // Przekieruj do portalu
-        router.push('/portal');
+        if (data.mustChangePassword || data.user?.mustChangePassword) {
+          router.push('/portal/zmien-haslo');
+        } else {
+          router.push('/portal');
+        }
         router.refresh();
       } else {
         setError(data.message || data.error || 'Błąd logowania');

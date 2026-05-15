@@ -1,0 +1,49 @@
+'use client';
+
+import FullCalendar from '@fullcalendar/react';
+import dayGridPlugin from '@fullcalendar/daygrid';
+import timeGridPlugin from '@fullcalendar/timegrid';
+import interactionPlugin from '@fullcalendar/interaction';
+import plLocale from '@fullcalendar/core/locales/pl';
+import type { DatesSetArg, EventInput } from '@fullcalendar/core';
+
+const SCHOOL_TZ = 'Europe/Warsaw';
+
+export type ClassesCalendarInnerProps = {
+  events: EventInput[];
+  initialView: 'dayGridMonth' | 'timeGridWeek' | 'timeGridDay';
+  onDatesSet: (arg: DatesSetArg) => void;
+};
+
+export default function ClassesCalendarInner({ events, initialView, onDatesSet }: ClassesCalendarInnerProps) {
+  return (
+    <div className="classes-fc min-h-[520px] w-full text-sm">
+      <FullCalendar
+        plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+        initialView={initialView}
+        locale={plLocale}
+        timeZone={SCHOOL_TZ}
+        headerToolbar={{
+          left: 'prev,next today',
+          center: 'title',
+          right: 'dayGridMonth,timeGridWeek,timeGridDay',
+        }}
+        buttonText={{
+          today: 'Dziś',
+          month: 'Miesiąc',
+          week: 'Tydzień',
+          day: 'Dzień',
+        }}
+        slotMinTime="07:00:00"
+        slotMaxTime="21:00:00"
+        allDaySlot
+        events={events}
+        datesSet={onDatesSet}
+        height="auto"
+        nowIndicator
+        eventTimeFormat={{ hour: '2-digit', minute: '2-digit', meridiem: false }}
+        slotLabelFormat={{ hour: '2-digit', minute: '2-digit', meridiem: false }}
+      />
+    </div>
+  );
+}

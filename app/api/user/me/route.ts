@@ -47,6 +47,7 @@ export async function GET(request: NextRequest) {
         lastName: user.last_name,
         role: user.role,
         accessLevel: user.access_level,
+        mustChangePassword: user.must_change_password === true,
         schoolId: user.school_id,
         children,
         accountType: user.account_type,

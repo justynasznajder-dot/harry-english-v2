@@ -1,9 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import Link from 'next/link';
 import type { EnrollmentStatus } from '@/lib/enrollment-status';
 import { normalizePolishPhone } from '@/lib/phone';
+import ClassesCalendarPanel from '@/src/components/admin/ClassesCalendarPanel';
 
 type TabKey =
   | 'organization'
@@ -18,6 +19,7 @@ type UsersSubTab = 'parents' | 'children' | 'teachers' | 'managers' | 'add';
 type OrganizationSubTab = 'schoolYear' | 'teachers' | 'locations' | 'history';
 type TeacherOrgSubTab = 'list' | 'add';
 type LocationOrgSubTab = 'list' | 'add' | 'edit';
+type GroupsSubTab = 'list' | 'add' | 'organize';
 
 /** Zgodnie z kolumną `users.role` (TEXT): ADMIN, MANAGER, TEACHER, PARENT, CHILD */
 type AdminPortalUserRole = 'ADMIN' | 'MANAGER' | 'TEACHER' | 'PARENT' | 'CHILD';
@@ -60,6 +62,8 @@ interface GroupRow {
   level: string | null;
   teacher_name: string | null;
   location_name: string | null;
+  location_id: string | null;
+  school_year_id: string | null;
   students_count: string;
   active: boolean;
   max_students: number;
@@ -69,10 +73,15 @@ interface GroupRow {
 interface GroupDetail {
   group: {
     id: string;
+    school_id?: string | null;
+    school_year_id?: string | null;
+    location_id?: string | null;
+    created_at?: string | null;
     name: string;
     level: string | null;
     teacher_id: string | null;
     teacher_name: string | null;
+    location_name?: string | null;
     max_students: number;
     active: boolean;
   };
@@ -161,6 +170,59 @@ const usersSubTabs: Array<{ key: UsersSubTab; label: string }> = [
   { key: 'managers', label: 'Lista managerów' },
   { key: 'add', label: 'Dodaj nowego użytkownika' },
 ];
+const groupsSubTabs: Array<{ key: GroupsSubTab; label: string }> = [
+  { key: 'list', label: 'Lista grup' },
+  { key: 'add', label: 'Dodaj nową grupę' },
+  { key: 'organize', label: 'Organizacja grup' },
+];
+
+/** Wartości filtrów listy „Organizacja grup” (select); pusty string = wszystkie. */
+const ORGANIZE_FILTER_NO_LOCATION = '__no_location__';
+const ORGANIZE_FILTER_NO_TEACHER = '__no_teacher__';
+
+interface AdminPortalProps {
+  initialGroupId?: string;
+}
+
+function GroupSubTabButtons(props: {
+  active: GroupsSubTab;
+  setGroupsSubTab: Dispatch<SetStateAction<GroupsSubTab>>;
+  onEnterAddTab: () => void;
+  onOrganizeStateReset: () => void;
+}) {
+  const { active, setGroupsSubTab, onEnterAddTab, onOrganizeStateReset } = props;
+  return (
+    <div className="mb-4 flex flex-wrap gap-2">
+      {groupsSubTabs.map((tab) => (
+        <button
+          key={tab.key}
+          type="button"
+          onClick={() => {
+            setGroupsSubTab((prev) => {
+              const next: GroupsSubTab = tab.key;
+              const leftOrganize =
+                (prev as GroupsSubTab) === 'organize' && next !== 'organize';
+              if (next === 'organize' || leftOrganize) {
+                onOrganizeStateReset();
+              }
+              return next;
+            });
+            if (tab.key === 'add') {
+              onEnterAddTab();
+            }
+          }}
+          className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+            active === tab.key
+              ? 'border-[#0f6e56] bg-[#0f6e56] text-white'
+              : 'border-transparent bg-emerald-50/70 text-zinc-800 hover:border-emerald-200'
+          }`}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 function SkeletonBlock() {
   return <div className="h-24 animate-pulse rounded-2xl bg-emerald-100/80" />;
@@ -176,12 +238,13 @@ function EmptyDataPanel({ title }: { title: string }) {
   );
 }
 
-export default function AdminPortal() {
-  const [activeTab, setActiveTab] = useState<TabKey>('organization');
-  const [mobileTab, setMobileTab] = useState<MobileTab>('organization');
+export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
+  const [activeTab, setActiveTab] = useState<TabKey>(initialGroupId ? 'groups' : 'organization');
+  const [mobileTab, setMobileTab] = useState<MobileTab>(initialGroupId ? 'groups' : 'organization');
   const [organizationSubTab, setOrganizationSubTab] = useState<OrganizationSubTab>('schoolYear');
   const [teacherOrgSubTab, setTeacherOrgSubTab] = useState<TeacherOrgSubTab>('list');
   const [locationOrgSubTab, setLocationOrgSubTab] = useState<LocationOrgSubTab>('list');
+  const [groupsSubTab, setGroupsSubTab] = useState<GroupsSubTab>('list');
   const [schoolLocations, setSchoolLocations] = useState<SchoolLocationRow[]>([]);
   const [locationsLoading, setLocationsLoading] = useState(false);
   const [newLocationForm, setNewLocationForm] = useState({ name: '', address: '' });
@@ -243,6 +306,8 @@ export default function AdminPortal() {
       notes: string | null;
       proposedGroupId: string | null;
       proposedAt: string | null;
+      proposalCount?: number;
+      hasPendingProposal?: boolean;
     }>;
   }>>([]);
   const [enrollmentGroups, setEnrollmentGroups] = useState<Array<{
@@ -252,19 +317,47 @@ export default function AdminPortal() {
     schedule: string;
   }>>([]);
   const [proposalModalParentId, setProposalModalParentId] = useState<string | null>(null);
+  const [submittingProposalRequestId, setSubmittingProposalRequestId] = useState<string | null>(null);
   const [proposalDrafts, setProposalDrafts] = useState<Record<string, { groupId: string }>>({});
+  const [proposalHistoryByRequestId, setProposalHistoryByRequestId] = useState<
+    Record<
+      string,
+      Array<{
+        id: string;
+        proposed_at: string;
+        responded_at: string | null;
+        status: string;
+        rejection_comment: string | null;
+        group_name: string;
+        location_name: string;
+        schedule: string;
+        proposed_by_first_name: string;
+        proposed_by_last_name: string;
+      }>
+    >
+  >({});
   const [groups, setGroups] = useState<GroupRow[]>([]);
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [groupForm, setGroupForm] = useState({
     id: '',
+    schoolId: '',
+    schoolYearId: '',
+    locationId: '',
     name: '',
-    level: 'A1',
+    level: '',
     teacherId: '',
     maxStudents: 12,
+    active: true,
   });
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [groupDetail, setGroupDetail] = useState<GroupDetail | null>(null);
+  const [organizeExpandedGroupId, setOrganizeExpandedGroupId] = useState<string | null>(null);
+  const [organizeLoadingGroupId, setOrganizeLoadingGroupId] = useState<string | null>(null);
+  const [organizeFilterName, setOrganizeFilterName] = useState('');
+  const [organizeFilterLocation, setOrganizeFilterLocation] = useState('');
+  const [organizeFilterTeacher, setOrganizeFilterTeacher] = useState('');
   const [groupLoading, setGroupLoading] = useState(false);
+  const [initialGroupLoaded, setInitialGroupLoaded] = useState(false);
   const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
   const [scheduleForm, setScheduleForm] = useState({
     dayOfWeek: 1,
@@ -303,14 +396,15 @@ export default function AdminPortal() {
   /** `school_id` zalogowanego użytkownika (ADMIN może mieć `null`). */
   const [sessionSchoolId, setSessionSchoolId] = useState<string | null>(null);
   const [isManagerView, setIsManagerView] = useState(false);
+  const [classesCalRefreshSignal, setClassesCalRefreshSignal] = useState(0);
 
-  const pushToast = (kind: Toast['kind'], message: string) => {
+  const pushToast = useCallback((kind: Toast['kind'], message: string) => {
     const id = Date.now() + Math.floor(Math.random() * 1000);
     setToasts((prev) => [...prev, { id, kind, message }]);
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 2600);
-  };
+  }, []);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -322,7 +416,21 @@ export default function AdminPortal() {
         fetch('/api/admin/groups'),
         fetch('/api/user/me'),
       ]);
-      if (!uRes.ok || !cRes.ok || !eRes.ok || !gRes.ok) throw new Error('Nie udało się pobrać danych');
+      const failing: string[] = [];
+      if (!uRes.ok) failing.push(`users(${uRes.status})`);
+      if (!cRes.ok) failing.push(`children(${cRes.status})`);
+      if (!eRes.ok) failing.push(`enrollment(${eRes.status})`);
+      if (!gRes.ok) failing.push(`groups(${gRes.status})`);
+      if (failing.length > 0) {
+        let detail = "";
+        try {
+          const errBody = !eRes.ok ? await eRes.clone().json() : null;
+          if (errBody?.message) detail = ` — ${errBody.message}`;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(`Nie udało się pobrać danych: ${failing.join(', ')}${detail}`);
+      }
       const uJson = await uRes.json();
       const cJson = await cRes.json();
       const eJson = await eRes.json();
@@ -346,15 +454,18 @@ export default function AdminPortal() {
       setGroups((gJson.groups ?? []) as GroupRow[]);
     } catch (error) {
       console.error(error);
-      pushToast('error', 'Błąd pobierania danych panelu');
+      pushToast(
+        'error',
+        error instanceof Error ? error.message : 'Błąd pobierania danych panelu',
+      );
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [pushToast]);
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [loadData]);
 
   const loadSchoolYearData = useCallback(async () => {
     setSchoolYearLoading(true);
@@ -396,7 +507,7 @@ export default function AdminPortal() {
     } finally {
       setSchoolYearLoading(false);
     }
-  }, []);
+  }, [pushToast]);
 
   const loadLocations = useCallback(async () => {
     setLocationsLoading(true);
@@ -419,7 +530,7 @@ export default function AdminPortal() {
     } finally {
       setLocationsLoading(false);
     }
-  }, []);
+  }, [pushToast]);
 
   useEffect(() => {
     if (
@@ -435,6 +546,10 @@ export default function AdminPortal() {
       void loadLocations();
     }
   }, [activeTab, organizationSubTab, loadLocations]);
+
+  useEffect(() => {
+    if (activeTab === 'classes') void loadLocations();
+  }, [activeTab, loadLocations]);
 
   useEffect(() => {
     if (mobileTab === 'organization') setActiveTab('organization');
@@ -456,6 +571,15 @@ export default function AdminPortal() {
     });
   }, [users, isManagerView, showInactive, search]);
 
+  const calendarTeachers = useMemo(() => {
+    return users
+      .filter((u) => u.role === 'TEACHER' && u.active)
+      .map((u) => ({ id: u.id, first_name: u.first_name, last_name: u.last_name }))
+      .sort((a, b) =>
+        `${a.last_name} ${a.first_name}`.localeCompare(`${b.last_name} ${b.first_name}`, 'pl'),
+      );
+  }, [users]);
+
   const parentOptions = useMemo(
     () =>
       users.filter((u) => u.role === 'PARENT' && u.active).filter((u) => {
@@ -469,8 +593,100 @@ export default function AdminPortal() {
     [users, childForm.parentSearch]
   );
 
-  const loadGroupDetail = useCallback(async (groupId: string) => {
-    setGroupLoading(true);
+  const organizeFilterNameOptions = useMemo(() => {
+    const set = new Set(groups.map((g) => g.name).filter(Boolean));
+    return [...set].sort((a, b) => a.localeCompare(b, 'pl'));
+  }, [groups]);
+
+  const organizeFilterLocationOptions = useMemo(() => {
+    const set = new Set(
+      groups.map((g) => (g.location_name && g.location_name.trim() ? g.location_name : null)).filter(Boolean) as string[],
+    );
+    return [...set].sort((a, b) => a.localeCompare(b, 'pl'));
+  }, [groups]);
+
+  const organizeFilterTeacherOptions = useMemo(() => {
+    const set = new Set(
+      groups.map((g) => (g.teacher_name && g.teacher_name.trim() ? g.teacher_name : null)).filter(Boolean) as string[],
+    );
+    return [...set].sort((a, b) => a.localeCompare(b, 'pl'));
+  }, [groups]);
+
+  const organizeHasGroupsWithoutLocation = useMemo(
+    () => groups.some((g) => !g.location_name?.trim()),
+    [groups],
+  );
+  const organizeHasGroupsWithoutTeacher = useMemo(
+    () => groups.some((g) => !g.teacher_name?.trim()),
+    [groups],
+  );
+
+  const organizeFilteredGroups = useMemo(() => {
+    return groups.filter((g) => {
+      if (organizeFilterName && g.name !== organizeFilterName) return false;
+      if (organizeFilterLocation) {
+        if (organizeFilterLocation === ORGANIZE_FILTER_NO_LOCATION) {
+          if (g.location_name?.trim()) return false;
+        } else if ((g.location_name ?? '') !== organizeFilterLocation) return false;
+      }
+      if (organizeFilterTeacher) {
+        if (organizeFilterTeacher === ORGANIZE_FILTER_NO_TEACHER) {
+          if (g.teacher_name?.trim()) return false;
+        } else if ((g.teacher_name ?? '') !== organizeFilterTeacher) return false;
+      }
+      return true;
+    });
+  }, [groups, organizeFilterName, organizeFilterLocation, organizeFilterTeacher]);
+
+  useEffect(() => {
+    if (organizeFilterName && !organizeFilterNameOptions.includes(organizeFilterName)) {
+      setOrganizeFilterName('');
+    }
+  }, [organizeFilterName, organizeFilterNameOptions]);
+
+  useEffect(() => {
+    if (!organizeFilterLocation) return;
+    if (organizeFilterLocation === ORGANIZE_FILTER_NO_LOCATION) {
+      if (!organizeHasGroupsWithoutLocation) setOrganizeFilterLocation('');
+      return;
+    }
+    if (!organizeFilterLocationOptions.includes(organizeFilterLocation)) {
+      setOrganizeFilterLocation('');
+    }
+  }, [
+    organizeFilterLocation,
+    organizeFilterLocationOptions,
+    organizeHasGroupsWithoutLocation,
+  ]);
+
+  useEffect(() => {
+    if (!organizeFilterTeacher) return;
+    if (organizeFilterTeacher === ORGANIZE_FILTER_NO_TEACHER) {
+      if (!organizeHasGroupsWithoutTeacher) setOrganizeFilterTeacher('');
+      return;
+    }
+    if (!organizeFilterTeacherOptions.includes(organizeFilterTeacher)) {
+      setOrganizeFilterTeacher('');
+    }
+  }, [
+    organizeFilterTeacher,
+    organizeFilterTeacherOptions,
+    organizeHasGroupsWithoutTeacher,
+  ]);
+
+  useEffect(() => {
+    if (groupsSubTab !== 'organize' || !organizeExpandedGroupId) return;
+    if (!organizeFilteredGroups.some((g) => g.id === organizeExpandedGroupId)) {
+      setOrganizeExpandedGroupId(null);
+      setSelectedGroupId(null);
+      setGroupDetail(null);
+    }
+  }, [groupsSubTab, organizeExpandedGroupId, organizeFilteredGroups]);
+
+  const loadGroupDetail = useCallback(async (groupId: string, options?: { quiet?: boolean }) => {
+    const quiet = options?.quiet === true;
+    if (quiet) setOrganizeLoadingGroupId(groupId);
+    else setGroupLoading(true);
     try {
       const res = await fetch(`/api/admin/groups/${groupId}`);
       const data = await res.json();
@@ -480,9 +696,61 @@ export default function AdminPortal() {
     } catch (error) {
       pushToast('error', error instanceof Error ? error.message : 'Błąd pobierania grupy');
     } finally {
-      setGroupLoading(false);
+      if (quiet) setOrganizeLoadingGroupId(null);
+      else setGroupLoading(false);
     }
-  }, []);
+  }, [pushToast]);
+
+  useEffect(() => {
+    if (!initialGroupId || initialGroupLoaded) return;
+    void loadGroupDetail(initialGroupId);
+    setInitialGroupLoaded(true);
+  }, [initialGroupId, initialGroupLoaded, loadGroupDetail]);
+
+  useEffect(() => {
+    if (!proposalModalParentId) {
+      setProposalHistoryByRequestId({});
+      return;
+    }
+    const pid = proposalModalParentId.trim();
+    const parent = enrollmentParents.find((p) => {
+      if (p.id === pid) return true;
+      const em = (p.email ?? '').trim().toLowerCase();
+      return em.length > 0 && pid.includes('@') && em === pid.toLowerCase();
+    });
+    if (!parent) return;
+    let cancelled = false;
+    void (async () => {
+      const entries = await Promise.all(
+        parent.children.map(async (c) => {
+          const r = await fetch(
+            `/api/admin/enrollment/proposals?enrollmentRequestId=${encodeURIComponent(c.requestId)}`,
+            { credentials: 'include' },
+          );
+          if (!r.ok) return [c.requestId, []] as const;
+          const d = (await r.json()) as {
+            proposals?: Array<{
+              id: string;
+              proposed_at: string;
+              responded_at: string | null;
+              status: string;
+              rejection_comment: string | null;
+              group_name: string;
+              location_name: string;
+              schedule: string;
+              proposed_by_first_name: string;
+              proposed_by_last_name: string;
+            }>;
+          };
+          return [c.requestId, d.proposals ?? []] as const;
+        }),
+      );
+      if (!cancelled) setProposalHistoryByRequestId(Object.fromEntries(entries));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [proposalModalParentId, enrollmentParents]);
 
   const availableChildren = useMemo(() => {
     if (!groupDetail) return [];
@@ -1125,6 +1393,7 @@ export default function AdminPortal() {
                                           const data = await res.json().catch(() => ({}));
                                           if (!res.ok) throw new Error(data.message ?? 'Błąd');
                                           pushToast('success', 'Usunięto dzień wolny');
+                                          setClassesCalRefreshSignal((s) => s + 1);
                                           await loadSchoolYearData();
                                         } catch (e) {
                                           pushToast('error', e instanceof Error ? e.message : 'Błąd usuwania');
@@ -1638,6 +1907,132 @@ export default function AdminPortal() {
     );
   };
 
+  const renderGroupManageSections = (detail: GroupDetail, groupId: string, opts?: { quietReload?: boolean }) => {
+    const quietReload = opts?.quietReload === true;
+    const reloadDetail = () => loadGroupDetail(groupId, quietReload ? { quiet: true } : undefined);
+    return (
+      <>
+        <section className="rounded-2xl border border-emerald-100 bg-white p-4 md:p-5">
+          <div className="mb-3 flex items-center justify-between">
+            <div>
+              <h4 className="font-semibold text-zinc-900">Harmonogram</h4>
+              <p className="text-sm text-zinc-500">Stałe terminy grupy (dzień, godzina, czas trwania, lokalizacja).</p>
+            </div>
+            <button
+              type="button"
+              className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white"
+              onClick={() => setScheduleModalOpen(true)}
+            >
+              + Dodaj termin
+            </button>
+          </div>
+          <div className="space-y-2 text-sm">
+            {detail.scheduleTemplates.length === 0 ? (
+              <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-6 text-center text-zinc-600">
+                Brak zdefiniowanych terminów.
+              </p>
+            ) : (
+              detail.scheduleTemplates.map((st) => (
+                <div key={st.id} className="flex items-center justify-between rounded-xl border border-emerald-100 p-3">
+                  <div>
+                    <p>
+                      {({ 1: 'Poniedziałek', 2: 'Wtorek', 3: 'Środa', 4: 'Czwartek', 5: 'Piątek', 6: 'Sobota', 7: 'Niedziela' } as Record<number, string>)[st.day_of_week] ?? `Dzień ${st.day_of_week}`} · {st.start_time.slice(0, 5)} · {st.duration_min} min
+                    </p>
+                    <p className="text-zinc-600">{st.location_name ?? '-'}</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="rounded-lg bg-red-600 px-3 py-1 text-white"
+                    onClick={async () => {
+                      const res = await fetch(`/api/admin/schedule-templates/${st.id}`, { method: 'DELETE' });
+                      if (!res.ok) {
+                        pushToast('error', 'Nie udało się usunąć terminu');
+                        return;
+                      }
+                      pushToast('success', 'Termin usunięty');
+                      await reloadDetail();
+                    }}
+                  >
+                    Usuń
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-emerald-100 bg-white p-4 md:p-5">
+          <div className="mb-3 flex items-center justify-between">
+            <div>
+              <h4 className="font-semibold text-zinc-900">Uczniowie grupy</h4>
+              <p className="text-sm text-zinc-500">Zarządzaj przypisaniami uczniów do tej grupy.</p>
+            </div>
+            <button
+              type="button"
+              className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white"
+              onClick={() => setAddStudentModalOpen(true)}
+            >
+              + Dodaj ucznia
+            </button>
+          </div>
+          <div className="space-y-2 text-sm">
+            {detail.students.length === 0 ? (
+              <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-6 text-center text-zinc-600">
+                Brak uczniów w grupie.
+              </p>
+            ) : (
+              detail.students.map((st) => (
+                <div key={st.id} className="flex items-center justify-between rounded-xl border border-emerald-100 p-3">
+                  <div>
+                    <p>
+                      {st.first_name} {st.last_name}
+                    </p>
+                    <p className="text-zinc-600">
+                      {st.birth_date} · {st.left_at ? 'były' : 'aktywny'}
+                    </p>
+                  </div>
+                  {!st.left_at && (
+                    <button
+                      type="button"
+                      className="rounded-lg bg-red-600 px-3 py-1 text-white"
+                      onClick={async () => {
+                        const res = await fetch(`/api/admin/group-students/${st.id}`, { method: 'DELETE' });
+                        if (!res.ok) {
+                          pushToast('error', 'Nie udało się usunąć ucznia z grupy');
+                          return;
+                        }
+                        pushToast('success', 'Uczeń usunięty z grupy');
+                        await reloadDetail();
+                      }}
+                    >
+                      Usuń z grupy
+                    </button>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-emerald-100 bg-white p-4 md:p-5">
+          <div className="flex items-center justify-between">
+            <div>
+              <h4 className="font-semibold text-zinc-900">Generowanie zajęć</h4>
+              <p className="text-sm text-zinc-500">Wygeneruj kalendarz zajęć na podstawie harmonogramu grupy.</p>
+            </div>
+            <button
+              type="button"
+              className="rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white"
+              onClick={() => setGenerateModalOpen(true)}
+            >
+              Generuj zajęcia z harmonogramu
+            </button>
+          </div>
+        </section>
+      </>
+    );
+  };
+
   const renderGroups = () => {
     if (groupLoading) {
       return (
@@ -1648,27 +2043,43 @@ export default function AdminPortal() {
       );
     }
 
-    if (selectedGroupId && groupDetail) {
+    if (selectedGroupId && groupDetail && groupsSubTab !== 'organize') {
       return (
         <div className="space-y-4">
-          <section className="rounded-2xl border border-emerald-100 bg-white p-4">
-            <div className="flex items-center justify-between">
+          <section className="rounded-2xl border border-emerald-100 bg-white p-4 md:p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h3 className="text-xl font-semibold">{groupDetail.group.name}</h3>
-                <p className="text-sm text-zinc-600">
-                  Poziom: {groupDetail.group.level ?? '-'} · Nauczyciel: {groupDetail.group.teacher_name ?? '-'}
-                </p>
+                <h3 className="text-2xl font-semibold text-zinc-900">{groupDetail.group.name}</h3>
+                <div className="mt-2 flex flex-wrap gap-2 text-sm">
+                  <span className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-800">
+                    Poziom: {groupDetail.group.level ?? '-'}
+                  </span>
+                  <span className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-800">
+                    Nauczyciel: {groupDetail.group.teacher_name ?? '-'}
+                  </span>
+                  <span className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-800">
+                    Lokalizacja: {groupDetail.group.location_name ?? '-'}
+                  </span>
+                  <span className="rounded-full bg-zinc-100 px-3 py-1 text-zinc-700">
+                    Uczniowie: {groupDetail.students.filter((s) => !s.left_at).length}/{groupDetail.group.max_students}
+                  </span>
+                </div>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <button
+                  type="button"
                   className="rounded-xl bg-emerald-600 px-3 py-2 text-white"
                   onClick={() => {
                     setGroupForm({
                       id: groupDetail.group.id,
+                      schoolId: groupDetail.group.school_id ?? sessionSchoolId ?? '',
+                      schoolYearId: groupDetail.group.school_year_id ?? '',
+                      locationId: groupDetail.group.location_id ?? '',
                       name: groupDetail.group.name,
-                      level: groupDetail.group.level ?? 'inne',
+                      level: groupDetail.group.level ?? '',
                       teacherId: groupDetail.group.teacher_id ?? '',
                       maxStudents: groupDetail.group.max_students,
+                      active: groupDetail.group.active,
                     });
                     setGroupModalOpen(true);
                   }}
@@ -1676,6 +2087,7 @@ export default function AdminPortal() {
                   Edytuj
                 </button>
                 <button
+                  type="button"
                   className="rounded-xl bg-zinc-200 px-3 py-2"
                   onClick={() => {
                     setSelectedGroupId(null);
@@ -1688,95 +2100,7 @@ export default function AdminPortal() {
             </div>
           </section>
 
-          <section className="rounded-2xl border border-emerald-100 bg-white p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <h4 className="font-semibold">Harmonogram</h4>
-              <button
-                className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white"
-                onClick={() => setScheduleModalOpen(true)}
-              >
-                + Dodaj termin
-              </button>
-            </div>
-            <div className="space-y-2 text-sm">
-              {groupDetail.scheduleTemplates.map((st) => (
-                <div key={st.id} className="flex items-center justify-between rounded-xl border border-emerald-100 p-3">
-                  <div>
-                    <p>
-                      Dzień {st.day_of_week} · {st.start_time.slice(0, 5)} · {st.duration_min} min
-                    </p>
-                    <p className="text-zinc-600">{st.location_name ?? '-'}</p>
-                  </div>
-                  <button
-                    className="rounded-lg bg-red-600 px-3 py-1 text-white"
-                    onClick={async () => {
-                      const res = await fetch(`/api/admin/schedule-templates/${st.id}`, { method: 'DELETE' });
-                      if (!res.ok) {
-                        pushToast('error', 'Nie udało się usunąć terminu');
-                        return;
-                      }
-                      pushToast('success', 'Termin usunięty');
-                      await loadGroupDetail(selectedGroupId);
-                    }}
-                  >
-                    Usuń
-                  </button>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="rounded-2xl border border-emerald-100 bg-white p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <h4 className="font-semibold">Uczniowie grupy</h4>
-              <button
-                className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white"
-                onClick={() => setAddStudentModalOpen(true)}
-              >
-                + Dodaj ucznia
-              </button>
-            </div>
-            <div className="space-y-2 text-sm">
-              {groupDetail.students.map((st) => (
-                <div key={st.id} className="flex items-center justify-between rounded-xl border border-emerald-100 p-3">
-                  <div>
-                    <p>{st.first_name} {st.last_name}</p>
-                    <p className="text-zinc-600">
-                      {st.birth_date} · {st.left_at ? 'były' : 'aktywny'}
-                    </p>
-                  </div>
-                  {!st.left_at && (
-                    <button
-                      className="rounded-lg bg-red-600 px-3 py-1 text-white"
-                      onClick={async () => {
-                        const res = await fetch(`/api/admin/group-students/${st.id}`, { method: 'DELETE' });
-                        if (!res.ok) {
-                          pushToast('error', 'Nie udało się usunąć ucznia z grupy');
-                          return;
-                        }
-                        pushToast('success', 'Uczeń usunięty z grupy');
-                        await loadGroupDetail(selectedGroupId);
-                      }}
-                    >
-                      Usuń z grupy
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="rounded-2xl border border-emerald-100 bg-white p-4">
-            <div className="flex items-center justify-between">
-              <h4 className="font-semibold">Generowanie zajęć</h4>
-              <button
-                className="rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white"
-                onClick={() => setGenerateModalOpen(true)}
-              >
-                Generuj zajęcia z harmonogramu
-              </button>
-            </div>
-          </section>
+          {renderGroupManageSections(groupDetail, selectedGroupId)}
         </div>
       );
     }
@@ -1784,52 +2108,391 @@ export default function AdminPortal() {
     return (
       <div className="space-y-4">
         <section className="rounded-2xl border border-emerald-100 bg-white p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="font-semibold">Grupy</h3>
-            <button
-              className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white"
-              onClick={() => {
-                setGroupForm({ id: '', name: '', level: 'A1', teacherId: '', maxStudents: 12 });
-                setGroupModalOpen(true);
-              }}
-            >
-              + Nowa grupa
-            </button>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[860px] text-sm">
-              <thead className="bg-emerald-50 text-zinc-700">
-                <tr>
-                  <th className="px-4 py-3 text-left">Nazwa</th>
-                  <th className="px-4 py-3 text-left">Poziom</th>
-                  <th className="px-4 py-3 text-left">Nauczyciel</th>
-                  <th className="px-4 py-3 text-left">Lokalizacja</th>
-                  <th className="px-4 py-3 text-left">Uczniowie</th>
-                  <th className="px-4 py-3 text-left">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {groups.map((g) => (
-                  <tr
-                    key={g.id}
-                    className="cursor-pointer border-t border-emerald-50 hover:bg-emerald-50/40"
-                    onClick={() => loadGroupDetail(g.id)}
-                  >
-                    <td className="px-4 py-3">{g.name}</td>
-                    <td className="px-4 py-3">{g.level ?? '-'}</td>
-                    <td className="px-4 py-3">{g.teacher_name ?? '-'}</td>
-                    <td className="px-4 py-3">{g.location_name ?? '-'}</td>
-                    <td className="px-4 py-3">{g.students_count}</td>
-                    <td className="px-4 py-3">
-                      <span className={`rounded-full px-2 py-1 text-xs font-semibold ${g.active ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-700'}`}>
-                        {g.active ? 'aktywna' : 'nieaktywna'}
-                      </span>
-                    </td>
+          <GroupSubTabButtons
+            active={groupsSubTab}
+            setGroupsSubTab={setGroupsSubTab}
+            onOrganizeStateReset={() => {
+              setOrganizeExpandedGroupId(null);
+              setSelectedGroupId(null);
+              setGroupDetail(null);
+            }}
+            onEnterAddTab={() => {
+              setGroupForm({
+                id: '',
+                schoolId: sessionSchoolId ?? '',
+                schoolYearId: schoolYears.find((y) => y.isActive ?? y.active)?.id ?? '',
+                locationId: '',
+                name: '',
+                level: '',
+                teacherId: '',
+                maxStudents: 12,
+                active: true,
+              });
+              void loadLocations();
+            }}
+          />
+          {groupsSubTab === 'organize' && (
+            <div className="mb-4 grid gap-3 sm:grid-cols-3">
+              <div className="space-y-1">
+                <label htmlFor="organize-filter-name" className="block text-xs font-medium text-zinc-600">
+                  Nazwa grupy
+                </label>
+                <select
+                  id="organize-filter-name"
+                  className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
+                  value={organizeFilterName}
+                  onChange={(e) => setOrganizeFilterName(e.target.value)}
+                >
+                  <option value="">Wszystkie</option>
+                  {organizeFilterNameOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label htmlFor="organize-filter-location" className="block text-xs font-medium text-zinc-600">
+                  Lokalizacja
+                </label>
+                <select
+                  id="organize-filter-location"
+                  className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
+                  value={organizeFilterLocation}
+                  onChange={(e) => setOrganizeFilterLocation(e.target.value)}
+                >
+                  <option value="">Wszystkie</option>
+                  {organizeHasGroupsWithoutLocation && (
+                    <option value={ORGANIZE_FILTER_NO_LOCATION}>Brak lokalizacji</option>
+                  )}
+                  {organizeFilterLocationOptions.map((loc) => (
+                    <option key={loc} value={loc}>
+                      {loc}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label htmlFor="organize-filter-teacher" className="block text-xs font-medium text-zinc-600">
+                  Nauczyciel
+                </label>
+                <select
+                  id="organize-filter-teacher"
+                  className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
+                  value={organizeFilterTeacher}
+                  onChange={(e) => setOrganizeFilterTeacher(e.target.value)}
+                >
+                  <option value="">Wszyscy</option>
+                  {organizeHasGroupsWithoutTeacher && (
+                    <option value={ORGANIZE_FILTER_NO_TEACHER}>Brak nauczyciela</option>
+                  )}
+                  {organizeFilterTeacherOptions.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+          {groupsSubTab === 'list' ? (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[860px] text-sm">
+                <thead className="bg-emerald-50 text-zinc-700">
+                  <tr>
+                    <th className="px-4 py-3 text-left">Nazwa</th>
+                    <th className="px-4 py-3 text-left">Poziom</th>
+                    <th className="px-4 py-3 text-left">Nauczyciel</th>
+                    <th className="px-4 py-3 text-left">Lokalizacja</th>
+                    <th className="px-4 py-3 text-left">Uczniowie</th>
+                    <th className="px-4 py-3 text-left">Status</th>
+                    <th className="px-4 py-3 text-left">Akcje</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {groups.map((g) => (
+                    <tr
+                      key={g.id}
+                      className="cursor-pointer border-t border-emerald-50 hover:bg-emerald-50/40"
+                      onClick={() => loadGroupDetail(g.id)}
+                    >
+                      <td className="px-4 py-3">{g.name}</td>
+                      <td className="px-4 py-3">{g.level ?? '-'}</td>
+                      <td className="px-4 py-3">{g.teacher_name ?? '-'}</td>
+                      <td className="px-4 py-3">{g.location_name ?? '-'}</td>
+                      <td className="px-4 py-3">{g.students_count}/{g.max_students}</td>
+                      <td className="px-4 py-3">
+                        <span className={`rounded-full px-2 py-1 text-xs font-semibold ${g.active ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-700'}`}>
+                          {g.active ? 'aktywna' : 'nieaktywna'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <button
+                          type="button"
+                          className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setGroupForm({
+                              id: g.id,
+                              schoolId: sessionSchoolId ?? '',
+                              schoolYearId: g.school_year_id ?? '',
+                              locationId: g.location_id ?? '',
+                              name: g.name,
+                              level: g.level ?? '',
+                              teacherId: g.teacher_id ?? '',
+                              maxStudents: g.max_students,
+                              active: g.active,
+                            });
+                            void loadLocations();
+                            setGroupModalOpen(true);
+                          }}
+                        >
+                          Edytuj
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : groupsSubTab === 'add' ? (
+            <div className="space-y-3 rounded-2xl border border-emerald-100 bg-white p-4">
+              <h3 className="text-lg font-semibold">Nowa grupa</h3>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-zinc-700">Rok szkolny</label>
+                <select
+                  className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                  value={groupForm.schoolYearId}
+                  onChange={(e) => setGroupForm((p) => ({ ...p, schoolYearId: e.target.value }))}
+                >
+                  <option value="">Brak roku szkolnego</option>
+                  {schoolYears.map((year) => (
+                    <option key={year.id} value={year.id}>
+                      {year.name}{(year.isActive ?? year.active) ? ' (aktywny)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-zinc-700">Nazwa grupy</label>
+                <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" placeholder="Nazwa grupy" value={groupForm.name} onChange={(e) => setGroupForm((p) => ({ ...p, name: e.target.value }))} />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-zinc-700">Poziom</label>
+                <input
+                  type="text"
+                  className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                  placeholder="Poziom"
+                  value={groupForm.level}
+                  onChange={(e) => setGroupForm((p) => ({ ...p, level: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-zinc-700">Nauczyciel</label>
+                <select className="w-full rounded-xl border border-emerald-200 px-3 py-2" value={groupForm.teacherId} onChange={(e) => setGroupForm((p) => ({ ...p, teacherId: e.target.value }))}>
+                  <option value="">Wybierz nauczyciela</option>
+                  {users.filter((u) => u.role === 'TEACHER' && u.active).map((t) => (
+                    <option key={t.id} value={t.id}>{t.first_name} {t.last_name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-zinc-700">Lokalizacja</label>
+                <select
+                  className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                  value={groupForm.locationId}
+                  onChange={(e) => setGroupForm((p) => ({ ...p, locationId: e.target.value }))}
+                >
+                  <option value="">Brak lokalizacji</option>
+                  {schoolLocations.filter((loc) => loc.active).map((loc) => (
+                    <option key={loc.id} value={loc.id}>
+                      {loc.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-zinc-700">Maksymalna liczba uczniów</label>
+                <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="number" min="1" value={groupForm.maxStudents} onChange={(e) => setGroupForm((p) => ({ ...p, maxStudents: Number(e.target.value || 12) }))} />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-zinc-700">Status grupy</label>
+                <label className="flex items-center gap-2 rounded-xl border border-emerald-200 px-3 py-2 text-sm text-zinc-700">
+                  <input
+                    type="checkbox"
+                    checked={groupForm.active}
+                    onChange={(e) => setGroupForm((p) => ({ ...p, active: e.target.checked }))}
+                    className="accent-emerald-600"
+                  />
+                  Aktywna grupa
+                </label>
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded-xl bg-zinc-200 px-3 py-2"
+                  onClick={() => setGroupsSubTab('list')}
+                >
+                  Anuluj
+                </button>
+                <button
+                  type="button"
+                  className="rounded-xl bg-emerald-600 px-3 py-2 text-white"
+                  onClick={async () => {
+                    if (!groupForm.name.trim()) {
+                      pushToast('error', 'Podaj nazwę grupy');
+                      return;
+                    }
+                    if (!groupForm.teacherId) {
+                      pushToast('error', 'Wybierz nauczyciela dla grupy');
+                      return;
+                    }
+                    const res = await fetch('/api/admin/groups', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        name: groupForm.name.trim(),
+                        level: groupForm.level.trim() || null,
+                        teacherId: groupForm.teacherId,
+                        maxStudents: groupForm.maxStudents,
+                        active: groupForm.active,
+                        schoolId: groupForm.schoolId || null,
+                        schoolYearId: groupForm.schoolYearId || null,
+                        locationId: groupForm.locationId || null,
+                      }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok) {
+                      pushToast('error', data.message ?? 'Nie udało się zapisać grupy');
+                      return;
+                    }
+                    pushToast('success', 'Grupa zapisana');
+                    setGroupsSubTab('list');
+                    await loadData();
+                  }}
+                >
+                  Zapisz
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-sm text-zinc-600">
+                Rozwiń grupę, aby zarządzać harmonogramem, uczniami i generowaniem zajęć — bez przechodzenia na osobną stronę.
+              </p>
+              {groups.length === 0 ? (
+                <p className="rounded-xl border border-emerald-100 bg-white px-4 py-8 text-center text-sm text-zinc-600">
+                  Brak grup w szkole.
+                </p>
+              ) : organizeFilteredGroups.length === 0 ? (
+                <p className="rounded-xl border border-emerald-100 bg-white px-4 py-8 text-center text-sm text-zinc-600">
+                  Brak grup spełniających kryteria wyszukiwania.
+                </p>
+              ) : (
+                organizeFilteredGroups.map((g) => {
+                  const expanded = organizeExpandedGroupId === g.id;
+                  const detailReady = groupDetail?.group.id === g.id;
+                  return (
+                    <div
+                      key={g.id}
+                      className="overflow-hidden rounded-2xl border border-emerald-100 bg-white shadow-sm"
+                    >
+                      <button
+                        type="button"
+                        className="flex w-full items-start gap-3 px-4 py-4 text-left transition hover:bg-emerald-50/50"
+                        onClick={() => {
+                          if (expanded) {
+                            setOrganizeExpandedGroupId(null);
+                            if (selectedGroupId === g.id) {
+                              setSelectedGroupId(null);
+                              setGroupDetail(null);
+                            }
+                          } else {
+                            setOrganizeExpandedGroupId(g.id);
+                            void loadGroupDetail(g.id, { quiet: true });
+                          }
+                        }}
+                      >
+                        <span
+                          className={`mt-0.5 shrink-0 text-emerald-700 transition ${expanded ? 'rotate-90' : ''}`}
+                          aria-hidden
+                        >
+                          ▶
+                        </span>
+                        <div className="min-w-0 flex-1 space-y-2">
+                          <p className="text-base font-semibold text-zinc-900">{g.name}</p>
+                          <div className="flex flex-wrap gap-2 text-xs">
+                            <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-emerald-800">
+                              Poziom: {g.level ?? '-'}
+                            </span>
+                            <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-emerald-800">
+                              Nauczyciel: {g.teacher_name ?? '-'}
+                            </span>
+                            <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-emerald-800">
+                              Lokalizacja: {g.location_name ?? '-'}
+                            </span>
+                            <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-zinc-700">
+                              Uczniowie: {g.students_count}/{g.max_students}
+                            </span>
+                            <span
+                              className={`rounded-full px-2.5 py-0.5 font-semibold ${g.active ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-700'}`}
+                            >
+                              {g.active ? 'aktywna' : 'nieaktywna'}
+                            </span>
+                          </div>
+                        </div>
+                      </button>
+                      {expanded && (
+                        <div className="space-y-4 border-t border-emerald-100 bg-emerald-50/40 px-4 py-4">
+                          {organizeLoadingGroupId === g.id || !detailReady ? (
+                            <div className="space-y-3">
+                              <SkeletonBlock />
+                              <SkeletonBlock />
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-100 bg-white px-4 py-3">
+                                <p className="text-sm font-medium text-zinc-700">Szczegóły i edycja danych grupy</p>
+                                <div className="flex flex-wrap gap-2">
+                                  <button
+                                    type="button"
+                                    className="rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white"
+                                    onClick={() => {
+                                      setGroupForm({
+                                        id: groupDetail.group.id,
+                                        schoolId: groupDetail.group.school_id ?? sessionSchoolId ?? '',
+                                        schoolYearId: groupDetail.group.school_year_id ?? '',
+                                        locationId: groupDetail.group.location_id ?? '',
+                                        name: groupDetail.group.name,
+                                        level: groupDetail.group.level ?? '',
+                                        teacherId: groupDetail.group.teacher_id ?? '',
+                                        maxStudents: groupDetail.group.max_students,
+                                        active: groupDetail.group.active,
+                                      });
+                                      setGroupModalOpen(true);
+                                    }}
+                                  >
+                                    Edytuj
+                                  </button>
+                                  <Link
+                                    href={`/portal/groups/${g.id}`}
+                                    className="inline-flex items-center rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50"
+                                  >
+                                    Pełny widok
+                                  </Link>
+                                </div>
+                              </div>
+                              {renderGroupManageSections(groupDetail, g.id, { quietReload: true })}
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
         </section>
       </div>
     );
@@ -1849,18 +2512,27 @@ export default function AdminPortal() {
     if (activeTab === 'organization') return renderOrganization();
     if (activeTab === 'users') return renderUsers();
     if (activeTab === 'groups') return renderGroups();
-    if (activeTab === 'classes') return <EmptyDataPanel title="Zajęcia" />;
+    if (activeTab === 'classes') {
+      return (
+        <ClassesCalendarPanel
+          isActive
+          refreshSignal={classesCalRefreshSignal}
+          teachers={calendarTeachers}
+          locations={schoolLocations}
+          groups={groups.map((g) => ({ id: g.id, name: g.name }))}
+          pushToast={pushToast}
+        />
+      );
+    }
     if (activeTab === 'payments') return <EmptyDataPanel title="Płatności" />;
     if (activeTab === 'enrollment') {
-      const pending = enrollmentParents.filter(
-        (parent) => parent.accessLevel === 'NEW' || parent.accessLevel === 'PROPOSED',
-      );
-      if (pending.length === 0) {
+      const enrollmentRows = enrollmentParents.filter((parent) => parent.children.length > 0);
+      if (enrollmentRows.length === 0) {
         return <EmptyDataPanel title="Zgłoszenia" />;
       }
       return (
         <section className="rounded-2xl border border-emerald-100 bg-white space-y-3 p-4">
-          {pending.map((parent) => (
+          {enrollmentRows.map((parent) => (
             <div key={parent.id} className="rounded-xl border border-emerald-100 p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -1904,7 +2576,13 @@ export default function AdminPortal() {
   const proposalParent =
     proposalModalParentId == null
       ? null
-      : enrollmentParents.find((parent) => parent.id === proposalModalParentId) ?? null;
+      : enrollmentParents.find((parent) => {
+          const pid = proposalModalParentId.trim();
+          if (parent.id === pid) return true;
+          const em = (parent.email ?? '').trim().toLowerCase();
+          if (em.length > 0 && pid.includes('@') && em === pid.toLowerCase()) return true;
+          return false;
+        }) ?? null;
 
   return (
     <div className="manager-panel pb-24" data-session-school-id={sessionSchoolId ?? ''}>
@@ -2167,6 +2845,7 @@ export default function AdminPortal() {
                     if (!res.ok) throw new Error(data.message ?? 'Błąd');
                     pushToast('success', 'Dodano dzień wolny');
                     setHolidayModalOpen(false);
+                    setClassesCalRefreshSignal((s) => s + 1);
                     await loadSchoolYearData();
                   } catch (e) {
                     pushToast('error', e instanceof Error ? e.message : 'Błąd');
@@ -2254,31 +2933,101 @@ export default function AdminPortal() {
           <div className="w-full max-w-lg rounded-2xl bg-white p-5">
             <h3 className="text-lg font-semibold">{groupForm.id ? 'Edytuj grupę' : 'Nowa grupa'}</h3>
             <div className="mt-4 space-y-3">
-              <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" placeholder="Nazwa grupy" value={groupForm.name} onChange={(e) => setGroupForm((p) => ({ ...p, name: e.target.value }))} />
-              <select className="w-full rounded-xl border border-emerald-200 px-3 py-2" value={groupForm.level} onChange={(e) => setGroupForm((p) => ({ ...p, level: e.target.value }))}>
-                {['A1','A2','B1','B2','C1','C2','inne'].map((lvl) => <option key={lvl} value={lvl}>{lvl}</option>)}
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-zinc-700">Rok szkolny</label>
+              <select
+                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                value={groupForm.schoolYearId}
+                onChange={(e) => setGroupForm((p) => ({ ...p, schoolYearId: e.target.value }))}
+              >
+                <option value="">Brak roku szkolnego</option>
+                {schoolYears.map((year) => (
+                  <option key={year.id} value={year.id}>
+                    {year.name}{(year.isActive ?? year.active) ? ' (aktywny)' : ''}
+                  </option>
+                ))}
               </select>
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-zinc-700">Nazwa grupy</label>
+                <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" placeholder="Nazwa grupy" value={groupForm.name} onChange={(e) => setGroupForm((p) => ({ ...p, name: e.target.value }))} />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-zinc-700">Poziom</label>
+                <input
+                  type="text"
+                  className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                  placeholder="Poziom"
+                  value={groupForm.level}
+                  onChange={(e) => setGroupForm((p) => ({ ...p, level: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-zinc-700">Nauczyciel</label>
               <select className="w-full rounded-xl border border-emerald-200 px-3 py-2" value={groupForm.teacherId} onChange={(e) => setGroupForm((p) => ({ ...p, teacherId: e.target.value }))}>
                 <option value="">Wybierz nauczyciela</option>
                 {users.filter((u) => u.role === 'TEACHER' && u.active).map((t) => (
                   <option key={t.id} value={t.id}>{t.first_name} {t.last_name}</option>
                 ))}
               </select>
-              <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="number" min="1" value={groupForm.maxStudents} onChange={(e) => setGroupForm((p) => ({ ...p, maxStudents: Number(e.target.value || 12) }))} />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-zinc-700">Lokalizacja</label>
+                <select
+                  className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                  value={groupForm.locationId}
+                  onChange={(e) => setGroupForm((p) => ({ ...p, locationId: e.target.value }))}
+                >
+                  <option value="">Brak lokalizacji</option>
+                  {schoolLocations.filter((loc) => loc.active).map((loc) => (
+                    <option key={loc.id} value={loc.id}>
+                      {loc.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-zinc-700">Maksymalna liczba uczniów</label>
+                <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="number" min="1" value={groupForm.maxStudents} onChange={(e) => setGroupForm((p) => ({ ...p, maxStudents: Number(e.target.value || 12) }))} />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-zinc-700">Status grupy</label>
+                <label className="flex items-center gap-2 rounded-xl border border-emerald-200 px-3 py-2 text-sm text-zinc-700">
+                  <input
+                    type="checkbox"
+                    checked={groupForm.active}
+                    onChange={(e) => setGroupForm((p) => ({ ...p, active: e.target.checked }))}
+                    className="accent-emerald-600"
+                  />
+                  Aktywna grupa
+                </label>
+              </div>
               <div className="flex justify-end gap-2">
                 <button className="rounded-xl bg-zinc-200 px-3 py-2" onClick={() => setGroupModalOpen(false)}>Anuluj</button>
                 <button
                   className="rounded-xl bg-emerald-600 px-3 py-2 text-white"
                   onClick={async () => {
+                    if (!groupForm.name.trim()) {
+                      pushToast('error', 'Podaj nazwę grupy');
+                      return;
+                    }
+                    if (!groupForm.teacherId) {
+                      pushToast('error', 'Wybierz nauczyciela dla grupy');
+                      return;
+                    }
                     const endpoint = groupForm.id ? `/api/admin/groups/${groupForm.id}` : '/api/admin/groups';
                     const res = await fetch(endpoint, {
                       method: groupForm.id ? 'PUT' : 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({
-                        name: groupForm.name,
-                        level: groupForm.level,
-                        teacherId: groupForm.teacherId || null,
+                        name: groupForm.name.trim(),
+                        level: groupForm.level.trim() || null,
+                        teacherId: groupForm.teacherId,
                         maxStudents: groupForm.maxStudents,
+                        active: groupForm.active,
+                        schoolId: groupForm.schoolId || null,
+                        schoolYearId: groupForm.schoolYearId || null,
+                        locationId: groupForm.locationId || null,
                       }),
                     });
                     const data = await res.json();
@@ -2289,7 +3038,14 @@ export default function AdminPortal() {
                     pushToast('success', groupForm.id ? 'Grupa zaktualizowana' : 'Grupa zapisana');
                     setGroupModalOpen(false);
                     await loadData();
-                    if (groupForm.id) await loadGroupDetail(groupForm.id);
+                    if (groupForm.id) {
+                      await loadGroupDetail(
+                        groupForm.id,
+                        groupsSubTab === 'organize' && organizeExpandedGroupId === groupForm.id
+                          ? { quiet: true }
+                          : undefined,
+                      );
+                    }
                   }}
                 >
                   Zapisz
@@ -2305,15 +3061,27 @@ export default function AdminPortal() {
           <div className="w-full max-w-lg rounded-2xl bg-white p-5">
             <h3 className="text-lg font-semibold">Dodaj termin</h3>
             <div className="mt-4 space-y-3">
-              <select className="w-full rounded-xl border border-emerald-200 px-3 py-2" value={scheduleForm.dayOfWeek} onChange={(e) => setScheduleForm((p) => ({ ...p, dayOfWeek: Number(e.target.value) }))}>
-                <option value={1}>Poniedziałek</option><option value={2}>Wtorek</option><option value={3}>Środa</option><option value={4}>Czwartek</option><option value={5}>Piątek</option><option value={6}>Sobota</option><option value={7}>Niedziela</option>
-              </select>
-              <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="time" value={scheduleForm.startTime} onChange={(e) => setScheduleForm((p) => ({ ...p, startTime: e.target.value }))} />
-              <select className="w-full rounded-xl border border-emerald-200 px-3 py-2" value={scheduleForm.locationId} onChange={(e) => setScheduleForm((p) => ({ ...p, locationId: e.target.value }))}>
-                <option value="">Wybierz lokalizację</option>
-                {groupDetail.locations.map((loc) => <option key={loc.id} value={loc.id}>{loc.name}</option>)}
-              </select>
-              <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="number" min="15" value={scheduleForm.durationMin} onChange={(e) => setScheduleForm((p) => ({ ...p, durationMin: Number(e.target.value || 60) }))} />
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-zinc-700">Dzień tygodnia</label>
+                <select className="w-full rounded-xl border border-emerald-200 px-3 py-2" value={scheduleForm.dayOfWeek} onChange={(e) => setScheduleForm((p) => ({ ...p, dayOfWeek: Number(e.target.value) }))}>
+                  <option value={1}>Poniedziałek</option><option value={2}>Wtorek</option><option value={3}>Środa</option><option value={4}>Czwartek</option><option value={5}>Piątek</option><option value={6}>Sobota</option><option value={7}>Niedziela</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-zinc-700">Godzina rozpoczęcia</label>
+                <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="time" value={scheduleForm.startTime} onChange={(e) => setScheduleForm((p) => ({ ...p, startTime: e.target.value }))} />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-zinc-700">Lokalizacja</label>
+                <select className="w-full rounded-xl border border-emerald-200 px-3 py-2" value={scheduleForm.locationId} onChange={(e) => setScheduleForm((p) => ({ ...p, locationId: e.target.value }))}>
+                  <option value="">Wybierz lokalizację</option>
+                  {groupDetail.locations.map((loc) => <option key={loc.id} value={loc.id}>{loc.name}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-zinc-700">Czas trwania (minuty)</label>
+                <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="number" min="15" value={scheduleForm.durationMin} onChange={(e) => setScheduleForm((p) => ({ ...p, durationMin: Number(e.target.value || 60) }))} />
+              </div>
               <div className="flex justify-end gap-2">
                 <button className="rounded-xl bg-zinc-200 px-3 py-2" onClick={() => setScheduleModalOpen(false)}>Anuluj</button>
                 <button
@@ -2331,7 +3099,12 @@ export default function AdminPortal() {
                     }
                     pushToast('success', 'Termin dodany');
                     setScheduleModalOpen(false);
-                    await loadGroupDetail(selectedGroupId);
+                    await loadGroupDetail(
+                      selectedGroupId,
+                      groupsSubTab === 'organize' && organizeExpandedGroupId === selectedGroupId
+                        ? { quiet: true }
+                        : undefined,
+                    );
                   }}
                 >
                   Sprawdź konflikty i zapisz
@@ -2378,7 +3151,12 @@ export default function AdminPortal() {
                     pushToast('success', 'Uczeń dodany do grupy');
                     setAddStudentModalOpen(false);
                     setSelectedChildId('');
-                    await loadGroupDetail(selectedGroupId);
+                    await loadGroupDetail(
+                      selectedGroupId,
+                      groupsSubTab === 'organize' && organizeExpandedGroupId === selectedGroupId
+                        ? { quiet: true }
+                        : undefined,
+                    );
                   }}
                 >
                   Dodaj ucznia
@@ -2413,7 +3191,13 @@ export default function AdminPortal() {
                     }
                     pushToast('success', data.message ?? `Wygenerowano ${data.created ?? 0} zajęć`);
                     setGenerateModalOpen(false);
-                    await loadGroupDetail(selectedGroupId);
+                    setClassesCalRefreshSignal((s) => s + 1);
+                    await loadGroupDetail(
+                      selectedGroupId,
+                      groupsSubTab === 'organize' && organizeExpandedGroupId === selectedGroupId
+                        ? { quiet: true }
+                        : undefined,
+                    );
                   }}
                 >
                   Generuj
@@ -2526,15 +3310,60 @@ export default function AdminPortal() {
                   <p className="mt-1 break-all text-sm text-zinc-600">{proposalParent.email}</p>
                 </div>
                 <div className="mt-4 space-y-3">
-                  {proposalParent.children.map((child) => (
+                  {proposalParent.children.map((child) => {
+                    const statusLabels: Record<EnrollmentStatus, string> = {
+                      NEW: 'Nowe zgłoszenie',
+                      PROPOSED: 'Propozycja wysłana — oczekuje na rodzica',
+                      NEGOTIATING: 'Odrzucona propozycja — oczekuje na nową z szkoły',
+                      ACCEPTED: 'Zaakceptowane przez rodzica',
+                      SIGNED: 'Umowa podpisana',
+                      COMPLETED: 'Zakończone',
+                      REJECTED: 'Odrzucone przez managera',
+                    };
+                    const statusColors: Record<EnrollmentStatus, string> = {
+                      NEW: 'bg-amber-100 text-amber-800',
+                      PROPOSED: 'bg-sky-100 text-sky-800',
+                      NEGOTIATING: 'bg-amber-100 text-amber-900',
+                      ACCEPTED: 'bg-emerald-100 text-emerald-800',
+                      SIGNED: 'bg-emerald-200 text-emerald-900',
+                      COMPLETED: 'bg-zinc-200 text-zinc-700',
+                      REJECTED: 'bg-rose-100 text-rose-800',
+                    };
+                    const proposalAllowed =
+                      child.status === 'NEW' ||
+                      child.status === 'REJECTED' ||
+                      child.status === 'NEGOTIATING';
+                    const proposedGroup =
+                      child.proposedGroupId
+                        ? enrollmentGroups.find((g) => g.id === child.proposedGroupId)
+                        : null;
+                    const proposedAtFormatted = child.proposedAt
+                      ? (() => {
+                          const d = new Date(child.proposedAt as string);
+                          return Number.isNaN(d.getTime())
+                            ? child.proposedAt
+                            : d.toLocaleString('pl-PL', {
+                                dateStyle: 'medium',
+                                timeStyle: 'short',
+                              });
+                        })()
+                      : null;
+                    const history = proposalHistoryByRequestId[child.requestId] ?? [];
+                    return (
                     <div key={child.requestId} className="rounded-xl border border-emerald-100 p-4">
                       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                         <div>
                           <p className="font-semibold">
                             {child.firstName} {child.lastName}
                           </p>
-                          <p className="text-sm text-zinc-600">Status: {child.status}</p>
-                          <p className="text-sm text-zinc-600">Data urodzenia: {child.birthDate ?? 'brak'}</p>
+                          <p className="mt-1">
+                            <span
+                              className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${statusColors[child.status] ?? 'bg-zinc-100 text-zinc-700'}`}
+                            >
+                              {statusLabels[child.status] ?? child.status}
+                            </span>
+                          </p>
+                          <p className="mt-2 text-sm text-zinc-600">Data urodzenia: {child.birthDate ?? 'brak'}</p>
                           <p className="text-sm text-zinc-600">
                             Preferowana lokalizacja: {child.preferredLocation ?? 'brak'}
                           </p>
@@ -2543,56 +3372,203 @@ export default function AdminPortal() {
                           </p>
                         </div>
                         <div className="space-y-2">
-                          <select
-                            className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-                            value={proposalDrafts[child.requestId]?.groupId ?? ''}
-                            onChange={(e) =>
-                              setProposalDrafts((prev) => ({
-                                ...prev,
-                                [child.requestId]: {
-                                  groupId: e.target.value,
-                                },
-                              }))
-                            }
-                          >
-                            <option value="">Wybierz grupę</option>
-                            {enrollmentGroups.map((group) => (
-                              <option key={group.id} value={group.id}>
-                                {group.name} - {group.location_name} - {group.schedule}
-                              </option>
-                            ))}
-                          </select>
-                          <button
-                            className="rounded-xl bg-emerald-600 px-3 py-2 text-white"
-                            onClick={async () => {
-                              const draft = proposalDrafts[child.requestId];
-                              const groupId = draft?.groupId ?? child.proposedGroupId ?? '';
-                              if (!groupId) {
-                                pushToast('error', 'Wybierz grupę');
-                                return;
-                              }
-                              const res = await fetch('/api/admin/enrollment', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                  requestId: child.requestId,
-                                  groupId,
-                                }),
-                              });
-                              if (!res.ok) {
-                                pushToast('error', 'Nie udało się wysłać propozycji');
-                                return;
-                              }
-                              pushToast('success', `Wysłano propozycję dla: ${child.firstName} ${child.lastName}`);
-                              await loadData();
-                            }}
-                          >
-                            Wyślij propozycję dla dziecka
-                          </button>
+                          {child.status === 'PROPOSED' ? (
+                            <div className="rounded-xl border border-sky-200 bg-sky-50 p-3 text-sm">
+                              <p className="font-semibold text-sky-900">Propozycja wysłana</p>
+                              {proposedGroup ? (
+                                <p className="mt-1 text-sky-900">
+                                  {proposedGroup.name} · {proposedGroup.location_name} ·{' '}
+                                  {proposedGroup.schedule}
+                                </p>
+                              ) : (
+                                <p className="mt-1 text-sky-900">
+                                  (nie udało się dopasować grupy w aktualnej liście)
+                                </p>
+                              )}
+                              {proposedAtFormatted && (
+                                <p className="mt-1 text-xs text-sky-800">
+                                  Wysłano: {proposedAtFormatted}
+                                </p>
+                              )}
+                              {(child.proposalCount ?? 0) >= 3 && (
+                                <p className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+                                  To zgłoszenie ma już {child.proposalCount} propozycji grup (limit miękki: 3).
+                                  Rozważ kontakt z rodzicem przed kolejną propozycją.
+                                </p>
+                              )}
+                              <p className="mt-2 text-xs text-sky-800">
+                                Czekamy na decyzję rodzica. Kolejną propozycję będzie można wysłać
+                                dopiero po jej odrzuceniu.
+                              </p>
+                            </div>
+                          ) : (
+                            <>
+                              {child.status === 'NEGOTIATING' && (
+                                <p className="rounded-xl border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+                                  Rodzic odrzucił ostatnią propozycję — możesz wysłać kolejną propozycję grupy.
+                                </p>
+                              )}
+                              {child.status === 'REJECTED' && (
+                                <p className="rounded-xl border border-rose-200 bg-rose-50 p-2 text-xs text-rose-800">
+                                  Zgłoszenie oznaczone jako odrzucone przez szkołę — możesz zaproponować inną grupę,
+                                  jeśli proces ma być kontynuowany.
+                                </p>
+                              )}
+                              {proposalAllowed && (
+                                <>
+                                  {(child.proposalCount ?? 0) >= 3 && (
+                                    <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+                                      To zgłoszenie ma już {child.proposalCount} propozycji grup (limit miękki: 3).
+                                      Rozważ kontakt z rodzicem przed kolejną propozycją.
+                                    </p>
+                                  )}
+                              <select
+                                className="w-full rounded-xl border border-emerald-200 px-3 py-2 disabled:cursor-not-allowed disabled:opacity-60"
+                                disabled={!proposalAllowed}
+                                value={proposalDrafts[child.requestId]?.groupId ?? ''}
+                                onChange={(e) =>
+                                  setProposalDrafts((prev) => ({
+                                    ...prev,
+                                    [child.requestId]: {
+                                      groupId: e.target.value,
+                                    },
+                                  }))
+                                }
+                              >
+                                <option value="">Wybierz grupę</option>
+                                {enrollmentGroups.map((group) => (
+                                  <option key={group.id} value={group.id}>
+                                    {group.name} - {group.location_name} - {group.schedule}
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                disabled={
+                                  !proposalAllowed ||
+                                  child.hasPendingProposal === true ||
+                                  submittingProposalRequestId === child.requestId
+                                }
+                                className="rounded-xl bg-emerald-600 px-3 py-2 text-white disabled:opacity-60 disabled:cursor-not-allowed"
+                                onClick={async () => {
+                                  const draft = proposalDrafts[child.requestId];
+                                  const groupId = draft?.groupId ?? '';
+                                  if (!groupId) {
+                                    pushToast('error', 'Wybierz grupę');
+                                    return;
+                                  }
+                                  setSubmittingProposalRequestId(child.requestId);
+                                  try {
+                                    const res = await fetch('/api/admin/enrollment', {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({
+                                        requestId: child.requestId,
+                                        groupId,
+                                      }),
+                                    });
+                                    const data = (await res.json().catch(() => ({}))) as {
+                                      message?: string;
+                                      parentCreated?: boolean;
+                                      parentId?: string;
+                                      proposalCount?: number;
+                                    };
+                                    if (!res.ok) {
+                                      pushToast(
+                                        'error',
+                                        data?.message ?? 'Nie udało się wysłać propozycji',
+                                      );
+                                      return;
+                                    }
+                                    const accountInfo = data?.parentCreated
+                                      ? ' (utworzono konto rodzica)'
+                                      : '';
+                                    pushToast(
+                                      'success',
+                                      `Wysłano propozycję dla: ${child.firstName} ${child.lastName}${accountInfo}`,
+                                    );
+                                    if (
+                                      typeof data.parentId === 'string' &&
+                                      data.parentId.trim().length > 0
+                                    ) {
+                                      setProposalModalParentId(data.parentId.trim());
+                                    }
+                                    // Nie zamykamy modala — rodzic może mieć więcej dzieci,
+                                    // dla których nadal trzeba wysłać propozycję.
+                                    // Sprzątamy tylko draft tego dziecka (jego sekcja zmieni się
+                                    // na "Propozycja wysłana" po loadData, ale czyścimy na wszelki wypadek).
+                                    setProposalDrafts((prev) => {
+                                      const next = { ...prev };
+                                      delete next[child.requestId];
+                                      return next;
+                                    });
+                                    await loadData();
+                                  } catch (err) {
+                                    pushToast(
+                                      'error',
+                                      err instanceof Error ? err.message : 'Błąd wysyłania propozycji',
+                                    );
+                                  } finally {
+                                    setSubmittingProposalRequestId(null);
+                                  }
+                                }}
+                              >
+                                {submittingProposalRequestId === child.requestId
+                                  ? 'Wysyłanie…'
+                                  : 'Wyślij propozycję dla dziecka'}
+                              </button>
+                                </>
+                              )}
+                            </>
+                          )}
                         </div>
                       </div>
+                      <details className="mt-3 rounded-lg border border-zinc-200 bg-zinc-50/90">
+                        <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-zinc-800">
+                          Historia propozycji grup ({history.length})
+                        </summary>
+                        <div className="space-y-2 border-t border-zinc-200 px-3 py-3 text-sm">
+                          {history.length === 0 ? (
+                            <p className="text-xs text-zinc-500">Brak zapisanej historii.</p>
+                          ) : (
+                            history.map((h) => (
+                              <div key={h.id} className="rounded-lg border border-white bg-white p-2 shadow-sm">
+                                <p className="font-semibold text-zinc-900">{h.group_name}</p>
+                                <p className="text-xs text-zinc-600">
+                                  {h.location_name} · {h.schedule}
+                                </p>
+                                <p className="mt-1 text-xs text-zinc-500">
+                                  Wysłano:{' '}
+                                  {new Date(h.proposed_at).toLocaleString('pl-PL', {
+                                    dateStyle: 'short',
+                                    timeStyle: 'short',
+                                  })}
+                                  {' · '}
+                                  Status: {h.status}
+                                  {h.responded_at
+                                    ? ` · Odpowiedź: ${new Date(h.responded_at).toLocaleString('pl-PL', {
+                                        dateStyle: 'short',
+                                        timeStyle: 'short',
+                                      })}`
+                                    : ''}
+                                </p>
+                                {h.status === 'REJECTED' && h.rejection_comment && (
+                                  <p className="mt-1 text-xs text-rose-800">
+                                    Komentarz rodzica: {h.rejection_comment}
+                                  </p>
+                                )}
+                                {(h.proposed_by_first_name || h.proposed_by_last_name) && (
+                                  <p className="mt-1 text-xs text-zinc-500">
+                                    Wysłał(a): {h.proposed_by_first_name} {h.proposed_by_last_name}
+                                  </p>
+                                )}
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </details>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ) : (

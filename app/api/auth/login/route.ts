@@ -53,16 +53,6 @@ export async function POST(request: Request) {
       );
     }
 
-    if (user.role === "PARENT") {
-      return NextResponse.json(
-        {
-          message:
-            "Panel rodzica jest w przygotowaniu. W sprawie zgłoszenia skontaktuj się z biurem szkoły.",
-        },
-        { status: 403 }
-      );
-    }
-
     if (!user.active) {
       return NextResponse.json(
         { message: "To konto jest nieaktywne. Skontaktuj się z administracją szkoły." },
@@ -83,6 +73,7 @@ export async function POST(request: Request) {
       message: "Zalogowano pomyślnie",
       token,
       userName: `${user.first_name} ${user.last_name}`,
+      mustChangePassword: user.must_change_password === true,
       user: {
         id: user.id,
         email: user.email,
@@ -90,6 +81,7 @@ export async function POST(request: Request) {
         accessLevel: user.access_level,
         firstName: user.first_name,
         lastName: user.last_name,
+        mustChangePassword: user.must_change_password === true,
       },
     });
 

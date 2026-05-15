@@ -30,6 +30,13 @@ model School {
   announcements Announcement[]
   rewards       Reward[]
   messages      Message[]
+  payments      Payment[]
+  attendances   Attendance[]
+  contracts     Contract[]
+  contractTemplates ContractTemplate[]
+  parentProfiles    ParentProfile[]
+  enrollmentRequests EnrollmentRequest[]
+  enrollmentProposals EnrollmentProposal[]
   schoolYears   SchoolYear[]
   schoolHolidays SchoolHoliday[]
 
@@ -89,10 +96,15 @@ model User {
   phone        String?
   active       Boolean   @default(true)
   confirmed    Boolean   @default(false)
+  accessLevel  String    @default("PENDING") @map("access_level") @db.Text
 
   // Reset hasła
   resetToken       String?   @map("reset_token")
   resetTokenExpiry DateTime? @map("reset_token_expiry")
+
+  // Pierwsze logowanie po wygenerowaniu konta przez admina — wymuś zmianę
+  // tymczasowego hasła wysłanego w mailu „Wyślij propozycję dla dziecka".
+  mustChangePassword Boolean @default(false) @map("must_change_password")
 
   // Soft-delete
   resignationDate DateTime? @map("resignation_date")
@@ -106,9 +118,14 @@ model User {
   taughtGroups  Group[]         @relation("TeacherGroups")
   uploadedMaterials Material[]  @relation("UploadedMaterials")
   progressNotes ProgressNote[]  @relation("TeacherNotes")
-  sentMessages     Message[]    @relation("SentMessages")
-  receivedMessages Message[]    @relation("ReceivedMessages")
+  sentMessages     Message[]    @relation("SenderMessages")
+  parentMessages   Message[]    @relation("ParentMessages")
+  enrollmentRequests EnrollmentRequest[]
+  enrollmentProposalsAuthored EnrollmentProposal[] @relation("EnrollmentProposalProposedBy")
+  contracts          Contract[]
+  payments           Payment[]
   announcements Announcement[]
+  parentProfile ParentProfile?
 
   @@unique([schoolId, email])
   @@index([schoolId])
@@ -139,6 +156,8 @@ model Child {
   resignationDate      DateTime? @map("resignation_date")
 
   createdAt DateTime @default(now()) @map("created_at")
+  confirmed           Boolean  @default(false)
+  enrollmentRequestId String?  @map("enrollment_request_id")
 
   school School @relation(fields: [schoolId], references: [id])
   parent User   @relation("ParentChildren", fields: [parentId], references: [id])
@@ -151,6 +170,7 @@ model Child {
   attendance    Attendance[]
   progressNotes ProgressNote[]
   childRewards  ChildReward[]
+  payments      Payment[]
 
   @@index([schoolId])
   @@index([parentId])
@@ -183,6 +203,7 @@ model Location {
 
   school School @relation(fields: [schoolId], references: [id])
 
+  groups            Group[]
   scheduleTemplates ScheduleTemplate[]
   lessons           Lesson[]
   preferredByChildren Child[] @relation("ChildPreferredLocation")
@@ -199,6 +220,7 @@ model Group {
   id          String  @id @default(cuid())
   schoolId    String  @map("school_id")
   schoolYearId String? @map("school_year_id")
+  locationId  String?  @map("location_id")
   teacherId   String  @map("teacher_id")
   name        String
   level       String?
@@ -208,6 +230,7 @@ model Group {
 
   school     School      @relation(fields: [schoolId], references: [id])
   schoolYear SchoolYear? @relation(fields: [schoolYearId], references: [id])
+  location  Location?  @relation(fields: [locationId], references: [id])
   teacher User   @relation("TeacherGroups", fields: [teacherId], references: [id])
 
   groupStudents     GroupStudent[]
@@ -215,6 +238,7 @@ model Group {
   lessons           Lesson[]
   groupMaterials    GroupMaterial[]
   subscriptions     Subscription[]
+  enrollmentProposals EnrollmentProposal[]
 
   @@index([schoolId])
   @@index([teacherId])
@@ -269,6 +293,7 @@ model Lesson {
   durationMin  Int          @default(60) @map("duration_min")
   status       LessonStatus @default(SCHEDULED)
   notes        String?
+  cancellationReason String? @map("cancellation_reason")
   createdAt    DateTime     @default(now()) @map("created_at")
 
   group      Group       @relation(fields: [groupId], references: [id])
@@ -405,8 +430,6 @@ model Subscription {
   school     School      @relation(fields: [schoolId], references: [id])
   schoolYear SchoolYear? @relation(fields: [schoolYearId], references: [id])
 
-  payments Payment[]
-
   @@index([schoolId])
   @@index([parentId])
   @@index([childId])
@@ -421,19 +444,29 @@ enum SubscriptionStatus {
 }
 
 model Payment {
-  id             String        @id @default(cuid())
-  subscriptionId String        @map("subscription_id")
-  amountCents    Int           @map("amount_cents")
-  currency       String        @default("PLN")
-  status         PaymentStatus @default(PENDING)
-  method         String?
-  paidAt         DateTime?     @map("paid_at")
-  dueAt          DateTime      @map("due_at")
-  createdAt      DateTime      @default(now()) @map("created_at")
+  id          String    @id @default(cuid())
+  schoolId    String    @map("school_id")
+  childId     String    @map("child_id")
+  parentId    String    @map("parent_id")
+  contractId  String    @map("contract_id")
+  amount      Decimal   @db.Decimal(10, 2)
+  /// PAID | PENDING | OVERDUE
+  status      String    @default("PENDING") @db.Text
+  dueDate     DateTime  @map("due_date") @db.Date
+  paidAt      DateTime? @map("paid_at")
+  periodMonth DateTime  @map("period_month") @db.Date
+  description String?
+  createdAt   DateTime  @default(now()) @map("created_at")
 
-  subscription Subscription @relation(fields: [subscriptionId], references: [id])
+  school   School   @relation(fields: [schoolId], references: [id])
+  child    Child    @relation(fields: [childId], references: [id])
+  parent   User     @relation(fields: [parentId], references: [id])
+  contract Contract @relation(fields: [contractId], references: [id])
 
-  @@index([subscriptionId])
+  @@index([schoolId])
+  @@index([childId])
+  @@index([parentId])
+  @@index([contractId])
   @@map("payments")
 }
 
@@ -450,22 +483,146 @@ enum PaymentStatus {
 
 // Wiadomości 1:1
 model Message {
-  id          String   @id @default(cuid())
-  schoolId    String   @map("school_id")
-  senderId    String   @map("sender_id")
-  recipientId String   @map("recipient_id")
-  subject     String
-  body        String
-  read        Boolean  @default(false)
-  createdAt   DateTime @default(now()) @map("created_at")
+  id                  String   @id @default(cuid())
+  schoolId            String   @map("school_id")
+  parentId            String   @map("parent_id")
+  senderId            String   @map("sender_id")
+  senderRole          String   @map("sender_role") @db.Text
+  enrollmentRequestId String?  @map("enrollment_request_id")
+  content             String   @db.Text
+  readAt              DateTime? @map("read_at")
+  createdAt           DateTime @default(now()) @map("created_at")
 
-  school    School @relation(fields: [schoolId], references: [id])
-  sender    User   @relation("SentMessages", fields: [senderId], references: [id])
-  recipient User   @relation("ReceivedMessages", fields: [recipientId], references: [id])
+  school            School            @relation(fields: [schoolId], references: [id])
+  parent            User              @relation("ParentMessages", fields: [parentId], references: [id])
+  sender            User              @relation("SenderMessages", fields: [senderId], references: [id])
+  enrollmentRequest EnrollmentRequest? @relation(fields: [enrollmentRequestId], references: [id])
 
   @@index([schoolId])
-  @@index([recipientId])
+  @@index([parentId])
+  @@index([senderId])
+  @@index([enrollmentRequestId])
   @@map("messages")
+}
+
+model EnrollmentRequest {
+  id               String    @id @default(cuid())
+  schoolId         String    @map("school_id")
+  userId           String?   @map("user_id")
+  parentFirstName  String    @map("parent_first_name")
+  parentLastName   String    @map("parent_last_name")
+  parentEmail      String    @map("parent_email")
+  parentPhone      String?   @map("parent_phone")
+  childFirstName   String    @map("child_first_name")
+  childLastName    String    @map("child_last_name")
+  childBirthDate   DateTime  @map("child_birth_date") @db.Date
+  preferredLocation String?  @map("preferred_location")
+  preferredDays    String?   @map("preferred_days")
+  notes            String?
+  status           String    @default("NEW") @db.Text
+  proposedGroupId  String?   @map("proposed_group_id")
+  proposedAt       DateTime? @map("proposed_at")
+  acceptedAt       DateTime? @map("accepted_at")
+  contractSigned   Boolean   @default(false) @map("contract_signed")
+  contractSignedAt DateTime? @map("contract_signed_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  school    School    @relation(fields: [schoolId], references: [id])
+  parent    User?     @relation(fields: [userId], references: [id])
+  messages  Message[]
+  contracts Contract[]
+  enrollmentProposals EnrollmentProposal[]
+
+  @@index([schoolId])
+  @@index([userId])
+  @@index([proposedGroupId])
+  @@map("enrollment_requests")
+}
+
+/// Historia propozycji grup (PENDING → ACCEPTED | REJECTED).
+model EnrollmentProposal {
+  id                   String    @id @default(cuid())
+  schoolId             String    @map("school_id")
+  enrollmentRequestId  String    @map("enrollment_request_id")
+  groupId              String    @map("group_id")
+  proposedByUserId     String    @map("proposed_by")
+  proposedAt           DateTime  @default(now()) @map("proposed_at")
+  status               String    @default("PENDING") @db.Text
+  respondedAt          DateTime? @map("responded_at")
+  rejectionComment     String?   @map("rejection_comment") @db.Text
+  createdAt            DateTime  @default(now()) @map("created_at")
+
+  school              School            @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  enrollmentRequest   EnrollmentRequest @relation(fields: [enrollmentRequestId], references: [id], onDelete: Cascade)
+  group               Group             @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  proposedBy          User              @relation("EnrollmentProposalProposedBy", fields: [proposedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([schoolId])
+  @@index([enrollmentRequestId])
+  @@map("enrollment_proposals")
+}
+
+model Contract {
+  id                  String    @id @default(cuid())
+  schoolId            String    @map("school_id")
+  childId             String?   @map("child_id")
+  parentId            String    @map("parent_id")
+  groupId             String?   @map("group_id")
+  templateId          String?   @map("template_id")
+  enrollmentRequestId String?   @map("enrollment_request_id")
+  contentHtml         String    @map("content_html")
+  status              String    @default("SENT") @db.Text
+  sentAt              DateTime? @map("sent_at")
+  signedAt            DateTime? @map("signed_at")
+  signedIp            String?   @map("signed_ip")
+  /// MONTHLY | ONE_TIME
+  paymentType         String?   @map("payment_type") @db.Text
+  amount              Decimal?  @db.Decimal(10, 2)
+  paymentDueDay       Int?      @map("payment_due_day")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  schoolYearId        String?   @map("school_year_id")
+
+  school            School             @relation(fields: [schoolId], references: [id])
+  child             Child?             @relation(fields: [childId], references: [id])
+  parent            User               @relation(fields: [parentId], references: [id])
+  enrollmentRequest EnrollmentRequest? @relation(fields: [enrollmentRequestId], references: [id])
+  payments          Payment[]
+
+  @@index([schoolId])
+  @@index([childId])
+  @@index([parentId])
+  @@index([enrollmentRequestId])
+  @@map("contracts")
+}
+
+model ContractTemplate {
+  id          String   @id @default(cuid())
+  schoolId    String   @map("school_id")
+  name        String
+  contentHtml String   @map("content_html") @db.Text
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  school School @relation(fields: [schoolId], references: [id])
+
+  @@index([schoolId])
+  @@map("contract_templates")
+}
+
+model ParentProfile {
+  id        String    @id @default(cuid())
+  userId    String    @unique @map("user_id")
+  schoolId  String    @map("school_id")
+  address   String?
+  city      String?
+  zipCode   String?   @map("zip_code")
+  createdAt DateTime? @default(now()) @map("created_at")
+  updatedAt DateTime? @map("updated_at")
+
+  school School @relation(fields: [schoolId], references: [id])
+
+  @@index([schoolId])
+  @@map("parent_profiles")
 }
 
 // Ogłoszenia (broadcast do roli)

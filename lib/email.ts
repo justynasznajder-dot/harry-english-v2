@@ -514,36 +514,189 @@ export async function sendProposalEmail(
     groupName: string;
     locationName: string;
     schedule: string;
-    priceMonthly: number;
+    childFirstName?: string;
+    childLastName?: string;
+  },
+  /**
+   * Podane tylko dla nowo utworzonego konta rodzica.
+   * `undefined` → konto już istniało, w mailu prosimy o zalogowanie istniejącymi danymi.
+   */
+  credentials?: {
+    loginEmail: string;
+    tempPassword: string;
   }
 ) {
+  const portalUrl = `${getAppBaseUrl()}/portal/login`;
+  const safeChildName =
+    proposal.childFirstName != null && proposal.childLastName != null
+      ? `${escapeHtmlForEmail(proposal.childFirstName)} ${escapeHtmlForEmail(proposal.childLastName)}`
+      : "Twojego dziecka";
+  const childNameText =
+    proposal.childFirstName != null && proposal.childLastName != null
+      ? `${proposal.childFirstName} ${proposal.childLastName}`
+      : "Twojego dziecka";
+
+  const credentialsHtml = credentials
+    ? `
+      <p style="margin:16px 0 8px 0;font-size:15px;line-height:1.6;">
+        Założyliśmy dla Ciebie konto w portalu. Aby zobaczyć szczegóły propozycji i podjąć decyzję, zaloguj się danymi:
+      </p>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0 0 12px 0;">
+        <tr>
+          <td style="padding:4px 12px 4px 0;font-size:15px;color:#374151;"><strong>Login (email):</strong></td>
+          <td style="padding:4px 0;font-size:15px;color:#111827;font-family:Consolas,Menlo,monospace;">${escapeHtmlForEmail(credentials.loginEmail)}</td>
+        </tr>
+        <tr>
+          <td style="padding:4px 12px 4px 0;font-size:15px;color:#374151;"><strong>Hasło tymczasowe:</strong></td>
+          <td style="padding:4px 0;font-size:16px;color:#111827;font-family:Consolas,Menlo,monospace;letter-spacing:1px;"><strong>${escapeHtmlForEmail(credentials.tempPassword)}</strong></td>
+        </tr>
+      </table>
+      <p style="margin:0 0 12px 0;font-size:14px;line-height:1.6;color:#6b7280;">
+        Po pierwszym zalogowaniu poprosimy Cię o ustawienie własnego hasła.
+      </p>
+    `
+    : `
+      <p style="margin:16px 0 8px 0;font-size:15px;line-height:1.6;">
+        Aby zobaczyć szczegóły propozycji i podjąć decyzję, zaloguj się do portalu danymi, których używasz na co dzień.
+      </p>
+      <p style="margin:0 0 12px 0;font-size:14px;line-height:1.6;color:#6b7280;">
+        Nie pamiętasz hasła? Skorzystaj z opcji „Zapomniałem hasła" na stronie logowania.
+      </p>
+    `;
+
+  const credentialsText = credentials
+    ? `
+Założyliśmy dla Ciebie konto w portalu. Zaloguj się danymi:
+- Login (email): ${credentials.loginEmail}
+- Hasło tymczasowe: ${credentials.tempPassword}
+Po pierwszym zalogowaniu poprosimy Cię o ustawienie własnego hasła.
+`
+    : `
+Zaloguj się do portalu danymi, których używasz na co dzień.
+Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logowania.
+`;
+
   await transporter.sendMail({
     from: {
       name: "Harry English",
       address: process.env.EMAIL_USER || "kontakt@harry-english.pl",
     },
     to,
-    subject: "Nowa propozycja grupy - Harry English",
+    subject: "Propozycja grupy - Harry English",
     html: buildEmailShell({
       title: `Dzień dobry ${escapeHtmlForEmail(parentName)},`,
-      intro: "Przygotowaliśmy propozycję grupy dla Twojego dziecka.",
+      intro: `Przygotowaliśmy propozycję grupy dla ${safeChildName}.`,
       contentHtml: `
         <ul style="margin:0 0 12px 18px;padding:0;font-size:15px;line-height:1.6;">
           <li><strong>Grupa:</strong> ${escapeHtmlForEmail(proposal.groupName)}</li>
           <li><strong>Lokalizacja:</strong> ${escapeHtmlForEmail(proposal.locationName)}</li>
           <li><strong>Termin:</strong> ${escapeHtmlForEmail(proposal.schedule)}</li>
-          <li><strong>Cena miesięczna:</strong> ${proposal.priceMonthly} zł</li>
         </ul>
-        <p style="margin:0;font-size:15px;line-height:1.6;">Zaloguj się do portalu, aby zaakceptować termin lub poprosić o inny.</p>
+        ${credentialsHtml}
+        <p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;">
+          <a href="${portalUrl}" style="display:inline-block;background:#175244;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:9999px;font-weight:600;">Przejdź do portalu</a>
+        </p>
+        <p style="margin:0;font-size:13px;line-height:1.6;color:#6b7280;">
+          Lub skopiuj link do przeglądarki: <a href="${portalUrl}" style="color:#175244;">${portalUrl}</a>
+        </p>
       `,
     }),
     text: `Dzień dobry ${parentName},
-Przygotowaliśmy propozycję grupy:
+
+Przygotowaliśmy propozycję grupy dla ${childNameText}:
 - Grupa: ${proposal.groupName}
 - Lokalizacja: ${proposal.locationName}
 - Termin: ${proposal.schedule}
-- Cena miesięczna: ${proposal.priceMonthly} zł
-Zaloguj się do portalu, aby zaakceptować lub poprosić o inny termin.`,
+${credentialsText}
+Przejdź do portalu: ${portalUrl}
+`,
+  });
+}
+
+/**
+ * Powiadomienie dla szkoły, że rodzic odrzucił propozycję grupy.
+ * Wysyłane na `process.env.EMAIL_USER` (kontakt@harry-english.pl).
+ * `reason` jest opcjonalny — jeśli rodzic nie wpisał komentarza, podaj `null`.
+ */
+export async function sendProposalRejectedEmail(params: {
+  parentFirstName: string;
+  parentLastName: string;
+  parentEmail: string;
+  childFirstName: string;
+  childLastName: string;
+  groupName: string;
+  locationName: string;
+  schedule: string;
+  reason: string | null;
+}): Promise<void> {
+  const fromAddr = process.env.EMAIL_USER || "kontakt@harry-english.pl";
+  const adminTo = process.env.EMAIL_USER || "kontakt@harry-english.pl";
+
+  const reasonHtml = params.reason
+    ? `
+      <div style="border:2px solid #f59e0b;background:#fffbeb;padding:14px 16px;border-radius:10px;margin-top:12px;">
+        <p style="margin:0 0 8px 0;font-size:14px;font-weight:700;color:#92400e;">Komentarz rodzica</p>
+        <p style="margin:0;font-size:14px;line-height:1.6;white-space:pre-wrap;color:${BRAND_TEXT};">${escapeHtmlForEmail(params.reason)}</p>
+      </div>
+    `
+    : `
+      <p style="margin:12px 0 0 0;font-size:14px;line-height:1.6;color:${BRAND_MUTED};">
+        Rodzic nie podał powodu odrzucenia.
+      </p>
+    `;
+
+  const reasonText = params.reason
+    ? `Komentarz rodzica:\n${params.reason}\n`
+    : `Rodzic nie podał powodu odrzucenia.\n`;
+
+  await transporter.sendMail({
+    from: {
+      name: "Harry English",
+      address: fromAddr,
+    },
+    to: adminTo,
+    subject: `Odrzucono propozycję grupy — ${params.childFirstName} ${params.childLastName}`,
+    html: buildEmailShell({
+      title: "Rodzic odrzucił propozycję grupy",
+      intro: `Rodzic ${escapeHtmlForEmail(params.parentFirstName)} ${escapeHtmlForEmail(params.parentLastName)} odrzucił propozycję dla dziecka ${escapeHtmlForEmail(params.childFirstName)} ${escapeHtmlForEmail(params.childLastName)}.`,
+      contentHtml: `
+        <div style="border:1px solid #d9e0db;background:#ffffff;padding:14px 16px;border-radius:10px;margin-bottom:12px;">
+          <p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;"><strong>Dziecko:</strong> ${escapeHtmlForEmail(params.childFirstName)} ${escapeHtmlForEmail(params.childLastName)}</p>
+          <p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;"><strong>Rodzic:</strong> ${escapeHtmlForEmail(params.parentFirstName)} ${escapeHtmlForEmail(params.parentLastName)}</p>
+          <p style="margin:0;font-size:14px;line-height:1.6;"><strong>Email rodzica:</strong> ${escapeHtmlForEmail(params.parentEmail)}</p>
+        </div>
+        <div style="border:1px solid #d9e0db;background:#ffffff;padding:14px 16px;border-radius:10px;">
+          <p style="margin:0 0 8px 0;font-size:14px;font-weight:700;color:${BRAND_GREEN};">Odrzucona propozycja</p>
+          <ul style="margin:0 0 0 18px;padding:0;font-size:14px;line-height:1.6;">
+            <li><strong>Grupa:</strong> ${escapeHtmlForEmail(params.groupName)}</li>
+            <li><strong>Lokalizacja:</strong> ${escapeHtmlForEmail(params.locationName)}</li>
+            <li><strong>Termin:</strong> ${escapeHtmlForEmail(params.schedule)}</li>
+          </ul>
+        </div>
+        ${reasonHtml}
+        <p style="margin:14px 0 0 0;font-size:13px;line-height:1.6;color:${BRAND_MUTED};">
+          Zgłoszenie wróciło do statusu REJECTED — w panelu admina możesz zaproponować inną grupę.
+        </p>
+      `,
+      footerHtml: `<p style="margin:0;">Harry English</p><p style="margin:4px 0 0 0;">System automatycznego powiadamiania</p>`,
+    }),
+    text: `Rodzic odrzucił propozycję grupy
+
+Dziecko: ${params.childFirstName} ${params.childLastName}
+Rodzic: ${params.parentFirstName} ${params.parentLastName}
+Email rodzica: ${params.parentEmail}
+
+Odrzucona propozycja:
+- Grupa: ${params.groupName}
+- Lokalizacja: ${params.locationName}
+- Termin: ${params.schedule}
+
+${reasonText}
+Zgłoszenie wróciło do statusu REJECTED — w panelu admina możesz zaproponować inną grupę.
+
+Harry English
+System automatycznego powiadamiania
+`,
   });
 }
 

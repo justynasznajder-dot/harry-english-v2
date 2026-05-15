@@ -25,9 +25,10 @@ export async function GET(
   const { id } = await params;
   try {
     const group = await queryDb(
-      `SELECT g.*, CONCAT(u.first_name, ' ', u.last_name) AS teacher_name
+      `SELECT g.*, CONCAT(u.first_name, ' ', u.last_name) AS teacher_name, gl.name AS location_name
        FROM groups g
        LEFT JOIN users u ON u.id = g.teacher_id
+       LEFT JOIN locations gl ON gl.id = g.location_id
        WHERE g.id = $1 ${tenant.role === "MANAGER" ? "AND g.school_id = $2" : ""}
        LIMIT 1`,
       tenant.role === "MANAGER" ? [id, tenant.tenantSchoolId] : [id]
@@ -103,18 +104,20 @@ export async function PUT(
   const { id } = await params;
   try {
     const body = await request.json();
-    const { name, level, teacherId, maxStudents, active } = body;
+    const { name, level, teacherId, maxStudents, active, schoolYearId, locationId } = body;
     await queryDb(
       `UPDATE groups
        SET name = COALESCE($2, name),
            level = COALESCE($3, level),
            teacher_id = $4,
            max_students = COALESCE($5, max_students),
-           active = COALESCE($6, active)
-       WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $7" : ""}`,
+           active = COALESCE($6, active),
+           school_year_id = $7,
+           location_id = $8
+       WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $9" : ""}`,
       tenant.role === "MANAGER"
-        ? [id, name ?? null, level ?? null, teacherId ?? null, maxStudents ?? null, active ?? null, tenant.tenantSchoolId]
-        : [id, name ?? null, level ?? null, teacherId ?? null, maxStudents ?? null, active ?? null]
+        ? [id, name ?? null, level ?? null, teacherId ?? null, maxStudents ?? null, active ?? null, schoolYearId ?? null, locationId ?? null, tenant.tenantSchoolId]
+        : [id, name ?? null, level ?? null, teacherId ?? null, maxStudents ?? null, active ?? null, schoolYearId ?? null, locationId ?? null]
     );
     return NextResponse.json({ message: "Grupa została zaktualizowana" });
   } catch (error) {

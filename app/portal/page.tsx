@@ -15,6 +15,7 @@ interface UserInfo {
   lastName: string;
   role?: string;
   accessLevel?: 'PENDING' | 'PROPOSED' | 'CONTRACT_SENT' | 'ACTIVE';
+  mustChangePassword?: boolean;
   children?: Array<{
     childId?: string;
     firstName: string;
@@ -106,6 +107,11 @@ export default function PortalPage() {
       const response = await fetch('/api/user/me', { cache: 'no-store' });
       if (response.ok) {
         const data = await response.json();
+        // Wymuś zmianę hasła przy pierwszym logowaniu po wygenerowaniu konta przez admina.
+        if (data.user?.mustChangePassword === true) {
+          router.replace('/portal/zmien-haslo');
+          return;
+        }
         setUserInfo(data.user);
         localStorage.setItem('userInfo', JSON.stringify(data.user));
         if (data.user.email) {
@@ -206,15 +212,7 @@ export default function PortalPage() {
         {userInfo?.role === "ADMIN" || userInfo?.role === "MANAGER" ? (
           <AdminPortal />
         ) : userInfo?.role === "PARENT" ? (
-          <div className="rounded-3xl border border-zinc-200 bg-[#f8f6f3] p-8 text-center shadow-xl">
-            <p className="text-lg font-semibold text-[#1e3a4c]">
-              Panel rodzica jest w przygotowaniu
-            </p>
-            <p className="mt-3 text-sm text-zinc-600">
-              Nowe zgłoszenia zapisujemy wyłącznie przez formularz na stronie głównej — administracja
-              odezwie się po weryfikacji. Jeśli masz pytania, napisz lub zadzwoń do biura szkoły.
-            </p>
-          </div>
+          <UserPortal userInfo={userInfo} onUserInfoUpdate={setUserInfo} />
         ) : userInfo?.role === "TEACHER" ? (
           <LektorPortal />
         ) : userInfo?.role === "CHILD" ? (

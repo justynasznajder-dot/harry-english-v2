@@ -79,12 +79,17 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
     setIsLoading(true);
 
     try {
+      // Defensywnie przycinamy białe znaki — klienty pocztowe (Gmail, Outlook)
+      // często doklejają spację/nowy wiersz przy kopiowaniu hasła tymczasowego z maila,
+      // przez co bcrypt.compare zwracał false i logowanie nie działało.
+      const emailToSubmit = formData.email.trim();
+      const passwordToSubmit = formData.password.trim();
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email: formData.email,
-          password: formData.password,
+          email: emailToSubmit,
+          password: passwordToSubmit,
         }),
       });
 
@@ -98,9 +103,13 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
           localStorage.setItem("userEmail", data.user.email);
           localStorage.setItem("userInfo", JSON.stringify(data.user));
         }
-        
-        // Przekieruj do portalu
-        window.location.href = "/portal";
+
+        // Przy pierwszym logowaniu po wygenerowaniu konta przez admina — wymuś zmianę hasła.
+        if (data.mustChangePassword || data.user?.mustChangePassword) {
+          window.location.href = "/portal/zmien-haslo";
+        } else {
+          window.location.href = "/portal";
+        }
       } else {
         setErrors({ form: data.message || "Nieprawidłowy email lub hasło" });
       }
@@ -225,7 +234,7 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
       const response = await fetch("/api/auth/forgot-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: formData.email }),
+        body: JSON.stringify({ email: formData.email.trim() }),
       });
 
       const data = await response.json();

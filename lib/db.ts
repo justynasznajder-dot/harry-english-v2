@@ -9,6 +9,24 @@ import {
 /** Domyślna szkoła z env — multi-tenant (pusty string gdy brak `SCHOOL_ID`). */
 export const DEFAULT_SCHOOL_ID = process.env.SCHOOL_ID || "";
 
+/**
+ * Fragment SQL zamieniający `st.day_of_week` (1..7) na polską nazwę dnia.
+ * Wymaga aliasu tabeli `st` (schedule_templates st). Używaj wszędzie tam,
+ * gdzie składasz `schedule` z numeru dnia + godziny — żeby w UI/mailach
+ * pojawiało się „Poniedziałek 16:00" zamiast „1 16:00".
+ */
+export const POLISH_DAY_FROM_ST_SQL = `
+  CASE st.day_of_week
+    WHEN 1 THEN 'Poniedziałek'
+    WHEN 2 THEN 'Wtorek'
+    WHEN 3 THEN 'Środa'
+    WHEN 4 THEN 'Czwartek'
+    WHEN 5 THEN 'Piątek'
+    WHEN 6 THEN 'Sobota'
+    WHEN 7 THEN 'Niedziela'
+    ELSE CONCAT('Dzień ', st.day_of_week)
+  END`;
+
 /** Szkoła dla rejestracji i publicznych endpointów (np. produkcja harry-english.pl). */
 export function getRegistrationSchoolId(): string {
   const raw = process.env.SCHOOL_ID?.trim();
@@ -64,11 +82,16 @@ type DbShape = {
   userHasRole: boolean;
   userHasPhone: boolean;
   userHasAccessLevel: boolean;
+  userHasMustChangePassword: boolean;
   hasChildrenTable: boolean;
   hasStudentsTable: boolean;
   childHasConfirmed: boolean;
   childHasEnrollmentRequestId: boolean;
   childHasPreferredLocationId: boolean;
+  enrollmentHasRejectionComment: boolean;
+  enrollmentHasRejectedAt: boolean;
+  /** Tabela `enrollment_proposals` — historia propozycji grup. */
+  hasEnrollmentProposalsTable: boolean;
 };
 
 /** Odświeżanie po migracjach — bez tego stary kształt (np. brak `access_level` w cache) daje błędne INSERT-y aż do restartu. */
@@ -91,11 +114,15 @@ export async function getDbShape(): Promise<DbShape> {
     user_has_role: boolean;
     user_has_phone: boolean;
     user_has_access_level: boolean;
+    user_has_must_change_password: boolean;
     has_children: boolean;
     has_students: boolean;
     child_has_confirmed: boolean;
     child_has_enrollment_request_id: boolean;
     child_has_preferred_location_id: boolean;
+    enrollment_has_rejection_comment: boolean;
+    enrollment_has_rejected_at: boolean;
+    has_enrollment_proposals: boolean;
   }>(
     `SELECT
        EXISTS(
@@ -115,6 +142,10 @@ export async function getDbShape(): Promise<DbShape> {
          WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'access_level'
        ) AS user_has_access_level,
        EXISTS(
+         SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'must_change_password'
+       ) AS user_has_must_change_password,
+       EXISTS(
          SELECT 1 FROM information_schema.tables
          WHERE table_schema = 'public' AND table_name = 'children'
        ) AS has_children,
@@ -133,7 +164,19 @@ export async function getDbShape(): Promise<DbShape> {
        EXISTS(
          SELECT 1 FROM information_schema.columns
          WHERE table_schema = 'public' AND table_name = 'children' AND column_name = 'preferred_location_id'
-       ) AS child_has_preferred_location_id`
+       ) AS child_has_preferred_location_id,
+       EXISTS(
+         SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'enrollment_requests' AND column_name = 'rejection_comment'
+       ) AS enrollment_has_rejection_comment,
+       EXISTS(
+         SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'enrollment_requests' AND column_name = 'rejected_at'
+       ) AS enrollment_has_rejected_at,
+       EXISTS(
+         SELECT 1 FROM information_schema.tables
+         WHERE table_schema = 'public' AND table_name = 'enrollment_proposals'
+       ) AS has_enrollment_proposals`
   );
   const row = r.rows[0];
   dbShapeCache = {
@@ -141,11 +184,15 @@ export async function getDbShape(): Promise<DbShape> {
     userHasRole: Boolean(row?.user_has_role),
     userHasPhone: Boolean(row?.user_has_phone),
     userHasAccessLevel: Boolean(row?.user_has_access_level),
+    userHasMustChangePassword: Boolean(row?.user_has_must_change_password),
     hasChildrenTable: Boolean(row?.has_children),
     hasStudentsTable: Boolean(row?.has_students),
     childHasConfirmed: Boolean(row?.child_has_confirmed),
     childHasEnrollmentRequestId: Boolean(row?.child_has_enrollment_request_id),
     childHasPreferredLocationId: Boolean(row?.child_has_preferred_location_id),
+    enrollmentHasRejectionComment: Boolean(row?.enrollment_has_rejection_comment),
+    enrollmentHasRejectedAt: Boolean(row?.enrollment_has_rejected_at),
+    hasEnrollmentProposalsTable: Boolean(row?.has_enrollment_proposals),
   };
   dbShapeCacheAt = Date.now();
   return dbShapeCache;
@@ -180,6 +227,7 @@ export interface User {
   phone: string | null;
   active: boolean;
   confirmed: boolean;
+  must_change_password: boolean;
   reset_token: string | null;
   reset_token_expiry: Date | null;
   resignation_date: Date | null;
@@ -233,6 +281,7 @@ type UserRow = QueryResultRow & {
   phone: string | null;
   active: boolean;
   confirmed: boolean;
+  must_change_password?: boolean;
   reset_token: string | null;
   reset_token_expiry: Date | null;
   resignation_date: Date | null;
@@ -344,6 +393,7 @@ function mapUserRow(row: QueryResultRow): User {
     phone: row.phone != null ? (row.phone as string) : null,
     active: row.active === undefined ? true : Boolean(row.active),
     confirmed: Boolean(row.confirmed),
+    must_change_password: Boolean(row.must_change_password),
     reset_token: row.reset_token != null ? (row.reset_token as string) : null,
     reset_token_expiry: (row.reset_token_expiry as Date | null) ?? null,
     resignation_date: (row.resignation_date as Date | null) ?? null,
@@ -538,6 +588,7 @@ export async function createUser(data: {
   phone?: string | null;
   confirmed?: boolean;
   accessLevel?: AccessLevel;
+  mustChangePassword?: boolean;
 }): Promise<User> {
   const id = randomUUID();
   const role =
@@ -547,6 +598,7 @@ export async function createUser(data: {
       : "PARENT");
   const confirmed = data.confirmed ?? false;
   const accessLevel = data.accessLevel ?? "ACTIVE";
+  const mustChangePassword = data.mustChangePassword ?? false;
   const shape = await getDbShape();
 
   let insertSchoolId: string | null;
@@ -651,6 +703,13 @@ export async function createUser(data: {
       if (role === "PARENT" && insertSchoolId != null) {
         await insertParentProfileInTx(client, id, insertSchoolId);
       }
+      if (mustChangePassword && shape.userHasMustChangePassword) {
+        await client.query(
+          `UPDATE users SET must_change_password = TRUE WHERE id = $1`,
+          [id]
+        );
+        (r.rows[0] as UserRow).must_change_password = true;
+      }
       await client.query("COMMIT");
       return mapUserRow(r.rows[0]);
     }
@@ -749,6 +808,49 @@ export async function updateLastLogin(userId: string): Promise<void> {
   await pool.query(
     `UPDATE users SET last_login = NOW() WHERE id = $1`,
     [userId]
+  );
+}
+
+/** Znajdź użytkownika po (school_id, email). Używane przy „Wyślij propozycję" — sprawdzenie czy rodzic już ma konto. */
+export async function findUserBySchoolAndEmail(
+  schoolId: string,
+  email: string
+): Promise<User | null> {
+  const shape = await getDbShape();
+  const r = shape.userHasSchoolId
+    ? await pool.query<UserRow>(
+        `SELECT * FROM users
+         WHERE school_id = $1 AND LOWER(email::text) = LOWER($2::text)
+         LIMIT 1`,
+        [schoolId, email]
+      )
+    : await pool.query<UserRow>(
+        `SELECT * FROM users
+         WHERE LOWER(email::text) = LOWER($1::text)
+         LIMIT 1`,
+        [email]
+      );
+  return r.rows[0] ? mapUserRow(r.rows[0]) : null;
+}
+
+/** Czyści flagę must_change_password po skutecznej zmianie hasła przez użytkownika. */
+export async function clearMustChangePassword(userId: string): Promise<void> {
+  const shape = await getDbShape();
+  if (!shape.userHasMustChangePassword) return;
+  await pool.query(
+    `UPDATE users SET must_change_password = FALSE WHERE id = $1`,
+    [userId]
+  );
+}
+
+/** Aktualizuje hash hasła użytkownika. */
+export async function updateUserPasswordHash(
+  userId: string,
+  passwordHash: string
+): Promise<void> {
+  await pool.query(
+    `UPDATE users SET password_hash = $2 WHERE id = $1`,
+    [userId, passwordHash]
   );
 }
 
@@ -983,11 +1085,15 @@ export async function resetPassword(
   token: string,
   newPasswordHash: string
 ): Promise<boolean> {
+  const shape = await getDbShape();
+  const mustChangeSet = shape.userHasMustChangePassword
+    ? `, must_change_password = FALSE`
+    : "";
   const r = await pool.query(
     `UPDATE users
      SET password_hash = $1,
          reset_token = NULL,
-         reset_token_expiry = NULL
+         reset_token_expiry = NULL${mustChangeSet}
      WHERE reset_token = $2
        AND reset_token_expiry IS NOT NULL
        AND reset_token_expiry > NOW()

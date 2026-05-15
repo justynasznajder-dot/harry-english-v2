@@ -37,6 +37,8 @@ export async function GET(request: NextRequest) {
       teacher_id: string | null;
       teacher_name: string | null;
       location_name: string | null;
+      location_id: string | null;
+      school_year_id: string | null;
       students_count: string;
     }>(
       `SELECT
@@ -45,17 +47,20 @@ export async function GET(request: NextRequest) {
          g.level,
          g.max_students,
          g.active,
+         g.location_id,
+         g.school_year_id,
          g.teacher_id,
          CASE WHEN t.id IS NULL THEN NULL ELSE CONCAT(t.first_name, ' ', t.last_name) END AS teacher_name,
-         MAX(l.name) AS location_name,
+         COALESCE(gl.name, MAX(l.name)) AS location_name,
          COUNT(DISTINCT gs.id) FILTER (WHERE gs.left_at IS NULL)::text AS students_count
        FROM groups g
        LEFT JOIN users t ON t.id = g.teacher_id
+       LEFT JOIN locations gl ON gl.id = g.location_id
        LEFT JOIN schedule_templates st ON st.group_id = g.id
-      LEFT JOIN locations l ON l.id = st.location_id
+       LEFT JOIN locations l ON l.id = st.location_id
        LEFT JOIN group_students gs ON gs.group_id = g.id
        WHERE 1=1 ${schoolClause}
-       GROUP BY g.id, t.id
+       GROUP BY g.id, t.id, gl.name
        ORDER BY g.created_at DESC`,
       listParams
     );
@@ -84,6 +89,9 @@ export async function POST(request: NextRequest) {
       level,
       teacherId,
       maxStudents = 12,
+      active = true,
+      schoolYearId,
+      locationId,
       school_id: bodySchoolId,
       schoolId: bodySchoolIdCamel,
     }: {
@@ -91,11 +99,17 @@ export async function POST(request: NextRequest) {
       level?: string;
       teacherId?: string | null;
       maxStudents?: number;
+      active?: boolean;
+      schoolYearId?: string | null;
+      locationId?: string | null;
       school_id?: string;
       schoolId?: string;
     } = body;
 
     if (!name) return NextResponse.json({ message: "Nazwa grupy jest wymagana" }, { status: 400 });
+    if (!teacherId) {
+      return NextResponse.json({ message: "Wybierz nauczyciela dla grupy" }, { status: 400 });
+    }
 
     let insertSchoolId: string | null =
       tenant.role === "MANAGER" ? tenant.tenantSchoolId : null;
@@ -114,13 +128,10 @@ export async function POST(request: NextRequest) {
     }
 
     const inserted = await queryDb<{ id: string }>(
-      `INSERT INTO groups (id, school_id, teacher_id, name, level, max_students, active, created_at, school_year_id)
-       VALUES (
-         $1, $2, $3, $4, $5, $6, TRUE, NOW(),
-         (SELECT id FROM school_years WHERE school_id = $2 AND active = TRUE LIMIT 1)
-       )
+      `INSERT INTO groups (id, school_id, teacher_id, name, level, max_students, active, created_at, school_year_id, location_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, $9)
        RETURNING id`,
-      [randomUUID(), insertSchoolId, teacherId ?? null, name.trim(), level ?? null, maxStudents]
+      [randomUUID(), insertSchoolId, teacherId ?? null, name.trim(), level ?? null, maxStudents, active, schoolYearId ?? null, locationId ?? null]
     );
 
     return NextResponse.json({ id: inserted.rows[0].id, message: "Grupa została utworzona" });

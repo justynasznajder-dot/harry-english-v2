@@ -1,6 +1,7 @@
 export const ENROLLMENT_STATUSES = [
   "NEW",
   "PROPOSED",
+  "NEGOTIATING",
   "ACCEPTED",
   "SIGNED",
   "COMPLETED",
