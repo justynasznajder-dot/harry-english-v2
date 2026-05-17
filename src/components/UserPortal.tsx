@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import MessagesPanel from '@/src/components/messages/MessagesPanel';
+import RenewalsBanner from '@/src/components/RenewalsBanner';
 import MessagesTabLabel from '@/src/components/messages/MessagesTabLabel';
 import { useUnreadMessagesCount } from '@/src/components/messages/useUnreadMessagesCount';
 
@@ -710,6 +711,7 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
 
   return (
     <div className="space-y-4 pb-20 md:pb-4">
+      <RenewalsBanner onFlash={setFlash} onUpdated={refreshUserAccessLevel} />
       <div className="rounded-3xl border border-emerald-100 bg-white">
         <nav className="no-scrollbar overflow-x-auto border-b border-emerald-100">
           <div className="flex min-w-max gap-2 p-2">

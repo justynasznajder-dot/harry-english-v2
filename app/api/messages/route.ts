@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTokenFromRequest } from "@/lib/auth";
 import { sendMessageNotificationEmail } from "@/lib/email";
 import { queryDb, runPgTransaction } from "@/lib/db";
+import { isValidEmailAddress } from "@/lib/email-address";
 import {
   fetchThreadRoots,
   getThreadRootId,
@@ -10,6 +11,7 @@ import {
   insertMessages,
   requireMessageActor,
   resolveParentIdForMessage,
+  resolveUsersByEmails,
   userCanAccessThreadRoot,
   validateRecipientsForSender,
 } from "@/lib/messages";
@@ -86,6 +88,7 @@ export async function POST(request: NextRequest) {
 
   let body: {
     recipientIds?: unknown;
+    externalEmails?: unknown;
     subject?: unknown;
     content?: unknown;
     parentMessageId?: unknown;
@@ -99,6 +102,13 @@ export async function POST(request: NextRequest) {
   const recipientIds = Array.isArray(body.recipientIds)
     ? body.recipientIds.filter((id): id is string => typeof id === "string" && id.length > 0)
     : [];
+  const externalEmailsInput = Array.isArray(body.externalEmails)
+    ? body.externalEmails
+        .filter((e): e is string => typeof e === "string" && e.trim().length > 0)
+        .map((e) => e.trim().toLowerCase())
+        .filter((e) => isValidEmailAddress(e))
+    : [];
+  const externalEmails = [...new Set(externalEmailsInput)];
   const subject = typeof body.subject === "string" ? body.subject.trim() : "";
   const content = typeof body.content === "string" ? body.content.trim() : "";
   const parentMessageId =
@@ -122,7 +132,62 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  let effectiveRecipientIds = recipientIds;
+  if (parentMessageId && externalEmails.length > 0) {
+    return NextResponse.json(
+      { message: "Adresy e-mail można dodać tylko przy nowej wiadomości" },
+      { status: 400 }
+    );
+  }
+
+  if (
+    actor.user.role !== "MANAGER" &&
+    actor.user.role !== "TEACHER" &&
+    externalEmails.length > 0
+  ) {
+    return NextResponse.json(
+      { message: "Brak uprawnień do wysyłki na adresy e-mail spoza listy" },
+      { status: 403 }
+    );
+  }
+
+  if (externalEmails.length > 500) {
+    return NextResponse.json(
+      { message: "Maksymalnie 500 adresów e-mail na jedną wysyłkę" },
+      { status: 400 }
+    );
+  }
+
+  let effectiveRecipientIds = [...recipientIds];
+  const emailOnlyRecipients: string[] = [];
+
+  if (externalEmails.length > 0) {
+    const byEmail = await resolveUsersByEmails(actor.user.schoolId, externalEmails);
+    const knownEmails = new Set(
+      (await getUsersForEmail(effectiveRecipientIds))
+        .map((u) => u.email.trim().toLowerCase())
+        .filter(Boolean)
+    );
+
+    for (const email of externalEmails) {
+      const matched = byEmail.get(email);
+      if (matched && matched.id !== actor.user.id) {
+        if (!effectiveRecipientIds.includes(matched.id)) {
+          effectiveRecipientIds.push(matched.id);
+        }
+        continue;
+      }
+      if (knownEmails.has(email)) continue;
+      emailOnlyRecipients.push(email);
+    }
+  }
+
+  if (effectiveRecipientIds.length === 0 && emailOnlyRecipients.length === 0) {
+    return NextResponse.json(
+      { message: "Wybierz odbiorców z listy lub podaj co najmniej jeden adres e-mail" },
+      { status: 400 }
+    );
+  }
+
   if (parentMessageId && threadRootId) {
     const rootRes = await queryDb<{ sender_id: string; recipient_id: string }>(
       `SELECT sender_id, recipient_id FROM messages WHERE id = $1 LIMIT 1`,
@@ -137,25 +202,31 @@ export async function POST(request: NextRequest) {
     effectiveRecipientIds = [otherParty];
   }
 
-  const validation = await validateRecipientsForSender({
-    senderId: actor.user.id,
-    senderRole: actor.user.role,
-    schoolId: actor.user.schoolId,
-    recipientIds: effectiveRecipientIds,
-    threadRootId,
-  });
-  if (!validation.ok) {
-    return NextResponse.json({ message: validation.message }, { status: 403 });
+  const uniqueRecipients = [...new Set(effectiveRecipientIds)];
+
+  if (uniqueRecipients.length > 0) {
+    const validation = await validateRecipientsForSender({
+      senderId: actor.user.id,
+      senderRole: actor.user.role,
+      schoolId: actor.user.schoolId,
+      recipientIds: uniqueRecipients,
+      threadRootId,
+    });
+    if (!validation.ok) {
+      return NextResponse.json({ message: validation.message }, { status: 403 });
+    }
   }
 
-  const uniqueRecipients = [...new Set(effectiveRecipientIds)];
   const broadcastId = uniqueRecipients.length > 1 ? randomUUID() : null;
 
   const recipientUsers = await getUsersForEmail(uniqueRecipients);
   const recipientMap = new Map(recipientUsers.map((u) => [u.id, u]));
 
   try {
-    const messageIds = await runPgTransaction(async (client) => {
+    const messageIds =
+      uniqueRecipients.length === 0
+        ? []
+        : await runPgTransaction(async (client) => {
       const rows = uniqueRecipients.map((recipientId) => {
         const recipient = recipientMap.get(recipientId);
         const parentId = resolveParentIdForMessage(
@@ -180,10 +251,25 @@ export async function POST(request: NextRequest) {
     });
 
     const shouldSendEmail = actor.user.role === "MANAGER" || actor.user.role === "TEACHER";
+    let emailsSent = 0;
+    let emailsFailed = 0;
 
     if (shouldSendEmail) {
       const senderName = `${actor.user.firstName} ${actor.user.lastName}`.trim();
       const portalUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://www.harry-english.pl";
+      const senderRole = actor.user.role as "MANAGER" | "TEACHER";
+      const isDirectEmailCompose =
+        recipientIds.length === 0 && externalEmails.length > 0;
+      const senderUsers = isDirectEmailCompose
+        ? await getUsersForEmail([actor.user.id])
+        : [];
+      const senderReplyTo = senderUsers[0]?.email?.trim() || undefined;
+      const emailNotifyParams = {
+        deliveryMode: isDirectEmailCompose
+          ? ("direct-email" as const)
+          : ("portal" as const),
+        replyTo: senderReplyTo,
+      };
 
       for (let i = 0; i < uniqueRecipients.length; i++) {
         const recipientId = uniqueRecipients[i];
@@ -197,15 +283,46 @@ export async function POST(request: NextRequest) {
             to: recipient.email,
             recipientName: `${recipient.first_name} ${recipient.last_name}`.trim(),
             senderName,
-            senderRole: actor.user.role as "MANAGER" | "TEACHER",
+            senderRole,
             subject,
             contentPreview: content,
             portalUrl,
+            ...emailNotifyParams,
           });
-          await queryDb(`UPDATE messages SET email_status = 'SENT' WHERE id = $1`, [messageId]);
+          emailsSent += 1;
+          if (messageId) {
+            await queryDb(`UPDATE messages SET email_status = 'SENT' WHERE id = $1`, [messageId]);
+          }
         } catch (emailErr) {
           console.error("Message notification email failed:", emailErr);
-          await queryDb(`UPDATE messages SET email_status = 'FAILED' WHERE id = $1`, [messageId]);
+          emailsFailed += 1;
+          if (messageId) {
+            await queryDb(`UPDATE messages SET email_status = 'FAILED' WHERE id = $1`, [messageId]);
+          }
+        }
+      }
+
+      for (const email of emailOnlyRecipients) {
+        const localPart = email.split("@")[0] ?? "";
+        const displayName =
+          localPart.length > 0
+            ? localPart.charAt(0).toUpperCase() + localPart.slice(1)
+            : "Odbiorco";
+        try {
+          await sendMessageNotificationEmail({
+            to: email,
+            recipientName: displayName,
+            senderName,
+            senderRole,
+            subject,
+            contentPreview: content,
+            portalUrl,
+            ...emailNotifyParams,
+          });
+          emailsSent += 1;
+        } catch (emailErr) {
+          console.error("External message notification email failed:", emailErr);
+          emailsFailed += 1;
         }
       }
     }
@@ -213,6 +330,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       messageIds,
       broadcastId: broadcastId ?? undefined,
+      emailsSent,
+      emailsFailed,
+      externalEmailsCount: emailOnlyRecipients.length,
     });
   } catch (error) {
     console.error("POST /api/messages error:", error);

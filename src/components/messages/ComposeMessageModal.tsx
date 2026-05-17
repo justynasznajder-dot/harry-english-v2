@@ -1,8 +1,10 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import ComposeEmailRecipientsColumn from '@/src/components/messages/ComposeEmailRecipientsColumn';
 
 export type ComposePanelMode = 'manager' | 'teacher' | 'parent';
+export type ComposeSection = 'parents' | 'teachers' | 'email';
 
 const COMPOSE_FILTER_FIELD =
   'flex w-full min-h-[2.375rem] items-center justify-between rounded-lg border border-zinc-300 bg-white px-3 py-2 text-left text-sm outline-none transition focus:border-[#0f6e56] focus:ring-2 focus:ring-[#0f6e56]/20';
@@ -280,9 +282,18 @@ export interface ComposeMessageModalProps {
   sendingCompose: boolean;
   onSend: () => void;
   onClearForm: () => void;
-  composeAudience?: 'parents' | 'teachers';
-  onComposeAudienceChange?: (audience: 'parents' | 'teachers') => void;
-  showAudienceToggle?: boolean;
+  composeSection?: ComposeSection;
+  onComposeSectionChange?: (section: ComposeSection) => void;
+  showSectionTabs?: boolean;
+  showTeachersTab?: boolean;
+  externalEmails?: string[];
+  externalEmailInput?: string;
+  onExternalEmailInputChange?: (value: string) => void;
+  externalEmailBulkPaste?: string;
+  onExternalEmailBulkPasteChange?: (value: string) => void;
+  onAddExternalEmail?: () => void;
+  onParseExternalEmailBulk?: () => void;
+  onRemoveExternalEmail?: (email: string) => void;
 }
 
 export default function ComposeMessageModal(props: ComposeMessageModalProps) {
@@ -293,9 +304,11 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
     : props.singleRecipientId
       ? [props.singleRecipientId]
       : [];
-
-  const audience = props.composeAudience ?? 'parents';
-  const isTeachersAudience = props.showAudienceToggle && audience === 'teachers';
+  const externalEmails = props.externalEmails ?? [];
+  const section = props.composeSection ?? 'parents';
+  const isEmailSection = section === 'email';
+  const isTeachersAudience = section === 'teachers';
+  const totalRecipients = isEmailSection ? externalEmails.length : adresatIds.length;
 
   const searchPlaceholder =
     props.mode === 'parent'
@@ -332,36 +345,56 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
             <h3 id="compose-modal-title" className="text-lg font-bold text-zinc-900">
               Nowa wiadomość
             </h3>
-            {props.showAudienceToggle && props.onComposeAudienceChange && (
-              <div className="flex rounded-full bg-zinc-100 p-0.5" role="tablist" aria-label="Odbiorcy wiadomości">
+            {props.showSectionTabs && props.onComposeSectionChange && (
+              <div
+                className="flex rounded-full bg-zinc-100 p-0.5"
+                role="tablist"
+                aria-label="Tryb wysyłki"
+              >
                 <button
                   type="button"
                   role="tab"
-                  aria-selected={audience === 'parents'}
-                  onClick={() => props.onComposeAudienceChange!('parents')}
+                  aria-selected={section === 'parents'}
+                  onClick={() => props.onComposeSectionChange!('parents')}
                   className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
-                    audience === 'parents'
+                    section === 'parents'
                       ? 'bg-white text-[#0f6e56] shadow-sm'
                       : 'text-zinc-600 hover:text-zinc-900'
                   }`}
                 >
                   Do rodziców
                 </button>
+                {props.showTeachersTab && (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={section === 'teachers'}
+                    onClick={() => props.onComposeSectionChange!('teachers')}
+                    className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                      section === 'teachers'
+                        ? 'bg-white text-[#0f6e56] shadow-sm'
+                        : 'text-zinc-600 hover:text-zinc-900'
+                    }`}
+                  >
+                    Do nauczycieli
+                  </button>
+                )}
                 <button
                   type="button"
                   role="tab"
-                  aria-selected={audience === 'teachers'}
-                  onClick={() => props.onComposeAudienceChange!('teachers')}
+                  aria-selected={section === 'email'}
+                  onClick={() => props.onComposeSectionChange!('email')}
                   className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
-                    audience === 'teachers'
+                    section === 'email'
                       ? 'bg-white text-[#0f6e56] shadow-sm'
                       : 'text-zinc-600 hover:text-zinc-900'
                   }`}
                 >
-                  Do nauczycieli
+                  Wyślij e-mail
                 </button>
               </div>
             )}
+
           </div>
           <button
             type="button"
@@ -374,7 +407,18 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
         </div>
 
         <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] overflow-hidden md:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] md:grid-rows-1">
-          {/* Lewa kolumna — filtry i wybór adresatów */}
+          {isEmailSection ? (
+            <ComposeEmailRecipientsColumn
+              externalEmails={externalEmails}
+              externalEmailInput={props.externalEmailInput ?? ''}
+              externalEmailBulkPaste={props.externalEmailBulkPaste ?? ''}
+              onExternalEmailInputChange={(v) => props.onExternalEmailInputChange?.(v)}
+              onExternalEmailBulkPasteChange={(v) => props.onExternalEmailBulkPasteChange?.(v)}
+              onAddExternalEmail={() => props.onAddExternalEmail?.()}
+              onParseExternalEmailBulk={() => props.onParseExternalEmailBulk?.()}
+              onRemoveExternalEmail={(email) => props.onRemoveExternalEmail?.(email)}
+            />
+          ) : (
           <div className="flex min-h-0 flex-col overflow-hidden border-b border-zinc-200 bg-zinc-50/80 p-3 md:border-b-0 md:border-r md:p-4">
             {props.canPickIndividuals &&
               !isTeachersAudience &&
@@ -518,10 +562,12 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
               )
             )}
           </div>
+          )}
 
           {/* Prawa kolumna — treść wiadomości */}
           <div className="flex min-h-0 flex-col overflow-hidden p-3 md:p-4">
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden md:gap-3">
+              {!isEmailSection && (
               <div className="shrink-0">
                 <label className="mb-1 block text-sm font-medium text-zinc-800">
                   Adresat / Adresaci
@@ -561,6 +607,7 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
                   )}
                 </div>
               </div>
+              )}
 
               <div className="shrink-0">
                 <label htmlFor="compose-subject" className="mb-1 block text-sm font-medium text-zinc-800">
@@ -606,8 +653,8 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
               >
                 {props.sendingCompose
                   ? 'Wysyłanie…'
-                  : props.canPickIndividuals && props.selectedRecipientIds.length > 1
-                    ? `Wyślij do ${props.selectedRecipientIds.length} osób`
+                  : totalRecipients > 1
+                    ? `Wyślij do ${totalRecipients} odbiorców`
                     : 'Wyślij'}
               </button>
             </div>

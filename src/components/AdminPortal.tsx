@@ -5,6 +5,7 @@ import Link from 'next/link';
 import type { EnrollmentStatus } from '@/lib/enrollment-status';
 import { normalizePolishPhone } from '@/lib/phone';
 import ClassesCalendarPanel from '@/src/components/admin/ClassesCalendarPanel';
+import RenewalsPanel from '@/src/components/admin/RenewalsPanel';
 import MessagesPanel from '@/src/components/messages/MessagesPanel';
 import MessagesTabLabel from '@/src/components/messages/MessagesTabLabel';
 import { useUnreadMessagesCount } from '@/src/components/messages/useUnreadMessagesCount';
@@ -15,6 +16,7 @@ type TabKey =
   | 'groups'
   | 'classes'
   | 'enrollment'
+  | 'renewals'
   | 'announcements'
   | 'payments';
 type MobileTab = 'organization' | 'users' | 'groups' | 'more';
@@ -139,6 +141,7 @@ const topTabs: Array<{ key: TabKey; label: string }> = [
   { key: 'groups', label: 'Grupy' },
   { key: 'classes', label: 'Zajęcia' },
   { key: 'enrollment', label: 'Zgłoszenia' },
+  { key: 'renewals', label: 'Odnowienia' },
   { key: 'announcements', label: 'Wiadomości' },
   { key: 'payments', label: 'Płatności' },
 ];
@@ -2533,6 +2536,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       );
     }
     if (activeTab === 'payments') return <EmptyDataPanel title="Płatności" />;
+    if (activeTab === 'renewals') {
+      return <RenewalsPanel pushToast={pushToast} />;
+    }
     if (activeTab === 'enrollment') {
       const enrollmentRows = enrollmentParents.filter((parent) => parent.children.length > 0);
       if (enrollmentRows.length === 0) {

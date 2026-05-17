@@ -24,7 +24,37 @@ const BRAND_CARD_BG = "#ffffff";
 const BRAND_FONT = "Geist, Arial, Helvetica, sans-serif";
 const BRAND_FOOTER_TEXT = "#d8e8e3";
 const BRAND_FOOTER_LINK = "#ecf7f2";
-const FACEBOOK_URL = "https://www.facebook.com/Zyrafa.Harry";
+const FACEBOOK_URL = "https://www.facebook.com/Zyrafa.Harry/";
+const GOOGLE_REVIEWS_URL =
+  "https://www.google.com/search?sca_esv=99745c67aa04a219&sxsrf=ANbL-n7HiNnvaXbYokdqZaa8sr2B5VnzGw:1779058135505&si=AL3DRZEsmMGCryMMFSHJ3StBhOdZ2-6yYkXd_doETEE1OR-qOciDfQuCR-dVjLubxB-qRnMBRkFw0c47nHwcNNUL2trieJW5FuWs3zVGIsBEpB165vCMOZ2b377BAEgULGwRIG89CEtG&q=Harry+English+Opinie&sa=X&ved=2ahUKEwixk86BtMGUAxXfOBAIHRMKMdoQ0bkNegQIKxAF&biw=1280&bih=665&dpr=1.5";
+
+function buildEmailSocialLinksButtons(): string {
+  const pillStyle = `display:inline-block;padding:9px 20px;font-family:${BRAND_FONT};font-size:13px;font-weight:600;color:${BRAND_FOOTER_TEXT};text-decoration:none;`;
+  const cellStyle = `border:1px solid #8fb5ab;border-radius:999px;`;
+  return `
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:16px auto 0 auto;">
+      <tr>
+        <td style="${cellStyle}">
+          <a href="${GOOGLE_REVIEWS_URL}" style="${pillStyle}">Opinie Google</a>
+        </td>
+        <td style="width:10px;font-size:0;line-height:0;">&nbsp;</td>
+        <td style="${cellStyle}">
+          <a href="${FACEBOOK_URL}" style="${pillStyle}">Facebook</a>
+        </td>
+      </tr>
+    </table>`;
+}
+
+function buildMessageEmailFooter(): string {
+  return `<p style="margin:0;font-size:12px;color:${BRAND_FOOTER_TEXT};">Aby odpowiedzieć, zaloguj się do panelu. Nie odpowiadaj na tę wiadomość.</p>
+        ${buildEmailSocialLinksButtons()}
+        <p style="margin:10px 0 0 0;font-size:15px;font-weight:700;color:${BRAND_YELLOW};">Harry English</p>`;
+}
+
+function buildDirectMessageEmailFooter(): string {
+  return `${buildEmailSocialLinksButtons()}
+        <p style="margin:10px 0 0 0;font-size:15px;font-weight:700;color:${BRAND_YELLOW};">Harry English</p>`;
+}
 
 function getAppBaseUrl(): string {
   const raw = process.env.NEXT_PUBLIC_APP_URL?.trim();
@@ -51,15 +81,7 @@ function buildDefaultEmailFooter(): string {
             <a href="mailto:kontakt@harry-english.pl" style="color:${BRAND_FOOTER_LINK};text-decoration:underline;">kontakt@harry-english.pl</a><br />
             <a href="${siteUrl}" style="color:${BRAND_FOOTER_LINK};text-decoration:underline;">www.harry-english.pl</a>
           </p>
-          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:16px auto 0 auto;">
-            <tr>
-              <td style="border:1px solid #8fb5ab;border-radius:999px;">
-                <a href="${FACEBOOK_URL}" style="display:inline-block;padding:9px 20px;font-family:${BRAND_FONT};font-size:13px;font-weight:600;color:${BRAND_FOOTER_TEXT};text-decoration:none;">
-                  Facebook
-                </a>
-              </td>
-            </tr>
-          </table>
+          ${buildEmailSocialLinksButtons()}
         </td>
       </tr>
     </table>`;
@@ -341,6 +363,31 @@ export function escapeHtmlForEmail(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
+/** Akapity i łamanie linii z pola tekstowego — treść główna maila direct. */
+function formatPlainTextAsEmailHtml(content: string): string {
+  const normalized = content.replace(/\r\n/g, "\n").trim();
+  if (!normalized) {
+    return `<p style="margin:0;font-size:15px;line-height:1.7;color:${BRAND_MUTED};">(brak treści)</p>`;
+  }
+
+  return normalized
+    .split(/\n{2,}/)
+    .map((paragraph) => {
+      const lines = escapeHtmlForEmail(paragraph).split("\n").join("<br />");
+      return `<p style="margin:0 0 1em 0;font-size:16px;line-height:1.75;color:${BRAND_TEXT};">${lines}</p>`;
+    })
+    .join("\n        ");
+}
+
+function buildDirectMessageEmailBodyHtml(content: string): string {
+  const messageHtml = formatPlainTextAsEmailHtml(content);
+
+  return `
+        <div style="border:1px solid #d9e0db;background:#fafcfb;padding:20px 22px;border-radius:12px;margin:0;">
+          ${messageHtml}
+        </div>`;
+}
+
 /** Kopie zapasowe zgłoszeń z formularza publicznego (tylko wywołanie z produkcji dla wybranej szkoły). */
 export type PublicEnrollmentBackupChild = {
   index: number;
@@ -529,7 +576,6 @@ ${textChildren}
   });
 }
 
-// Funkcja weryfikująca konfigurację emaila
 export async function sendMessageNotificationEmail(params: {
   to: string;
   recipientName: string;
@@ -538,30 +584,22 @@ export async function sendMessageNotificationEmail(params: {
   subject: string;
   contentPreview: string;
   portalUrl: string;
+  /** Wysyłka z sekcji „Wyślij e-mail” — bez informacji o panelu; odpowiedź na ten mail. */
+  deliveryMode?: "portal" | "direct-email";
+  replyTo?: string;
 }): Promise<void> {
+  const isDirectEmail = params.deliveryMode === "direct-email";
+  const messageBody = params.contentPreview;
   const preview =
-    params.contentPreview.length > 200
-      ? `${params.contentPreview.slice(0, 200)}…`
-      : params.contentPreview;
+    isDirectEmail || messageBody.length <= 200
+      ? messageBody
+      : `${messageBody.slice(0, 200)}…`;
   const roleLabel =
     params.senderRole === "MANAGER" ? "Zarządca szkoły" : "Nauczyciel";
   const portalLink = params.portalUrl.replace(/\/$/, "");
+  const mailFrom = process.env.EMAIL_USER || "kontakt@harry-english.pl";
 
-  await transporter.sendMail({
-    from: {
-      name: "Harry English",
-      address: process.env.EMAIL_USER || "kontakt@harry-english.pl",
-    },
-    to: params.to,
-    subject: `Nowa wiadomość: ${params.subject}`,
-    html: buildEmailShell({
-      title: `Dzień dobry ${escapeHtmlForEmail(params.recipientName)},`,
-      intro: `Otrzymałeś/aś nową wiadomość od ${escapeHtmlForEmail(params.senderName)} (${roleLabel}).`,
-      contentHtml: `
-        <p style="margin:0 0 8px 0;font-size:15px;line-height:1.6;"><strong>Temat:</strong> ${escapeHtmlForEmail(params.subject)}</p>
-        <div style="border:1px solid #d9e0db;background:#f8faf8;padding:14px 16px;border-radius:10px;margin:0 0 16px 0;">
-          <p style="margin:0;font-size:14px;line-height:1.6;white-space:pre-wrap;color:${BRAND_TEXT};">${escapeHtmlForEmail(preview)}</p>
-        </div>
+  const portalCtaHtml = `
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
           <tr>
             <td style="border-radius:999px;background:${BRAND_YELLOW};">
@@ -570,12 +608,54 @@ export async function sendMessageNotificationEmail(params: {
               </a>
             </td>
           </tr>
-        </table>
-      `,
-      footerHtml: `<p style="margin:0;font-size:12px;color:${BRAND_FOOTER_TEXT};">Aby odpowiedzieć, zaloguj się do panelu. Nie odpowiadaj na tę wiadomość.</p>
-        <p style="margin:10px 0 0 0;font-size:15px;font-weight:700;color:${BRAND_YELLOW};">Harry English</p>`,
+        </table>`;
+
+  const portalContentHtml = `
+        <p style="margin:0 0 8px 0;font-size:15px;line-height:1.6;"><strong>Temat:</strong> ${escapeHtmlForEmail(params.subject)}</p>
+        <div style="border:1px solid #d9e0db;background:#f8faf8;padding:14px 16px;border-radius:10px;margin:0 0 16px 0;">
+          <p style="margin:0;font-size:14px;line-height:1.6;white-space:pre-wrap;color:${BRAND_TEXT};">${escapeHtmlForEmail(preview)}</p>
+        </div>
+        ${portalCtaHtml}`;
+
+  const directContentHtml = buildDirectMessageEmailBodyHtml(messageBody);
+
+  const replyToAddress = params.replyTo?.trim();
+
+  await transporter.sendMail({
+    from: {
+      name: "Harry English",
+      address: mailFrom,
+    },
+    to: params.to,
+    ...(isDirectEmail && replyToAddress
+      ? {
+          replyTo: {
+            name: params.senderName,
+            address: replyToAddress,
+          },
+        }
+      : {}),
+    subject: isDirectEmail ? params.subject : `Nowa wiadomość: ${params.subject}`,
+    html: buildEmailShell({
+      title: isDirectEmail
+        ? escapeHtmlForEmail(params.subject)
+        : `Dzień dobry ${escapeHtmlForEmail(params.recipientName)},`,
+      intro: isDirectEmail
+        ? undefined
+        : `Otrzymałeś/aś nową wiadomość od ${escapeHtmlForEmail(params.senderName)} (${roleLabel}).`,
+      contentHtml: isDirectEmail ? directContentHtml : portalContentHtml,
+      footerHtml: isDirectEmail ? buildDirectMessageEmailFooter() : buildMessageEmailFooter(),
     }),
-    text: `Dzień dobry ${params.recipientName},
+    text: isDirectEmail
+      ? `${params.subject}
+
+${messageBody}
+
+Opinie Google: ${GOOGLE_REVIEWS_URL}
+Facebook: ${FACEBOOK_URL}
+
+Harry English`
+      : `Dzień dobry ${params.recipientName},
 
 Otrzymałeś/aś nową wiadomość od ${params.senderName} (${roleLabel}).
 
@@ -586,6 +666,9 @@ ${preview}
 Przejdź do panelu: ${portalLink}/portal
 
 Aby odpowiedzieć, zaloguj się do panelu. Nie odpowiadaj na tę wiadomość.
+
+Opinie Google: ${GOOGLE_REVIEWS_URL}
+Facebook: ${FACEBOOK_URL}
 
 Harry English`,
   });

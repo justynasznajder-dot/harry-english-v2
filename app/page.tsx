@@ -1157,12 +1157,13 @@ export default function HomePage() {
                 </div>
               </div>
 
-              {/* Przycisk CTA – otwiera formularz „Napisz do nas” */}
+              {/* Przycisk CTA – formularz zapisu dziecka */}
               <div className="mt-6 flex gap-4">
                 <button
                   onClick={() => {
                     setSelectedPlan(null);
-                    setContactFormOpen(true);
+                    setAuthModalMode("register");
+                    setAuthModalOpen(true);
                   }}
                   className="flex-1 rounded-full bg-[#175244] px-6 py-3 text-sm font-semibold text-white hover:bg-[#0f3c33] transition-colors"
                 >

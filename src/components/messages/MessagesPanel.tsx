@@ -1,7 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import ComposeMessageModal from '@/src/components/messages/ComposeMessageModal';
+import ComposeMessageModal, {
+  type ComposeSection,
+} from '@/src/components/messages/ComposeMessageModal';
+import { isValidEmailAddress, parseEmailList } from '@/lib/email-address';
 
 type PanelMode = 'manager' | 'teacher' | 'parent';
 
@@ -135,10 +138,14 @@ export default function MessagesPanel({
   const [filterLocationIds, setFilterLocationIds] = useState<string[]>([]);
   const [recipientsReloadToken, setRecipientsReloadToken] = useState(0);
   const [recipientsLoading, setRecipientsLoading] = useState(false);
-  const [composeAudience, setComposeAudience] = useState<'parents' | 'teachers'>('parents');
+  const [composeSection, setComposeSection] = useState<ComposeSection>('parents');
   const [bulkAddLoading, setBulkAddLoading] = useState<'all' | 'active' | null>(null);
+  const [externalEmails, setExternalEmails] = useState<string[]>([]);
+  const [externalEmailInput, setExternalEmailInput] = useState('');
+  const [externalEmailBulkPaste, setExternalEmailBulkPaste] = useState('');
 
   const canPickIndividuals = mode === 'manager' || mode === 'teacher' || mode === 'parent';
+  const canUseExternalEmails = mode === 'manager' || mode === 'teacher';
 
   const resetComposeForm = useCallback(() => {
     setSelectedRecipientIds([]);
@@ -149,10 +156,13 @@ export default function MessagesPanel({
     setFilterGroupIds([]);
     setFilterLocationIds([]);
     setShowGroupFilters(false);
-    setComposeAudience('parents');
+    setComposeSection('parents');
     setBulkAddLoading(null);
     setComposeSubject('');
     setComposeContent('');
+    setExternalEmails([]);
+    setExternalEmailInput('');
+    setExternalEmailBulkPaste('');
     setRecipientsReloadToken((t) => t + 1);
   }, []);
 
@@ -234,7 +244,7 @@ export default function MessagesPanel({
       const q = new URLSearchParams();
       if (recipientSearchDebounced) q.set('search', recipientSearchDebounced);
 
-      if (mode === 'manager' && composeAudience === 'teachers') {
+      if (mode === 'manager' && composeSection === 'teachers') {
         q.set('audience', 'teachers');
         return q;
       }
@@ -252,7 +262,7 @@ export default function MessagesPanel({
       }
       return q;
     },
-    [mode, composeAudience, recipientSearchDebounced, filterGroupIds, filterLocationIds]
+    [mode, composeSection, recipientSearchDebounced, filterGroupIds, filterLocationIds]
   );
 
   const fetchRecipientsList = useCallback(
@@ -292,10 +302,10 @@ export default function MessagesPanel({
         })
       );
       if (mode === 'parent') return teachers;
-      if (mode === 'manager' && composeAudience === 'teachers') return teachers;
+      if (mode === 'manager' && composeSection === 'teachers') return teachers;
       return parents;
     },
-    [buildRecipientsQuery, mode, composeAudience]
+    [buildRecipientsQuery, mode, composeSection]
   );
 
   const loadRecipients = useCallback(async () => {
@@ -311,24 +321,36 @@ export default function MessagesPanel({
   }, [fetchRecipientsList]);
 
   useEffect(() => {
-    if (composeOpen) void loadRecipients();
+    if (composeOpen && composeSection !== 'email') void loadRecipients();
   }, [
     composeOpen,
+    composeSection,
     loadRecipients,
     recipientsReloadToken,
     filterGroupIds,
     filterLocationIds,
-    composeAudience,
   ]);
 
-  const handleComposeAudienceChange = useCallback((audience: 'parents' | 'teachers') => {
-    setComposeAudience(audience);
-    setSelectedRecipientIds([]);
-    setSelectedRecipientLabels({});
-    setFilterGroupIds([]);
-    setFilterLocationIds([]);
-    setShowGroupFilters(false);
-    setRecipientsReloadToken((t) => t + 1);
+  const handleComposeSectionChange = useCallback((section: ComposeSection) => {
+    setComposeSection(section);
+    if (section === 'email') {
+      setSelectedRecipientIds([]);
+      setSelectedRecipientLabels({});
+      setSingleRecipientId('');
+      setFilterGroupIds([]);
+      setFilterLocationIds([]);
+      setShowGroupFilters(false);
+    } else {
+      setExternalEmails([]);
+      setExternalEmailInput('');
+      setExternalEmailBulkPaste('');
+      setSelectedRecipientIds([]);
+      setSelectedRecipientLabels({});
+      setFilterGroupIds([]);
+      setFilterLocationIds([]);
+      setShowGroupFilters(false);
+      setRecipientsReloadToken((t) => t + 1);
+    }
   }, []);
 
   useEffect(() => {
@@ -394,13 +416,25 @@ export default function MessagesPanel({
   };
 
   const handleSendCompose = async () => {
-    const recipientIds = canPickIndividuals
-      ? selectedRecipientIds
-      : singleRecipientId
-        ? [singleRecipientId]
-        : [];
-    if (recipientIds.length === 0 || !composeSubject.trim() || !composeContent.trim()) {
-      setError('Uzupełnij odbiorców, temat i treść');
+    const isEmailSection = composeSection === 'email';
+    const recipientIds = isEmailSection
+      ? []
+      : canPickIndividuals
+        ? selectedRecipientIds
+        : singleRecipientId
+          ? [singleRecipientId]
+          : [];
+    const emailsToSend = isEmailSection ? externalEmails : [];
+    if (
+      (recipientIds.length === 0 && emailsToSend.length === 0) ||
+      !composeSubject.trim() ||
+      !composeContent.trim()
+    ) {
+      setError(
+        isEmailSection
+          ? 'Uzupełnij adresy e-mail, temat i treść'
+          : 'Uzupełnij odbiorców, temat i treść'
+      );
       return;
     }
     setSendingCompose(true);
@@ -411,12 +445,25 @@ export default function MessagesPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           recipientIds,
+          ...(isEmailSection && canUseExternalEmails
+            ? { externalEmails: emailsToSend }
+            : {}),
           subject: composeSubject.trim(),
           content: composeContent.trim(),
         }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as {
+        message?: string;
+        emailsSent?: number;
+        emailsFailed?: number;
+        externalEmailsCount?: number;
+      };
       if (!res.ok) throw new Error(data.message ?? 'Błąd wysyłania');
+      if ((data.emailsFailed ?? 0) > 0) {
+        setError(
+          `Wysłano, ale ${data.emailsFailed} powiadomień e-mail nie powiodło się (wysłano: ${data.emailsSent ?? 0}).`
+        );
+      }
       closeCompose();
       await loadThreads();
     } catch (e) {
@@ -432,6 +479,28 @@ export default function MessagesPanel({
     if (r.role === 'MANAGER') return `${name} (zarządca szkoły)`;
     if (r.role === 'TEACHER') return `${name} (nauczyciel)`;
     return name;
+  };
+
+  const addExternalEmail = (raw: string) => {
+    const email = raw.trim().toLowerCase();
+    if (!email || !isValidEmailAddress(email)) {
+      setError('Podaj poprawny adres e-mail');
+      return;
+    }
+    setExternalEmails((prev) => (prev.includes(email) ? prev : [...prev, email]));
+    setExternalEmailInput('');
+    setError(null);
+  };
+
+  const parseExternalEmailBulk = () => {
+    const parsed = parseEmailList(externalEmailBulkPaste);
+    if (parsed.length === 0) {
+      setError('Nie znaleziono poprawnych adresów e-mail na liście');
+      return;
+    }
+    setExternalEmails((prev) => [...new Set([...prev, ...parsed])]);
+    setExternalEmailBulkPaste('');
+    setError(null);
   };
 
   const addRecipient = (r: RecipientOption) => {
@@ -463,7 +532,7 @@ export default function MessagesPanel({
 
   const fetchBulkParents = useCallback(
     async (bulkParents: 'active' | 'all') => {
-      if (mode !== 'manager' || composeAudience !== 'parents') return;
+      if (mode !== 'manager' || composeSection !== 'parents') return;
       setBulkAddLoading(bulkParents);
       setError(null);
       try {
@@ -496,14 +565,14 @@ export default function MessagesPanel({
         setBulkAddLoading(null);
       }
     },
-    [mode, composeAudience, addRecipientsToSelection]
+    [mode, composeSection, addRecipientsToSelection]
   );
 
   const addParentsFromFilter = useCallback(
     async (opts: { locationIds?: string[]; groupIds?: string[] }) => {
       const locationIds = opts.locationIds;
       const groupIds = opts.groupIds;
-      if (composeAudience !== 'parents') return;
+      if (composeSection !== 'parents') return;
       if ((locationIds?.length ?? 0) === 0 && (groupIds?.length ?? 0) === 0) return;
 
       if (locationIds) setFilterLocationIds(locationIds);
@@ -536,7 +605,7 @@ export default function MessagesPanel({
         setRecipientsLoading(false);
       }
     },
-    [composeAudience, fetchRecipientsList, recipientLabel]
+    [composeSection, fetchRecipientsList, recipientLabel]
   );
 
   const addParentsFromLocations = useCallback(
@@ -784,7 +853,7 @@ export default function MessagesPanel({
         onLocationFilterChange={setFilterLocationIds}
         onConfirmLocationFilter={addParentsFromLocations}
         onAddAllFromList={() => addRecipientsToSelection(recipients)}
-        showBulkParentAddButtons={mode === 'manager' && composeAudience === 'parents'}
+        showBulkParentAddButtons={mode === 'manager' && composeSection === 'parents'}
         onAddAllFromDatabase={() => void fetchBulkParents('all')}
         onAddAllActiveClients={() => void fetchBulkParents('active')}
         bulkAddLoading={bulkAddLoading}
@@ -795,9 +864,20 @@ export default function MessagesPanel({
         sendingCompose={sendingCompose}
         onSend={() => void handleSendCompose()}
         onClearForm={resetComposeForm}
-        composeAudience={composeAudience}
-        onComposeAudienceChange={handleComposeAudienceChange}
-        showAudienceToggle={mode === 'manager'}
+        composeSection={composeSection}
+        onComposeSectionChange={handleComposeSectionChange}
+        showSectionTabs={canUseExternalEmails}
+        showTeachersTab={mode === 'manager'}
+        externalEmails={externalEmails}
+        externalEmailInput={externalEmailInput}
+        onExternalEmailInputChange={setExternalEmailInput}
+        externalEmailBulkPaste={externalEmailBulkPaste}
+        onExternalEmailBulkPasteChange={setExternalEmailBulkPaste}
+        onAddExternalEmail={() => addExternalEmail(externalEmailInput)}
+        onParseExternalEmailBulk={parseExternalEmailBulk}
+        onRemoveExternalEmail={(email) =>
+          setExternalEmails((prev) => prev.filter((e) => e !== email))
+        }
       />
 
     </section>

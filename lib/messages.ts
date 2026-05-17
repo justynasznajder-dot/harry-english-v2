@@ -293,7 +293,7 @@ export async function validateRecipientsForSender(params: {
 }): Promise<{ ok: true } | { ok: false; message: string }> {
   const unique = [...new Set(params.recipientIds.filter(Boolean))];
   if (unique.length === 0) {
-    return { ok: false, message: "Wybierz co najmniej jednego odbiorcę" };
+    return { ok: false, message: "Wybierz co najmniej jednego odbiorcę z listy" };
   }
 
   if (params.threadRootId) {
@@ -794,6 +794,38 @@ export async function insertMessages(
     );
   }
   return ids;
+}
+
+/** Użytkownicy szkoły o podanych adresach e-mail (klucz: email lowercase). */
+export async function resolveUsersByEmails(
+  schoolId: string,
+  emails: string[]
+): Promise<
+  Map<string, { id: string; email: string; first_name: string; last_name: string; role: string }>
+> {
+  if (emails.length === 0) return new Map();
+  const r = await queryDb<{
+    id: string;
+    email: string;
+    first_name: string;
+    last_name: string;
+    role: string;
+  }>(
+    `SELECT id, email, first_name, last_name, role
+     FROM users
+     WHERE school_id = $1
+       AND active = TRUE
+       AND LOWER(TRIM(email::text)) = ANY($2::text[])`,
+    [schoolId, emails]
+  );
+  const map = new Map<
+    string,
+    { id: string; email: string; first_name: string; last_name: string; role: string }
+  >();
+  for (const row of r.rows) {
+    map.set(row.email.trim().toLowerCase(), row);
+  }
+  return map;
 }
 
 export async function getUsersForEmail(
