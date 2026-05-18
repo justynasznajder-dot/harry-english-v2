@@ -1,4 +1,41 @@
-import nodemailer from 'nodemailer';
+import fs from "node:fs";
+import path from "node:path";
+import nodemailer, { type SendMailOptions } from "nodemailer";
+
+const EMAIL_IMAGES_DIR = path.join(process.cwd(), "public", "images");
+
+const EMAIL_CID = {
+  googleBtn: "he-google-btn",
+  facebookBtn: "he-facebook-btn",
+  logo: "he-logo",
+} as const;
+
+function buildEmailInlineAttachments(html: string): NonNullable<SendMailOptions["attachments"]> {
+  const defs: { file: string; cid: string }[] = [
+    { file: "ocen_google1.png", cid: EMAIL_CID.googleBtn },
+    { file: "facebook_like1.png", cid: EMAIL_CID.facebookBtn },
+    { file: "2zyrafa2.png", cid: EMAIL_CID.logo },
+  ];
+  return defs
+    .filter(({ cid }) => html.includes(`cid:${cid}`))
+    .map(({ file, cid }) => {
+      const filePath = path.join(EMAIL_IMAGES_DIR, file);
+      if (!fs.existsSync(filePath)) return null;
+      return { filename: file, path: filePath, cid };
+    })
+    .filter((a): a is NonNullable<typeof a> => a !== null);
+}
+
+/** Wysyłka z osadzonymi obrazkami (przyciski, logo) — działają bez URL na serwerze. */
+export async function sendHarryMail(options: SendMailOptions): Promise<void> {
+  const html = typeof options.html === "string" ? options.html : "";
+  const inline = buildEmailInlineAttachments(html);
+  const extra = options.attachments ?? [];
+  await transporter.sendMail({
+    ...options,
+    attachments: [...inline, ...(Array.isArray(extra) ? extra : [extra])],
+  });
+}
 
 // Konfiguracja transportera email (Zoho Mail dla domeny harry-english.pl)
 export const transporter = nodemailer.createTransport({
@@ -14,46 +51,103 @@ export const transporter = nodemailer.createTransport({
   },
 });
 
-const BRAND_GREEN_DARK = "#0f3c33";
-const BRAND_GREEN = "#175244";
 const BRAND_YELLOW = "#ffc94a";
-const BRAND_TEXT = "#1f2937";
-const BRAND_MUTED = "#6b7280";
-const BRAND_BG = "#f3f5f4";
-const BRAND_CARD_BG = "#ffffff";
 const BRAND_FONT = "Geist, Arial, Helvetica, sans-serif";
-const BRAND_FOOTER_TEXT = "#d8e8e3";
-const BRAND_FOOTER_LINK = "#ecf7f2";
+const EMAIL_DIVIDER_HEIGHT = 5;
+const EMAIL_CARD_BORDER_WIDTH = 1;
 const FACEBOOK_URL = "https://www.facebook.com/Zyrafa.Harry/";
 const GOOGLE_REVIEWS_URL =
-  "https://www.google.com/search?sca_esv=99745c67aa04a219&sxsrf=ANbL-n7HiNnvaXbYokdqZaa8sr2B5VnzGw:1779058135505&si=AL3DRZEsmMGCryMMFSHJ3StBhOdZ2-6yYkXd_doETEE1OR-qOciDfQuCR-dVjLubxB-qRnMBRkFw0c47nHwcNNUL2trieJW5FuWs3zVGIsBEpB165vCMOZ2b377BAEgULGwRIG89CEtG&q=Harry+English+Opinie&sa=X&ved=2ahUKEwixk86BtMGUAxXfOBAIHRMKMdoQ0bkNegQIKxAF&biw=1280&bih=665&dpr=1.5";
+  "https://search.google.com/local/writereview?placeid=ChIJoxDKpbyPxoIRdD4lVqiZibo";
+
+/** Wspólna wysokość przycisków social w stopce (szerokości z proporcji plików PNG). */
+const EMAIL_SOCIAL_BTN_HEIGHT = 52;
+const EMAIL_SOCIAL_GOOGLE_WIDTH = Math.round((EMAIL_SOCIAL_BTN_HEIGHT * 421) / 188);
+const EMAIL_SOCIAL_FACEBOOK_WIDTH = Math.round((EMAIL_SOCIAL_BTN_HEIGHT * 681) / 227);
+
+/** Paleta szablonu maili (gradienty ze strony, odporne na dark mode w kliencie poczty). */
+export type EmailPalette = {
+  canvas: string;
+  outer: string;
+  headerFrom: string;
+  headerTo: string;
+  content: string;
+  divider: string;
+  accentWarm: string;
+  text: string;
+  title: string;
+  insetBg: string;
+  insetBorder: string;
+  insetText: string;
+  insetLink: string;
+  cardBorder: string;
+  link: string;
+};
+
+const EMAIL_PALETTE: EmailPalette = {
+  canvas: "#186653",
+  outer: "#0f3c33",
+  headerFrom: "#073229",
+  headerTo: "#0f3c33",
+  content: "#0f3c33",
+  divider: "#ffc94a",
+  accentWarm: "#ffc94a",
+  text: "#fdfaf3",
+  title: "#ffc94a",
+  insetBg: "#144035",
+  insetBorder: "#ffc94a",
+  insetText: "#fdfaf3",
+  insetLink: "#fdfaf3",
+  cardBorder: "#073229",
+  link: "#fdfaf3",
+};
+
+export function getEmailPalette(): EmailPalette {
+  return EMAIL_PALETTE;
+}
+
+/** @deprecated Użyj getEmailPalette */
+export const getEmailGreenPalette = getEmailPalette;
+/** @deprecated Użyj EmailPalette */
+export type EmailGreenPalette = EmailPalette;
 
 function buildEmailSocialLinksButtons(): string {
-  const pillStyle = `display:inline-block;padding:9px 20px;font-family:${BRAND_FONT};font-size:13px;font-weight:600;color:${BRAND_FOOTER_TEXT};text-decoration:none;`;
-  const cellStyle = `border:1px solid #8fb5ab;border-radius:999px;`;
+  const h = EMAIL_SOCIAL_BTN_HEIGHT;
+  const googleW = EMAIL_SOCIAL_GOOGLE_WIDTH;
+  const fbW = EMAIL_SOCIAL_FACEBOOK_WIDTH;
+  const imgBaseStyle =
+    "display:block;border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;";
+  const imgSize = (w: number) =>
+    `${imgBaseStyle}width:${w}px;height:${h}px;max-width:${w}px;max-height:${h}px;`;
   return `
     <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:16px auto 0 auto;">
       <tr>
-        <td style="${cellStyle}">
-          <a href="${GOOGLE_REVIEWS_URL}" style="${pillStyle}">Opinie Google</a>
+        <td align="center" valign="middle" height="${h}" style="padding:0;height:${h}px;line-height:${h}px;">
+          <a href="${GOOGLE_REVIEWS_URL}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;">
+            <img src="cid:${EMAIL_CID.googleBtn}" alt="Oceń nas w Google" width="${googleW}" height="${h}" style="${imgSize(googleW)}" />
+          </a>
         </td>
-        <td style="width:10px;font-size:0;line-height:0;">&nbsp;</td>
-        <td style="${cellStyle}">
-          <a href="${FACEBOOK_URL}" style="${pillStyle}">Facebook</a>
+        <td style="width:12px;font-size:0;line-height:0;">&nbsp;</td>
+        <td align="center" valign="middle" height="${h}" style="padding:0;height:${h}px;line-height:${h}px;">
+          <a href="${FACEBOOK_URL}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;">
+            <img src="cid:${EMAIL_CID.facebookBtn}" alt="Polub nas na Facebooku" width="${fbW}" height="${h}" style="${imgSize(fbW)}" />
+          </a>
         </td>
       </tr>
     </table>`;
 }
 
-function buildMessageEmailFooter(): string {
-  return `<p style="margin:0;font-size:12px;color:${BRAND_FOOTER_TEXT};">Aby odpowiedzieć, zaloguj się do panelu. Nie odpowiadaj na tę wiadomość.</p>
+function buildMessageEmailFooter(palette: EmailPalette = getEmailPalette()): string {
+  const text = palette.text;
+  const brandColor = palette.accentWarm;
+  return `<p style="margin:0;font-size:12px;color:${text};">Aby odpowiedzieć, zaloguj się do panelu. Nie odpowiadaj na tę wiadomość.</p>
         ${buildEmailSocialLinksButtons()}
-        <p style="margin:10px 0 0 0;font-size:15px;font-weight:700;color:${BRAND_YELLOW};">Harry English</p>`;
+        ${buildEmailFooterBrandLine({ brandColor })}`;
 }
 
-function buildDirectMessageEmailFooter(): string {
+export function buildDirectMessageEmailFooter(palette: EmailPalette = getEmailPalette()): string {
+  const brandColor = palette.accentWarm;
   return `${buildEmailSocialLinksButtons()}
-        <p style="margin:10px 0 0 0;font-size:15px;font-weight:700;color:${BRAND_YELLOW};">Harry English</p>`;
+        ${buildEmailFooterBrandLine({ brandColor })}`;
 }
 
 function getAppBaseUrl(): string {
@@ -70,16 +164,107 @@ function getPublicEmailAssetBaseUrl(): string {
   return appUrl;
 }
 
-function buildDefaultEmailFooter(): string {
+function getEmailLogoUrl(): string {
+  return `${getPublicEmailAssetBaseUrl()}/images/2zyrafa2.png`;
+}
+
+function getEmailLogoSrc(): string {
+  const logoPath = path.join(EMAIL_IMAGES_DIR, "2zyrafa2.png");
+  if (fs.existsSync(logoPath)) return `cid:${EMAIL_CID.logo}`;
+  return getEmailLogoUrl();
+}
+
+/** Jak nagłówek/stopka: bgcolor + ten sam kolor w style (bez gradientów — Gmail je często psuje). */
+function emailSolidCellStyle(bg: string, textColor?: string): string {
+  const text = textColor ? `color:${textColor};` : "";
+  return `background-color:${bg};${text}`;
+}
+
+/** Tło paska z żyrafą — ten sam gradient co header na stronie (fallback: headerTo). */
+function emailHeaderBarStyle(p: EmailPalette): string {
+  return `${emailSolidCellStyle(p.headerTo)}background-image:linear-gradient(180deg, ${p.headerFrom} 0%, ${p.headerTo} 100%);`;
+}
+
+function emailInsetCellClose(): string {
+  return `</td></tr></table>`;
+}
+
+function emailDividerRow(palette: EmailPalette, heightPx = EMAIL_DIVIDER_HEIGHT): string {
+  const c = palette.divider;
+  return `
+            <tr>
+              <td bgcolor="${c}" style="height:${heightPx}px;${emailSolidCellStyle(c)}font-size:0;line-height:0;mso-line-height-rule:exactly;">&nbsp;</td>
+            </tr>`;
+}
+
+function emailInsetCellOpen(palette: EmailPalette = getEmailPalette()): string {
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0;">
+    <tr>
+      <td bgcolor="${palette.insetBg}" style="border:1px solid ${palette.insetBorder};${emailSolidCellStyle(palette.insetBg, palette.insetText)}padding:20px 22px;border-radius:12px;">`;
+}
+
+function buildEmailTitleBlock(title: string, palette: EmailPalette): string {
+  return `<h1 style="margin:0 0 12px 0;font-size:24px;line-height:1.3;font-weight:700;color:${palette.title};">${title}</h1>`;
+}
+
+function buildEmailIntroBlock(intro: string, palette: EmailPalette): string {
+  return `<p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;color:${palette.text};">${intro}</p>`;
+}
+
+function emailCtaButton(href: string, label: string): string {
+  return `
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+          <tr>
+            <td style="border-radius:999px;background:${BRAND_YELLOW};">
+              <a href="${href}" style="display:inline-block;padding:12px 24px;font-family:${BRAND_FONT};font-size:14px;font-weight:700;color:#3b2a10;text-decoration:none;">
+                ${label}
+              </a>
+            </td>
+          </tr>
+        </table>`;
+}
+
+function emailSectionHeading(text: string, palette: EmailPalette): string {
+  return `<p style="margin:0 0 8px 0;font-size:16px;line-height:1.5;font-weight:700;color:${palette.accentWarm};">${text}</p>`;
+}
+
+function buildEmailHeadBlock(palette: EmailPalette): string {
+  return `
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="x-apple-disable-message-reformatting" />
+    <style type="text/css">
+      body, table, td, div, p, h1, h2, h3, span, a, li { -webkit-text-size-adjust: 100%; }
+      ${buildEmailBodyLinkStylesCss(palette.link)}
+    </style>
+  </head>`;
+}
+
+const EMAIL_LOGO_WIDTH = 88;
+
+function buildEmailFooterBrandLine(options?: {
+  marginTop?: string;
+  fontSize?: string;
+  brandColor?: string;
+}): string {
+  const marginTop = options?.marginTop ?? "10px";
+  const fontSize = options?.fontSize ?? "15px";
+  const brandColor = options?.brandColor ?? BRAND_YELLOW;
+  return `<p style="margin:${marginTop} 0 0 0;font-size:${fontSize};font-weight:700;color:${brandColor};line-height:1.5;">Harry English</p>`;
+}
+
+function buildDefaultEmailFooter(palette: EmailPalette = getEmailPalette()): string {
   const siteUrl = getAppBaseUrl();
+  const linkStyle = `color:${palette.link};text-decoration:underline;`;
   return `
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
       <tr>
         <td align="center" style="font-family:${BRAND_FONT};">
-          <p style="margin:0;font-size:16px;font-weight:700;color:${BRAND_YELLOW};">Harry English</p>
-          <p style="margin:10px 0 0 0;font-size:13px;line-height:1.75;color:${BRAND_FOOTER_TEXT};">
-            <a href="mailto:kontakt@harry-english.pl" style="color:${BRAND_FOOTER_LINK};text-decoration:underline;">kontakt@harry-english.pl</a><br />
-            <a href="${siteUrl}" style="color:${BRAND_FOOTER_LINK};text-decoration:underline;">www.harry-english.pl</a>
+          ${buildEmailFooterBrandLine({ marginTop: "0", fontSize: "16px", brandColor: palette.accentWarm })}
+          <p style="margin:10px 0 0 0;font-size:13px;line-height:1.75;color:${palette.text};">
+            <a href="mailto:kontakt@harry-english.pl" style="${linkStyle}">kontakt@harry-english.pl</a><br />
+            <a href="${siteUrl}" style="${linkStyle}">www.harry-english.pl</a>
           </p>
           ${buildEmailSocialLinksButtons()}
         </td>
@@ -87,64 +272,54 @@ function buildDefaultEmailFooter(): string {
     </table>`;
 }
 
-/** Stopka w zielonym pasku — bgcolor + solid color dla Outlooka i Gmaila. */
-function buildEmailFooterRows(footerHtml: string): string {
-  return `
-            <tr>
-              <td bgcolor="${BRAND_YELLOW}" style="height:6px;background-color:${BRAND_YELLOW};font-size:0;line-height:0;mso-line-height-rule:exactly;">&nbsp;</td>
-            </tr>
-            <tr>
-              <td bgcolor="${BRAND_GREEN_DARK}" style="background-color:${BRAND_GREEN_DARK};padding:22px 22px 24px 22px;font-family:${BRAND_FONT};font-size:13px;line-height:1.6;color:${BRAND_FOOTER_TEXT};">
-                ${footerHtml}
-              </td>
-            </tr>`;
-}
-
+/** Szablon HTML wszystkich maili Harry English (ciemna zieleń, odporne na dark mode). */
 export function buildEmailShell(params: {
   title: string;
   intro?: string;
   contentHtml: string;
   footerHtml?: string;
+  palette?: EmailPalette;
 }): string {
-  const logoUrl = `${getPublicEmailAssetBaseUrl()}/images/2zyrafa2.png`;
-  const footer = params.footerHtml ?? buildDefaultEmailFooter();
+  const logoUrl = getEmailLogoSrc();
+  const p = params.palette ?? getEmailPalette();
+  const footer = params.footerHtml ?? buildDefaultEmailFooter(p);
 
   return `<!DOCTYPE html>
-<html>
-  <body style="margin:0;padding:0;background:${BRAND_BG};">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;background:${BRAND_BG};">
+<html lang="pl">
+${buildEmailHeadBlock(p)}
+  <body class="body" bgcolor="${p.canvas}" style="margin:0;padding:0;${emailSolidCellStyle(p.canvas, p.text)}">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${p.canvas}" style="border-collapse:collapse;${emailSolidCellStyle(p.canvas)}">
       <tr>
-        <td align="center" style="padding:24px 12px;">
-          <table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:640px;border-collapse:collapse;background:${BRAND_CARD_BG};border-radius:16px;overflow:hidden;">
+        <td align="center" bgcolor="${p.canvas}" style="padding:24px 12px;${emailSolidCellStyle(p.canvas)}">
+          <table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" bgcolor="${p.content}" style="width:100%;max-width:640px;border-collapse:collapse;${emailSolidCellStyle(p.content)};border:${EMAIL_CARD_BORDER_WIDTH}px solid ${p.cardBorder};border-radius:16px;overflow:hidden;">
             <tr>
-              <td style="background:linear-gradient(180deg,#073229 0%,${BRAND_GREEN_DARK} 100%);padding:16px 20px;">
+              <td bgcolor="${p.headerTo}" style="${emailHeaderBarStyle(p)}padding:16px 20px;">
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
                   <tr>
-                    <td align="left" valign="middle">
-                      <img src="${logoUrl}" alt="" width="56" style="display:block;border:0;outline:none;text-decoration:none;" />
+                    <td align="left" valign="middle" width="${EMAIL_LOGO_WIDTH}" style="width:${EMAIL_LOGO_WIDTH}px;">
+                      <img src="${logoUrl}" alt="Harry English" width="${EMAIL_LOGO_WIDTH}" style="display:block;width:${EMAIL_LOGO_WIDTH}px;height:auto;border:0;outline:none;text-decoration:none;" />
                     </td>
-                    <td align="right" valign="middle" style="font-family:${BRAND_FONT};font-size:42px;line-height:1.1;font-weight:700;color:${BRAND_YELLOW};">
+                    <td align="right" valign="middle" style="font-family:${BRAND_FONT};font-size:42px;line-height:1.1;font-weight:700;color:${p.accentWarm};">
                       Harry English
                     </td>
                   </tr>
                 </table>
               </td>
             </tr>
+            ${emailDividerRow(p)}
             <tr>
-              <td style="height:6px;background:${BRAND_YELLOW};font-size:0;line-height:0;">&nbsp;</td>
-            </tr>
-            <tr>
-              <td style="padding:24px 22px 18px 22px;font-family:${BRAND_FONT};color:${BRAND_TEXT};">
-                <h1 style="margin:0 0 12px 0;font-size:24px;line-height:1.3;color:${BRAND_GREEN};">${params.title}</h1>
-                ${
-                  params.intro
-                    ? `<p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;color:${BRAND_TEXT};">${params.intro}</p>`
-                    : ""
-                }
+              <td bgcolor="${p.content}" style="${emailSolidCellStyle(p.content, p.text)}padding:24px 22px 18px 22px;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;">
+                ${buildEmailTitleBlock(params.title, p)}
+                ${params.intro ? buildEmailIntroBlock(params.intro, p) : ""}
                 ${params.contentHtml}
               </td>
             </tr>
-            ${buildEmailFooterRows(footer)}
+            ${emailDividerRow(p)}
+            <tr>
+              <td bgcolor="${p.outer}" style="${emailSolidCellStyle(p.outer)}padding:22px 22px 24px 22px;font-family:${BRAND_FONT};font-size:13px;line-height:1.6;color:${p.text};">
+                ${footer}
+              </td>
+            </tr>
           </table>
         </td>
       </tr>
@@ -152,6 +327,9 @@ export function buildEmailShell(params: {
   </body>
 </html>`;
 }
+
+/** @deprecated Użyj buildEmailShell */
+export const buildEmailShellGreen = buildEmailShell;
 
 // Funkcja do wysyłania emaila powitalnego
 export async function sendWelcomeEmail(
@@ -161,39 +339,32 @@ export async function sendWelcomeEmail(
   childFirstName: string
 ) {
   const appUrl = getAppBaseUrl();
+  const p = getEmailPalette();
   const mailOptions = {
     from: {
       name: 'Harry English',
       address: process.env.EMAIL_USER || 'kontakt@harry-english.pl',
     },
     to,
-    subject: '🦒 Witamy w Harry English!',
+    subject: 'Witamy w Harry English!',
     html: buildEmailShell({
       title: `Dzień dobry ${escapeHtmlForEmail(parentFirstName)} ${escapeHtmlForEmail(parentLastName)}!`,
       intro: `Cieszymy się, że dołączyliście do Harry English wraz z ${escapeHtmlForEmail(childFirstName)}.`,
       contentHtml: `
-        <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;">
+        <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;color:${p.text};">
           Twoje konto zostało pomyślnie utworzone. Czekamy na kontakt z naszej strony i przygotowujemy dla Was spersonalizowany plan zajęć.
         </p>
-        <p style="margin:0 0 8px 0;font-size:16px;line-height:1.5;font-weight:700;color:${BRAND_GREEN};">Co dalej?</p>
-        <ul style="margin:0 0 14px 18px;padding:0;font-size:15px;line-height:1.6;color:${BRAND_TEXT};">
+        ${emailSectionHeading("Co dalej?", p)}
+        <ul style="margin:0 0 14px 18px;padding:0;font-size:15px;line-height:1.6;color:${p.text};">
           <li>Nasz lektor skontaktuje się z Tobą w ciągu 24-48 godzin.</li>
           <li>Ustalimy dogodne terminy zajęć dla ${escapeHtmlForEmail(childFirstName)}.</li>
           <li>Otrzymasz harmonogram i materiały do nauki.</li>
           <li>Już wkrótce będziecie mogli korzystać z pełni możliwości portalu.</li>
         </ul>
-        <p style="margin:0 0 14px 0;font-size:15px;line-height:1.6;">
+        <p style="margin:0 0 14px 0;font-size:15px;line-height:1.6;color:${p.text};">
           <strong>Prosimy o cierpliwość</strong> - skontaktujemy się z Tobą wkrótce, aby potwierdzić możliwe terminy zajęć i omówić szczegóły kursu.
         </p>
-        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
-          <tr>
-            <td style="border-radius:999px;background:${BRAND_YELLOW};">
-              <a href="${appUrl}/portal" style="display:inline-block;padding:12px 24px;font-family:${BRAND_FONT};font-size:14px;font-weight:700;color:#3b2a10;text-decoration:none;">
-                Przejdź do portalu
-              </a>
-            </td>
-          </tr>
-        </table>
+        ${emailCtaButton(`${appUrl}/portal`, "Przejdź do portalu")}
       `,
     }),
     text: `
@@ -221,7 +392,7 @@ Harry English
     `,
   };
 
-  await transporter.sendMail(mailOptions);
+  await sendHarryMail(mailOptions);
 }
 
 // Funkcja do wysyłania emaila z resetem hasła
@@ -231,7 +402,8 @@ export async function sendPasswordResetEmail(
   parentFirstName: string
 ) {
   const resetUrl = `${getAppBaseUrl()}/reset-password?token=${resetToken}`;
-  
+  const p = getEmailPalette();
+
   const mailOptions = {
     from: {
       name: 'Harry English',
@@ -243,23 +415,15 @@ export async function sendPasswordResetEmail(
       title: `Dzień dobry ${escapeHtmlForEmail(parentFirstName)}!`,
       intro: "Otrzymaliśmy prośbę o zresetowanie hasła do Twojego konta w Harry English.",
       contentHtml: `
-        <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;">Aby ustawić nowe hasło, kliknij poniższy przycisk:</p>
-        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-bottom:14px;">
-          <tr>
-            <td style="border-radius:999px;background:${BRAND_YELLOW};">
-              <a href="${resetUrl}" style="display:inline-block;padding:12px 24px;font-family:${BRAND_FONT};font-size:14px;font-weight:700;color:#3b2a10;text-decoration:none;">
-                Ustaw nowe hasło
-              </a>
-            </td>
-          </tr>
-        </table>
-        <p style="margin:0 0 14px 0;font-size:14px;line-height:1.6;color:${BRAND_MUTED};">
+        <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;color:${p.text};">Aby ustawić nowe hasło, kliknij poniższy przycisk:</p>
+        ${emailCtaButton(resetUrl, "Ustaw nowe hasło")}
+        <p style="margin:14px 0;font-size:14px;line-height:1.6;color:${p.text};">
           Lub skopiuj i wklej ten link do przeglądarki:<br />
-          <a href="${resetUrl}" style="color:${BRAND_GREEN};word-break:break-all;">${resetUrl}</a>
+          <a href="${resetUrl}" class="he-email-body-link" style="color:${p.link} !important;word-break:break-all;">${resetUrl}</a>
         </p>
-        <div style="background:#fff3cd;border-left:4px solid #f59e0b;padding:14px;border-radius:8px;">
-          <p style="margin:0 0 8px 0;font-size:14px;line-height:1.5;font-weight:700;">Ważne informacje:</p>
-          <ul style="margin:0 0 0 18px;padding:0;font-size:14px;line-height:1.6;">
+        <div style="background:#3d3420;border-left:4px solid #f59e0b;padding:14px;border-radius:8px;">
+          <p style="margin:0 0 8px 0;font-size:14px;line-height:1.5;font-weight:700;color:${p.accentWarm};">Ważne informacje:</p>
+          <ul style="margin:0 0 0 18px;padding:0;font-size:14px;line-height:1.6;color:${p.text};">
             <li>Link jest ważny przez 1 godzinę.</li>
             <li>Jeśli nie prosiłeś/aś o reset hasła, zignoruj tę wiadomość.</li>
             <li>Twoje obecne hasło pozostaje aktywne do momentu ustawienia nowego.</li>
@@ -290,7 +454,7 @@ Harry English
     `,
   };
 
-  await transporter.sendMail(mailOptions);
+  await sendHarryMail(mailOptions);
 }
 
 // Funkcja do wysyłania emaila o rezygnacji
@@ -303,6 +467,7 @@ export async function sendResignationEmail(
   studentId: string,
   reason: string
 ) {
+  const p = getEmailPalette();
   const mailOptions = {
     from: {
       name: 'Harry English',
@@ -314,20 +479,20 @@ export async function sendResignationEmail(
       title: "Rezygnacja z kursu",
       intro: "Rodzic zgłosił chęć rezygnacji z kursu dla swojego dziecka.",
       contentHtml: `
-        <div style="border:1px solid #d9e0db;background:#ffffff;padding:14px 16px;border-radius:10px;margin-bottom:12px;">
-          <p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;"><strong>Dziecko:</strong> ${escapeHtmlForEmail(childFirstName)} ${escapeHtmlForEmail(childLastName)}</p>
-          <p style="margin:0;font-size:14px;line-height:1.6;"><strong>ID studenta:</strong> ${escapeHtmlForEmail(studentId)}</p>
-        </div>
-        <div style="border:1px solid #d9e0db;background:#ffffff;padding:14px 16px;border-radius:10px;margin-bottom:12px;">
-          <p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;"><strong>Rodzic:</strong> ${escapeHtmlForEmail(parentFirstName)} ${escapeHtmlForEmail(parentLastName)}</p>
-          <p style="margin:0;font-size:14px;line-height:1.6;"><strong>Email:</strong> ${escapeHtmlForEmail(parentEmail)}</p>
-        </div>
-        <div style="border:2px solid #dc2626;background:#fff;padding:14px 16px;border-radius:10px;">
-          <p style="margin:0 0 8px 0;font-size:14px;font-weight:700;color:#b91c1c;">Powód rezygnacji</p>
-          <p style="margin:0;font-size:14px;line-height:1.6;white-space:pre-wrap;">${escapeHtmlForEmail(reason)}</p>
+        ${emailInsetCellOpen(p)}
+          <p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;color:${p.insetText};"><strong>Dziecko:</strong> ${escapeHtmlForEmail(childFirstName)} ${escapeHtmlForEmail(childLastName)}</p>
+          <p style="margin:0;font-size:14px;line-height:1.6;color:${p.insetText};"><strong>ID studenta:</strong> ${escapeHtmlForEmail(studentId)}</p>
+        ${emailInsetCellClose()}
+        ${emailInsetCellOpen(p)}
+          <p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;color:${p.insetText};"><strong>Rodzic:</strong> ${escapeHtmlForEmail(parentFirstName)} ${escapeHtmlForEmail(parentLastName)}</p>
+          <p style="margin:0;font-size:14px;line-height:1.6;color:${p.insetText};"><strong>Email:</strong> ${escapeHtmlForEmail(parentEmail)}</p>
+        ${emailInsetCellClose()}
+        <div style="border:2px solid #dc2626;background:#3b1a1a;padding:14px 16px;border-radius:10px;margin-top:12px;">
+          <p style="margin:0 0 8px 0;font-size:14px;font-weight:700;color:#fca5a5;">Powód rezygnacji</p>
+          <p style="margin:0;font-size:14px;line-height:1.6;white-space:pre-wrap;color:${p.text};">${escapeHtmlForEmail(reason)}</p>
         </div>
       `,
-      footerHtml: `<p style="margin:0 0 4px 0;font-size:15px;font-weight:700;color:${BRAND_YELLOW};">Harry English</p><p style="margin:0;font-size:12px;color:${BRAND_FOOTER_TEXT};">System automatycznego powiadamiania</p>`,
+      footerHtml: `${buildEmailFooterBrandLine({ marginTop: "0", brandColor: p.accentWarm })}<p style="margin:0;font-size:12px;color:${p.text};">System automatycznego powiadamiania</p>`,
     }),
     text: `
 Rezygnacja z kursu - ${childFirstName} ${childLastName}
@@ -352,7 +517,7 @@ System automatycznego powiadamiania
     `,
   };
 
-  await transporter.sendMail(mailOptions);
+  await sendHarryMail(mailOptions);
 }
 
 export function escapeHtmlForEmail(s: string): string {
@@ -363,29 +528,88 @@ export function escapeHtmlForEmail(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
+function splitTrailingUrlPunctuation(token: string): { url: string; suffix: string } {
+  const comma = token.match(/^(.+?)([,;:!?)]+)$/);
+  if (comma) return { url: comma[1], suffix: comma[2] };
+  const sentenceDot = token.match(/^(.+\.[a-z]{2,})\.$/i);
+  if (sentenceDot) return { url: sentenceDot[1], suffix: "." };
+  return { url: token, suffix: "" };
+}
+
+function emailBodyLinkInlineStyle(color: string): string {
+  return `color:${color} !important;text-decoration:underline;-webkit-text-fill-color:${color} !important;`;
+}
+
+function buildEmailBodyLinkStylesCss(textColor: string): string {
+  return `
+      a.he-email-body-link,
+      a.he-email-body-link:link,
+      a.he-email-body-link:visited,
+      a.he-email-body-link:hover,
+      a.he-email-body-link:active {
+        color: ${textColor} !important;
+        text-decoration: underline !important;
+        -webkit-text-fill-color: ${textColor} !important;
+      }`;
+}
+
+/** Zamienia URL w już escapowanym tekście na linki w kolorze treści (bez niebieskiego / visited). */
+function linkifyEscapedEmailText(escaped: string, textColor: string): string {
+  const style = emailBodyLinkInlineStyle(textColor);
+  const anchor = (href: string, label: string) =>
+    `<a class="he-email-body-link" href="${href}" target="_blank" rel="noopener noreferrer" style="${style}">${label}</a>`;
+
+  const withHttp = escaped.replace(/https?:\/\/[^\s<&]+/gi, (raw) => {
+    const { url, suffix } = splitTrailingUrlPunctuation(raw);
+    if (!url) return raw;
+    return anchor(url, url) + suffix;
+  });
+
+  return withHttp.replace(/(^|[\s(])(www\.[^\s<&]+)/gi, (full, lead, wwwRaw) => {
+    const { url, suffix } = splitTrailingUrlPunctuation(wwwRaw);
+    if (!url) return full;
+    return `${lead}${anchor(`https://${url}`, url)}${suffix}`;
+  });
+}
+
 /** Akapity i łamanie linii z pola tekstowego — treść główna maila direct. */
-function formatPlainTextAsEmailHtml(content: string): string {
+function formatPlainTextAsEmailHtml(
+  content: string,
+  textColor?: string,
+  linkColor?: string
+): string {
+  const p = getEmailPalette();
+  const text = textColor ?? p.insetText;
   const normalized = content.replace(/\r\n/g, "\n").trim();
+  const link = linkColor ?? text;
   if (!normalized) {
-    return `<p style="margin:0;font-size:15px;line-height:1.7;color:${BRAND_MUTED};">(brak treści)</p>`;
+    return `<p style="margin:0;font-size:15px;line-height:1.7;color:${text};opacity:0.75;">(brak treści)</p>`;
   }
 
   return normalized
     .split(/\n{2,}/)
     .map((paragraph) => {
-      const lines = escapeHtmlForEmail(paragraph).split("\n").join("<br />");
-      return `<p style="margin:0 0 1em 0;font-size:16px;line-height:1.75;color:${BRAND_TEXT};">${lines}</p>`;
+      const lines = linkifyEscapedEmailText(escapeHtmlForEmail(paragraph), link)
+        .split("\n")
+        .join("<br />");
+      return `<p style="margin:0 0 1em 0;font-size:16px;line-height:1.75;color:${text};">${lines}</p>`;
     })
     .join("\n        ");
 }
 
-function buildDirectMessageEmailBodyHtml(content: string): string {
-  const messageHtml = formatPlainTextAsEmailHtml(content);
-
+export function buildDirectMessageEmailBodyHtml(
+  content: string,
+  palette: EmailPalette = getEmailPalette()
+): string {
+  const messageHtml = formatPlainTextAsEmailHtml(
+    content,
+    palette.insetText,
+    palette.insetLink
+  );
   return `
-        <div style="border:1px solid #d9e0db;background:#fafcfb;padding:20px 22px;border-radius:12px;margin:0;">
-          ${messageHtml}
-        </div>`;
+        ${emailInsetCellOpen(palette)}
+              ${messageHtml}
+        ${emailInsetCellClose()}`;
 }
 
 /** Kopie zapasowe zgłoszeń z formularza publicznego (tylko wywołanie z produkcji dla wybranej szkoły). */
@@ -404,6 +628,7 @@ export async function sendEnrollmentConfirmationToParent(params: {
   children: PublicEnrollmentBackupChild[];
 }): Promise<void> {
   const fromAddr = process.env.EMAIL_USER || "kontakt@harry-english.pl";
+  const p = getEmailPalette();
 
   const childrenBlocks = params.children
     .map(
@@ -412,7 +637,7 @@ export async function sendEnrollmentConfirmationToParent(params: {
           <td style="padding:0 0 12px 0;">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
               <tr>
-                <td style="border:1px solid #d9e0db;background:#ffffff;padding:14px 16px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#1f2937;">
+                <td bgcolor="${p.insetBg}" style="border:1px solid ${p.insetBorder};${emailSolidCellStyle(p.insetBg, p.insetText)}padding:14px 16px;font-family:${BRAND_FONT};font-size:14px;line-height:1.6;">
                   <strong>Dziecko ${ch.index}</strong><br />
                   Imię: ${escapeHtmlForEmail(ch.firstName)}<br />
                   Nazwisko: ${escapeHtmlForEmail(ch.lastName)}<br />
@@ -433,7 +658,7 @@ export async function sendEnrollmentConfirmationToParent(params: {
     )
     .join("\n");
 
-  await transporter.sendMail({
+  await sendHarryMail({
     from: {
       name: "Harry English",
       address: fromAddr,
@@ -444,14 +669,12 @@ export async function sendEnrollmentConfirmationToParent(params: {
       title: "Potwierdzenie otrzymania zgłoszenia",
       intro: "Dziękujemy - Twoje zgłoszenie dotarło. Odezwiemy się do Ciebie wkrótce, aby ustalić szczegóły.",
       contentHtml: `
-        <div style="border:1px solid #d9e0db;background:#f8faf8;padding:14px 16px;border-radius:10px;margin-bottom:14px;font-size:14px;line-height:1.6;">
-          <strong>Dane rodzica</strong><br />
-          Imię: ${escapeHtmlForEmail(params.parentFirstName)}<br />
-          Nazwisko: ${escapeHtmlForEmail(params.parentLastName)}
-        </div>
-        <p style="margin:0 0 10px 0;font-size:18px;line-height:1.4;font-weight:700;color:${BRAND_GREEN};">
-          Lista dzieci
-        </p>
+        ${emailInsetCellOpen(p)}
+          <strong style="color:${p.insetText};">Dane rodzica</strong><br />
+          <span style="color:${p.insetText};">Imię: ${escapeHtmlForEmail(params.parentFirstName)}<br />
+          Nazwisko: ${escapeHtmlForEmail(params.parentLastName)}</span>
+        ${emailInsetCellClose()}
+        ${emailSectionHeading("Lista dzieci", p)}
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
           ${childrenBlocks}
         </table>
@@ -493,6 +716,7 @@ export async function sendPublicEnrollmentBackupEmail(params: {
 }): Promise<void> {
   const to = "kontakt@harry-english.pl";
   const fromAddr = process.env.EMAIL_USER || "kontakt@harry-english.pl";
+  const p = getEmailPalette();
   const subjectPrefix = params.dbSaveOk
     ? "[ZGŁOSZENIE] Formularz (zapis w bazie OK)"
     : "[ZGŁOSZENIE] UWAGA: błąd zapisu w bazie";
@@ -501,18 +725,18 @@ export async function sendPublicEnrollmentBackupEmail(params: {
     .map(
       (ch) => `
           <tr>
-            <td style="padding:8px;border:1px solid #ccc;">${ch.index}</td>
-            <td style="padding:8px;border:1px solid #ccc;">${escapeHtmlForEmail(ch.firstName)}</td>
-            <td style="padding:8px;border:1px solid #ccc;">${escapeHtmlForEmail(ch.lastName)}</td>
-            <td style="padding:8px;border:1px solid #ccc;">${escapeHtmlForEmail(ch.birthDate)}</td>
-            <td style="padding:8px;border:1px solid #ccc;">${escapeHtmlForEmail(ch.preferredLocationLabel)}</td>
+            <td style="padding:8px;border:1px solid ${p.insetBorder};color:${p.insetText};">${ch.index}</td>
+            <td style="padding:8px;border:1px solid ${p.insetBorder};color:${p.insetText};">${escapeHtmlForEmail(ch.firstName)}</td>
+            <td style="padding:8px;border:1px solid ${p.insetBorder};color:${p.insetText};">${escapeHtmlForEmail(ch.lastName)}</td>
+            <td style="padding:8px;border:1px solid ${p.insetBorder};color:${p.insetText};">${escapeHtmlForEmail(ch.birthDate)}</td>
+            <td style="padding:8px;border:1px solid ${p.insetBorder};color:${p.insetText};">${escapeHtmlForEmail(ch.preferredLocationLabel)}</td>
           </tr>`
     )
     .join("");
 
   const dbNote = params.dbSaveOk
     ? "<p><strong>Status:</strong> Zapis w bazie zakończył się powodzeniem (wiadomość informacyjna).</p>"
-    : `<p style="color:#b45309;"><strong>Status:</strong> Zapis w bazie nie powiódł się — sprawdź bazę i wpisz zgłoszenie ręcznie.</p>
+    : `<p style="color:${p.accentWarm};"><strong>Status:</strong> Zapis w bazie nie powiódł się — sprawdź bazę i wpisz zgłoszenie ręcznie.</p>
        <p style="font-size:13px;"><strong>Komunikat błędu (techniczny):</strong> ${escapeHtmlForEmail(params.dbErrorMessage ?? "(brak)")}</p>`;
 
   const textChildren = params.children
@@ -522,7 +746,7 @@ export async function sendPublicEnrollmentBackupEmail(params: {
     )
     .join("\n");
 
-  await transporter.sendMail({
+  await sendHarryMail({
     from: {
       name: "Harry English",
       address: fromAddr,
@@ -533,30 +757,30 @@ export async function sendPublicEnrollmentBackupEmail(params: {
       title: "Nowe zgłoszenie z formularza na stronie",
       contentHtml: `
         ${dbNote}
-        <p style="margin:12px 0 6px 0;font-size:16px;line-height:1.5;font-weight:700;color:${BRAND_GREEN};">Szkoła</p>
-        <p style="margin:0 0 12px 0;font-size:14px;line-height:1.6;"><strong>Nazwa:</strong> ${escapeHtmlForEmail(params.schoolName)}</p>
-        <p style="margin:0 0 6px 0;font-size:16px;line-height:1.5;font-weight:700;color:${BRAND_GREEN};">Rodzic</p>
-        <ul style="margin:0 0 12px 18px;padding:0;font-size:14px;line-height:1.6;">
+        ${emailSectionHeading("Szkoła", p)}
+        <p style="margin:0 0 12px 0;font-size:14px;line-height:1.6;color:${p.text};"><strong>Nazwa:</strong> ${escapeHtmlForEmail(params.schoolName)}</p>
+        ${emailSectionHeading("Rodzic", p)}
+        <ul style="margin:0 0 12px 18px;padding:0;font-size:14px;line-height:1.6;color:${p.text};">
           <li><strong>Imię:</strong> ${escapeHtmlForEmail(params.parentFirstName)}</li>
           <li><strong>Nazwisko:</strong> ${escapeHtmlForEmail(params.parentLastName)}</li>
           <li><strong>Email:</strong> ${escapeHtmlForEmail(params.parentEmail)}</li>
           <li><strong>Telefon:</strong> ${escapeHtmlForEmail(params.parentPhone)}</li>
           <li><strong>Zgoda RODO:</strong> ${params.rodoConsent ? "tak" : "nie"}</li>
         </ul>
-        <p style="margin:0 0 8px 0;font-size:16px;line-height:1.5;font-weight:700;color:${BRAND_GREEN};">Dzieci</p>
+        ${emailSectionHeading("Dzieci", p)}
         <table role="presentation" style="border-collapse:collapse;width:100%;font-size:14px;">
           <thead>
-            <tr style="background:#f0f0f0;">
-              <th style="padding:8px;border:1px solid #ccc;text-align:left;">#</th>
-              <th style="padding:8px;border:1px solid #ccc;text-align:left;">Imię</th>
-              <th style="padding:8px;border:1px solid #ccc;text-align:left;">Nazwisko</th>
-              <th style="padding:8px;border:1px solid #ccc;text-align:left;">Data ur.</th>
-              <th style="padding:8px;border:1px solid #ccc;text-align:left;">Preferowana lokalizacja</th>
+            <tr bgcolor="${p.insetBg}" style="background-color:${p.insetBg};">
+              <th style="padding:8px;border:1px solid ${p.insetBorder};text-align:left;color:${p.insetText};">#</th>
+              <th style="padding:8px;border:1px solid ${p.insetBorder};text-align:left;color:${p.insetText};">Imię</th>
+              <th style="padding:8px;border:1px solid ${p.insetBorder};text-align:left;color:${p.insetText};">Nazwisko</th>
+              <th style="padding:8px;border:1px solid ${p.insetBorder};text-align:left;color:${p.insetText};">Data ur.</th>
+              <th style="padding:8px;border:1px solid ${p.insetBorder};text-align:left;color:${p.insetText};">Preferowana lokalizacja</th>
             </tr>
           </thead>
           <tbody>${rowsHtml}</tbody>
         </table>
-        <p style="margin:14px 0 0 0;font-size:12px;color:${BRAND_MUTED};">Wiadomość wygenerowana automatycznie — kopia zapasowa treści formularza.</p>
+        <p style="margin:14px 0 0 0;font-size:12px;color:${p.text};opacity:0.85;">Wiadomość wygenerowana automatycznie — kopia zapasowa treści formularza.</p>
       `,
     }),
     text: `
@@ -599,29 +823,37 @@ export async function sendMessageNotificationEmail(params: {
   const portalLink = params.portalUrl.replace(/\/$/, "");
   const mailFrom = process.env.EMAIL_USER || "kontakt@harry-english.pl";
 
-  const portalCtaHtml = `
-        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
-          <tr>
-            <td style="border-radius:999px;background:${BRAND_YELLOW};">
-              <a href="${portalLink}/portal" style="display:inline-block;padding:12px 24px;font-family:${BRAND_FONT};font-size:14px;font-weight:700;color:#3b2a10;text-decoration:none;">
-                Przejdź do panelu
-              </a>
-            </td>
-          </tr>
-        </table>`;
+  const p = getEmailPalette();
+  const portalCtaHtml = emailCtaButton(`${portalLink}/portal`, "Przejdź do panelu");
 
   const portalContentHtml = `
-        <p style="margin:0 0 8px 0;font-size:15px;line-height:1.6;"><strong>Temat:</strong> ${escapeHtmlForEmail(params.subject)}</p>
-        <div style="border:1px solid #d9e0db;background:#f8faf8;padding:14px 16px;border-radius:10px;margin:0 0 16px 0;">
-          <p style="margin:0;font-size:14px;line-height:1.6;white-space:pre-wrap;color:${BRAND_TEXT};">${escapeHtmlForEmail(preview)}</p>
-        </div>
+        <p style="margin:0 0 8px 0;font-size:15px;line-height:1.6;color:${p.text};"><strong style="color:${p.accentWarm};">Temat:</strong> ${escapeHtmlForEmail(params.subject)}</p>
+        ${emailInsetCellOpen(p)}
+              <p style="margin:0;font-size:14px;line-height:1.6;white-space:pre-wrap;color:${p.insetText};">${linkifyEscapedEmailText(escapeHtmlForEmail(preview), p.insetLink)}</p>
+        ${emailInsetCellClose()}
         ${portalCtaHtml}`;
 
-  const directContentHtml = buildDirectMessageEmailBodyHtml(messageBody);
+  const directContentHtml = buildDirectMessageEmailBodyHtml(messageBody, p);
 
   const replyToAddress = params.replyTo?.trim();
+  const shellTitle = isDirectEmail
+    ? escapeHtmlForEmail(params.subject)
+    : `Dzień dobry ${escapeHtmlForEmail(params.recipientName)},`;
+  const shellIntro = isDirectEmail
+    ? undefined
+    : `Otrzymałeś/aś nową wiadomość od ${escapeHtmlForEmail(params.senderName)} (${roleLabel}).`;
+  const shellFooter = isDirectEmail
+    ? buildDirectMessageEmailFooter(p)
+    : buildMessageEmailFooter(p);
+  const shellHtml = buildEmailShell({
+    title: shellTitle,
+    intro: shellIntro,
+    contentHtml: isDirectEmail ? directContentHtml : portalContentHtml,
+    footerHtml: shellFooter,
+    palette: p,
+  });
 
-  await transporter.sendMail({
+  await sendHarryMail({
     from: {
       name: "Harry English",
       address: mailFrom,
@@ -636,16 +868,7 @@ export async function sendMessageNotificationEmail(params: {
         }
       : {}),
     subject: isDirectEmail ? params.subject : `Nowa wiadomość: ${params.subject}`,
-    html: buildEmailShell({
-      title: isDirectEmail
-        ? escapeHtmlForEmail(params.subject)
-        : `Dzień dobry ${escapeHtmlForEmail(params.recipientName)},`,
-      intro: isDirectEmail
-        ? undefined
-        : `Otrzymałeś/aś nową wiadomość od ${escapeHtmlForEmail(params.senderName)} (${roleLabel}).`,
-      contentHtml: isDirectEmail ? directContentHtml : portalContentHtml,
-      footerHtml: isDirectEmail ? buildDirectMessageEmailFooter() : buildMessageEmailFooter(),
-    }),
+    html: shellHtml,
     text: isDirectEmail
       ? `${params.subject}
 
@@ -705,6 +928,7 @@ export async function sendProposalEmail(
   }
 ) {
   const portalUrl = `${getAppBaseUrl()}/portal/login`;
+  const p = getEmailPalette();
   const safeChildName =
     proposal.childFirstName != null && proposal.childLastName != null
       ? `${escapeHtmlForEmail(proposal.childFirstName)} ${escapeHtmlForEmail(proposal.childLastName)}`
@@ -716,28 +940,30 @@ export async function sendProposalEmail(
 
   const credentialsHtml = credentials
     ? `
-      <p style="margin:16px 0 8px 0;font-size:15px;line-height:1.6;">
+      <p style="margin:16px 0 8px 0;font-size:15px;line-height:1.6;color:${p.text};">
         Założyliśmy dla Ciebie konto w portalu. Aby zobaczyć szczegóły propozycji i podjąć decyzję, zaloguj się danymi:
       </p>
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0 0 12px 0;">
+      ${emailInsetCellOpen(p)}
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;">
         <tr>
-          <td style="padding:4px 12px 4px 0;font-size:15px;color:#374151;"><strong>Login (email):</strong></td>
-          <td style="padding:4px 0;font-size:15px;color:#111827;font-family:Consolas,Menlo,monospace;">${escapeHtmlForEmail(credentials.loginEmail)}</td>
+          <td style="padding:4px 12px 4px 0;font-size:15px;color:${p.insetText};"><strong>Login (email):</strong></td>
+          <td style="padding:4px 0;font-size:15px;color:${p.insetText};font-family:Consolas,Menlo,monospace;">${escapeHtmlForEmail(credentials.loginEmail)}</td>
         </tr>
         <tr>
-          <td style="padding:4px 12px 4px 0;font-size:15px;color:#374151;"><strong>Hasło tymczasowe:</strong></td>
-          <td style="padding:4px 0;font-size:16px;color:#111827;font-family:Consolas,Menlo,monospace;letter-spacing:1px;"><strong>${escapeHtmlForEmail(credentials.tempPassword)}</strong></td>
+          <td style="padding:4px 12px 4px 0;font-size:15px;color:${p.insetText};"><strong>Hasło tymczasowe:</strong></td>
+          <td style="padding:4px 0;font-size:16px;color:${p.insetText};font-family:Consolas,Menlo,monospace;letter-spacing:1px;"><strong>${escapeHtmlForEmail(credentials.tempPassword)}</strong></td>
         </tr>
       </table>
-      <p style="margin:0 0 12px 0;font-size:14px;line-height:1.6;color:#6b7280;">
+      ${emailInsetCellClose()}
+      <p style="margin:12px 0;font-size:14px;line-height:1.6;color:${p.text};opacity:0.85;">
         Po pierwszym zalogowaniu poprosimy Cię o ustawienie własnego hasła.
       </p>
     `
     : `
-      <p style="margin:16px 0 8px 0;font-size:15px;line-height:1.6;">
+      <p style="margin:16px 0 8px 0;font-size:15px;line-height:1.6;color:${p.text};">
         Aby zobaczyć szczegóły propozycji i podjąć decyzję, zaloguj się do portalu danymi, których używasz na co dzień.
       </p>
-      <p style="margin:0 0 12px 0;font-size:14px;line-height:1.6;color:#6b7280;">
+      <p style="margin:0 0 12px 0;font-size:14px;line-height:1.6;color:${p.text};opacity:0.85;">
         Nie pamiętasz hasła? Skorzystaj z opcji „Zapomniałem hasła" na stronie logowania.
       </p>
     `;
@@ -754,7 +980,7 @@ Zaloguj się do portalu danymi, których używasz na co dzień.
 Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logowania.
 `;
 
-  await transporter.sendMail({
+  await sendHarryMail({
     from: {
       name: "Harry English",
       address: process.env.EMAIL_USER || "kontakt@harry-english.pl",
@@ -765,17 +991,15 @@ Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logow
       title: `Dzień dobry ${escapeHtmlForEmail(parentName)},`,
       intro: `Przygotowaliśmy propozycję grupy dla ${safeChildName}.`,
       contentHtml: `
-        <ul style="margin:0 0 12px 18px;padding:0;font-size:15px;line-height:1.6;">
+        <ul style="margin:0 0 12px 18px;padding:0;font-size:15px;line-height:1.6;color:${p.text};">
           <li><strong>Grupa:</strong> ${escapeHtmlForEmail(proposal.groupName)}</li>
           <li><strong>Lokalizacja:</strong> ${escapeHtmlForEmail(proposal.locationName)}</li>
           <li><strong>Termin:</strong> ${escapeHtmlForEmail(proposal.schedule)}</li>
         </ul>
         ${credentialsHtml}
-        <p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;">
-          <a href="${portalUrl}" style="display:inline-block;background:#175244;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:9999px;font-weight:600;">Przejdź do portalu</a>
-        </p>
-        <p style="margin:0;font-size:13px;line-height:1.6;color:#6b7280;">
-          Lub skopiuj link do przeglądarki: <a href="${portalUrl}" style="color:#175244;">${portalUrl}</a>
+        ${emailCtaButton(portalUrl, "Przejdź do portalu")}
+        <p style="margin:14px 0 0 0;font-size:13px;line-height:1.6;color:${p.text};">
+          Lub skopiuj link do przeglądarki: <a href="${portalUrl}" class="he-email-body-link" style="color:${p.link} !important;">${portalUrl}</a>
         </p>
       `,
     }),
@@ -809,16 +1033,17 @@ export async function sendProposalRejectedEmail(params: {
 }): Promise<void> {
   const fromAddr = process.env.EMAIL_USER || "kontakt@harry-english.pl";
   const adminTo = process.env.EMAIL_USER || "kontakt@harry-english.pl";
+  const p = getEmailPalette();
 
   const reasonHtml = params.reason
     ? `
-      <div style="border:2px solid #f59e0b;background:#fffbeb;padding:14px 16px;border-radius:10px;margin-top:12px;">
-        <p style="margin:0 0 8px 0;font-size:14px;font-weight:700;color:#92400e;">Komentarz rodzica</p>
-        <p style="margin:0;font-size:14px;line-height:1.6;white-space:pre-wrap;color:${BRAND_TEXT};">${escapeHtmlForEmail(params.reason)}</p>
+      <div style="border:2px solid #f59e0b;background:#3d3420;padding:14px 16px;border-radius:10px;margin-top:12px;">
+        <p style="margin:0 0 8px 0;font-size:14px;font-weight:700;color:${p.accentWarm};">Komentarz rodzica</p>
+        <p style="margin:0;font-size:14px;line-height:1.6;white-space:pre-wrap;color:${p.text};">${escapeHtmlForEmail(params.reason)}</p>
       </div>
     `
     : `
-      <p style="margin:12px 0 0 0;font-size:14px;line-height:1.6;color:${BRAND_MUTED};">
+      <p style="margin:12px 0 0 0;font-size:14px;line-height:1.6;color:${p.text};opacity:0.85;">
         Rodzic nie podał powodu odrzucenia.
       </p>
     `;
@@ -827,7 +1052,7 @@ export async function sendProposalRejectedEmail(params: {
     ? `Komentarz rodzica:\n${params.reason}\n`
     : `Rodzic nie podał powodu odrzucenia.\n`;
 
-  await transporter.sendMail({
+  await sendHarryMail({
     from: {
       name: "Harry English",
       address: fromAddr,
@@ -838,25 +1063,25 @@ export async function sendProposalRejectedEmail(params: {
       title: "Rodzic odrzucił propozycję grupy",
       intro: `Rodzic ${escapeHtmlForEmail(params.parentFirstName)} ${escapeHtmlForEmail(params.parentLastName)} odrzucił propozycję dla dziecka ${escapeHtmlForEmail(params.childFirstName)} ${escapeHtmlForEmail(params.childLastName)}.`,
       contentHtml: `
-        <div style="border:1px solid #d9e0db;background:#ffffff;padding:14px 16px;border-radius:10px;margin-bottom:12px;">
-          <p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;"><strong>Dziecko:</strong> ${escapeHtmlForEmail(params.childFirstName)} ${escapeHtmlForEmail(params.childLastName)}</p>
-          <p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;"><strong>Rodzic:</strong> ${escapeHtmlForEmail(params.parentFirstName)} ${escapeHtmlForEmail(params.parentLastName)}</p>
-          <p style="margin:0;font-size:14px;line-height:1.6;"><strong>Email rodzica:</strong> ${escapeHtmlForEmail(params.parentEmail)}</p>
-        </div>
-        <div style="border:1px solid #d9e0db;background:#ffffff;padding:14px 16px;border-radius:10px;">
-          <p style="margin:0 0 8px 0;font-size:14px;font-weight:700;color:${BRAND_GREEN};">Odrzucona propozycja</p>
-          <ul style="margin:0 0 0 18px;padding:0;font-size:14px;line-height:1.6;">
+        ${emailInsetCellOpen(p)}
+          <p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;color:${p.insetText};"><strong>Dziecko:</strong> ${escapeHtmlForEmail(params.childFirstName)} ${escapeHtmlForEmail(params.childLastName)}</p>
+          <p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;color:${p.insetText};"><strong>Rodzic:</strong> ${escapeHtmlForEmail(params.parentFirstName)} ${escapeHtmlForEmail(params.parentLastName)}</p>
+          <p style="margin:0;font-size:14px;line-height:1.6;color:${p.insetText};"><strong>Email rodzica:</strong> ${escapeHtmlForEmail(params.parentEmail)}</p>
+        ${emailInsetCellClose()}
+        ${emailInsetCellOpen(p)}
+          ${emailSectionHeading("Odrzucona propozycja", p)}
+          <ul style="margin:0 0 0 18px;padding:0;font-size:14px;line-height:1.6;color:${p.insetText};">
             <li><strong>Grupa:</strong> ${escapeHtmlForEmail(params.groupName)}</li>
             <li><strong>Lokalizacja:</strong> ${escapeHtmlForEmail(params.locationName)}</li>
             <li><strong>Termin:</strong> ${escapeHtmlForEmail(params.schedule)}</li>
           </ul>
-        </div>
+        ${emailInsetCellClose()}
         ${reasonHtml}
-        <p style="margin:14px 0 0 0;font-size:13px;line-height:1.6;color:${BRAND_MUTED};">
+        <p style="margin:14px 0 0 0;font-size:13px;line-height:1.6;color:${p.text};opacity:0.85;">
           Zgłoszenie wróciło do statusu REJECTED — w panelu admina możesz zaproponować inną grupę.
         </p>
       `,
-      footerHtml: `<p style="margin:0 0 4px 0;font-size:15px;font-weight:700;color:${BRAND_YELLOW};">Harry English</p><p style="margin:0;font-size:12px;color:${BRAND_FOOTER_TEXT};">System automatycznego powiadamiania</p>`,
+      footerHtml: `${buildEmailFooterBrandLine({ marginTop: "0", brandColor: p.accentWarm })}<p style="margin:0;font-size:12px;color:${p.text};">System automatycznego powiadamiania</p>`,
     }),
     text: `Rodzic odrzucił propozycję grupy
 
@@ -883,7 +1108,8 @@ export async function sendContractEmail(
   parentName: string,
   contractHtml: string
 ) {
-  await transporter.sendMail({
+  const p = getEmailPalette();
+  await sendHarryMail({
     from: {
       name: "Harry English",
       address: process.env.EMAIL_USER || "kontakt@harry-english.pl",
@@ -894,7 +1120,7 @@ export async function sendContractEmail(
       title: `Dzień dobry ${escapeHtmlForEmail(parentName)},`,
       intro: "Twoja umowa została przygotowana. Zapoznaj się z nią i podpisz ją w portalu.",
       contentHtml: `
-        <hr style="border:none;border-top:1px solid #e5e7eb;margin:0 0 12px 0;" />
+        <hr style="border:none;border-top:1px solid ${p.insetBorder};margin:0 0 12px 0;" />
         ${contractHtml}
       `,
     }),
@@ -906,8 +1132,9 @@ export async function sendSignedContractEmail(
   parentEmail: string,
   contractHtml: string
 ) {
+  const p = getEmailPalette();
   const recipients = [parentEmail, "kontakt@harry-english.pl"];
-  await transporter.sendMail({
+  await sendHarryMail({
     from: {
       name: "Harry English",
       address: process.env.EMAIL_USER || "kontakt@harry-english.pl",
@@ -918,7 +1145,7 @@ export async function sendSignedContractEmail(
       title: "Podpisana umowa",
       intro: "Umowa została podpisana elektronicznie.",
       contentHtml: `
-        <hr style="border:none;border-top:1px solid #e5e7eb;margin:0 0 12px 0;" />
+        <hr style="border:none;border-top:1px solid ${p.insetBorder};margin:0 0 12px 0;" />
         ${contractHtml}
       `,
     }),

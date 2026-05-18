@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { buildEmailShell, escapeHtmlForEmail, transporter } from "@/lib/email";
+import { buildEmailShell, escapeHtmlForEmail, sendHarryMail } from "@/lib/email";
 
 export async function POST(request: NextRequest) {
   try {
@@ -71,14 +71,14 @@ export async function POST(request: NextRequest) {
     });
 
     const fromAddress = process.env.EMAIL_USER || "kontakt@harry-english.pl";
-    await transporter.sendMail({
+    await sendHarryMail({
       from: { name: "Harry English", address: fromAddress },
       to: "kontakt@harry-english.pl",
       subject: `[Harry English] ${subjectText}`,
       html: schoolEmailContent,
       replyTo: email,
     });
-    await transporter.sendMail({
+    await sendHarryMail({
       from: { name: "Harry English", address: fromAddress },
       to: email,
       subject: "Potwierdzenie otrzymania wiadomości - Harry English",
