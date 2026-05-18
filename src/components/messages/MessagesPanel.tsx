@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import ComposeMessageModal, {
   type ComposeSection,
 } from '@/src/components/messages/ComposeMessageModal';
-import { isValidEmailAddress, parseEmailList } from '@/lib/email-address';
+import { parseEmailList } from '@/lib/email-address';
 
 type PanelMode = 'manager' | 'teacher' | 'parent';
 
@@ -141,7 +141,6 @@ export default function MessagesPanel({
   const [composeSection, setComposeSection] = useState<ComposeSection>('parents');
   const [bulkAddLoading, setBulkAddLoading] = useState<'all' | 'active' | null>(null);
   const [externalEmails, setExternalEmails] = useState<string[]>([]);
-  const [externalEmailInput, setExternalEmailInput] = useState('');
   const [externalEmailBulkPaste, setExternalEmailBulkPaste] = useState('');
 
   const canPickIndividuals = mode === 'manager' || mode === 'teacher' || mode === 'parent';
@@ -161,7 +160,6 @@ export default function MessagesPanel({
     setComposeSubject('');
     setComposeContent('');
     setExternalEmails([]);
-    setExternalEmailInput('');
     setExternalEmailBulkPaste('');
     setRecipientsReloadToken((t) => t + 1);
   }, []);
@@ -342,7 +340,6 @@ export default function MessagesPanel({
       setShowGroupFilters(false);
     } else {
       setExternalEmails([]);
-      setExternalEmailInput('');
       setExternalEmailBulkPaste('');
       setSelectedRecipientIds([]);
       setSelectedRecipientLabels({});
@@ -479,17 +476,6 @@ export default function MessagesPanel({
     if (r.role === 'MANAGER') return `${name} (zarządca szkoły)`;
     if (r.role === 'TEACHER') return `${name} (nauczyciel)`;
     return name;
-  };
-
-  const addExternalEmail = (raw: string) => {
-    const email = raw.trim().toLowerCase();
-    if (!email || !isValidEmailAddress(email)) {
-      setError('Podaj poprawny adres e-mail');
-      return;
-    }
-    setExternalEmails((prev) => (prev.includes(email) ? prev : [...prev, email]));
-    setExternalEmailInput('');
-    setError(null);
   };
 
   const parseExternalEmailBulk = () => {
@@ -869,11 +855,8 @@ export default function MessagesPanel({
         showSectionTabs={canUseExternalEmails}
         showTeachersTab={mode === 'manager'}
         externalEmails={externalEmails}
-        externalEmailInput={externalEmailInput}
-        onExternalEmailInputChange={setExternalEmailInput}
         externalEmailBulkPaste={externalEmailBulkPaste}
         onExternalEmailBulkPasteChange={setExternalEmailBulkPaste}
-        onAddExternalEmail={() => addExternalEmail(externalEmailInput)}
         onParseExternalEmailBulk={parseExternalEmailBulk}
         onRemoveExternalEmail={(email) =>
           setExternalEmails((prev) => prev.filter((e) => e !== email))

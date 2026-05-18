@@ -56,8 +56,7 @@ const BRAND_FONT = "Geist, Arial, Helvetica, sans-serif";
 const EMAIL_DIVIDER_HEIGHT = 5;
 const EMAIL_CARD_BORDER_WIDTH = 1;
 const FACEBOOK_URL = "https://www.facebook.com/Zyrafa.Harry/";
-const GOOGLE_REVIEWS_URL =
-  "https://search.google.com/local/writereview?placeid=ChIJoxDKpbyPxoIRdD4lVqiZibo";
+const GOOGLE_REVIEWS_URL = "https://g.page/r/CXQ-JVaomYm6EBM/review";
 
 /** Wspólna wysokość przycisków social w stopce (szerokości z proporcji plików PNG). */
 const EMAIL_SOCIAL_BTN_HEIGHT = 52;

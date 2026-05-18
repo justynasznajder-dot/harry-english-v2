@@ -287,11 +287,8 @@ export interface ComposeMessageModalProps {
   showSectionTabs?: boolean;
   showTeachersTab?: boolean;
   externalEmails?: string[];
-  externalEmailInput?: string;
-  onExternalEmailInputChange?: (value: string) => void;
   externalEmailBulkPaste?: string;
   onExternalEmailBulkPasteChange?: (value: string) => void;
-  onAddExternalEmail?: () => void;
   onParseExternalEmailBulk?: () => void;
   onRemoveExternalEmail?: (email: string) => void;
 }
@@ -410,11 +407,8 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
           {isEmailSection ? (
             <ComposeEmailRecipientsColumn
               externalEmails={externalEmails}
-              externalEmailInput={props.externalEmailInput ?? ''}
               externalEmailBulkPaste={props.externalEmailBulkPaste ?? ''}
-              onExternalEmailInputChange={(v) => props.onExternalEmailInputChange?.(v)}
               onExternalEmailBulkPasteChange={(v) => props.onExternalEmailBulkPasteChange?.(v)}
-              onAddExternalEmail={() => props.onAddExternalEmail?.()}
               onParseExternalEmailBulk={() => props.onParseExternalEmailBulk?.()}
               onRemoveExternalEmail={(email) => props.onRemoveExternalEmail?.(email)}
             />
