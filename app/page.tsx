@@ -55,10 +55,12 @@ export default function HomePage() {
         <div className="sticky top-0 z-40">
           <div className="mx-auto max-w-6xl px-4 lg:px-6">
             <header className="rounded-b-3xl overflow-hidden border border-[#05231d] bg-gradient-to-b from-[#073229] to-[#0f3c33] shadow-[0_10px_25px_rgba(0,0,0,0.35)]">
-              {/* LOGO U GÓRY – centrowane, zmniejsza się przy scrollu */}
-              <div className={`flex items-center justify-center px-4 border-b border-white/10 transition-[padding] duration-300 ease-out ${
-                isScrolled ? "py-1 lg:py-2" : "py-3 lg:py-4"
-              }`}>
+              {/* LOGO + przycisk Menu (mobile) / logo wyśrodkowane (desktop) */}
+              <div
+                className={`flex items-center justify-between gap-3 border-b border-white/10 px-4 transition-[padding] duration-300 ease-out lg:justify-center ${
+                  isScrolled ? "py-1 lg:py-2" : "py-3 lg:py-4"
+                }`}
+              >
                 <a
                   href="#"
                   onClick={(e) => {
@@ -66,7 +68,7 @@ export default function HomePage() {
                     setMobileOpen(false);
                     window.scrollTo({ top: 0, behavior: "smooth" });
                   }}
-                  className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-[#ffc94a] focus-visible:ring-offset-2 focus-visible:ring-offset-[#073229] rounded"
+                  className="block shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#ffc94a] focus-visible:ring-offset-2 focus-visible:ring-offset-[#073229] rounded"
                 >
                   <ReloadableImage
                     src="/images/2zyrafa2.svg"
@@ -75,16 +77,41 @@ export default function HomePage() {
                     height={120}
                     priority
                     className={`w-auto object-contain transition-[max-height] duration-300 ease-out ${
-                      isScrolled ? "max-h-[36px] lg:max-h-[40px]" : "max-h-[72px] lg:max-h-[80px]"
+                      isScrolled
+                        ? "max-h-[36px] lg:max-h-[40px]"
+                        : "max-h-[56px] sm:max-h-[64px] lg:max-h-[80px]"
                     }`}
                   />
                 </a>
+
+                <button
+                  type="button"
+                  className="inline-flex shrink-0 items-center gap-2 rounded-full bg-[#ffc94a] px-4 py-2.5 text-sm font-bold text-[#3b2a10] shadow-[0_4px_16px_rgba(0,0,0,0.35)] ring-2 ring-white/25 transition-colors hover:bg-[#ffd76f] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#ffc94a] focus-visible:ring-offset-2 focus-visible:ring-offset-[#073229] min-h-[44px] lg:hidden"
+                  aria-label={mobileOpen ? "Zamknij menu" : "Otwórz menu nawigacji"}
+                  aria-expanded={mobileOpen}
+                  onClick={() => setMobileOpen((v) => !v)}
+                >
+                  {mobileOpen ? (
+                    <>
+                      <span>Zamknij</span>
+                      <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden>
+                        <path strokeLinecap="round" d="M6 6l12 12M18 6L6 18" />
+                      </svg>
+                    </>
+                  ) : (
+                    <>
+                      <span>Menu</span>
+                      <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden>
+                        <path strokeLinecap="round" d="M4 7h16M4 12h16M4 17h16" />
+                      </svg>
+                    </>
+                  )}
+                </button>
               </div>
 
-              {/* MENU PONIŻEJ */}
-              <div className="flex items-center justify-end lg:justify-between px-4 py-3 lg:px-6 lg:py-4">
-                {/* MENU DESKTOP */}
-                <nav className="hidden items-center gap-8 text-sm font-medium text-[#fdfaf3] lg:flex flex-1 justify-center">
+              {/* MENU DESKTOP */}
+              <div className="hidden items-center justify-between px-4 py-3 lg:flex lg:px-6 lg:py-4">
+                <nav className="flex flex-1 items-center justify-center gap-8 text-sm font-medium text-[#fdfaf3]">
                   <a
                     href="#"
                     onClick={(e) => {
@@ -138,19 +165,6 @@ export default function HomePage() {
                     Zapisz dziecko
                   </button>
                 </nav>
-
-                {/* HAMBURGER (MOBILE/TABLET) */}
-                <button
-                  type="button"
-                  className="inline-flex items-center justify-center rounded-xl border border-white/20 px-3 py-2 text-[#fdfaf3] transition-colors hover:border-[#ffc94a] hover:text-[#ffc94a] lg:hidden"
-                  aria-label={mobileOpen ? "Zamknij menu" : "Otwórz menu"}
-                  aria-expanded={mobileOpen}
-                  onClick={() => setMobileOpen((v) => !v)}
-                >
-                  <span className="text-lg leading-none">
-                    {mobileOpen ? "✕" : "☰"}
-                  </span>
-                </button>
               </div>
 
               {/* MENU MOBILE */}

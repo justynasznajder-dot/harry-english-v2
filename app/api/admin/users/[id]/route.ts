@@ -7,7 +7,6 @@ import {
   updateUser,
   deleteUser,
   restoreUser,
-  getAllUsers,
   isAdmin,
   parseUserRole,
 } from "@/lib/db";
@@ -160,8 +159,7 @@ export async function PUT(
       if (!restored) {
         return NextResponse.json({ message: "Użytkownik nie został znaleziony" }, { status: 404 });
       }
-      const allUsers = await getAllUsers();
-      const user = allUsers.find(u => u.id === targetUserId);
+      const user = await getUserById(targetUserId);
       if (!user) {
         return NextResponse.json({ message: "Nie można pobrać zaktualizowanych danych" }, { status: 404 });
       }
@@ -332,10 +330,8 @@ export async function DELETE(
     }
 
     console.log(`User ${targetUserId} successfully marked as former`);
-    
-    // Pobierz zaktualizowanego użytkownika
-    const allUsers = await getAllUsers();
-    const user = allUsers.find(u => u.id === targetUserId);
+
+    const user = await getUserById(targetUserId);
 
     return NextResponse.json({ 
       user: user ? {

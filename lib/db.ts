@@ -546,6 +546,14 @@ export type ResolvedAdminPanelTenant =
   | { role: "MANAGER"; tenantSchoolId: string }
   | { role: "ADMIN"; tenantSchoolId: null };
 
+/** Szkoła dla list użytkowników w panelu — manager: z konta; admin: env / rejestracja. */
+export function resolveAdminUsersSchoolScope(
+  tenant: ResolvedAdminPanelTenant
+): string {
+  if (tenant.role === "MANAGER") return tenant.tenantSchoolId;
+  return getRegistrationSchoolId() || DEFAULT_SCHOOL_ID;
+}
+
 export async function resolveAdminPanelTenant(
   userId: string
 ): Promise<
@@ -877,18 +885,23 @@ export async function updateUserPasswordHash(
   );
 }
 
-export async function getAllUsers(): Promise<User[]> {
+export async function getAllUsers(
+  schoolId: string = DEFAULT_SCHOOL_ID
+): Promise<User[]> {
   const shape = await getDbShape();
   const r = shape.userHasSchoolId
     ? await pool.query<UserRow>(
         `SELECT * FROM users WHERE school_id = $1 ORDER BY created_at DESC`,
-        [DEFAULT_SCHOOL_ID]
+        [schoolId]
       )
     : await pool.query<UserRow>(`SELECT * FROM users ORDER BY created_at DESC`);
   return r.rows.map(mapUserRow);
 }
 
-export async function getUsersByRole(role: UserRole): Promise<User[]> {
+export async function getUsersByRole(
+  role: UserRole,
+  schoolId: string = DEFAULT_SCHOOL_ID
+): Promise<User[]> {
   const shape = await getDbShape();
   const r =
     shape.userHasRole && shape.userHasSchoolId
@@ -896,7 +909,7 @@ export async function getUsersByRole(role: UserRole): Promise<User[]> {
           `SELECT * FROM users
            WHERE school_id = $1 AND role = $2
            ORDER BY created_at DESC`,
-          [DEFAULT_SCHOOL_ID, role]
+          [schoolId, role]
         )
       : shape.userHasRole
         ? await pool.query<UserRow>(

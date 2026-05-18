@@ -9,6 +9,7 @@ import {
   isAdmin,
   parseUserRole,
   resolveAdminPanelTenant,
+  resolveAdminUsersSchoolScope,
   UserRole,
 } from "@/lib/db";
 import bcrypt from "bcryptjs";
@@ -34,6 +35,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ message: resolved.message }, { status: resolved.status });
     }
     const { tenant } = resolved;
+    const schoolScope = resolveAdminUsersSchoolScope(tenant);
 
     // Pobierz parametry filtrowania
     const { searchParams } = new URL(request.url);
@@ -46,15 +48,13 @@ export async function GET(request: NextRequest) {
       const parsed = parseUserRole(upper);
       const role = (parsed ??
         accountTypeToUserRole(filterRole as "user" | "admin" | "lektor")) as UserRole;
-      users = await getUsersByRole(role);
+      users = await getUsersByRole(role, schoolScope);
     } else {
-      users = await getAllUsers();
+      users = await getAllUsers(schoolScope);
     }
 
     if (tenant.role === "MANAGER") {
-      users = users.filter(
-        (u) => u.school_id === tenant.tenantSchoolId && u.role !== "ADMIN"
-      );
+      users = users.filter((u) => u.role !== "ADMIN");
     }
 
     // Filtruj po confirmed jeśli podano
