@@ -313,9 +313,11 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className={`relative w-full max-w-md max-h-[90vh] overflow-y-auto bg-white rounded-2xl shadow-2xl ${isLoading ? 'opacity-50 pointer-events-none' : ''}`}>
+      <div
+        className={`relative flex w-full max-w-md max-h-[90vh] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ${isLoading ? "opacity-50 pointer-events-none" : ""}`}
+      >
         {isLoading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-white/80 rounded-2xl z-10">
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80">
             <div className="flex flex-col items-center gap-3">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#175244]"></div>
               <p className="text-gray-700 font-medium">Przetwarzanie...</p>
@@ -332,6 +334,7 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
           </svg>
         </button>
 
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div className="p-8">
           {/* Header */}
           <div className="text-center mb-8">
@@ -738,6 +741,7 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
               </button>
             </form>
           )}
+        </div>
         </div>
       </div>
     </div>
