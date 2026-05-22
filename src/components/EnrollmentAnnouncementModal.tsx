@@ -59,7 +59,7 @@ export default function EnrollmentAnnouncementModal({ onOpenEnrollmentForm }: Pr
         </button>
 
         <div className="px-6 pb-6 pt-8 text-center sm:px-8">
-          <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-[#ffc94a]/20 ring-2 ring-[#ffc94a]/50">
+          <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-[#073229] ring-2 ring-[#ffc94a]">
             <ReloadableImage
               src="/images/2zyrafa2.png"
               alt=""
