@@ -1,10 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { buildEmailShell, escapeHtmlForEmail, sendHarryMail } from "@/lib/email";
+import {
+  buildDirectMessageEmailBodyHtml,
+  buildEmailShell,
+  escapeHtmlForEmail,
+  getEmailPalette,
+  sendHarryMail,
+} from "@/lib/email";
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { email, subject, childAge, message } = body;
+    const { email, subject, message } = body;
 
     // Walidacja
     if (!email || !subject || !message) {
@@ -16,7 +22,6 @@ export async function POST(request: NextRequest) {
 
     // Mapowanie tematu na czytelny tekst
     const subjectMap: { [key: string]: string } = {
-      zapisanie: "Zapisanie dziecka na zajęcia",
       lekcja: "Lekcja pokazowa",
       program: "Pytanie odnośnie programu",
       platnosci: "Pytanie odnośnie płatności",
@@ -26,45 +31,60 @@ export async function POST(request: NextRequest) {
 
     const subjectText = subjectMap[subject] || subject;
 
+    const p = getEmailPalette();
     const safeEmail = escapeHtmlForEmail(email);
     const safeSubjectText = escapeHtmlForEmail(subjectText);
-    const safeChildAge = childAge ? escapeHtmlForEmail(String(childAge)) : "";
-    const safeMessage = escapeHtmlForEmail(message).replace(/\n/g, "<br />");
+
+    const senderDetailsHtml = `
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0 0 12px 0;">
+          <tr>
+            <td bgcolor="${p.insetBg}" style="border:1px solid ${p.insetBorder};background-color:${p.insetBg};color:${p.insetText};padding:14px 16px;border-radius:10px;font-size:14px;line-height:1.6;">
+              <p style="margin:0 0 8px 0;font-size:14px;font-weight:700;color:${p.accentWarm};">Dane nadawcy</p>
+              <p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;color:${p.insetText};">
+                Email: <a href="mailto:${safeEmail}" class="he-email-body-link" style="color:${p.insetLink} !important;">${safeEmail}</a>
+              </p>
+              <p style="margin:0;font-size:14px;line-height:1.6;color:${p.insetText};">Temat: ${safeSubjectText}</p>
+            </td>
+          </tr>
+        </table>`;
+
+    const messageBodyHtml = buildDirectMessageEmailBodyHtml(message, p);
 
     // Email do szkoły
     const schoolEmailContent = buildEmailShell({
       title: "Nowa wiadomość z formularza kontaktowego",
       intro: "Przesłano nową wiadomość przez formularz kontaktowy na stronie Harry English.",
+      palette: p,
       contentHtml: `
-        <div style="border:1px solid #d9e0db;background:#f8faf8;padding:14px 16px;border-radius:10px;margin-bottom:14px;font-size:14px;line-height:1.6;">
-          <strong>Dane nadawcy</strong><br />
-          Email: <a href="mailto:${safeEmail}" style="color:#175244;">${safeEmail}</a><br />
-          Temat: ${safeSubjectText}<br />
-          ${safeChildAge ? `Wiek dziecka: ${safeChildAge}` : "Wiek dziecka: brak"}
-        </div>
-        <div style="border:1px solid #d9e0db;background:#ffffff;padding:14px 16px;border-radius:10px;font-size:14px;line-height:1.6;">
-          <strong>Wiadomość</strong><br />
-          <span>${safeMessage}</span>
-        </div>
-        <p style="color:#6b7280;font-size:12px;margin-top:14px;">
+        ${senderDetailsHtml}
+        <p style="margin:0 0 8px 0;font-size:14px;font-weight:700;color:${p.accentWarm};">Wiadomość</p>
+        ${messageBodyHtml}
+        <p style="color:${p.text};font-size:12px;margin-top:14px;opacity:0.85;">
           Ta wiadomość została wysłana z formularza kontaktowego na stronie Harry English.
         </p>
       `,
     });
 
     // Email potwierdzający dla nadawcy
+    const confirmationMetaHtml = `
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0 0 12px 0;">
+          <tr>
+            <td bgcolor="${p.insetBg}" style="border:1px solid ${p.insetBorder};background-color:${p.insetBg};color:${p.insetText};padding:14px 16px;border-radius:10px;font-size:14px;line-height:1.6;">
+              <p style="margin:0 0 8px 0;font-size:14px;font-weight:700;color:${p.accentWarm};">Kopia Twojej wiadomości</p>
+              <p style="margin:0;font-size:14px;line-height:1.6;color:${p.insetText};">Temat: ${safeSubjectText}</p>
+            </td>
+          </tr>
+        </table>`;
+
     const confirmationEmailContent = buildEmailShell({
       title: "Potwierdzenie otrzymania wiadomości",
       intro: "Dziękujemy - Twoja wiadomość dotarła. Odezwiemy się do Ciebie najszybciej jak to możliwe.",
+      palette: p,
       contentHtml: `
-        <div style="border:1px solid #d9e0db;background:#f8faf8;padding:14px 16px;border-radius:10px;margin-bottom:14px;font-size:14px;line-height:1.6;">
-          <strong>Kopia Twojej wiadomości</strong><br />
-          Temat: ${safeSubjectText}<br />
-          ${safeChildAge ? `Wiek dziecka: ${safeChildAge}<br />` : ""}
-          Treść:<br />
-          <span>${safeMessage}</span>
-        </div>
-        <p style="color:#6b7280;font-size:12px;margin:0;">
+        ${confirmationMetaHtml}
+        <p style="margin:0 0 8px 0;font-size:14px;font-weight:700;color:${p.accentWarm};">Treść</p>
+        ${messageBodyHtml}
+        <p style="color:${p.text};font-size:12px;margin:14px 0 0 0;opacity:0.85;">
           Jeśli nie wysyłałeś/aś tej wiadomości, zignoruj tego maila.
         </p>
       `,

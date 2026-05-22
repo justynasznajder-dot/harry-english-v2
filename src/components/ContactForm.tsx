@@ -14,7 +14,6 @@ export default function ContactForm({ isOpen, onClose }: ContactFormProps) {
   const [formData, setFormData] = useState({
     email: "",
     subject: "",
-    childAge: "",
     message: "",
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -39,7 +38,6 @@ export default function ContactForm({ isOpen, onClose }: ContactFormProps) {
         setFormData({
           email: "",
           subject: "",
-          childAge: "",
           message: "",
         });
         setTimeout(() => {
@@ -90,9 +88,9 @@ export default function ContactForm({ isOpen, onClose }: ContactFormProps) {
           <div className="p-8">
             <div className="mb-8 text-center">
               <h2 className="mb-2 text-3xl font-bold text-gray-900">Formularz kontaktowy</h2>
-              <p className="text-gray-600">
-                Napisz do nas — odpowiemy najszybciej, jak to możliwe
-              </p>
+              {submitStatus !== "success" && (
+                <p className="text-gray-600">Napisz do nas — odpowiemy najszybciej, jak to możliwe</p>
+              )}
             </div>
 
             {submitStatus === "success" ? (
@@ -143,26 +141,11 @@ export default function ContactForm({ isOpen, onClose }: ContactFormProps) {
                     className={inputClass}
                   >
                     <option value="">Wybierz temat...</option>
-                    <option value="zapisanie">Zapisanie dziecka na zajęcia</option>
                     <option value="lekcja">Lekcja pokazowa</option>
                     <option value="program">Pytanie odnośnie programu</option>
                     <option value="platnosci">Pytanie odnośnie płatności</option>
                     <option value="inne">Inne</option>
                   </select>
-                </div>
-
-                <div>
-                  <label htmlFor="contact-childAge" className="mb-2 block text-sm font-semibold text-gray-700">
-                    Wiek dziecka
-                  </label>
-                  <input
-                    type="text"
-                    id="contact-childAge"
-                    value={formData.childAge}
-                    onChange={(e) => setFormData({ ...formData, childAge: e.target.value })}
-                    className={inputClass}
-                    placeholder="np. 5 lat"
-                  />
                 </div>
 
                 <div>
