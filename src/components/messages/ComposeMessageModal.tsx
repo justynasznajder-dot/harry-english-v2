@@ -7,7 +7,11 @@ export type ComposePanelMode = 'manager' | 'teacher' | 'parent';
 export type ComposeSection = 'parents' | 'teachers' | 'email';
 
 const COMPOSE_FILTER_FIELD =
-  'flex w-full min-h-[2.375rem] items-center justify-between rounded-lg border border-zinc-300 bg-white px-3 py-2 text-left text-sm outline-none transition focus:border-[#0f6e56] focus:ring-2 focus:ring-[#0f6e56]/20';
+  'flex w-full min-h-[2.375rem] items-center justify-between rounded-lg border border-zinc-300 bg-white px-3 py-2 text-left text-sm text-zinc-900 outline-none transition focus:border-[#0f6e56] focus:ring-2 focus:ring-[#0f6e56]/20';
+
+/** Stały ciemny tekst — nie dziedziczy jasnego koloru z `body` przy ciemnym motywie systemu. */
+const COMPOSE_INPUT =
+  'rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 [color-scheme:light]';
 
 const COMPOSE_FILTER_CHEVRON = 'pointer-events-none shrink-0 text-xs text-zinc-400';
 
@@ -336,7 +340,7 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
       aria-modal="true"
       aria-labelledby="compose-modal-title"
     >
-      <div className="flex h-[min(92vh,720px)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
+      <div className="flex h-[min(92vh,720px)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white text-zinc-900 shadow-xl [color-scheme:light]">
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-zinc-200 px-4 py-3 md:px-5 md:py-3">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
             <h3 id="compose-modal-title" className="text-lg font-bold text-zinc-900">
@@ -463,7 +467,7 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
               value={props.recipientSearch}
               onChange={(e) => props.onRecipientSearchChange(e.target.value)}
               placeholder={searchPlaceholder}
-              className="mb-2 w-full shrink-0 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm"
+              className={`mb-2 w-full shrink-0 ${COMPOSE_INPUT}`}
             />
             <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-zinc-200 bg-white">
               {props.recipientsLoading ? (
@@ -612,7 +616,7 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
                   type="text"
                   value={props.composeSubject}
                   onChange={(e) => props.onComposeSubjectChange(e.target.value)}
-                  className="w-full rounded-xl border border-zinc-300 px-3 py-2 text-sm"
+                  className={`w-full ${COMPOSE_INPUT}`}
                 />
               </div>
 
@@ -624,7 +628,7 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
                   id="compose-body"
                   value={props.composeContent}
                   onChange={(e) => props.onComposeContentChange(e.target.value)}
-                  className="min-h-0 w-full flex-1 resize-none rounded-xl border border-zinc-300 px-3 py-2 text-sm"
+                  className={`min-h-0 w-full flex-1 resize-none ${COMPOSE_INPUT}`}
                   placeholder="Napisz wiadomość…"
                 />
               </div>

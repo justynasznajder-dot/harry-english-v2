@@ -640,7 +640,7 @@ export default function MessagesPanel({
     }
     const rootSubject = threadMessages[0]?.subject ?? selectedThread.subject ?? '(bez tematu)';
     return (
-      <section className="space-y-4 rounded-3xl border border-emerald-100 bg-white p-5 md:p-6">
+      <section className="space-y-4 rounded-3xl border border-emerald-100 bg-white p-5 text-zinc-900 md:p-6 [color-scheme:light]">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <button
             type="button"
@@ -695,7 +695,7 @@ export default function MessagesPanel({
             value={replyText}
             onChange={(e) => setReplyText(e.target.value)}
             rows={4}
-            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none ring-[#0f6e56]/30 focus:border-[#0f6e56] focus:ring-2"
+            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 outline-none ring-[#0f6e56]/30 focus:border-[#0f6e56] focus:ring-2 [color-scheme:light]"
             placeholder="Napisz odpowiedź…"
           />
           <button
@@ -712,7 +712,7 @@ export default function MessagesPanel({
   }
 
   return (
-    <section className="space-y-4 rounded-3xl border border-emerald-100 bg-white p-5 md:p-6">
+    <section className="space-y-4 rounded-3xl border border-emerald-100 bg-white p-5 text-zinc-900 md:p-6 [color-scheme:light]">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-xl font-bold text-zinc-900 md:text-2xl">Wiadomości</h2>
         <button
@@ -735,7 +735,7 @@ export default function MessagesPanel({
         value={search}
         onChange={(e) => setSearch(e.target.value)}
         placeholder="Szukaj po temacie lub treści…"
-        className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none ring-[#0f6e56]/30 focus:border-[#0f6e56] focus:ring-2"
+        className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 outline-none ring-[#0f6e56]/30 focus:border-[#0f6e56] focus:ring-2 [color-scheme:light]"
       />
 
       {loading ? (

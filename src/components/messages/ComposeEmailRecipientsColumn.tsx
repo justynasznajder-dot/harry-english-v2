@@ -27,7 +27,7 @@ export default function ComposeEmailRecipientsColumn({
         onChange={(e) => onExternalEmailBulkPasteChange(e.target.value)}
         rows={5}
         placeholder="Wpisz lub wklej adresy (jeden lub wiele — przecinek, średnik lub nowa linia)…"
-        className="w-full shrink-0 resize-y rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm"
+        className="w-full shrink-0 resize-y rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 [color-scheme:light]"
       />
       <button
         type="button"
