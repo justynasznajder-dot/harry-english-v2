@@ -10,10 +10,10 @@ import {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { email, subject, message } = body;
+    const { email, phone, subject, message } = body;
 
     // Walidacja
-    if (!email || !subject || !message) {
+    if (!email || !phone || !subject || !message) {
       return NextResponse.json(
         { error: "Brakuje wymaganych pól" },
         { status: 400 }
@@ -33,6 +33,7 @@ export async function POST(request: NextRequest) {
 
     const p = getEmailPalette();
     const safeEmail = escapeHtmlForEmail(email);
+    const safePhone = escapeHtmlForEmail(phone);
     const safeSubjectText = escapeHtmlForEmail(subjectText);
 
     const senderDetailsHtml = `
@@ -42,6 +43,9 @@ export async function POST(request: NextRequest) {
               <p style="margin:0 0 8px 0;font-size:14px;font-weight:700;color:${p.accentWarm};">Dane nadawcy</p>
               <p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;color:${p.insetText};">
                 Email: <a href="mailto:${safeEmail}" class="he-email-body-link" style="color:${p.insetLink} !important;">${safeEmail}</a>
+              </p>
+              <p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;color:${p.insetText};">
+                Telefon: <a href="tel:${safePhone}" class="he-email-body-link" style="color:${p.insetLink} !important;">${safePhone}</a>
               </p>
               <p style="margin:0;font-size:14px;line-height:1.6;color:${p.insetText};">Temat: ${safeSubjectText}</p>
             </td>

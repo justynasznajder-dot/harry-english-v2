@@ -13,6 +13,7 @@ const inputClass =
 export default function ContactForm({ isOpen, onClose }: ContactFormProps) {
   const [formData, setFormData] = useState({
     email: "",
+    phone: "",
     subject: "",
     message: "",
   });
@@ -37,6 +38,7 @@ export default function ContactForm({ isOpen, onClose }: ContactFormProps) {
         setSubmitStatus("success");
         setFormData({
           email: "",
+          phone: "",
           subject: "",
           message: "",
         });
@@ -126,6 +128,21 @@ export default function ContactForm({ isOpen, onClose }: ContactFormProps) {
                     onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                     className={inputClass}
                     placeholder="twoj@email.pl"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="contact-phone" className="mb-2 block text-sm font-semibold text-gray-700">
+                    Numer telefonu *
+                  </label>
+                  <input
+                    type="tel"
+                    id="contact-phone"
+                    required
+                    value={formData.phone}
+                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                    className={inputClass}
+                    placeholder="+48 000 000 000"
                   />
                 </div>
 
