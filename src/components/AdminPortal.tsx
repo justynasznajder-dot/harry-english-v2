@@ -2,7 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import Link from 'next/link';
-import type { EnrollmentStatus } from '@/lib/enrollment-status';
+import {
+  ENROLLMENT_STATUS_COLORS,
+  ENROLLMENT_STATUS_LABELS,
+  formatEnrollmentProposalStatusLabel,
+  formatEnrollmentStatusLabel,
+  type EnrollmentStatus,
+} from '@/lib/enrollment-status';
 import { normalizePolishPhone } from '@/lib/phone';
 import ClassesCalendarPanel from '@/src/components/admin/ClassesCalendarPanel';
 import RenewalsPanel from '@/src/components/admin/RenewalsPanel';
@@ -2554,7 +2560,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     {parent.firstName} {parent.lastName}
                   </p>
                   <p className="text-sm text-zinc-600">{parent.email}</p>
-                  <p className="mt-1 text-xs text-zinc-500">Status: {parent.accessLevel}</p>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Status: {formatEnrollmentStatusLabel(parent.accessLevel)}
+                  </p>
                 </div>
                 <button
                   className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm text-white"
@@ -3294,10 +3302,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   }))
                 }
               >
-                <option value="NEW">Nowe (NEW)</option>
-                <option value="PROPOSED">Propozycja (PROPOSED)</option>
-                <option value="SIGNED">Umowa podpisana (SIGNED)</option>
-                <option value="COMPLETED">Zakończone (COMPLETED)</option>
+                <option value="NEW">Nowe zgłoszenie</option>
+                <option value="PROPOSED">Propozycja wysłana</option>
+                <option value="SIGNED">Umowa podpisana</option>
+                <option value="COMPLETED">Zakończone</option>
               </select>
               <div className="flex justify-end gap-2">
                 <button
@@ -3370,24 +3378,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 </div>
                 <div className="mt-4 space-y-3">
                   {proposalParent.children.map((child) => {
-                    const statusLabels: Record<EnrollmentStatus, string> = {
-                      NEW: 'Nowe zgłoszenie',
-                      PROPOSED: 'Propozycja wysłana — oczekuje na rodzica',
-                      NEGOTIATING: 'Odrzucona propozycja — oczekuje na nową z szkoły',
-                      ACCEPTED: 'Zaakceptowane przez rodzica',
-                      SIGNED: 'Umowa podpisana',
-                      COMPLETED: 'Zakończone',
-                      REJECTED: 'Odrzucone przez managera',
-                    };
-                    const statusColors: Record<EnrollmentStatus, string> = {
-                      NEW: 'bg-amber-100 text-amber-800',
-                      PROPOSED: 'bg-sky-100 text-sky-800',
-                      NEGOTIATING: 'bg-amber-100 text-amber-900',
-                      ACCEPTED: 'bg-emerald-100 text-emerald-800',
-                      SIGNED: 'bg-emerald-200 text-emerald-900',
-                      COMPLETED: 'bg-zinc-200 text-zinc-700',
-                      REJECTED: 'bg-rose-100 text-rose-800',
-                    };
                     const proposalAllowed =
                       child.status === 'NEW' ||
                       child.status === 'REJECTED' ||
@@ -3417,20 +3407,22 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                           </p>
                           <p className="mt-1 flex flex-wrap gap-2">
                             <span
-                              className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${statusColors[child.status] ?? 'bg-zinc-100 text-zinc-700'}`}
+                              className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${ENROLLMENT_STATUS_COLORS[child.status] ?? 'bg-zinc-100 text-zinc-700'}`}
                             >
-                              Zgłoszenie: {statusLabels[child.status] ?? child.status}
+                              Zgłoszenie: {ENROLLMENT_STATUS_LABELS[child.status] ?? child.status}
                             </span>
                             {child.childAccessLevel && child.childAccessLevel !== child.status && (
                               <span
-                                className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${statusColors[child.childAccessLevel] ?? 'bg-zinc-100 text-zinc-700'}`}
+                                className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${ENROLLMENT_STATUS_COLORS[child.childAccessLevel] ?? 'bg-zinc-100 text-zinc-700'}`}
                               >
-                                Dziecko: {statusLabels[child.childAccessLevel] ?? child.childAccessLevel}
+                                Dziecko:{' '}
+                                {ENROLLMENT_STATUS_LABELS[child.childAccessLevel] ?? child.childAccessLevel}
                               </span>
                             )}
                             {child.childAccessLevel && child.childAccessLevel === child.status && (
                               <span className="inline-block rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-semibold text-zinc-600">
-                                Dziecko: {statusLabels[child.childAccessLevel] ?? child.childAccessLevel}
+                                Dziecko:{' '}
+                                {ENROLLMENT_STATUS_LABELS[child.childAccessLevel] ?? child.childAccessLevel}
                               </span>
                             )}
                           </p>
@@ -3614,7 +3606,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                     timeStyle: 'short',
                                   })}
                                   {' · '}
-                                  Status: {h.status}
+                                  Status: {formatEnrollmentProposalStatusLabel(h.status)}
                                   {h.responded_at
                                     ? ` · Odpowiedź: ${new Date(h.responded_at).toLocaleString('pl-PL', {
                                         dateStyle: 'short',
