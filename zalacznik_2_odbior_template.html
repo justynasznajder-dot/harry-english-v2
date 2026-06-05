@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    font-size: 12pt;
+    line-height: 1.5;
+    color: #1a1a1a;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 40px 48px;
+  }
+  h1 {
+    text-align: center;
+    font-size: 14pt;
+    font-weight: bold;
+    margin-bottom: 28px;
+  }
+  p {
+    margin: 0 0 12px;
+    text-align: justify;
+    font-size: 11.5pt;
+  }
+  .ph {
+    color: #1a1a1a;
+    font-weight: bold;
+    font-style: normal;
+  }
+  .field-block {
+    margin: 16px 0;
+  }
+  .field-line {
+    border-bottom: 1px dotted #333;
+    min-height: 28px;
+    padding: 4px 0 2px;
+    font-weight: bold;
+  }
+  .field-caption {
+    font-size: 10pt;
+    color: #555;
+    text-align: center;
+    margin-top: 4px;
+  }
+  .highlight {
+    background: #f0f0f0;
+    padding: 2px 4px;
+  }
+  .signatures {
+    margin-top: 40px;
+  }
+  .signature-date {
+    margin-bottom: 24px;
+  }
+  .signature-row {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 8px;
+    gap: 24px;
+  }
+  .signature-col {
+    width: 48%;
+  }
+  .signature-line {
+    border-bottom: 1px solid #333;
+    margin-bottom: 4px;
+    min-height: 32px;
+  }
+  .signature-caption {
+    font-size: 10pt;
+    color: #555;
+    text-align: center;
+  }
+  .attachment-note {
+    margin-top: 0;
+    margin-bottom: 20px;
+    font-size: 10pt;
+    color: #666;
+    font-style: italic;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<h1>Upoważnienie do odbioru dziecka ze szkoły/przedszkola</h1>
+<p class="attachment-note">Załącznik nr 2 do umowy nr <span class="ph">{{contract_number}}</span></p>
+
+<p>
+  Upoważniam <span class="highlight">lektorkę / lektora prowadzącego/a zajęcia w ramach kursów językowych Harry English</span>
+</p>
+
+<div class="field-block">
+  <div class="field-line"><span class="ph">{{teacher_full_name}}</span><span class="ph">{{teacher_id_suffix}}</span></div>
+  <div class="field-caption">Imię, nazwisko, numer dowodu osobistego</div>
+</div>
+
+<p>do odbioru dziecka, którego jestem rodzicem / prawnym opiekunem</p>
+
+<div class="field-block">
+  <div class="field-line"><span class="ph">{{child_1_full_name}}</span></div>
+  <div class="field-caption">Imię i nazwisko dziecka</div>
+</div>
+
+<p>
+  w roku szkolnym <span class="ph">{{school_year}}</span> ze szkoły/przedszkola
+  <span class="ph">{{child_school_name}}</span>.
+</p>
+
+<p>
+  Oświadczam, że biorę na siebie pełną odpowiedzialność prawną za bezpieczeństwo dziecka od chwili jego
+  odbioru przez wskazaną wyżej osobę.
+</p>
+
+<div class="signatures">
+  {{signed_at_line}}
+  <div class="signature-row">
+    <div class="signature-col">
+      <div class="signature-line"></div>
+      <div class="signature-caption">Data</div>
+    </div>
+    <div class="signature-col">
+      <div class="signature-line"><span class="ph">{{parent_full_name}}</span></div>
+      <div class="signature-caption">Imię, nazwisko i czytelny podpis rodzica / opiekuna prawnego dziecka</div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

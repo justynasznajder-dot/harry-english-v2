@@ -9,12 +9,12 @@ import {
   POLISH_DAY_FROM_ST_SQL,
   queryDb,
   resolveAdminPanelTenant,
-  runPgTransaction,
 } from "@/lib/db";
 import { sendProposalEmail } from "@/lib/email";
 import { getTokenFromRequest } from "@/lib/auth";
 import type { EnrollmentStatus } from "@/lib/enrollment-status";
 import { generateTempPassword } from "@/lib/password";
+import { formatPersonName } from "@/lib/format-person-name";
 import {
   syncChildrenAccessLevelForEnrollment,
   syncParentUserAccessLevel,
@@ -88,10 +88,6 @@ export async function GET(request: NextRequest) {
                'notes', er.notes,
                'proposedGroupId', er.proposed_group_id,
                'proposedAt', er.proposed_at
-               ${shape.hasEnrollmentProposalsTable
-                 ? `, 'proposalCount', COALESCE((SELECT COUNT(*)::int FROM enrollment_proposals ep WHERE ep.enrollment_request_id = er.id), 0),
-                 'hasPendingProposal', EXISTS (SELECT 1 FROM enrollment_proposals ep2 WHERE ep2.enrollment_request_id = er.id AND UPPER(BTRIM(COALESCE(ep2.status::text, ''))) = 'PENDING')`
-                 : ""}
              )
            ) FILTER (
              WHERE COALESCE(c.id, er.id) IS NOT NULL
@@ -190,9 +186,10 @@ export async function POST(request: NextRequest) {
     const shape = await getDbShape();
 
     const body = await request.json();
-    const { requestId, groupId } = body as {
+    const { requestId, groupId, amount_override: amountOverrideRaw } = body as {
       requestId?: string;
       groupId?: string;
+      amount_override?: number | string | null;
     };
     if (!requestId || !groupId) {
       return NextResponse.json({ message: "Brak wymaganych pól" }, { status: 400 });
@@ -229,7 +226,7 @@ export async function POST(request: NextRequest) {
              FROM enrollment_requests er
              WHERE er.id = $1
                AND er.school_id = $2
-               AND UPPER(BTRIM(COALESCE(er.status::text, ''))) IN ('NEW', 'PROPOSED', 'REJECTED', 'NEGOTIATING')
+               AND UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'NEW'
              LIMIT 1`,
             [requestId, tenant.tenantSchoolId]
           )
@@ -259,12 +256,21 @@ export async function POST(request: NextRequest) {
                     er.preferred_location
              FROM enrollment_requests er
              WHERE er.id = $1
-               AND UPPER(BTRIM(COALESCE(er.status::text, ''))) IN ('NEW', 'PROPOSED', 'REJECTED', 'NEGOTIATING')
+               AND UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'NEW'
              LIMIT 1`,
             [requestId]
           );
     const enrollment = enrollmentRes.rows[0];
-    if (!enrollment) return NextResponse.json({ message: "Nie znaleziono zgłoszenia" }, { status: 404 });
+    if (!enrollment) {
+      return NextResponse.json(
+        {
+          message:
+            "Propozycję można wysłać tylko raz, gdy zgłoszenie ma status „Nowe”. Jeśli rodzic odrzucił propozycję, skontaktuj się z nim bezpośrednio.",
+        },
+        { status: 409 }
+      );
+    }
+
     const parentSchoolId = enrollment.school_id;
     const parentEmail = String(enrollment.parent_email || "").trim().toLowerCase();
     if (!parentEmail) {
@@ -272,9 +278,16 @@ export async function POST(request: NextRequest) {
     }
 
     // 2) Sprawdź grupę (w zakresie szkoły rodzica).
-    const groupRes = await queryDb<{ id: string; name: string; location_name: string; schedule: string }>(
+    const groupRes = await queryDb<{
+      id: string;
+      name: string;
+      location_name: string;
+      schedule: string;
+      school_year_id: string | null;
+    }>(
       `SELECT g.id,
               g.name,
+              g.school_year_id,
               COALESCE(MAX(l.name), 'Do ustalenia') AS location_name,
               COALESCE(
                 STRING_AGG(
@@ -287,7 +300,7 @@ export async function POST(request: NextRequest) {
        LEFT JOIN schedule_templates st ON st.group_id = g.id
        LEFT JOIN locations l ON l.id = st.location_id
        WHERE g.id = $1 AND g.school_id = $2
-       GROUP BY g.id, g.name`,
+       GROUP BY g.id, g.name, g.school_year_id`,
       [groupId, parentSchoolId]
     );
     const group = groupRes.rows[0];
@@ -333,8 +346,8 @@ export async function POST(request: NextRequest) {
         const newUser = await createUser({
           email: parentEmail,
           passwordHash,
-          firstName: enrollment.parent_first_name?.trim() || "Rodzic",
-          lastName: enrollment.parent_last_name?.trim() || "",
+          firstName: formatPersonName(enrollment.parent_first_name?.trim() || "Rodzic"),
+          lastName: formatPersonName(enrollment.parent_last_name?.trim() || ""),
           role: "PARENT",
           schoolId: parentSchoolId,
           phone: enrollment.parent_phone ?? null,
@@ -361,76 +374,23 @@ export async function POST(request: NextRequest) {
       [parentUserId, parentSchoolId, parentEmail]
     );
 
-    // 5) Propozycja: INSERT do enrollment_proposals + UPDATE enrollment_requests (albo sam UPDATE bez tabeli historii).
-    let proposalCount: number | undefined;
-    if (shape.hasEnrollmentProposalsTable) {
-      try {
-        proposalCount = await runPgTransaction(async (client) => {
-          const pend = await client.query<{ id: string }>(
-            `SELECT id FROM enrollment_proposals
-             WHERE enrollment_request_id = $1
-               AND UPPER(BTRIM(COALESCE(status::text, ''))) = 'PENDING'
-             LIMIT 1`,
-            [requestId]
-          );
-          if (pend.rows.length > 0) {
-            throw new Error("__409_PENDING_PROPOSAL__");
-          }
-          const proposalId = randomUUID();
-          await client.query(
-            `INSERT INTO enrollment_proposals (
-               id, school_id, enrollment_request_id, group_id, proposed_by, proposed_at, status, created_at
-             ) VALUES ($1, $2, $3, $4, $5, NOW(), 'PENDING', NOW())`,
-            [proposalId, parentSchoolId, requestId, groupId, userId]
-          );
-          await client.query(
-            `UPDATE enrollment_requests
-             SET status = 'PROPOSED',
-                 proposed_group_id = $2,
-                 proposed_at = NOW(),
-                 user_id = COALESCE(user_id, $3)
-             WHERE id = $1`,
-            [requestId, groupId, parentUserId]
-          );
-          const cnt = await client.query<{ n: string }>(
-            `SELECT COUNT(*)::text AS n FROM enrollment_proposals WHERE enrollment_request_id = $1`,
-            [requestId]
-          );
-          return Number(cnt.rows[0]?.n ?? "0");
-        });
-      } catch (e: unknown) {
-        if (e instanceof Error && e.message === "__409_PENDING_PROPOSAL__") {
-          return NextResponse.json(
-            { message: "Aktywna propozycja czeka już na decyzję rodzica." },
-            { status: 409 }
-          );
-        }
-        const code = typeof e === "object" && e !== null && "code" in e ? String((e as { code: string }).code) : "";
-        if (code === "23505") {
-          return NextResponse.json(
-            { message: "Aktywna propozycja czeka już na decyzję rodzica." },
-            { status: 409 }
-          );
-        }
-        throw e;
-      }
-    } else {
-      await queryDb(
-        `UPDATE enrollment_requests
-         SET status = 'PROPOSED',
-             proposed_group_id = $2,
-             proposed_at = NOW(),
-             user_id = COALESCE(user_id, $3)
-         WHERE id = $1`,
-        [requestId, groupId, parentUserId]
-      );
-    }
+    // 5) Propozycja grupy — aktualizacja zgłoszenia.
+    await queryDb(
+      `UPDATE enrollment_requests
+       SET status = 'PROPOSED',
+           proposed_group_id = $2,
+           proposed_at = NOW(),
+           user_id = COALESCE(user_id, $3)
+       WHERE id = $1`,
+      [requestId, groupId, parentUserId]
+    );
 
-    // 6) Upewnij się, że dziecko z tego zgłoszenia istnieje w `children` (active=TRUE, confirmed=FALSE)
+    // 6) Upewnij się, że dziecko z tego zgłoszenia istnieje w `children`
     //    i jest dowiązane do enrollment_request_id. Tworzymy TYLKO to jedno dziecko.
+    let resolvedChildId: string | null = null;
     if (shape.hasChildrenTable) {
-      const childFirst = (enrollment.child_first_name ?? "").trim();
-      const childLast = (enrollment.child_last_name ?? "").trim();
+      const childFirst = formatPersonName(enrollment.child_first_name ?? "");
+      const childLast = formatPersonName(enrollment.child_last_name ?? "");
       const childBirth = String(enrollment.child_birth_date ?? "").slice(0, 10);
 
       const existingChildRes = await queryDb<{ id: string }>(
@@ -445,6 +405,7 @@ export async function POST(request: NextRequest) {
       const existingChildId = existingChildRes.rows[0]?.id ?? null;
 
       if (existingChildId) {
+        resolvedChildId = existingChildId;
         const setParts = ["active = TRUE"];
         const setVals: unknown[] = [existingChildId];
         let pi = 2;
@@ -462,6 +423,7 @@ export async function POST(request: NextRequest) {
         );
       } else {
         const childId = randomUUID();
+        resolvedChildId = childId;
         const cols: string[] = [
           "id",
           "school_id",
@@ -513,6 +475,60 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const amountOverrideParsed =
+      amountOverrideRaw != null && String(amountOverrideRaw).trim() !== ""
+        ? Number(String(amountOverrideRaw).replace(",", "."))
+        : null;
+    const hasAmountOverride =
+      amountOverrideParsed != null && Number.isFinite(amountOverrideParsed) && amountOverrideParsed > 0;
+
+    if (resolvedChildId) {
+      const existingContractRes = await queryDb<{ id: string }>(
+        `SELECT id FROM contracts
+         WHERE child_id = $1 AND enrollment_request_id = $2
+         LIMIT 1`,
+        [resolvedChildId, requestId]
+      );
+      if (existingContractRes.rows[0]) {
+        await queryDb(
+          `UPDATE contracts
+           SET amount = $3,
+               price_override = $4,
+               group_id = $5,
+               school_year_id = COALESCE($6, school_year_id),
+               parent_id = $7
+           WHERE id = $1 AND child_id = $2`,
+          [
+            existingContractRes.rows[0].id,
+            resolvedChildId,
+            hasAmountOverride ? amountOverrideParsed : null,
+            hasAmountOverride,
+            groupId,
+            group.school_year_id ?? null,
+            parentUserId,
+          ]
+        );
+      } else {
+        await queryDb(
+          `INSERT INTO contracts (
+             id, school_id, child_id, parent_id, group_id, enrollment_request_id,
+             content_html, status, amount, price_override, school_year_id, created_at
+           ) VALUES ($1, $2, $3, $4, $5, $6, '', 'DRAFT', $7, $8, $9, NOW())`,
+          [
+            randomUUID(),
+            parentSchoolId,
+            resolvedChildId,
+            parentUserId,
+            groupId,
+            requestId,
+            hasAmountOverride ? amountOverrideParsed : null,
+            hasAmountOverride,
+            group.school_year_id ?? null,
+          ]
+        );
+      }
+    }
+
     await syncChildrenAccessLevelForEnrollment(requestId, "PROPOSED");
     await syncParentUserAccessLevel(parentUserId);
 
@@ -539,7 +555,6 @@ export async function POST(request: NextRequest) {
       parentCreated,
       /** Id użytkownika rodzica — po pierwszym podlinkowaniu zgłoszeń klucz grupowania w GET zmienia się z emaila na to id; UI modala ma się do niego przełączyć. */
       parentId: parentUserId,
-      ...(proposalCount !== undefined ? { proposalCount } : {}),
     });
   } catch (error) {
     console.error("Admin enrollment POST error:", error);

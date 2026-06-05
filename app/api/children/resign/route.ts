@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getChildById, getUserById, requestStudentResignation } from "@/lib/db";
+import { getChildById, getUserById, requestChildResignation } from "@/lib/db";
 import { sendResignationEmail } from "@/lib/email";
 import { getTokenFromRequest } from "@/lib/auth";
 
@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: "Dziecko nie zostało znalezione lub nie należy do użytkownika" }, { status: 404 });
     }
 
-    const success = await requestStudentResignation(childId, userId, reason.trim());
+    const success = await requestChildResignation(childId, userId, reason.trim());
     if (!success) {
       return NextResponse.json({ message: "Nie udało się zaktualizować rezygnacji" }, { status: 500 });
     }

@@ -13,7 +13,7 @@ export type EnrollmentStatus = (typeof ENROLLMENT_STATUSES)[number];
 export const ENROLLMENT_STATUS_LABELS: Record<EnrollmentStatus, string> = {
   NEW: "Nowe zgłoszenie",
   PROPOSED: "Propozycja wysłana — oczekuje na rodzica",
-  NEGOTIATING: "Odrzucona propozycja — oczekuje na nową z szkoły",
+  NEGOTIATING: "Kontakt ze szkołą — oczekiwanie na odpowiedź",
   ACCEPTED: "Zaakceptowane przez rodzica",
   SIGNED: "Umowa podpisana",
   COMPLETED: "Zakończone",

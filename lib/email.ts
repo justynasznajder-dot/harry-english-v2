@@ -262,7 +262,7 @@ function buildDefaultEmailFooter(palette: EmailPalette = getEmailPalette()): str
         <td align="center" style="font-family:${BRAND_FONT};">
           ${buildEmailFooterBrandLine({ marginTop: "0", fontSize: "16px", brandColor: palette.accentWarm })}
           <p style="margin:10px 0 0 0;font-size:13px;line-height:1.75;color:${palette.text};">
-            <a href="mailto:kontakt@harry-english.pl" style="${linkStyle}">kontakt@harry-english.pl</a><br />
+            <a href="mailto:kontakt@harry-english.pl" class="he-email-body-link" style="${linkStyle}">kontakt@harry-english.pl</a><br />
             <a href="${siteUrl}" style="${linkStyle}">www.harry-english.pl</a>
           </p>
           ${buildEmailSocialLinksButtons()}
@@ -548,6 +548,15 @@ function buildEmailBodyLinkStylesCss(textColor: string): string {
       a.he-email-body-link:active {
         color: ${textColor} !important;
         text-decoration: underline !important;
+        -webkit-text-fill-color: ${textColor} !important;
+      }
+      a[href^="mailto:"],
+      a[href^="mailto:"]:link,
+      a[href^="mailto:"]:visited,
+      a[href^="mailto:"]:hover,
+      a[href^="mailto:"]:active,
+      a[x-apple-data-detectors] {
+        color: ${textColor} !important;
         -webkit-text-fill-color: ${textColor} !important;
       }`;
 }
@@ -940,13 +949,15 @@ export async function sendProposalEmail(
   const credentialsHtml = credentials
     ? `
       <p style="margin:16px 0 8px 0;font-size:15px;line-height:1.6;color:${p.text};">
-        Założyliśmy dla Ciebie konto w portalu. Aby zobaczyć szczegóły propozycji i podjąć decyzję, zaloguj się danymi:
+        Założyliśmy dla Ciebie konto w portalu. Zaloguj się poniższymi danymi.
       </p>
       ${emailInsetCellOpen(p)}
       <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;">
         <tr>
           <td style="padding:4px 12px 4px 0;font-size:15px;color:${p.insetText};"><strong>Login (email):</strong></td>
-          <td style="padding:4px 0;font-size:15px;color:${p.insetText};font-family:Consolas,Menlo,monospace;">${escapeHtmlForEmail(credentials.loginEmail)}</td>
+          <td style="padding:4px 0;font-size:15px;color:${p.insetText};font-family:Consolas,Menlo,monospace;">
+            <a href="mailto:${escapeHtmlForEmail(credentials.loginEmail)}" class="he-email-body-link" style="color:${p.insetText} !important;-webkit-text-fill-color:${p.insetText} !important;text-decoration:none;">${escapeHtmlForEmail(credentials.loginEmail)}</a>
+          </td>
         </tr>
         <tr>
           <td style="padding:4px 12px 4px 0;font-size:15px;color:${p.insetText};"><strong>Hasło tymczasowe:</strong></td>
@@ -969,7 +980,7 @@ export async function sendProposalEmail(
 
   const credentialsText = credentials
     ? `
-Założyliśmy dla Ciebie konto w portalu. Zaloguj się danymi:
+Założyliśmy dla Ciebie konto w portalu. Zaloguj się poniższymi danymi.
 - Login (email): ${credentials.loginEmail}
 - Hasło tymczasowe: ${credentials.tempPassword}
 Po pierwszym zalogowaniu poprosimy Cię o ustawienie własnego hasła.
@@ -988,7 +999,7 @@ Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logow
     subject: "Propozycja grupy - Harry English",
     html: buildEmailShell({
       title: `Dzień dobry ${escapeHtmlForEmail(parentName)},`,
-      intro: `Przygotowaliśmy propozycję grupy dla ${safeChildName}.`,
+      intro: `Przygotowaliśmy propozycję grupy dla ${safeChildName}. Zaakceptuj ją w portalu, aby przejść do uzupełnienia danych oraz do podpisania umowy.`,
       contentHtml: `
         <ul style="margin:0 0 12px 18px;padding:0;font-size:15px;line-height:1.6;color:${p.text};">
           <li><strong>Grupa:</strong> ${escapeHtmlForEmail(proposal.groupName)}</li>
@@ -1004,7 +1015,7 @@ Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logow
     }),
     text: `Dzień dobry ${parentName},
 
-Przygotowaliśmy propozycję grupy dla ${childNameText}:
+Przygotowaliśmy propozycję grupy dla ${childNameText}. Zaakceptuj ją w portalu, aby przejść do uzupełnienia danych oraz do podpisania umowy:
 - Grupa: ${proposal.groupName}
 - Lokalizacja: ${proposal.locationName}
 - Termin: ${proposal.schedule}
@@ -1077,7 +1088,7 @@ export async function sendProposalRejectedEmail(params: {
         ${emailInsetCellClose()}
         ${reasonHtml}
         <p style="margin:14px 0 0 0;font-size:13px;line-height:1.6;color:${p.text};opacity:0.85;">
-          Zgłoszenie wróciło do statusu REJECTED — w panelu admina możesz zaproponować inną grupę.
+          Skontaktuj się z rodzicem bezpośrednio — w systemie nie wyślesz kolejnej propozycji grupy.
         </p>
       `,
       footerHtml: `${buildEmailFooterBrandLine({ marginTop: "0", brandColor: p.accentWarm })}<p style="margin:0;font-size:12px;color:${p.text};">System automatycznego powiadamiania</p>`,
@@ -1094,7 +1105,7 @@ Odrzucona propozycja:
 - Termin: ${params.schedule}
 
 ${reasonText}
-Zgłoszenie wróciło do statusu REJECTED — w panelu admina możesz zaproponować inną grupę.
+Skontaktuj się z rodzicem bezpośrednio — w systemie nie wyślesz kolejnej propozycji grupy.
 
 Harry English
 System automatycznego powiadamiania

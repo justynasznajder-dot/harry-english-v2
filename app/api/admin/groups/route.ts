@@ -40,6 +40,8 @@ export async function GET(request: NextRequest) {
       location_id: string | null;
       school_year_id: string | null;
       students_count: string;
+      price_monthly: string | null;
+      price_yearly: string | null;
     }>(
       `SELECT
          g.id,
@@ -50,6 +52,8 @@ export async function GET(request: NextRequest) {
          g.location_id,
          g.school_year_id,
          g.teacher_id,
+         g.price_monthly::text AS price_monthly,
+         g.price_yearly::text AS price_yearly,
          CASE WHEN t.id IS NULL THEN NULL ELSE CONCAT(t.first_name, ' ', t.last_name) END AS teacher_name,
          COALESCE(gl.name, MAX(l.name)) AS location_name,
          COUNT(DISTINCT gs.id) FILTER (WHERE gs.left_at IS NULL)::text AS students_count
@@ -94,6 +98,8 @@ export async function POST(request: NextRequest) {
       locationId,
       school_id: bodySchoolId,
       schoolId: bodySchoolIdCamel,
+      priceMonthly,
+      priceYearly,
     }: {
       name?: string;
       level?: string;
@@ -104,6 +110,8 @@ export async function POST(request: NextRequest) {
       locationId?: string | null;
       school_id?: string;
       schoolId?: string;
+      priceMonthly?: number | string | null;
+      priceYearly?: number | string | null;
     } = body;
 
     if (!name) return NextResponse.json({ message: "Nazwa grupy jest wymagana" }, { status: 400 });
@@ -128,10 +136,25 @@ export async function POST(request: NextRequest) {
     }
 
     const inserted = await queryDb<{ id: string }>(
-      `INSERT INTO groups (id, school_id, teacher_id, name, level, max_students, active, created_at, school_year_id, location_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, $9)
+      `INSERT INTO groups (
+         id, school_id, teacher_id, name, level, max_students, active,
+         created_at, school_year_id, location_id, price_monthly, price_yearly
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, $9, $10, $11)
        RETURNING id`,
-      [randomUUID(), insertSchoolId, teacherId ?? null, name.trim(), level ?? null, maxStudents, active, schoolYearId ?? null, locationId ?? null]
+      [
+        randomUUID(),
+        insertSchoolId,
+        teacherId ?? null,
+        name.trim(),
+        level ?? null,
+        maxStudents,
+        active,
+        schoolYearId ?? null,
+        locationId ?? null,
+        priceMonthly != null && priceMonthly !== "" ? Number(priceMonthly) : null,
+        priceYearly != null && priceYearly !== "" ? Number(priceYearly) : null,
+      ]
     );
 
     return NextResponse.json({ id: inserted.rows[0].id, message: "Grupa została utworzona" });

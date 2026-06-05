@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:migrate:attachments": "tsx scripts/run-contracts-attachments-migration.ts",
+    "db:insert-templates": "tsx scripts/insert-contract-template.ts"
   },
   "dependencies": {
     "@fullcalendar/core": "^6.1.20",

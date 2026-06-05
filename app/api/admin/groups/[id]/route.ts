@@ -104,7 +104,17 @@ export async function PUT(
   const { id } = await params;
   try {
     const body = await request.json();
-    const { name, level, teacherId, maxStudents, active, schoolYearId, locationId } = body;
+    const {
+      name,
+      level,
+      teacherId,
+      maxStudents,
+      active,
+      schoolYearId,
+      locationId,
+      priceMonthly,
+      priceYearly,
+    } = body;
     await queryDb(
       `UPDATE groups
        SET name = COALESCE($2, name),
@@ -113,11 +123,36 @@ export async function PUT(
            max_students = COALESCE($5, max_students),
            active = COALESCE($6, active),
            school_year_id = $7,
-           location_id = $8
-       WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $9" : ""}`,
+           location_id = $8,
+           price_monthly = $9,
+           price_yearly = $10
+       WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $11" : ""}`,
       tenant.role === "MANAGER"
-        ? [id, name ?? null, level ?? null, teacherId ?? null, maxStudents ?? null, active ?? null, schoolYearId ?? null, locationId ?? null, tenant.tenantSchoolId]
-        : [id, name ?? null, level ?? null, teacherId ?? null, maxStudents ?? null, active ?? null, schoolYearId ?? null, locationId ?? null]
+        ? [
+            id,
+            name ?? null,
+            level ?? null,
+            teacherId ?? null,
+            maxStudents ?? null,
+            active ?? null,
+            schoolYearId ?? null,
+            locationId ?? null,
+            priceMonthly != null && priceMonthly !== "" ? Number(priceMonthly) : null,
+            priceYearly != null && priceYearly !== "" ? Number(priceYearly) : null,
+            tenant.tenantSchoolId,
+          ]
+        : [
+            id,
+            name ?? null,
+            level ?? null,
+            teacherId ?? null,
+            maxStudents ?? null,
+            active ?? null,
+            schoolYearId ?? null,
+            locationId ?? null,
+            priceMonthly != null && priceMonthly !== "" ? Number(priceMonthly) : null,
+            priceYearly != null && priceYearly !== "" ? Number(priceYearly) : null,
+          ]
     );
     return NextResponse.json({ message: "Grupa została zaktualizowana" });
   } catch (error) {

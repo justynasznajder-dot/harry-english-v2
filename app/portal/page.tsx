@@ -16,6 +16,8 @@ interface UserInfo {
   role?: string;
   accessLevel?: 'PENDING' | 'ACTIVE';
   mustChangePassword?: boolean;
+  schoolId?: string | null;
+  schoolName?: string | null;
   children?: Array<{
     childId?: string;
     firstName: string;
@@ -58,7 +60,10 @@ function PortalHeaderUserBlock({ userInfo }: { userInfo: UserInfo | null }) {
         {[userInfo.firstName, userInfo.lastName].filter(Boolean).join(' ') || userInfo.email}
       </p>
       <p className="mt-2 text-sm font-semibold uppercase tracking-[0.12em] text-[#1f2933]">
-        {(process.env.NEXT_PUBLIC_PORTAL_SITE_TAG ?? 'Harry English').toUpperCase()}
+        {(userInfo.schoolName?.trim() ||
+          process.env.NEXT_PUBLIC_PORTAL_SITE_TAG ||
+          'Harry English'
+        ).toUpperCase()}
       </p>
       <p className="mt-2 text-sm text-[#1f2933]">{formatPolishLongDate(new Date())}</p>
     </>

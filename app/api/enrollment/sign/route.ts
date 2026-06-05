@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDbShape, getRegistrationSchoolId, queryDb } from "@/lib/db";
 import { sendSignedContractEmail } from "@/lib/email";
 import { getTokenFromRequest } from "@/lib/auth";
+import { applySignedAtToDocumentHtml } from "@/lib/contract-html";
 import {
   syncChildrenAccessLevelForEnrollment,
   syncParentUserAccessLevel,
@@ -35,9 +36,11 @@ export async function POST(request: NextRequest) {
     const contractRes = await queryDb<{
       id: string;
       content_html: string;
+      attachment_1_html: string | null;
+      attachment_2_html: string | null;
       child_id: string | null;
     }>(
-      `SELECT id, content_html, child_id
+      `SELECT id, content_html, attachment_1_html, attachment_2_html, child_id
        FROM contracts
        WHERE parent_id = $1 AND school_id = $2 AND status = 'SENT'
        ORDER BY created_at DESC
@@ -48,11 +51,31 @@ export async function POST(request: NextRequest) {
     if (!contract) return NextResponse.json({ message: "Brak umowy do podpisu" }, { status: 400 });
 
     const ip = extractIp(request);
+    const signedAt = new Date();
+    const signedContentHtml = applySignedAtToDocumentHtml(contract.content_html, signedAt);
+    const signedAttachment1Html = contract.attachment_1_html
+      ? applySignedAtToDocumentHtml(contract.attachment_1_html, signedAt)
+      : null;
+    const signedAttachment2Html = contract.attachment_2_html
+      ? applySignedAtToDocumentHtml(contract.attachment_2_html, signedAt)
+      : null;
+
     await queryDb(
       `UPDATE contracts
-       SET status = 'SIGNED', signed_at = NOW(), signed_ip = $2
+       SET status = 'SIGNED',
+           signed_at = NOW(),
+           signed_ip = $2,
+           content_html = $3,
+           attachment_1_html = $4,
+           attachment_2_html = $5
        WHERE id = $1`,
-      [contract.id, ip]
+      [
+        contract.id,
+        ip,
+        signedContentHtml,
+        signedAttachment1Html,
+        signedAttachment2Html,
+      ]
     );
 
     if (contract.child_id) {
@@ -81,7 +104,7 @@ export async function POST(request: NextRequest) {
         if (enrollmentRequestId) {
           await queryDb(
             `UPDATE enrollment_requests
-             SET status = 'SIGNED', contract_signed = TRUE, contract_signed_at = NOW()
+             SET status = 'SIGNED'
              WHERE id = $1 AND user_id = $2 AND school_id = $3`,
             [enrollmentRequestId, parentId, SCHOOL_ID]
           );
@@ -97,7 +120,7 @@ export async function POST(request: NextRequest) {
       );
       await queryDb(
         `UPDATE enrollment_requests
-         SET status = 'SIGNED', contract_signed = TRUE, contract_signed_at = NOW()
+         SET status = 'SIGNED'
          WHERE user_id = $1 AND school_id = $2 AND status IN ('ACCEPTED', 'PROPOSED')`,
         [parentId, SCHOOL_ID]
       );
@@ -113,7 +136,7 @@ export async function POST(request: NextRequest) {
 
     await syncParentUserAccessLevel(parentId);
 
-    await sendSignedContractEmail(parent.email, contract.content_html);
+    await sendSignedContractEmail(parent.email, signedContentHtml);
 
     return NextResponse.json({
       message: "Umowa podpisana",

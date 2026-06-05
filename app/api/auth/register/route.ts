@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
  * transakcji wykonywany jest INSERT do `parent_profiles` (pusty wiersz + school_id).
  */
 import {
+  DuplicateEnrollmentError,
   getDbShape,
   getRegistrationSchoolId,
   insertPublicEnrollmentRequests,
@@ -127,7 +128,7 @@ export async function POST(request: Request) {
       console.error("Enrollment email: school name lookup failed:", schoolErr);
     }
     const shape = await getDbShape();
-    if (shape.hasChildrenTable && !shape.hasStudentsTable) {
+    if (shape.hasChildrenTable) {
       const hasBirthDateColumn = await queryDb<{
         exists: boolean;
       }>(
@@ -371,6 +372,9 @@ export async function POST(request: Request) {
         children: normalizedChildren,
       });
     } catch (insertErr) {
+      if (insertErr instanceof DuplicateEnrollmentError) {
+        return NextResponse.json({ message: insertErr.message }, { status: 409 });
+      }
       if (enrollmentBackupPayload) {
         try {
           await sendPublicEnrollmentBackupEmail({

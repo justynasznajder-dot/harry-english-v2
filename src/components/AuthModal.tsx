@@ -1,6 +1,10 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import {
+  DUPLICATE_CHILD_IN_FORM_MESSAGE,
+  findDuplicateChildIndices,
+} from "@/lib/enrollment-duplicate";
 import { normalizePolishPhone } from "@/lib/phone";
 
 interface AuthModalProps {
@@ -178,6 +182,16 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
       if (locations.length > 0 && !student.preferredLocationId?.trim()) {
         newErrors[`student_${index}_preferredLocationId`] = "Wybierz lokalizację";
       }
+    });
+
+    findDuplicateChildIndices(
+      formData.students.map((student) => ({
+        firstName: student.firstName,
+        lastName: student.lastName,
+        birthDate: student.birthDate,
+      }))
+    ).forEach((index) => {
+      newErrors[`student_${index}_firstName`] = DUPLICATE_CHILD_IN_FORM_MESSAGE;
     });
 
     if (!formData.rodoConsent) {
@@ -507,12 +521,6 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
           )}
           {mode === "register" && !registerSuccess && (
             <form onSubmit={handleRegister} className="space-y-6">
-              {errors.form && (
-                <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
-                  {errors.form}
-                </div>
-              )}
-
               {/* Parent Info - Imię i Nazwisko */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -723,6 +731,12 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
                 </label>
                 {errors.rodoConsent && <p className="mt-1 text-xs text-red-600">{errors.rodoConsent}</p>}
               </div>
+
+              {errors.form && (
+                <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
+                  {errors.form}
+                </div>
+              )}
 
               <button
                 type="submit"

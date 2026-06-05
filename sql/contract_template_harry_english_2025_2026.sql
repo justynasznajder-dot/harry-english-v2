@@ -1,0 +1,18 @@
+-- Jednorazowy INSERT szablonu umowy Harry English 2025/2026.
+-- Zawartość HTML: plik umowa_harry_english_template.html w katalogu projektu.
+-- Zalecane uruchomienie: npx tsx scripts/insert-contract-template.ts
+-- (skrypt wczytuje HTML z pliku i wstawia/aktualizuje rekord automatycznie).
+
+-- Przykładowy INSERT (school_id z env SCHOOL_ID lub pobierz z schools):
+-- INSERT INTO contract_templates (id, school_id, name, content_html, active, school_year, created_at)
+-- SELECT
+--   gen_random_uuid()::text,
+--   s.id,
+--   'Umowa HarryEnglish 2025/2026',
+--   '<WKLEJ ZAWARTOŚĆ umowa_harry_english_template.html>',
+--   TRUE,
+--   '2025/2026',
+--   NOW()
+-- FROM schools s
+-- WHERE LOWER(s.name) LIKE '%harry%english%'
+-- LIMIT 1;

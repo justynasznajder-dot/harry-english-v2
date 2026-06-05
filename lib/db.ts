@@ -5,6 +5,13 @@ import {
   type QueryResult,
   type QueryResultRow,
 } from "pg";
+import {
+  childEnrollmentIdentityKey,
+  DuplicateEnrollmentError,
+} from "@/lib/enrollment-duplicate";
+import { formatPersonName } from "@/lib/format-person-name";
+
+export { DuplicateEnrollmentError } from "@/lib/enrollment-duplicate";
 
 /** Domyślna szkoła z env — multi-tenant (pusty string gdy brak `SCHOOL_ID`). */
 export const DEFAULT_SCHOOL_ID = process.env.SCHOOL_ID || "";
@@ -59,9 +66,6 @@ export type ChildAccessLevel =
 /** @deprecated Stary model UI / API — mapowany na `UserRole` */
 export type AccountType = "user" | "admin" | "lektor";
 
-/** @deprecated Lokalizacje zajęć są w tabeli `locations`; pole zostaje dla formularzy */
-export type Location = "Paniówki" | "Halemba" | "Orzegów" | "Kochłowice" | "Bielszowice";
-
 function getConnectionString(): string {
   const url = process.env.DATABASE_URL;
   if (url) return url;
@@ -95,15 +99,12 @@ type DbShape = {
   userHasAccessLevel: boolean;
   userHasMustChangePassword: boolean;
   hasChildrenTable: boolean;
-  hasStudentsTable: boolean;
   childHasConfirmed: boolean;
   childHasEnrollmentRequestId: boolean;
   childHasPreferredLocationId: boolean;
   childHasAccessLevel: boolean;
   enrollmentHasRejectionComment: boolean;
   enrollmentHasRejectedAt: boolean;
-  /** Tabela `enrollment_proposals` — historia propozycji grup. */
-  hasEnrollmentProposalsTable: boolean;
 };
 
 /** Odświeżanie po migracjach — bez tego stary kształt (np. brak `access_level` w cache) daje błędne INSERT-y aż do restartu. */
@@ -128,14 +129,12 @@ export async function getDbShape(): Promise<DbShape> {
     user_has_access_level: boolean;
     user_has_must_change_password: boolean;
     has_children: boolean;
-    has_students: boolean;
     child_has_confirmed: boolean;
     child_has_enrollment_request_id: boolean;
     child_has_preferred_location_id: boolean;
     child_has_access_level: boolean;
     enrollment_has_rejection_comment: boolean;
     enrollment_has_rejected_at: boolean;
-    has_enrollment_proposals: boolean;
   }>(
     `SELECT
        EXISTS(
@@ -163,10 +162,6 @@ export async function getDbShape(): Promise<DbShape> {
          WHERE table_schema = 'public' AND table_name = 'children'
        ) AS has_children,
        EXISTS(
-         SELECT 1 FROM information_schema.tables
-         WHERE table_schema = 'public' AND table_name = 'students'
-       ) AS has_students,
-       EXISTS(
          SELECT 1 FROM information_schema.columns
          WHERE table_schema = 'public' AND table_name = 'children' AND column_name = 'confirmed'
        ) AS child_has_confirmed,
@@ -189,11 +184,7 @@ export async function getDbShape(): Promise<DbShape> {
        EXISTS(
          SELECT 1 FROM information_schema.columns
          WHERE table_schema = 'public' AND table_name = 'enrollment_requests' AND column_name = 'rejected_at'
-       ) AS enrollment_has_rejected_at,
-       EXISTS(
-         SELECT 1 FROM information_schema.tables
-         WHERE table_schema = 'public' AND table_name = 'enrollment_proposals'
-       ) AS has_enrollment_proposals`
+       ) AS enrollment_has_rejected_at`
   );
   const row = r.rows[0];
   dbShapeCache = {
@@ -203,14 +194,12 @@ export async function getDbShape(): Promise<DbShape> {
     userHasAccessLevel: Boolean(row?.user_has_access_level),
     userHasMustChangePassword: Boolean(row?.user_has_must_change_password),
     hasChildrenTable: Boolean(row?.has_children),
-    hasStudentsTable: Boolean(row?.has_students),
     childHasConfirmed: Boolean(row?.child_has_confirmed),
     childHasEnrollmentRequestId: Boolean(row?.child_has_enrollment_request_id),
     childHasPreferredLocationId: Boolean(row?.child_has_preferred_location_id),
     childHasAccessLevel: Boolean(row?.child_has_access_level),
     enrollmentHasRejectionComment: Boolean(row?.enrollment_has_rejection_comment),
     enrollmentHasRejectedAt: Boolean(row?.enrollment_has_rejected_at),
-    hasEnrollmentProposalsTable: Boolean(row?.has_enrollment_proposals),
   };
   dbShapeCacheAt = Date.now();
   return dbShapeCache;
@@ -270,23 +259,6 @@ export interface Child {
   resignation_reason: string | null;
   resignation_date: Date | null;
   created_at: Date;
-}
-
-/** Kształt zwracany dawniej przez warstwę „students” */
-export interface Student {
-  student_id: string;
-  user_id: string;
-  first_name: string;
-  last_name: string;
-  birth_year: string;
-  location: Location | "";
-  active: boolean;
-  confirmed: boolean;
-  enrollment_request_id: string | null;
-  resignation_requested: boolean;
-  resignation_reason?: string | null;
-  resignation_date?: Date | null;
-  created_at?: Date;
 }
 
 type UserRow = QueryResultRow & {
@@ -430,35 +402,6 @@ function birthDateToIso(d: Date | string): string {
   return `${y}-${m}-${day}`;
 }
 
-function birthYearFromBirthDate(d: Date | string): string {
-  if (typeof d === "string") return d.slice(0, 4);
-  return String(d.getFullYear());
-}
-
-export function childToLegacyStudent(
-  row: Child | ChildRow,
-  locationHint?: Location | ""
-): Student {
-  const c = row as ChildRow;
-  const birth_date = birthDateToIso(c.birth_date);
-  return {
-    student_id: c.id,
-    user_id: c.parent_id,
-    first_name: c.first_name,
-    last_name: c.last_name,
-    birth_year: birthYearFromBirthDate(c.birth_date),
-    location: (locationHint ?? "") as Location | "",
-    active: c.active,
-    confirmed: (c as QueryResultRow).confirmed === undefined ? false : Boolean((c as QueryResultRow).confirmed),
-    enrollment_request_id:
-      ((c as QueryResultRow).enrollment_request_id as string | null | undefined) ?? null,
-    resignation_requested: c.resignation_requested,
-    resignation_reason: c.resignation_reason,
-    resignation_date: c.resignation_date ?? undefined,
-    created_at: c.created_at,
-  };
-}
-
 function mapChildRow(row: ChildRow): Child {
   return {
     id: row.id,
@@ -477,33 +420,6 @@ function mapChildRow(row: ChildRow): Child {
     resignation_reason: row.resignation_reason,
     resignation_date: row.resignation_date,
     created_at: row.created_at,
-  };
-}
-
-/** Wiersz tabeli `students` (stary schemat) → `Child`. */
-function studentRowToChild(row: QueryResultRow): Child {
-  const birthYear = String(row.birth_year ?? "").slice(0, 4);
-  const birth_date =
-    birthYear.length === 4 && /^\d{4}$/.test(birthYear)
-      ? `${birthYear}-01-01`
-      : "2000-01-01";
-  return {
-    id: row.student_id as string,
-    school_id: DEFAULT_SCHOOL_ID,
-    parent_id: row.user_id as string,
-    first_name: row.first_name as string,
-    last_name: row.last_name as string,
-    birth_date,
-    avatar_url: null,
-    xp_total: 0,
-    active: row.active !== false,
-    confirmed: false,
-    enrollment_request_id: null,
-    access_level: "NEW",
-    resignation_requested: Boolean(row.resignation_requested),
-    resignation_reason: (row.resignation_reason as string | null) ?? null,
-    resignation_date: (row.resignation_date as Date | null) ?? null,
-    created_at: (row.created_at as Date) ?? new Date(),
   };
 }
 
@@ -620,6 +536,8 @@ export async function createUser(data: {
   accessLevel?: AccessLevel;
   mustChangePassword?: boolean;
 }): Promise<User> {
+  const firstName = formatPersonName(data.firstName);
+  const lastName = formatPersonName(data.lastName);
   const id = randomUUID();
   const role =
     data.role ??
@@ -668,8 +586,8 @@ export async function createUser(data: {
                 data.email,
                 data.passwordHash,
                 role,
-                data.firstName,
-                data.lastName,
+                firstName,
+                lastName,
                 data.phone ?? null,
                 confirmed,
                 accessLevel,
@@ -687,8 +605,8 @@ export async function createUser(data: {
                 data.email,
                 data.passwordHash,
                 role,
-                data.firstName,
-                data.lastName,
+                firstName,
+                lastName,
                 confirmed,
                 accessLevel,
               ]
@@ -707,8 +625,8 @@ export async function createUser(data: {
                 data.email,
                 data.passwordHash,
                 role,
-                data.firstName,
-                data.lastName,
+                firstName,
+                lastName,
                 data.phone ?? null,
                 confirmed,
               ]
@@ -725,8 +643,8 @@ export async function createUser(data: {
                 data.email,
                 data.passwordHash,
                 role,
-                data.firstName,
-                data.lastName,
+                firstName,
+                lastName,
                 confirmed,
               ]
             );
@@ -757,8 +675,8 @@ export async function createUser(data: {
         data.email,
         data.passwordHash,
         legacyType,
-        data.firstName,
-        data.lastName,
+        firstName,
+        lastName,
         confirmed,
       ]
     );
@@ -791,11 +709,11 @@ export async function updateUser(
 
   if (data.first_name !== undefined) {
     sets.push(`first_name = $${i++}`);
-    vals.push(data.first_name);
+    vals.push(formatPersonName(data.first_name));
   }
   if (data.last_name !== undefined) {
     sets.push(`last_name = $${i++}`);
-    vals.push(data.last_name);
+    vals.push(formatPersonName(data.last_name));
   }
   if (data.email !== undefined) {
     sets.push(`email = $${i++}`);
@@ -945,13 +863,6 @@ export async function deleteUser(
          SET active = FALSE, resignation_date = COALESCE(resignation_date, NOW())
          WHERE parent_id = $1 AND school_id = $2 AND active = TRUE`,
         [userId, tenantSchoolId]
-      );
-    } else if (shape.hasStudentsTable) {
-      await client.query(
-        `UPDATE students
-         SET active = FALSE, resignation_date = COALESCE(resignation_date, NOW())
-         WHERE user_id = $1 AND active = TRUE`,
-        [userId]
       );
     }
     const schoolScope =
@@ -1151,6 +1062,8 @@ export async function createChild(data: {
   accessLevel?: ChildAccessLevel;
 }): Promise<Child> {
   const shape = await getDbShape();
+  const firstName = formatPersonName(data.firstName);
+  const lastName = formatPersonName(data.lastName);
   const id = randomUUID();
   const schoolId = data.schoolId ?? DEFAULT_SCHOOL_ID;
   const accessLevel = data.accessLevel ?? "NEW";
@@ -1169,8 +1082,8 @@ export async function createChild(data: {
       id,
       schoolId,
       data.parentId,
-      data.firstName,
-      data.lastName,
+      firstName,
+      lastName,
       data.birthDate.slice(0, 10),
       data.avatarUrl ?? null,
     ];
@@ -1195,22 +1108,7 @@ export async function createChild(data: {
     return mapChildRow(r.rows[0]);
   }
 
-  if (shape.hasStudentsTable) {
-    const birthYear = data.birthDate.slice(0, 4);
-    await pool.query(
-      `INSERT INTO students (
-         student_id, user_id, first_name, last_name, birth_year, location, active
-       ) VALUES ($1, $2, $3, $4, $5, 'Paniówki', TRUE)`,
-      [id, data.parentId, data.firstName, data.lastName, birthYear]
-    );
-    const r = await pool.query(
-      `SELECT * FROM students WHERE student_id = $1 LIMIT 1`,
-      [id]
-    );
-    return studentRowToChild(r.rows[0]);
-  }
-
-  throw new Error("Brak tabeli children ani students w bazie");
+  throw new Error("Brak tabeli children w bazie");
 }
 
 /**
@@ -1252,13 +1150,19 @@ export type ParentProfile = {
   address: string | null;
   city: string | null;
   zip_code: string | null;
+  company_name: string | null;
+  nip: string | null;
+  pesel: string | null;
   created_at: Date;
   updated_at: Date;
 };
 
+const PARENT_PROFILE_SELECT = `id, user_id, school_id, address, city, zip_code,
+  company_name, nip, pesel, created_at, updated_at`;
+
 export async function getParentProfileByUserId(userId: string): Promise<ParentProfile | null> {
   const r = await pool.query<ParentProfile>(
-    `SELECT id, user_id, school_id, address, city, zip_code, created_at, updated_at
+    `SELECT ${PARENT_PROFILE_SELECT}
      FROM parent_profiles WHERE user_id = $1 LIMIT 1`,
     [userId]
   );
@@ -1274,27 +1178,87 @@ export async function upsertParentProfileForUser(params: {
   address?: string | null;
   city?: string | null;
   zip_code?: string | null;
+  company_name?: string | null;
+  nip?: string | null;
+  pesel?: string | null;
 }): Promise<ParentProfile | null> {
   const { userId, schoolId } = params;
-  const address = params.address ?? null;
-  const city = params.city ?? null;
-  const zip = params.zip_code != null ? String(params.zip_code).slice(0, 10) : null;
+  const existing = await getParentProfileByUserId(userId);
+  const address = params.address !== undefined ? params.address : existing?.address ?? null;
+  const city = params.city !== undefined ? params.city : existing?.city ?? null;
+  const zip =
+    params.zip_code !== undefined
+      ? params.zip_code != null
+        ? String(params.zip_code).slice(0, 10)
+        : null
+      : existing?.zip_code ?? null;
+  const company_name =
+    params.company_name !== undefined ? params.company_name : existing?.company_name ?? null;
+  const nip =
+    params.nip !== undefined
+      ? params.nip != null
+        ? String(params.nip).slice(0, 20)
+        : null
+      : existing?.nip ?? null;
+  const pesel =
+    params.pesel !== undefined
+      ? params.pesel != null
+        ? String(params.pesel).slice(0, 11)
+        : null
+      : existing?.pesel ?? null;
 
   const updated = await pool.query<ParentProfile>(
     `UPDATE parent_profiles
-     SET address = $2, city = $3, zip_code = $4, updated_at = NOW()
+     SET address = $2, city = $3, zip_code = $4,
+         company_name = $5, nip = $6, pesel = $7,
+         updated_at = NOW()
      WHERE user_id = $1
-     RETURNING id, user_id, school_id, address, city, zip_code, created_at, updated_at`,
-    [userId, address, city, zip]
+     RETURNING ${PARENT_PROFILE_SELECT}`,
+    [userId, address, city, zip, company_name, nip, pesel]
   );
   if (updated.rows[0]) return updated.rows[0];
 
   await pool.query(
-    `INSERT INTO parent_profiles (id, user_id, school_id, address, city, zip_code, created_at, updated_at)
-     VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, NOW(), NOW())`,
-    [userId, schoolId, address, city, zip]
+    `INSERT INTO parent_profiles (
+       id, user_id, school_id, address, city, zip_code,
+       company_name, nip, pesel, created_at, updated_at
+     )
+     VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
+    [userId, schoolId, address, city, zip, company_name, nip, pesel]
   );
   return getParentProfileByUserId(userId);
+}
+
+async function activeEnrollmentChildExists(
+  client: PoolClient,
+  params: {
+    schoolId: string;
+    parentEmail: string;
+    firstName: string;
+    lastName: string;
+    birthDate: string;
+  }
+): Promise<boolean> {
+  const r = await client.query<{ ok: boolean }>(
+    `SELECT EXISTS(
+       SELECT 1
+       FROM enrollment_requests
+       WHERE school_id::text = $1
+         AND LOWER(BTRIM(parent_email::text)) = $2
+         AND LOWER(BTRIM(child_first_name::text)) = LOWER($3)
+         AND LOWER(BTRIM(child_last_name::text)) = LOWER($4)
+         AND child_birth_date = $5::date
+         AND UPPER(BTRIM(COALESCE(status::text, ''))) NOT IN ('COMPLETED', 'REJECTED')
+     ) AS ok`,
+    [
+      params.schoolId,
+      params.parentEmail.trim().toLowerCase(),
+      params.firstName.trim(),
+      params.lastName.trim(),
+      params.birthDate.slice(0, 10),
+    ]
+  );
+  return Boolean(r.rows[0]?.ok);
 }
 
 /** Publiczne zgłoszenie dziecka — tylko wiersze `enrollment_requests`, bez konta w `users` i bez `children`. */
@@ -1329,6 +1293,8 @@ export async function insertPublicEnrollmentRequests(data: {
 
   const parentEmail = String(data.email).trim().toLowerCase();
   const parentPhone = data.phone?.trim() || null;
+  const parentFirstName = formatPersonName(data.firstName);
+  const parentLastName = formatPersonName(data.lastName);
 
   const client = await pool.connect();
   try {
@@ -1337,7 +1303,30 @@ export async function insertPublicEnrollmentRequests(data: {
       await ensureDefaultSchoolRow(client, schoolId);
     }
 
+    const seenInBatch = new Set<string>();
+
     for (const ch of data.children) {
+      const childFirst = formatPersonName(ch.firstName);
+      const childLast = formatPersonName(ch.lastName);
+      const childBirth = ch.birthDate.slice(0, 10);
+      const batchKey = childEnrollmentIdentityKey(childFirst, childLast, childBirth);
+
+      if (seenInBatch.has(batchKey)) {
+        throw new DuplicateEnrollmentError(`${childFirst} ${childLast}`, "batch");
+      }
+      seenInBatch.add(batchKey);
+
+      const alreadySubmitted = await activeEnrollmentChildExists(client, {
+        schoolId,
+        parentEmail,
+        firstName: childFirst,
+        lastName: childLast,
+        birthDate: childBirth,
+      });
+      if (alreadySubmitted) {
+        throw new DuplicateEnrollmentError(`${childFirst} ${childLast}`, "existing");
+      }
+
       /* Lokalizacja jest w `enrollment_requests` — nie uzależnij od kształtu tabeli `children`. */
       const locId = String(ch.preferredLocationId ?? "").trim() || null;
 
@@ -1364,12 +1353,12 @@ export async function insertPublicEnrollmentRequests(data: {
         [
           randomUUID(),
           schoolId,
-          data.firstName.trim(),
-          data.lastName.trim(),
+          parentFirstName,
+          parentLastName,
           parentEmail,
           parentPhone,
-          ch.firstName.trim(),
-          ch.lastName.trim(),
+          childFirst,
+          childLast,
           ch.birthDate.slice(0, 10),
           locId,
         ]
@@ -1416,6 +1405,8 @@ export async function createParentUserWithChildren(data: {
   const accessLevel = data.accessLevel ?? "PENDING";
   const shouldCreateEnrollmentRequests = data.createEnrollmentRequests ?? false;
   const parentPhone = data.parentPhone ?? data.phone ?? null;
+  const firstName = formatPersonName(data.firstName);
+  const lastName = formatPersonName(data.lastName);
 
   const client = await pool.connect();
   try {
@@ -1441,8 +1432,8 @@ export async function createParentUserWithChildren(data: {
                 data.email,
                 data.passwordHash,
                 role,
-                data.firstName,
-                data.lastName,
+                firstName,
+                lastName,
                 data.phone ?? null,
                 confirmed,
                 accessLevel,
@@ -1460,8 +1451,8 @@ export async function createParentUserWithChildren(data: {
                 data.email,
                 data.passwordHash,
                 role,
-                data.firstName,
-                data.lastName,
+                firstName,
+                lastName,
                 confirmed,
                 accessLevel,
               ]
@@ -1480,8 +1471,8 @@ export async function createParentUserWithChildren(data: {
                 data.email,
                 data.passwordHash,
                 role,
-                data.firstName,
-                data.lastName,
+                firstName,
+                lastName,
                 data.phone ?? null,
                 confirmed,
               ]
@@ -1498,8 +1489,8 @@ export async function createParentUserWithChildren(data: {
                 data.email,
                 data.passwordHash,
                 role,
-                data.firstName,
-                data.lastName,
+                firstName,
+                lastName,
                 confirmed,
               ]
             );
@@ -1515,8 +1506,8 @@ export async function createParentUserWithChildren(data: {
           userId,
           data.email,
           data.passwordHash,
-          data.firstName,
-          data.lastName,
+          firstName,
+          lastName,
           confirmed,
         ]
       );
@@ -1529,6 +1520,8 @@ export async function createParentUserWithChildren(data: {
     const children: Child[] = [];
     if (shape.hasChildrenTable) {
       for (const ch of data.children) {
+        const childFirstName = formatPersonName(ch.firstName);
+        const childLastName = formatPersonName(ch.lastName);
         const cid = randomUUID();
         const cr = shape.childHasConfirmed
           ? await client.query<ChildRow>(
@@ -1540,8 +1533,8 @@ export async function createParentUserWithChildren(data: {
                 cid,
                 schoolId,
                 userId,
-                ch.firstName.trim(),
-                ch.lastName.trim(),
+                childFirstName,
+                childLastName,
                 ch.birthDate.slice(0, 10),
                 null,
               ]
@@ -1555,8 +1548,8 @@ export async function createParentUserWithChildren(data: {
                 cid,
                 schoolId,
                 userId,
-                ch.firstName.trim(),
-                ch.lastName.trim(),
+                childFirstName,
+                childLastName,
                 ch.birthDate.slice(0, 10),
                 null,
               ]
@@ -1599,8 +1592,8 @@ export async function createParentUserWithChildren(data: {
             [
               randomUUID(),
               schoolId,
-              data.firstName.trim(),
-              data.lastName.trim(),
+              firstName,
+              lastName,
               String(data.email).trim().toLowerCase(),
               parentPhone,
               mappedChild.first_name,
@@ -1614,60 +1607,8 @@ export async function createParentUserWithChildren(data: {
           );
         }
       }
-    } else if (shape.hasStudentsTable) {
-      for (const ch of data.children) {
-        const sid = randomUUID();
-        const birthYear = ch.birthDate.slice(0, 4);
-        await client.query(
-          `INSERT INTO students (
-             student_id, user_id, first_name, last_name, birth_year, location, active
-           ) VALUES ($1, $2, $3, $4, $5, 'Paniówki', TRUE)`,
-          [sid, userId, ch.firstName.trim(), ch.lastName.trim(), birthYear]
-        );
-        const sr = await client.query(
-          `SELECT * FROM students WHERE student_id = $1`,
-          [sid]
-        );
-        const mappedChild = studentRowToChild(sr.rows[0]);
-        children.push(mappedChild);
-        if (shouldCreateEnrollmentRequests) {
-          await client.query(
-            `INSERT INTO enrollment_requests (
-               id,
-               school_id,
-               parent_first_name,
-               parent_last_name,
-               parent_email,
-               parent_phone,
-               child_first_name,
-               child_last_name,
-               child_birth_date,
-               preferred_location,
-               preferred_days,
-               notes,
-               status,
-               user_id,
-               created_at
-             ) VALUES (
-               $1, $2, $3, $4, $5, $6, $7, $8, $9::date, NULL, NULL, NULL, 'NEW', $10, NOW()
-             )`,
-            [
-              randomUUID(),
-              schoolId,
-              data.firstName.trim(),
-              data.lastName.trim(),
-              String(data.email).trim().toLowerCase(),
-              parentPhone,
-              mappedChild.first_name,
-              mappedChild.last_name,
-              mappedChild.birth_date,
-              userId,
-            ]
-          );
-        }
-      }
     } else {
-      throw new Error("Brak tabeli children ani students — nie można zapisać dzieci.");
+      throw new Error("Brak tabeli children — nie można zapisać dzieci.");
     }
 
     await client.query("COMMIT");
@@ -1691,51 +1632,27 @@ export async function getChildrenByParentId(parentId: string): Promise<Child[]> 
     );
     return r.rows.map(mapChildRow);
   }
-  if (shape.hasStudentsTable) {
-    const r = await pool.query(
-      `SELECT * FROM students WHERE user_id = $1 ORDER BY created_at ASC`,
-      [parentId]
-    );
-    return r.rows.map(studentRowToChild);
-  }
   return [];
 }
 
 export async function getChildById(childId: string): Promise<Child | null> {
   const shape = await getDbShape();
-  if (shape.hasChildrenTable) {
-    const r = await pool.query<ChildRow>(
-      `SELECT * FROM children WHERE id = $1 LIMIT 1`,
-      [childId]
-    );
-    return r.rows[0] ? mapChildRow(r.rows[0]) : null;
-  }
-  if (shape.hasStudentsTable) {
-    const r = await pool.query(
-      `SELECT * FROM students WHERE student_id = $1 LIMIT 1`,
-      [childId]
-    );
-    return r.rows[0] ? studentRowToChild(r.rows[0]) : null;
-  }
-  return null;
+  if (!shape.hasChildrenTable) return null;
+  const r = await pool.query<ChildRow>(
+    `SELECT * FROM children WHERE id = $1 LIMIT 1`,
+    [childId]
+  );
+  return r.rows[0] ? mapChildRow(r.rows[0]) : null;
 }
 
 export async function getAllChildren(): Promise<Child[]> {
   const shape = await getDbShape();
-  if (shape.hasChildrenTable) {
-    const r = await pool.query<ChildRow>(
-      `SELECT * FROM children WHERE school_id = $1 ORDER BY created_at DESC`,
-      [DEFAULT_SCHOOL_ID]
-    );
-    return r.rows.map(mapChildRow);
-  }
-  if (shape.hasStudentsTable) {
-    const r = await pool.query(
-      `SELECT * FROM students ORDER BY created_at DESC`
-    );
-    return r.rows.map(studentRowToChild);
-  }
-  return [];
+  if (!shape.hasChildrenTable) return [];
+  const r = await pool.query<ChildRow>(
+    `SELECT * FROM children WHERE school_id = $1 ORDER BY created_at DESC`,
+    [DEFAULT_SCHOOL_ID]
+  );
+  return r.rows.map(mapChildRow);
 }
 
 export async function updateChild(
@@ -1763,11 +1680,11 @@ export async function updateChild(
 
     if (data.first_name !== undefined) {
       sets.push(`first_name = $${i++}`);
-      vals.push(data.first_name);
+      vals.push(formatPersonName(data.first_name));
     }
     if (data.last_name !== undefined) {
       sets.push(`last_name = $${i++}`);
-      vals.push(data.last_name);
+      vals.push(formatPersonName(data.last_name));
     }
     if (data.birth_date !== undefined) {
       sets.push(`birth_date = $${i++}::date`);
@@ -1820,54 +1737,6 @@ export async function updateChild(
     return (r.rowCount ?? 0) > 0;
   }
 
-  if (shape.hasStudentsTable) {
-    const sets: string[] = [];
-    const vals: unknown[] = [];
-    let i = 1;
-
-    if (data.first_name !== undefined) {
-      sets.push(`first_name = $${i++}`);
-      vals.push(data.first_name);
-    }
-    if (data.last_name !== undefined) {
-      sets.push(`last_name = $${i++}`);
-      vals.push(data.last_name);
-    }
-    if (data.birth_date !== undefined) {
-      sets.push(`birth_year = $${i++}`);
-      vals.push(data.birth_date.slice(0, 4));
-    }
-    if (data.active !== undefined) {
-      sets.push(`active = $${i++}`);
-      vals.push(data.active);
-    }
-    if (data.resignation_requested !== undefined) {
-      sets.push(`resignation_requested = $${i++}`);
-      vals.push(data.resignation_requested);
-    }
-    if (data.resignation_reason !== undefined) {
-      sets.push(`resignation_reason = $${i++}`);
-      vals.push(data.resignation_reason);
-    }
-    if (data.resignation_date !== undefined) {
-      sets.push(`resignation_date = $${i++}`);
-      vals.push(
-        data.resignation_date === null
-          ? null
-          : typeof data.resignation_date === "string"
-            ? data.resignation_date
-            : data.resignation_date.toISOString()
-      );
-    }
-
-    if (sets.length === 0) return false;
-
-    vals.push(childId);
-    const q = `UPDATE students SET ${sets.join(", ")} WHERE student_id = $${i} RETURNING student_id`;
-    const r = await pool.query(q, vals);
-    return (r.rowCount ?? 0) > 0;
-  }
-
   return false;
 }
 
@@ -1904,52 +1773,6 @@ export async function deleteChild(childId: string): Promise<boolean> {
         `SELECT COUNT(*)::text AS c FROM children
          WHERE parent_id = $1 AND school_id = $2 AND active = TRUE`,
         [parentId, DEFAULT_SCHOOL_ID]
-      );
-      const activeChildren = parseInt(cnt.rows[0]?.c ?? "0", 10);
-      if (activeChildren === 0) {
-        if (shape.userHasSchoolId) {
-          await client.query(
-            `UPDATE users
-             SET active = FALSE, resignation_date = NOW()
-             WHERE id = $1 AND school_id = $2`,
-            [parentId, DEFAULT_SCHOOL_ID]
-          );
-        } else {
-          await client.query(
-            `UPDATE users
-             SET active = FALSE, resignation_date = NOW()
-             WHERE id = $1`,
-            [parentId]
-          );
-        }
-      }
-    } else if (shape.hasStudentsTable) {
-      const q = await client.query<{ user_id: string }>(
-        `SELECT user_id FROM students WHERE student_id = $1`,
-        [childId]
-      );
-      if (q.rows.length === 0) {
-        await client.query("ROLLBACK");
-        return false;
-      }
-      const parentId = q.rows[0].user_id;
-
-      const u = await client.query(
-        `UPDATE students
-         SET active = FALSE, resignation_date = COALESCE(resignation_date, NOW())
-         WHERE student_id = $1
-         RETURNING student_id`,
-        [childId]
-      );
-      if ((u.rowCount ?? 0) === 0) {
-        await client.query("ROLLBACK");
-        return false;
-      }
-
-      const cnt = await client.query<{ c: string }>(
-        `SELECT COUNT(*)::text AS c FROM students
-         WHERE user_id = $1 AND active = TRUE`,
-        [parentId]
       );
       const activeChildren = parseInt(cnt.rows[0]?.c ?? "0", 10);
       if (activeChildren === 0) {
@@ -2023,39 +1846,6 @@ export async function restoreChild(childId: string): Promise<boolean> {
           [parentId]
         );
       }
-    } else if (shape.hasStudentsTable) {
-      const q = await client.query<{ user_id: string }>(
-        `SELECT user_id FROM students WHERE student_id = $1`,
-        [childId]
-      );
-      if (q.rows.length === 0) {
-        await client.query("ROLLBACK");
-        return false;
-      }
-      const parentId = q.rows[0].user_id;
-
-      const u = await client.query(
-        `UPDATE students
-         SET active = TRUE, resignation_date = NULL
-         WHERE student_id = $1
-         RETURNING student_id`,
-        [childId]
-      );
-      if ((u.rowCount ?? 0) === 0) {
-        await client.query("ROLLBACK");
-        return false;
-      }
-
-      const p = await client.query<{ active: boolean }>(
-        `SELECT active FROM users WHERE id = $1 LIMIT 1`,
-        [parentId]
-      );
-      if (p.rows[0] && p.rows[0].active === false) {
-        await client.query(
-          `UPDATE users SET active = TRUE, resignation_date = NULL WHERE id = $1`,
-          [parentId]
-        );
-      }
     } else {
       await client.query("ROLLBACK");
       return false;
@@ -2071,105 +1861,22 @@ export async function restoreChild(childId: string): Promise<boolean> {
   }
 }
 
-export async function requestStudentResignation(
+export async function requestChildResignation(
   childId: string,
   parentUserId: string,
   reason: string
 ): Promise<boolean> {
   const shape = await getDbShape();
-  if (shape.hasChildrenTable) {
-    const r = await pool.query(
-      `UPDATE children
-       SET resignation_requested = TRUE,
-           resignation_reason = $1
-       WHERE id = $2 AND parent_id = $3 AND school_id = $4
-       RETURNING id`,
-      [reason, childId, parentUserId, DEFAULT_SCHOOL_ID]
-    );
-    return (r.rowCount ?? 0) > 0;
-  }
-  if (shape.hasStudentsTable) {
-    const r = await pool.query(
-      `UPDATE students
-       SET resignation_requested = TRUE,
-           resignation_reason = $1
-       WHERE student_id = $2 AND user_id = $3
-       RETURNING student_id`,
-      [reason, childId, parentUserId]
-    );
-    return (r.rowCount ?? 0) > 0;
-  }
-  return false;
-}
-
-// --- Legacy „students” API (aliasy pod istniejące route handlery) ---
-
-export async function getStudentsByUserId(userId: string): Promise<Student[]> {
-  const rows = await getChildrenByParentId(userId);
-  return rows.map((c) => childToLegacyStudent(c));
-}
-
-export async function getStudentById(studentId: string): Promise<Student | null> {
-  const c = await getChildById(studentId);
-  return c ? childToLegacyStudent(c) : null;
-}
-
-export async function createStudent(data: {
-  userId: string;
-  firstName: string;
-  lastName: string;
-  birthYear: string;
-  location: Location;
-}): Promise<Student> {
-  const birthDate = `${data.birthYear}-01-01`;
-  const child = await createChild({
-    parentId: data.userId,
-    firstName: data.firstName,
-    lastName: data.lastName,
-    birthDate,
-  });
-  return { ...childToLegacyStudent(child), location: data.location };
-}
-
-export async function getAllStudents(): Promise<Student[]> {
-  const rows = await getAllChildren();
-  return rows.map((c) => childToLegacyStudent(c));
-}
-
-export async function updateStudent(
-  studentId: string,
-  data: {
-    first_name?: string;
-    last_name?: string;
-    birth_year?: string;
-    location?: Location;
-    active?: boolean;
-    resignation_requested?: boolean;
-    resignation_reason?: string | null;
-    resignation_date?: Date | null;
-  }
-): Promise<boolean> {
-  const payload: Parameters<typeof updateChild>[1] = {};
-  if (data.first_name !== undefined) payload.first_name = data.first_name;
-  if (data.last_name !== undefined) payload.last_name = data.last_name;
-  if (data.birth_year !== undefined)
-    payload.birth_date = `${data.birth_year}-01-01`;
-  if (data.active !== undefined) payload.active = data.active;
-  if (data.resignation_requested !== undefined)
-    payload.resignation_requested = data.resignation_requested;
-  if (data.resignation_reason !== undefined)
-    payload.resignation_reason = data.resignation_reason;
-  if (data.resignation_date !== undefined)
-    payload.resignation_date = data.resignation_date;
-  return updateChild(studentId, payload);
-}
-
-export async function deleteStudent(studentId: string): Promise<boolean> {
-  return deleteChild(studentId);
-}
-
-export async function restoreStudent(studentId: string): Promise<boolean> {
-  return restoreChild(studentId);
+  if (!shape.hasChildrenTable) return false;
+  const r = await pool.query(
+    `UPDATE children
+     SET resignation_requested = TRUE,
+         resignation_reason = $1
+     WHERE id = $2 AND parent_id = $3 AND school_id = $4
+     RETURNING id`,
+    [reason, childId, parentUserId, DEFAULT_SCHOOL_ID]
+  );
+  return (r.rowCount ?? 0) > 0;
 }
 
 export async function getUsersByAccountType(
@@ -2273,26 +1980,4 @@ export async function queryDb<T extends QueryResultRow = QueryResultRow>(
   values?: unknown[]
 ) {
   return pool.query<T>(text, values);
-}
-
-export async function getStudentsWithResignation(): Promise<Student[]> {
-  const shape = await getDbShape();
-  if (shape.hasChildrenTable) {
-    const r = await pool.query<ChildRow>(
-      `SELECT * FROM children
-       WHERE school_id = $1 AND resignation_requested = TRUE
-       ORDER BY created_at DESC`,
-      [DEFAULT_SCHOOL_ID]
-    );
-    return r.rows.map((row) => childToLegacyStudent(mapChildRow(row)));
-  }
-  if (shape.hasStudentsTable) {
-    const r = await pool.query(
-      `SELECT * FROM students
-       WHERE resignation_requested = TRUE
-       ORDER BY created_at DESC`
-    );
-    return r.rows.map((row) => childToLegacyStudent(studentRowToChild(row)));
-  }
-  return [];
 }

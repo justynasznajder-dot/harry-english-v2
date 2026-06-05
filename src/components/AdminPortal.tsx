@@ -5,7 +5,6 @@ import Link from 'next/link';
 import {
   ENROLLMENT_STATUS_COLORS,
   ENROLLMENT_STATUS_LABELS,
-  formatEnrollmentProposalStatusLabel,
   formatEnrollmentStatusLabel,
   type EnrollmentStatus,
 } from '@/lib/enrollment-status';
@@ -79,6 +78,34 @@ interface GroupRow {
   active: boolean;
   max_students: number;
   teacher_id: string | null;
+  price_monthly?: string | number | null;
+  price_yearly?: string | number | null;
+}
+
+function priceFieldFromDb(value: unknown): string {
+  if (value == null || value === '') return '';
+  const n = Number(String(value).replace(',', '.'));
+  if (!Number.isFinite(n)) return '';
+  return String(n);
+}
+
+function isSchoolYearEndDatePassed(dateTo: string): boolean {
+  const end = String(dateTo).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) return false;
+  const today = new Date();
+  const todayStr = [
+    today.getFullYear(),
+    String(today.getMonth() + 1).padStart(2, '0'),
+    String(today.getDate()).padStart(2, '0'),
+  ].join('-');
+  return todayStr > end;
+}
+
+function formatSchoolYearEndDatePl(dateTo: string): string {
+  const end = String(dateTo).slice(0, 10);
+  const parsed = new Date(`${end}T12:00:00`);
+  if (Number.isNaN(parsed.getTime())) return end;
+  return parsed.toLocaleDateString('pl-PL', { year: 'numeric', month: 'long', day: 'numeric' });
 }
 
 interface GroupDetail {
@@ -95,6 +122,8 @@ interface GroupDetail {
     location_name?: string | null;
     max_students: number;
     active: boolean;
+    price_monthly?: string | number | null;
+    price_yearly?: string | number | null;
   };
   scheduleTemplates: Array<{
     id: string;
@@ -323,8 +352,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       notes: string | null;
       proposedGroupId: string | null;
       proposedAt: string | null;
-      proposalCount?: number;
-      hasPendingProposal?: boolean;
     }>;
   }>>([]);
   const [enrollmentGroups, setEnrollmentGroups] = useState<Array<{
@@ -335,26 +362,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   }>>([]);
   const [proposalModalParentId, setProposalModalParentId] = useState<string | null>(null);
   const [submittingProposalRequestId, setSubmittingProposalRequestId] = useState<string | null>(null);
-  const [proposalDrafts, setProposalDrafts] = useState<Record<string, { groupId: string }>>({});
-  const [proposalHistoryByRequestId, setProposalHistoryByRequestId] = useState<
-    Record<
-      string,
-      Array<{
-        id: string;
-        proposed_at: string;
-        responded_at: string | null;
-        status: string;
-        rejection_comment: string | null;
-        group_name: string;
-        location_name: string;
-        schedule: string;
-        proposed_by_first_name: string;
-        proposed_by_last_name: string;
-      }>
-    >
+  const [proposalDrafts, setProposalDrafts] = useState<
+    Record<string, { groupId: string; amountOverride: string }>
   >({});
   const [groups, setGroups] = useState<GroupRow[]>([]);
-  const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const [groupSaving, setGroupSaving] = useState(false);
   const [groupForm, setGroupForm] = useState({
     id: '',
     schoolId: '',
@@ -365,6 +377,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     teacherId: '',
     maxStudents: 12,
     active: true,
+    priceMonthly: '',
+    priceYearly: '',
   });
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [groupDetail, setGroupDetail] = useState<GroupDetail | null>(null);
@@ -700,6 +714,25 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     }
   }, [groupsSubTab, organizeExpandedGroupId, organizeFilteredGroups]);
 
+  const populateGroupFormFromGroup = useCallback(
+    (g: GroupDetail['group']) => {
+      setGroupForm({
+        id: g.id,
+        schoolId: g.school_id ?? sessionSchoolId ?? '',
+        schoolYearId: g.school_year_id ?? '',
+        locationId: g.location_id ?? '',
+        name: g.name,
+        level: g.level ?? '',
+        teacherId: g.teacher_id ?? '',
+        maxStudents: g.max_students,
+        active: g.active,
+        priceMonthly: priceFieldFromDb(g.price_monthly),
+        priceYearly: priceFieldFromDb(g.price_yearly),
+      });
+    },
+    [sessionSchoolId],
+  );
+
   const loadGroupDetail = useCallback(async (groupId: string, options?: { quiet?: boolean }) => {
     const quiet = options?.quiet === true;
     if (quiet) setOrganizeLoadingGroupId(groupId);
@@ -708,66 +741,78 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       const res = await fetch(`/api/admin/groups/${groupId}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.message ?? 'Nie udało się pobrać szczegółów grupy');
-      setGroupDetail(data as GroupDetail);
+      const detail = data as GroupDetail;
+      setGroupDetail(detail);
       setSelectedGroupId(groupId);
+      populateGroupFormFromGroup(detail.group);
     } catch (error) {
       pushToast('error', error instanceof Error ? error.message : 'Błąd pobierania grupy');
     } finally {
       if (quiet) setOrganizeLoadingGroupId(null);
       else setGroupLoading(false);
     }
-  }, [pushToast]);
+  }, [pushToast, populateGroupFormFromGroup]);
+
+  const saveGroupForm = useCallback(async () => {
+    if (!groupForm.id) return;
+    if (!groupForm.name.trim()) {
+      pushToast('error', 'Podaj nazwę grupy');
+      return;
+    }
+    if (!groupForm.teacherId) {
+      pushToast('error', 'Wybierz nauczyciela dla grupy');
+      return;
+    }
+    setGroupSaving(true);
+    try {
+      const res = await fetch(`/api/admin/groups/${groupForm.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: groupForm.name.trim(),
+          level: groupForm.level.trim() || null,
+          teacherId: groupForm.teacherId,
+          maxStudents: groupForm.maxStudents,
+          active: groupForm.active,
+          schoolId: groupForm.schoolId || null,
+          schoolYearId: groupForm.schoolYearId || null,
+          locationId: groupForm.locationId || null,
+          priceMonthly: groupForm.priceMonthly.trim() ? Number(groupForm.priceMonthly) : null,
+          priceYearly: groupForm.priceYearly.trim() ? Number(groupForm.priceYearly) : null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        pushToast('error', data.message ?? 'Nie udało się zapisać grupy');
+        return;
+      }
+      pushToast('success', 'Grupa zaktualizowana');
+      await loadData();
+      await loadGroupDetail(
+        groupForm.id,
+        groupsSubTab === 'organize' && organizeExpandedGroupId === groupForm.id
+          ? { quiet: true }
+          : undefined,
+      );
+    } catch {
+      pushToast('error', 'Nie udało się zapisać grupy');
+    } finally {
+      setGroupSaving(false);
+    }
+  }, [
+    groupForm,
+    pushToast,
+    loadData,
+    loadGroupDetail,
+    groupsSubTab,
+    organizeExpandedGroupId,
+  ]);
 
   useEffect(() => {
     if (!initialGroupId || initialGroupLoaded) return;
     void loadGroupDetail(initialGroupId);
     setInitialGroupLoaded(true);
   }, [initialGroupId, initialGroupLoaded, loadGroupDetail]);
-
-  useEffect(() => {
-    if (!proposalModalParentId) {
-      setProposalHistoryByRequestId({});
-      return;
-    }
-    const pid = proposalModalParentId.trim();
-    const parent = enrollmentParents.find((p) => {
-      if (p.id === pid) return true;
-      const em = (p.email ?? '').trim().toLowerCase();
-      return em.length > 0 && pid.includes('@') && em === pid.toLowerCase();
-    });
-    if (!parent) return;
-    let cancelled = false;
-    void (async () => {
-      const entries = await Promise.all(
-        parent.children.map(async (c) => {
-          const r = await fetch(
-            `/api/admin/enrollment/proposals?enrollmentRequestId=${encodeURIComponent(c.requestId)}`,
-            { credentials: 'include' },
-          );
-          if (!r.ok) return [c.requestId, []] as const;
-          const d = (await r.json()) as {
-            proposals?: Array<{
-              id: string;
-              proposed_at: string;
-              responded_at: string | null;
-              status: string;
-              rejection_comment: string | null;
-              group_name: string;
-              location_name: string;
-              schedule: string;
-              proposed_by_first_name: string;
-              proposed_by_last_name: string;
-            }>;
-          };
-          return [c.requestId, d.proposals ?? []] as const;
-        }),
-      );
-      if (!cancelled) setProposalHistoryByRequestId(Object.fromEntries(entries));
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [proposalModalParentId, enrollmentParents]);
 
   const availableChildren = useMemo(() => {
     if (!groupDetail) return [];
@@ -1324,13 +1369,35 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   {(() => {
                     const active = schoolYears.find((y) => y.isActive ?? y.active);
                     const inactive = schoolYears.filter((y) => !(y.isActive ?? y.active));
+                    const activeYearExpired = active ? isSchoolYearEndDatePassed(active.date_to) : false;
                     return (
                       <>
+                        {active && activeYearExpired && (
+                          <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+                            <p className="font-semibold">Rok szkolny minął</p>
+                            <p className="mt-1">
+                              Data końcowa ({formatSchoolYearEndDatePl(active.date_to)}) już upłynęła, a rok
+                              nadal jest oznaczony jako aktywny. Zakończ go przyciskiem „Zakończ rok szkolny”,
+                              aby móc utworzyć nowy rok i planować kolejne zajęcia.
+                            </p>
+                          </div>
+                        )}
                         {active ? (
-                          <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4">
+                          <div
+                            className={`rounded-xl border p-4 ${
+                              activeYearExpired
+                                ? 'border-amber-300 bg-amber-50/40'
+                                : 'border-emerald-200 bg-emerald-50/40'
+                            }`}
+                          >
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                               <div>
-                                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-800">Aktywny rok</p>
+                                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-800">
+                                  Aktywny rok
+                                  {activeYearExpired ? (
+                                    <span className="ml-2 normal-case text-amber-800">(po terminie)</span>
+                                  ) : null}
+                                </p>
                                 <p className="mt-1 text-lg font-bold text-zinc-900">{active.name}</p>
                                 <p className="mt-1 text-sm text-zinc-600">
                                   {active.date_from} — {active.date_to}
@@ -1924,6 +1991,172 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     );
   };
 
+  const renderGroupEditForm = (options?: { showBackButton?: boolean; groupId?: string }) => {
+    const backButton = options?.showBackButton ? (
+      <button
+        type="button"
+        className="rounded-xl bg-zinc-200 px-3 py-2 text-sm font-semibold text-zinc-800"
+        onClick={() => {
+          setSelectedGroupId(null);
+          setGroupDetail(null);
+        }}
+      >
+        Wróć do listy
+      </button>
+    ) : null;
+
+    const fullViewLink =
+      options?.groupId && groupsSubTab === 'organize' ? (
+        <Link
+          href={`/portal/groups/${options.groupId}`}
+          className="inline-flex items-center rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50"
+        >
+          Pełny widok
+        </Link>
+      ) : null;
+
+    return (
+      <section className="rounded-2xl border border-emerald-100 bg-white p-4 md:p-5">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h3 className="text-lg font-semibold text-zinc-900">Dane grupy</h3>
+          <div className="flex flex-wrap gap-2">
+            {fullViewLink}
+            {backButton}
+          </div>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-1 md:col-span-2">
+            <label className="block text-sm font-medium text-zinc-700">Rok szkolny</label>
+            <select
+              className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+              value={groupForm.schoolYearId}
+              onChange={(e) => setGroupForm((p) => ({ ...p, schoolYearId: e.target.value }))}
+            >
+              <option value="">Brak roku szkolnego</option>
+              {schoolYears.map((year) => (
+                <option key={year.id} value={year.id}>
+                  {year.name}{(year.isActive ?? year.active) ? ' (aktywny)' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-zinc-700">Nazwa grupy</label>
+            <input
+              className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+              value={groupForm.name}
+              onChange={(e) => setGroupForm((p) => ({ ...p, name: e.target.value }))}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-zinc-700">Poziom</label>
+            <input
+              type="text"
+              className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+              value={groupForm.level}
+              onChange={(e) => setGroupForm((p) => ({ ...p, level: e.target.value }))}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-zinc-700">Nauczyciel</label>
+            <select
+              className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+              value={groupForm.teacherId}
+              onChange={(e) => setGroupForm((p) => ({ ...p, teacherId: e.target.value }))}
+            >
+              <option value="">Wybierz nauczyciela</option>
+              {users.filter((u) => u.role === 'TEACHER' && u.active).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.first_name} {t.last_name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-zinc-700">Lokalizacja</label>
+            <select
+              className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+              value={groupForm.locationId}
+              onChange={(e) => setGroupForm((p) => ({ ...p, locationId: e.target.value }))}
+            >
+              <option value="">Brak lokalizacji</option>
+              {(groupDetail?.locations ?? schoolLocations)
+                .filter((loc) => ('active' in loc ? loc.active : true))
+                .map((loc) => (
+                  <option key={loc.id} value={loc.id}>
+                    {loc.name}
+                  </option>
+                ))}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-zinc-700">Maks. uczniów</label>
+            <input
+              className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+              type="number"
+              min="1"
+              value={groupForm.maxStudents}
+              onChange={(e) =>
+                setGroupForm((p) => ({ ...p, maxStudents: Number(e.target.value || 12) }))
+              }
+            />
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:col-span-2">
+            <div className="space-y-1">
+              <label className="block text-sm font-medium text-zinc-700">Stawka miesięczna (PLN)</label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                placeholder="Brak w bazie"
+                value={groupForm.priceMonthly}
+                onChange={(e) => setGroupForm((p) => ({ ...p, priceMonthly: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="block text-sm font-medium text-zinc-700">Stawka roczna (PLN)</label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                placeholder="Brak w bazie"
+                value={groupForm.priceYearly}
+                onChange={(e) => setGroupForm((p) => ({ ...p, priceYearly: e.target.value }))}
+              />
+            </div>
+          </div>
+          <div className="space-y-1 md:col-span-2">
+            <label className="block text-sm font-medium text-zinc-700">Status grupy</label>
+            <label className="flex items-center gap-2 rounded-xl border border-emerald-200 px-3 py-2 text-sm text-zinc-700">
+              <input
+                type="checkbox"
+                checked={groupForm.active}
+                onChange={(e) => setGroupForm((p) => ({ ...p, active: e.target.checked }))}
+                className="accent-emerald-600"
+              />
+              Aktywna grupa
+            </label>
+          </div>
+        </div>
+        <p className="mt-3 text-xs text-zinc-500">
+          Kwoty z bazy są wczytywane automatycznie — możesz je tutaj nadpisać.
+        </p>
+        <div className="mt-4 flex justify-end">
+          <button
+            type="button"
+            disabled={groupSaving}
+            className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            onClick={() => void saveGroupForm()}
+          >
+            {groupSaving ? 'Zapisywanie…' : 'Zapisz zmiany'}
+          </button>
+        </div>
+      </section>
+    );
+  };
+
   const renderGroupManageSections = (detail: GroupDetail, groupId: string, opts?: { quietReload?: boolean }) => {
     const quietReload = opts?.quietReload === true;
     const reloadDetail = () => loadGroupDetail(groupId, quietReload ? { quiet: true } : undefined);
@@ -2063,60 +2296,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     if (selectedGroupId && groupDetail && groupsSubTab !== 'organize') {
       return (
         <div className="space-y-4">
-          <section className="rounded-2xl border border-emerald-100 bg-white p-4 md:p-5">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h3 className="text-2xl font-semibold text-zinc-900">{groupDetail.group.name}</h3>
-                <div className="mt-2 flex flex-wrap gap-2 text-sm">
-                  <span className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-800">
-                    Poziom: {groupDetail.group.level ?? '-'}
-                  </span>
-                  <span className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-800">
-                    Nauczyciel: {groupDetail.group.teacher_name ?? '-'}
-                  </span>
-                  <span className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-800">
-                    Lokalizacja: {groupDetail.group.location_name ?? '-'}
-                  </span>
-                  <span className="rounded-full bg-zinc-100 px-3 py-1 text-zinc-700">
-                    Uczniowie: {groupDetail.students.filter((s) => !s.left_at).length}/{groupDetail.group.max_students}
-                  </span>
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="rounded-xl bg-emerald-600 px-3 py-2 text-white"
-                  onClick={() => {
-                    setGroupForm({
-                      id: groupDetail.group.id,
-                      schoolId: groupDetail.group.school_id ?? sessionSchoolId ?? '',
-                      schoolYearId: groupDetail.group.school_year_id ?? '',
-                      locationId: groupDetail.group.location_id ?? '',
-                      name: groupDetail.group.name,
-                      level: groupDetail.group.level ?? '',
-                      teacherId: groupDetail.group.teacher_id ?? '',
-                      maxStudents: groupDetail.group.max_students,
-                      active: groupDetail.group.active,
-                    });
-                    setGroupModalOpen(true);
-                  }}
-                >
-                  Edytuj
-                </button>
-                <button
-                  type="button"
-                  className="rounded-xl bg-zinc-200 px-3 py-2"
-                  onClick={() => {
-                    setSelectedGroupId(null);
-                    setGroupDetail(null);
-                  }}
-                >
-                  Wróć do listy
-                </button>
-              </div>
-            </div>
-          </section>
-
+          {renderGroupEditForm({ showBackButton: true })}
           {renderGroupManageSections(groupDetail, selectedGroupId)}
         </div>
       );
@@ -2144,6 +2324,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 teacherId: '',
                 maxStudents: 12,
                 active: true,
+                priceMonthly: '',
+                priceYearly: '',
               });
               void loadLocations();
             }}
@@ -2249,19 +2431,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                           className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
                           onClick={(event) => {
                             event.stopPropagation();
-                            setGroupForm({
-                              id: g.id,
-                              schoolId: sessionSchoolId ?? '',
-                              schoolYearId: g.school_year_id ?? '',
-                              locationId: g.location_id ?? '',
-                              name: g.name,
-                              level: g.level ?? '',
-                              teacherId: g.teacher_id ?? '',
-                              maxStudents: g.max_students,
-                              active: g.active,
-                            });
-                            void loadLocations();
-                            setGroupModalOpen(true);
+                            void loadGroupDetail(g.id);
                           }}
                         >
                           Edytuj
@@ -2332,6 +2502,35 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 <label className="block text-sm font-medium text-zinc-700">Maksymalna liczba uczniów</label>
                 <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="number" min="1" value={groupForm.maxStudents} onChange={(e) => setGroupForm((p) => ({ ...p, maxStudents: Number(e.target.value || 12) }))} />
               </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <label className="block text-sm font-medium text-zinc-700">Stawka miesięczna (PLN)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                    placeholder="Brak w bazie"
+                    value={groupForm.priceMonthly}
+                    onChange={(e) => setGroupForm((p) => ({ ...p, priceMonthly: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-sm font-medium text-zinc-700">Stawka roczna (PLN)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                    placeholder="Brak w bazie"
+                    value={groupForm.priceYearly}
+                    onChange={(e) => setGroupForm((p) => ({ ...p, priceYearly: e.target.value }))}
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-zinc-500">
+                Kwoty z bazy są wczytywane automatycznie — możesz je tutaj nadpisać.
+              </p>
               <div className="space-y-1">
                 <label className="block text-sm font-medium text-zinc-700">Status grupy</label>
                 <label className="flex items-center gap-2 rounded-xl border border-emerald-200 px-3 py-2 text-sm text-zinc-700">
@@ -2376,6 +2575,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         schoolId: groupForm.schoolId || null,
                         schoolYearId: groupForm.schoolYearId || null,
                         locationId: groupForm.locationId || null,
+                        priceMonthly: groupForm.priceMonthly.trim() ? Number(groupForm.priceMonthly) : null,
+                        priceYearly: groupForm.priceYearly.trim() ? Number(groupForm.priceYearly) : null,
                       }),
                     });
                     const data = await res.json();
@@ -2468,37 +2669,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                             </div>
                           ) : (
                             <>
-                              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-100 bg-white px-4 py-3">
-                                <p className="text-sm font-medium text-zinc-700">Szczegóły i edycja danych grupy</p>
-                                <div className="flex flex-wrap gap-2">
-                                  <button
-                                    type="button"
-                                    className="rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white"
-                                    onClick={() => {
-                                      setGroupForm({
-                                        id: groupDetail.group.id,
-                                        schoolId: groupDetail.group.school_id ?? sessionSchoolId ?? '',
-                                        schoolYearId: groupDetail.group.school_year_id ?? '',
-                                        locationId: groupDetail.group.location_id ?? '',
-                                        name: groupDetail.group.name,
-                                        level: groupDetail.group.level ?? '',
-                                        teacherId: groupDetail.group.teacher_id ?? '',
-                                        maxStudents: groupDetail.group.max_students,
-                                        active: groupDetail.group.active,
-                                      });
-                                      setGroupModalOpen(true);
-                                    }}
-                                  >
-                                    Edytuj
-                                  </button>
-                                  <Link
-                                    href={`/portal/groups/${g.id}`}
-                                    className="inline-flex items-center rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50"
-                                  >
-                                    Pełny widok
-                                  </Link>
-                                </div>
-                              </div>
+                              {renderGroupEditForm({ groupId: g.id })}
                               {renderGroupManageSections(groupDetail, g.id, { quietReload: true })}
                             </>
                           )}
@@ -2569,10 +2740,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   onClick={() => {
                     setProposalModalParentId(parent.id);
                     setProposalDrafts(() => {
-                      const next: Record<string, { groupId: string }> = {};
+                      const next: Record<string, { groupId: string; amountOverride: string }> = {};
                       for (const child of parent.children) {
                         next[child.requestId] = {
                           groupId: child.proposedGroupId ?? '',
+                          amountOverride: '',
                         };
                       }
                       return next;
@@ -2971,134 +3143,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         </div>
       )}
 
-      {groupModalOpen && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-5">
-            <h3 className="text-lg font-semibold">{groupForm.id ? 'Edytuj grupę' : 'Nowa grupa'}</h3>
-            <div className="mt-4 space-y-3">
-              <div className="space-y-1">
-                <label className="block text-sm font-medium text-zinc-700">Rok szkolny</label>
-              <select
-                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-                value={groupForm.schoolYearId}
-                onChange={(e) => setGroupForm((p) => ({ ...p, schoolYearId: e.target.value }))}
-              >
-                <option value="">Brak roku szkolnego</option>
-                {schoolYears.map((year) => (
-                  <option key={year.id} value={year.id}>
-                    {year.name}{(year.isActive ?? year.active) ? ' (aktywny)' : ''}
-                  </option>
-                ))}
-              </select>
-              </div>
-              <div className="space-y-1">
-                <label className="block text-sm font-medium text-zinc-700">Nazwa grupy</label>
-                <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" placeholder="Nazwa grupy" value={groupForm.name} onChange={(e) => setGroupForm((p) => ({ ...p, name: e.target.value }))} />
-              </div>
-              <div className="space-y-1">
-                <label className="block text-sm font-medium text-zinc-700">Poziom</label>
-                <input
-                  type="text"
-                  className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-                  placeholder="Poziom"
-                  value={groupForm.level}
-                  onChange={(e) => setGroupForm((p) => ({ ...p, level: e.target.value }))}
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="block text-sm font-medium text-zinc-700">Nauczyciel</label>
-              <select className="w-full rounded-xl border border-emerald-200 px-3 py-2" value={groupForm.teacherId} onChange={(e) => setGroupForm((p) => ({ ...p, teacherId: e.target.value }))}>
-                <option value="">Wybierz nauczyciela</option>
-                {users.filter((u) => u.role === 'TEACHER' && u.active).map((t) => (
-                  <option key={t.id} value={t.id}>{t.first_name} {t.last_name}</option>
-                ))}
-              </select>
-              </div>
-              <div className="space-y-1">
-                <label className="block text-sm font-medium text-zinc-700">Lokalizacja</label>
-                <select
-                  className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-                  value={groupForm.locationId}
-                  onChange={(e) => setGroupForm((p) => ({ ...p, locationId: e.target.value }))}
-                >
-                  <option value="">Brak lokalizacji</option>
-                  {schoolLocations.filter((loc) => loc.active).map((loc) => (
-                    <option key={loc.id} value={loc.id}>
-                      {loc.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-1">
-                <label className="block text-sm font-medium text-zinc-700">Maksymalna liczba uczniów</label>
-                <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="number" min="1" value={groupForm.maxStudents} onChange={(e) => setGroupForm((p) => ({ ...p, maxStudents: Number(e.target.value || 12) }))} />
-              </div>
-              <div className="space-y-1">
-                <label className="block text-sm font-medium text-zinc-700">Status grupy</label>
-                <label className="flex items-center gap-2 rounded-xl border border-emerald-200 px-3 py-2 text-sm text-zinc-700">
-                  <input
-                    type="checkbox"
-                    checked={groupForm.active}
-                    onChange={(e) => setGroupForm((p) => ({ ...p, active: e.target.checked }))}
-                    className="accent-emerald-600"
-                  />
-                  Aktywna grupa
-                </label>
-              </div>
-              <div className="flex justify-end gap-2">
-                <button className="rounded-xl bg-zinc-200 px-3 py-2" onClick={() => setGroupModalOpen(false)}>Anuluj</button>
-                <button
-                  className="rounded-xl bg-emerald-600 px-3 py-2 text-white"
-                  onClick={async () => {
-                    if (!groupForm.name.trim()) {
-                      pushToast('error', 'Podaj nazwę grupy');
-                      return;
-                    }
-                    if (!groupForm.teacherId) {
-                      pushToast('error', 'Wybierz nauczyciela dla grupy');
-                      return;
-                    }
-                    const endpoint = groupForm.id ? `/api/admin/groups/${groupForm.id}` : '/api/admin/groups';
-                    const res = await fetch(endpoint, {
-                      method: groupForm.id ? 'PUT' : 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        name: groupForm.name.trim(),
-                        level: groupForm.level.trim() || null,
-                        teacherId: groupForm.teacherId,
-                        maxStudents: groupForm.maxStudents,
-                        active: groupForm.active,
-                        schoolId: groupForm.schoolId || null,
-                        schoolYearId: groupForm.schoolYearId || null,
-                        locationId: groupForm.locationId || null,
-                      }),
-                    });
-                    const data = await res.json();
-                    if (!res.ok) {
-                      pushToast('error', data.message ?? 'Nie udało się zapisać grupy');
-                      return;
-                    }
-                    pushToast('success', groupForm.id ? 'Grupa zaktualizowana' : 'Grupa zapisana');
-                    setGroupModalOpen(false);
-                    await loadData();
-                    if (groupForm.id) {
-                      await loadGroupDetail(
-                        groupForm.id,
-                        groupsSubTab === 'organize' && organizeExpandedGroupId === groupForm.id
-                          ? { quiet: true }
-                          : undefined,
-                      );
-                    }
-                  }}
-                >
-                  Zapisz
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {scheduleModalOpen && selectedGroupId && groupDetail && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white p-5">
@@ -3378,10 +3422,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 </div>
                 <div className="mt-4 space-y-3">
                   {proposalParent.children.map((child) => {
-                    const proposalAllowed =
-                      child.status === 'NEW' ||
-                      child.status === 'REJECTED' ||
-                      child.status === 'NEGOTIATING';
+                    const proposalAllowed = child.status === 'NEW';
                     const proposedGroup =
                       child.proposedGroupId
                         ? enrollmentGroups.find((g) => g.id === child.proposedGroupId)
@@ -3397,7 +3438,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                               });
                         })()
                       : null;
-                    const history = proposalHistoryByRequestId[child.requestId] ?? [];
                     return (
                     <div key={child.requestId} className="rounded-xl border border-emerald-100 p-4">
                       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -3415,12 +3455,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                               <span
                                 className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${ENROLLMENT_STATUS_COLORS[child.childAccessLevel] ?? 'bg-zinc-100 text-zinc-700'}`}
                               >
-                                Dziecko:{' '}
-                                {ENROLLMENT_STATUS_LABELS[child.childAccessLevel] ?? child.childAccessLevel}
-                              </span>
-                            )}
-                            {child.childAccessLevel && child.childAccessLevel === child.status && (
-                              <span className="inline-block rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-semibold text-zinc-600">
                                 Dziecko:{' '}
                                 {ENROLLMENT_STATUS_LABELS[child.childAccessLevel] ?? child.childAccessLevel}
                               </span>
@@ -3453,38 +3487,51 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                   Wysłano: {proposedAtFormatted}
                                 </p>
                               )}
-                              {(child.proposalCount ?? 0) >= 3 && (
-                                <p className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-950">
-                                  To zgłoszenie ma już {child.proposalCount} propozycji grup (limit miękki: 3).
-                                  Rozważ kontakt z rodzicem przed kolejną propozycją.
+                              <p className="mt-2 text-xs text-sky-800">
+                                Czekamy na decyzję rodzica. To jedyna propozycja grupy dla tego
+                                zgłoszenia — po odrzuceniu skontaktuj się z rodzicem bezpośrednio.
+                              </p>
+                            </div>
+                          ) : child.status === 'NEGOTIATING' ? (
+                            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm">
+                              <p className="font-semibold text-amber-950">Propozycja odrzucona przez rodzica</p>
+                              {proposedGroup ? (
+                                <p className="mt-1 text-amber-950">
+                                  {proposedGroup.name} · {proposedGroup.location_name} ·{' '}
+                                  {proposedGroup.schedule}
+                                </p>
+                              ) : (
+                                <p className="mt-1 text-amber-950">
+                                  (nie udało się dopasować grupy w aktualnej liście)
                                 </p>
                               )}
-                              <p className="mt-2 text-xs text-sky-800">
-                                Czekamy na decyzję rodzica. Kolejną propozycję będzie można wysłać
-                                dopiero po jej odrzuceniu.
+                              <p className="mt-2 text-xs text-amber-900">
+                                Skontaktuj się z rodzicem, aby ustalić dalsze kroki. Kolejnej
+                                propozycji z systemu nie wyślesz.
+                              </p>
+                            </div>
+                          ) : child.status === 'ACCEPTED' ? (
+                            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm">
+                              <p className="font-semibold text-emerald-900">Propozycja zaakceptowana</p>
+                              {proposedGroup ? (
+                                <p className="mt-1 text-emerald-900">
+                                  {proposedGroup.name} · {proposedGroup.location_name} ·{' '}
+                                  {proposedGroup.schedule}
+                                </p>
+                              ) : null}
+                              <p className="mt-2 text-xs text-emerald-800">
+                                Rodzic przechodzi do uzupełnienia danych do umowy.
                               </p>
                             </div>
                           ) : (
                             <>
-                              {child.status === 'NEGOTIATING' && (
-                                <p className="rounded-xl border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
-                                  Rodzic odrzucił ostatnią propozycję — możesz wysłać kolejną propozycję grupy.
-                                </p>
-                              )}
                               {child.status === 'REJECTED' && (
                                 <p className="rounded-xl border border-rose-200 bg-rose-50 p-2 text-xs text-rose-800">
-                                  Zgłoszenie oznaczone jako odrzucone przez szkołę — możesz zaproponować inną grupę,
-                                  jeśli proces ma być kontynuowany.
+                                  Zgłoszenie oznaczone jako odrzucone przez szkołę.
                                 </p>
                               )}
                               {proposalAllowed && (
                                 <>
-                                  {(child.proposalCount ?? 0) >= 3 && (
-                                    <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-950">
-                                      To zgłoszenie ma już {child.proposalCount} propozycji grup (limit miękki: 3).
-                                      Rozważ kontakt z rodzicem przed kolejną propozycją.
-                                    </p>
-                                  )}
                               <select
                                 className="w-full rounded-xl border border-emerald-200 px-3 py-2 disabled:cursor-not-allowed disabled:opacity-60"
                                 disabled={!proposalAllowed}
@@ -3494,6 +3541,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                     ...prev,
                                     [child.requestId]: {
                                       groupId: e.target.value,
+                                      amountOverride: prev[child.requestId]?.amountOverride ?? '',
                                     },
                                   }))
                                 }
@@ -3505,16 +3553,39 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                   </option>
                                 ))}
                               </select>
+                              <div className="space-y-1">
+                                <label className="block text-xs font-medium text-zinc-600">
+                                  Nadpisanie kwoty (PLN, opcjonalnie)
+                                </label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  className="w-full rounded-xl border border-emerald-200 px-3 py-2 disabled:cursor-not-allowed disabled:opacity-60"
+                                  disabled={!proposalAllowed}
+                                  placeholder="Pozostaw puste — kwota z cennika grupy"
+                                  value={proposalDrafts[child.requestId]?.amountOverride ?? ''}
+                                  onChange={(e) =>
+                                    setProposalDrafts((prev) => ({
+                                      ...prev,
+                                      [child.requestId]: {
+                                        groupId: prev[child.requestId]?.groupId ?? '',
+                                        amountOverride: e.target.value,
+                                      },
+                                    }))
+                                  }
+                                />
+                              </div>
                               <button
                                 disabled={
                                   !proposalAllowed ||
-                                  child.hasPendingProposal === true ||
                                   submittingProposalRequestId === child.requestId
                                 }
                                 className="rounded-xl bg-emerald-600 px-3 py-2 text-white disabled:opacity-60 disabled:cursor-not-allowed"
                                 onClick={async () => {
                                   const draft = proposalDrafts[child.requestId];
                                   const groupId = draft?.groupId ?? '';
+                                  const amountOverrideRaw = draft?.amountOverride?.trim() ?? '';
                                   if (!groupId) {
                                     pushToast('error', 'Wybierz grupę');
                                     return;
@@ -3527,13 +3598,15 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                       body: JSON.stringify({
                                         requestId: child.requestId,
                                         groupId,
+                                        ...(amountOverrideRaw
+                                          ? { amount_override: Number(amountOverrideRaw) }
+                                          : {}),
                                       }),
                                     });
                                     const data = (await res.json().catch(() => ({}))) as {
                                       message?: string;
                                       parentCreated?: boolean;
                                       parentId?: string;
-                                      proposalCount?: number;
                                     };
                                     if (!res.ok) {
                                       pushToast(
@@ -3585,50 +3658,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                           )}
                         </div>
                       </div>
-                      <details className="mt-3 rounded-lg border border-zinc-200 bg-zinc-50/90">
-                        <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-zinc-800">
-                          Historia propozycji grup ({history.length})
-                        </summary>
-                        <div className="space-y-2 border-t border-zinc-200 px-3 py-3 text-sm">
-                          {history.length === 0 ? (
-                            <p className="text-xs text-zinc-500">Brak zapisanej historii.</p>
-                          ) : (
-                            history.map((h) => (
-                              <div key={h.id} className="rounded-lg border border-white bg-white p-2 shadow-sm">
-                                <p className="font-semibold text-zinc-900">{h.group_name}</p>
-                                <p className="text-xs text-zinc-600">
-                                  {h.location_name} · {h.schedule}
-                                </p>
-                                <p className="mt-1 text-xs text-zinc-500">
-                                  Wysłano:{' '}
-                                  {new Date(h.proposed_at).toLocaleString('pl-PL', {
-                                    dateStyle: 'short',
-                                    timeStyle: 'short',
-                                  })}
-                                  {' · '}
-                                  Status: {formatEnrollmentProposalStatusLabel(h.status)}
-                                  {h.responded_at
-                                    ? ` · Odpowiedź: ${new Date(h.responded_at).toLocaleString('pl-PL', {
-                                        dateStyle: 'short',
-                                        timeStyle: 'short',
-                                      })}`
-                                    : ''}
-                                </p>
-                                {h.status === 'REJECTED' && h.rejection_comment && (
-                                  <p className="mt-1 text-xs text-rose-800">
-                                    Komentarz rodzica: {h.rejection_comment}
-                                  </p>
-                                )}
-                                {(h.proposed_by_first_name || h.proposed_by_last_name) && (
-                                  <p className="mt-1 text-xs text-zinc-500">
-                                    Wysłał(a): {h.proposed_by_first_name} {h.proposed_by_last_name}
-                                  </p>
-                                )}
-                              </div>
-                            ))
-                          )}
-                        </div>
-                      </details>
                     </div>
                     );
                   })}

@@ -1,6 +1,50 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getChildrenByParentId, getUserById } from "@/lib/db";
+import { getChildrenByParentId, getUserById, queryDb } from "@/lib/db";
 import { getTokenFromRequest } from "@/lib/auth";
+
+async function resolveSchoolName(schoolId: string | null | undefined): Promise<string | null> {
+  const id = String(schoolId ?? "").trim();
+  if (!id) return null;
+  try {
+    const res = await queryDb<{ name: string }>(
+      `SELECT name FROM schools WHERE id::text = $1 LIMIT 1`,
+      [id]
+    );
+    return res.rows[0]?.name?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Dla rodzica: nazwa szkoły z aktywnego zgłoszenia (źródło prawdy przy zapisie). */
+async function resolveParentSchoolName(
+  userId: string,
+  parentEmail: string,
+  accountSchoolId: string | null | undefined
+): Promise<string | null> {
+  try {
+    const enrollmentRes = await queryDb<{ name: string; school_id: string }>(
+      `SELECT s.name, er.school_id::text AS school_id
+       FROM enrollment_requests er
+       JOIN schools s ON s.id::text = er.school_id::text
+       WHERE (
+           er.user_id = $1
+           OR LOWER(BTRIM(er.parent_email::text)) = LOWER(BTRIM($2::text))
+         )
+         AND UPPER(BTRIM(COALESCE(er.status::text, ''))) NOT IN ('COMPLETED', 'REJECTED')
+       ORDER BY er.created_at DESC
+       LIMIT 1`,
+      [userId, parentEmail]
+    );
+    const row = enrollmentRes.rows[0];
+    if (row?.name?.trim()) {
+      return row.name.trim();
+    }
+  } catch {
+    /* fallback na konto */
+  }
+  return resolveSchoolName(accountSchoolId);
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -40,16 +84,23 @@ export async function GET(request: NextRequest) {
       }));
     }
 
+    const schoolName =
+      user.role === "PARENT"
+        ? await resolveParentSchoolName(user.id, user.email, user.school_id)
+        : await resolveSchoolName(user.school_id);
+
     return NextResponse.json({
       user: {
         id: user.id,
         email: user.email,
+        phone: user.phone,
         firstName: user.first_name,
         lastName: user.last_name,
         role: user.role,
         accessLevel: user.access_level,
         mustChangePassword: user.must_change_password === true,
         schoolId: user.school_id,
+        schoolName,
         children,
         accountType: user.account_type,
         students: children.map((c) => ({

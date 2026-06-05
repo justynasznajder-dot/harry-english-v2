@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import ContractPortal from '@/src/components/ContractPortal';
 import MessagesPanel from '@/src/components/messages/MessagesPanel';
 import RenewalsBanner from '@/src/components/RenewalsBanner';
 import MessagesTabLabel from '@/src/components/messages/MessagesTabLabel';
@@ -11,6 +12,7 @@ type ChildEnrollmentLevel = 'NEW' | 'PROPOSED' | 'NEGOTIATING' | 'ACCEPTED' | 'S
 interface UserInfo {
   id: string;
   email: string;
+  phone?: string | null;
   firstName: string;
   lastName: string;
   accessLevel?: 'PENDING' | 'ACTIVE';
@@ -43,6 +45,82 @@ interface EnrollmentProposal {
   location_name: string;
   schedule: string;
   proposed_at?: string | null;
+  price_monthly?: number | null;
+  price_yearly?: number | null;
+  contract?: {
+    id: string;
+    status: string | null;
+    amount: number | null;
+    price_override: boolean;
+    payment_type: string | null;
+    content_html?: string | null;
+    attachment_1_html?: string | null;
+    attachment_2_html?: string | null;
+    include_attachment_2?: boolean;
+  } | null;
+}
+
+interface ParentProfileForm {
+  address: string;
+  city: string;
+  zipCode: string;
+  billingType: 'private' | 'company';
+  pesel: string;
+  companyName: string;
+  nip: string;
+}
+
+function formatPlnAmount(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  return `${value.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} PLN`;
+}
+
+function isExactDigits(value: string, length: number): boolean {
+  return new RegExp(`^\\d{${length}}$`).test(value.trim());
+}
+
+function validateContractProfile(profile: ParentProfileForm): string | null {
+  if (!profile.address.trim() || !profile.city.trim() || !profile.zipCode.trim()) {
+    return 'Uzupełnij adres, miasto i kod pocztowy.';
+  }
+  if (profile.billingType === 'private') {
+    if (!profile.pesel.trim()) return 'Podaj numer PESEL.';
+    if (!isExactDigits(profile.pesel, 11)) return 'PESEL musi składać się z dokładnie 11 cyfr.';
+  } else {
+    if (!profile.companyName.trim() || !profile.nip.trim()) {
+      return 'Dla faktury na firmę podaj nazwę firmy i NIP.';
+    }
+    if (!isExactDigits(profile.nip, 10)) return 'NIP musi składać się z dokładnie 10 cyfr.';
+  }
+  return null;
+}
+
+function resolveContractAmount(
+  proposal: EnrollmentProposal,
+  paymentType: 'MONTHLY' | 'YEARLY',
+): number | null {
+  if (proposal.contract?.price_override && proposal.contract.amount != null) {
+    return proposal.contract.amount;
+  }
+  const fromGroup =
+    paymentType === 'YEARLY' ? proposal.price_yearly : proposal.price_monthly;
+  return fromGroup != null ? Number(fromGroup) : null;
+}
+
+interface EnrollmentRequestSummary {
+  parentFirstName: string;
+  parentLastName: string;
+  parentEmail: string;
+  parentPhone: string | null;
+  submittedAt: string;
+  children: Array<{
+    requestId: string;
+    firstName: string;
+    lastName: string;
+    birthDate: string;
+    preferredLocation: string;
+    submittedAt: string;
+  }>;
 }
 
 function childAccessLevel(p: EnrollmentProposal): ChildEnrollmentLevel {
@@ -69,19 +147,6 @@ function deriveEnrollmentStepIndex(
   if (levels.some((s) => s === 'PROPOSED' || s === 'NEGOTIATING')) return 1;
   return 0;
 }
-
-type ProposalHistoryRow = {
-  id: string;
-  proposed_at: string;
-  responded_at: string | null;
-  status: string;
-  rejection_comment: string | null;
-  group_name: string;
-  location_name: string;
-  schedule: string;
-  proposed_by_first_name: string;
-  proposed_by_last_name: string;
-};
 
 type FlashKind = 'success' | 'error' | 'info';
 interface Flash {
@@ -125,33 +190,63 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
   const [messagesListResetToken, setMessagesListResetToken] = useState(0);
   const { unreadCount: messagesUnreadCount, refresh: refreshMessagesUnreadCount } =
     useUnreadMessagesCount(messagesListResetToken);
-  /** Multi-child: który `request_id` ma rozwiniętą textarea odrzucenia. */
-  const [rejectOpenFor, setRejectOpenFor] = useState<Record<string, boolean>>({});
-  /** Multi-child: komentarz odrzucenia per `request_id`. */
-  const [rejectComments, setRejectComments] = useState<Record<string, string>>({});
+  const [contactOpenFor, setContactOpenFor] = useState<Record<string, boolean>>({});
+  const [contactSubjects, setContactSubjects] = useState<Record<string, string>>({});
+  const [contactMessages, setContactMessages] = useState<Record<string, string>>({});
+  const [schoolRecipientIds, setSchoolRecipientIds] = useState<string[]>([]);
+  const schoolRecipientsLoadedRef = useRef(false);
   const [proposals, setProposals] = useState<EnrollmentProposal[]>([]);
-  const [proposalHistoryByRequestId, setProposalHistoryByRequestId] = useState<
-    Record<string, ProposalHistoryRow[]>
-  >({});
+  const [enrollmentRequestSummary, setEnrollmentRequestSummary] = useState<EnrollmentRequestSummary | null>(null);
   const [proposalsLoading, setProposalsLoading] = useState(false);
-  /** Trwa akceptacja konkretnego zgłoszenia (po `request_id`). */
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
-  /** Trwa odrzucenie konkretnego zgłoszenia. */
-  const [rejectingId, setRejectingId] = useState<string | null>(null);
-  /**
-   * Synchroniczna blokada zapisu (accept/reject) — stan React (`acceptingId` /
-   * `rejectingId`) aktualizuje się dopiero po re-renderze, więc przy dwójce
-   * dzieci drugie kliknięcie mogło „przejść” przez `if (acceptingId ||
-   * rejectingId) return` z przestarzałym closure albo bez komunikatu dla
-   * użytkownika.
-   */
+  const [negotiatingId, setNegotiatingId] = useState<string | null>(null);
+  const [sendingContactMessageId, setSendingContactMessageId] = useState<string | null>(null);
   const enrollmentActionBusyRef = useRef(false);
   const [flash, setFlash] = useState<Flash | null>(null);
+  const [contractProfile, setContractProfile] = useState<ParentProfileForm>({
+    address: '',
+    city: '',
+    zipCode: '',
+    billingType: 'private',
+    pesel: '',
+    companyName: '',
+    nip: '',
+  });
+  const [paymentTypeByChild, setPaymentTypeByChild] = useState<
+    Record<string, 'MONTHLY' | 'YEARLY'>
+  >({});
+  const [includeAttachment2ByChild, setIncludeAttachment2ByChild] = useState<
+    Record<string, boolean>
+  >({});
+  const [savingContractChildId, setSavingContractChildId] = useState<string | null>(null);
+  const [generatedContracts, setGeneratedContracts] = useState<
+    Record<
+      string,
+      {
+        id: string;
+        content_html: string;
+        attachment_1_html?: string | null;
+        attachment_2_html?: string | null;
+        status: string;
+      }
+    >
+  >({});
+  const [profileLoaded, setProfileLoaded] = useState(false);
   const currentStepIndex = deriveEnrollmentStepIndex(
     proposals,
     userInfo.children,
     userInfo.accessLevel
   );
+  const [selectedStepIndex, setSelectedStepIndex] = useState(currentStepIndex);
+  const [manualStepSelection, setManualStepSelection] = useState(false);
+
+  useEffect(() => {
+    if (!manualStepSelection) {
+      setSelectedStepIndex(currentStepIndex);
+      return;
+    }
+    setSelectedStepIndex((prev) => Math.min(prev, currentStepIndex));
+  }, [currentStepIndex, manualStepSelection]);
 
   const refreshUserAccessLevel = useCallback(async () => {
     try {
@@ -175,6 +270,7 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
       const data = (await r.json()) as {
         proposals?: EnrollmentProposal[];
         proposal?: EnrollmentProposal | null;
+        enrollmentRequestSummary?: EnrollmentRequestSummary | null;
       };
       if (Array.isArray(data.proposals)) {
         setProposals(data.proposals);
@@ -183,9 +279,11 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
       } else {
         setProposals([]);
       }
+      setEnrollmentRequestSummary(data.enrollmentRequestSummary ?? null);
     } catch (err) {
       console.error('Nie udało się pobrać statusu propozycji', err);
       setProposals([]);
+      setEnrollmentRequestSummary(null);
     } finally {
       setProposalsLoading(false);
     }
@@ -196,35 +294,148 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
   }, [loadProposals]);
 
   useEffect(() => {
-    if (proposals.length === 0) {
-      setProposalHistoryByRequestId({});
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      const entries = await Promise.all(
-        proposals.map(async (p) => {
-          const r = await fetch(
-            `/api/user/enrollment/proposals?enrollmentRequestId=${encodeURIComponent(p.request_id)}`,
-            { cache: 'no-store', credentials: 'include' },
-          );
-          if (!r.ok) return [p.request_id, []] as const;
-          const d = (await r.json()) as { proposals?: ProposalHistoryRow[] };
-          return [p.request_id, d.proposals ?? []] as const;
-        }),
-      );
-      if (!cancelled) setProposalHistoryByRequestId(Object.fromEntries(entries));
-    })();
-    return () => {
-      cancelled = true;
-    };
+    setIncludeAttachment2ByChild((prev) => {
+      const next = { ...prev };
+      for (const p of proposals) {
+        const childId = p.child_id ?? p.request_id;
+        if (p.contract?.include_attachment_2 && next[childId] === undefined) {
+          next[childId] = true;
+        }
+      }
+      return next;
+    });
   }, [proposals]);
+
+  const loadParentProfile = useCallback(async () => {
+    try {
+      const r = await fetch('/api/user/profile', { cache: 'no-store', credentials: 'include' });
+      if (!r.ok) return;
+      const data = (await r.json()) as {
+        profile?: {
+          address?: string | null;
+          city?: string | null;
+          zipCode?: string | null;
+          companyName?: string | null;
+          nip?: string | null;
+          pesel?: string | null;
+        } | null;
+      };
+      const p = data.profile;
+      if (!p) {
+        setProfileLoaded(true);
+        return;
+      }
+      setContractProfile((prev) => ({
+        address: p.address ?? prev.address,
+        city: p.city ?? prev.city,
+        zipCode: p.zipCode ?? prev.zipCode,
+        billingType: p.companyName || p.nip ? 'company' : 'private',
+        pesel: p.pesel ?? prev.pesel,
+        companyName: p.companyName ?? prev.companyName,
+        nip: p.nip ?? prev.nip,
+      }));
+      setProfileLoaded(true);
+    } catch (err) {
+      console.error('Nie udało się pobrać profilu rodzica', err);
+      setProfileLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'enrollment') {
+      void loadParentProfile();
+    }
+  }, [activeTab, loadParentProfile]);
+
+  const handleSaveContractData = useCallback(
+    async (childId: string, enrollmentRequestId: string) => {
+      const validationError = validateContractProfile(contractProfile);
+      if (validationError) {
+        setFlash({ kind: 'error', message: validationError });
+        return;
+      }
+
+      setSavingContractChildId(childId);
+      try {
+        const paymentType = paymentTypeByChild[childId] ?? 'MONTHLY';
+        const includeAttachment2 = includeAttachment2ByChild[childId] ?? false;
+        const r = await fetch('/api/parent/contract/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            childId,
+            enrollmentRequestId,
+            paymentType,
+            includeAttachment2,
+            billingType: contractProfile.billingType,
+            address: contractProfile.address,
+            city: contractProfile.city,
+            zipCode: contractProfile.zipCode,
+            pesel: contractProfile.billingType === 'private' ? contractProfile.pesel : null,
+            companyName:
+              contractProfile.billingType === 'company' ? contractProfile.companyName : null,
+            nip: contractProfile.billingType === 'company' ? contractProfile.nip : null,
+          }),
+        });
+        const data = (await r.json().catch(() => ({}))) as {
+          message?: string;
+          contract?: {
+            id: string;
+            content_html: string;
+            attachment_1_html?: string | null;
+            attachment_2_html?: string | null;
+            status: string;
+          };
+        };
+        if (!r.ok) {
+          setFlash({ kind: 'error', message: data.message ?? 'Nie udało się zapisać danych umowy' });
+          return;
+        }
+        if (data.contract) {
+          setGeneratedContracts((prev) => ({
+            ...prev,
+            [childId]: data.contract!,
+          }));
+        }
+        setFlash({
+          kind: 'success',
+          message: 'Dane zapisane. Zapoznaj się z umową i załącznikami, a następnie podpisz dokumenty poniżej.',
+        });
+        await loadProposals();
+      } catch {
+        setFlash({ kind: 'error', message: 'Nie udało się zapisać danych umowy' });
+      } finally {
+        setSavingContractChildId(null);
+      }
+    },
+    [contractProfile, paymentTypeByChild, includeAttachment2ByChild, loadProposals],
+  );
 
   useEffect(() => {
     if (!flash) return;
     const id = setTimeout(() => setFlash(null), 6000);
     return () => clearTimeout(id);
   }, [flash]);
+
+  const loadSchoolRecipients = useCallback(async (): Promise<string[]> => {
+    if (schoolRecipientsLoadedRef.current && schoolRecipientIds.length > 0) {
+      return schoolRecipientIds;
+    }
+    try {
+      const r = await fetch('/api/messages/recipients', { cache: 'no-store', credentials: 'include' });
+      if (!r.ok) return [];
+      const data = (await r.json()) as {
+        teachers?: Array<{ id: string; role: string }>;
+      };
+      const ids = (data.teachers ?? []).map((t) => t.id).filter(Boolean);
+      setSchoolRecipientIds(ids);
+      schoolRecipientsLoadedRef.current = ids.length > 0;
+      return ids;
+    } catch {
+      return [];
+    }
+  }, [schoolRecipientIds.length]);
 
   const handleAcceptProposal = useCallback(
     async (requestId: string) => {
@@ -256,10 +467,9 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
           kind: 'success',
           message:
             (data.remainingProposed ?? 0) > 0
-              ? 'Propozycja zaakceptowana. Umowa dla tego dziecka jest gotowa — pozostałe propozycje czekają na decyzję.'
-              : 'Propozycja zaakceptowana. Sprawdź skrzynkę — wysłaliśmy umowę.',
+              ? 'Propozycja zaakceptowana — uzupełnij dane do umowy dla tego dziecka. Pozostałe propozycje czekają na decyzję.'
+              : 'Propozycja zaakceptowana — przejdź do uzupełnienia danych do umowy.',
         });
-        setRejectOpenFor((prev) => ({ ...prev, [requestId]: false }));
         await Promise.all([loadProposals(), refreshUserAccessLevel()]);
       } catch (err) {
         console.error('Accept proposal error:', err);
@@ -272,61 +482,165 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
     [loadProposals, refreshUserAccessLevel]
   );
 
-  const handleRejectProposal = useCallback(
-    async (requestId: string) => {
+  const handleContactSchool = useCallback(
+    async (p: EnrollmentProposal) => {
       if (enrollmentActionBusyRef.current) {
         setFlash({
           kind: 'info',
-          message: 'Trwa już inna akcja zapisu — poczekaj chwilę i spróbuj ponownie.',
+          message: 'Trwa już inna akcja — poczekaj chwilę i spróbuj ponownie.',
         });
         return;
       }
       enrollmentActionBusyRef.current = true;
-      setRejectingId(requestId);
+      setNegotiatingId(p.request_id);
       try {
-        const reason = (rejectComments[requestId] ?? '').trim();
-        const r = await fetch('/api/enrollment/reject', {
-          method: 'POST',
+        const r = await fetch('/api/enrollment/negotiate', {
+          method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            enrollmentRequestId: requestId,
-            rejectionComment: reason.length > 0 ? reason : undefined,
-          }),
+          body: JSON.stringify({ requestId: p.request_id }),
           credentials: 'include',
         });
         const data = (await r.json().catch(() => ({}))) as { message?: string };
         if (!r.ok) {
-          setFlash({ kind: 'error', message: data?.message ?? 'Nie udało się odrzucić propozycji.' });
+          setFlash({
+            kind: 'error',
+            message: data?.message ?? 'Nie udało się zaktualizować statusu zgłoszenia.',
+          });
+          return;
+        }
+        const childName = `${p.child_first_name} ${p.child_last_name}`.trim();
+        const groupLabel = p.group_name ?? 'propozycja grupy';
+        setContactSubjects((prev) => ({
+          ...prev,
+          [p.request_id]: `Zgłoszenie — ${childName} (${groupLabel})`,
+        }));
+        setContactMessages((prev) => ({
+          ...prev,
+          [p.request_id]:
+            prev[p.request_id] ??
+            `Dzień dobry,\n\nPropozycja grupy (${groupLabel}, ${p.schedule}) nie pasuje nam w obecnej formie. Prosimy o kontakt w sprawie dalszych kroków.\n\nPozdrawiam`,
+        }));
+        setContactOpenFor((prev) => ({ ...prev, [p.request_id]: true }));
+        await loadSchoolRecipients();
+        await Promise.all([loadProposals(), refreshUserAccessLevel()]);
+        setFlash({
+          kind: 'success',
+          message: 'Wyślij wiadomość do szkoły w formularzu poniżej.',
+        });
+      } catch (err) {
+        console.error('Contact school error:', err);
+        setFlash({ kind: 'error', message: 'Nie udało się rozpocząć kontaktu ze szkołą.' });
+      } finally {
+        enrollmentActionBusyRef.current = false;
+        setNegotiatingId(null);
+      }
+    },
+    [loadProposals, loadSchoolRecipients, refreshUserAccessLevel],
+  );
+
+  const handleSendContactMessage = useCallback(
+    async (requestId: string) => {
+      const subject = (contactSubjects[requestId] ?? '').trim();
+      const content = (contactMessages[requestId] ?? '').trim();
+      if (!subject || !content) {
+        setFlash({ kind: 'error', message: 'Uzupełnij temat i treść wiadomości.' });
+        return;
+      }
+      const recipientIds =
+        schoolRecipientIds.length > 0 ? schoolRecipientIds : await loadSchoolRecipients();
+      if (recipientIds.length === 0) {
+        setFlash({
+          kind: 'error',
+          message: 'Nie udało się ustalić odbiorcy wiadomości — skontaktuj się telefonicznie ze szkołą.',
+        });
+        return;
+      }
+      setSendingContactMessageId(requestId);
+      try {
+        const r = await fetch('/api/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ recipientIds, subject, content }),
+          credentials: 'include',
+        });
+        const data = (await r.json().catch(() => ({}))) as { message?: string };
+        if (!r.ok) {
+          setFlash({ kind: 'error', message: data?.message ?? 'Nie udało się wysłać wiadomości.' });
           return;
         }
         setFlash({
           kind: 'success',
-          message:
-            'Propozycja odrzucona. Szkoła została powiadomiona — czekaj na nową propozycję.',
+          message: 'Wiadomość wysłana. Szkoła odpowie w module Wiadomości w portalu.',
         });
-        setRejectOpenFor((prev) => ({ ...prev, [requestId]: false }));
-        setRejectComments((prev) => ({ ...prev, [requestId]: '' }));
-        await loadProposals();
-        await refreshUserAccessLevel();
+        refreshMessagesUnreadCount();
       } catch (err) {
-        console.error('Reject proposal error:', err);
-        setFlash({ kind: 'error', message: 'Nie udało się odrzucić propozycji. Spróbuj ponownie.' });
+        console.error('Send contact message error:', err);
+        setFlash({ kind: 'error', message: 'Nie udało się wysłać wiadomości.' });
       } finally {
-        enrollmentActionBusyRef.current = false;
-        setRejectingId(null);
+        setSendingContactMessageId(null);
       }
     },
-    [rejectComments, loadProposals, refreshUserAccessLevel]
+    [
+      contactMessages,
+      contactSubjects,
+      loadSchoolRecipients,
+      refreshMessagesUnreadCount,
+      schoolRecipientIds,
+    ],
   );
 
   const renderEnrollmentStepContent = () => {
-    const currentStep = enrollmentSteps[currentStepIndex];
+    const currentStep = enrollmentSteps[selectedStepIndex];
+    const isReadOnlyPreview = selectedStepIndex < currentStepIndex;
 
     if (currentStep.key === 'pending') {
       return (
         <section className="space-y-4">
           <h3 className="text-lg font-semibold text-zinc-900">Zgłoszenie</h3>
-          <EmptyState message="Brak szczegółów zgłoszenia (dziecko, lokalizacja, data zgłoszenia)." />
+          {enrollmentRequestSummary ? (
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
+                <p className="text-base font-semibold text-zinc-900">Dane rodzica</p>
+                <div className="mt-2 grid gap-1.5 text-sm text-zinc-800 sm:grid-cols-[max-content_1fr]">
+                  <span className="font-semibold text-zinc-900">Imię:</span>
+                  <span>{enrollmentRequestSummary.parentFirstName}</span>
+                  <span className="font-semibold text-zinc-900">Nazwisko:</span>
+                  <span>{enrollmentRequestSummary.parentLastName}</span>
+                  <span className="font-semibold text-zinc-900">Email:</span>
+                  <span>{enrollmentRequestSummary.parentEmail}</span>
+                  <span className="font-semibold text-zinc-900">Telefon:</span>
+                  <span>{enrollmentRequestSummary.parentPhone ?? '— (nie podano)'}</span>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <p className="text-base font-semibold text-zinc-900">Lista dzieci</p>
+                {enrollmentRequestSummary.children.map((child, index) => (
+                  <div key={child.requestId} className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
+                    <p className="text-base font-semibold text-zinc-900">Dziecko {index + 1}</p>
+                    <div className="mt-2 grid gap-1.5 text-sm text-zinc-800 sm:grid-cols-[max-content_1fr]">
+                      <span className="font-semibold text-zinc-900">Imię:</span>
+                      <span>{child.firstName}</span>
+                      <span className="font-semibold text-zinc-900">Nazwisko:</span>
+                      <span>{child.lastName}</span>
+                      <span className="font-semibold text-zinc-900">Data urodzenia:</span>
+                      <span>
+                        {new Date(child.birthDate).toLocaleDateString('pl-PL', {
+                          year: 'numeric',
+                          month: '2-digit',
+                          day: '2-digit',
+                        })}
+                      </span>
+                      <span className="font-semibold text-zinc-900">Preferowana lokalizacja:</span>
+                      <span>{child.preferredLocation}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <EmptyState message="Brak szczegółów zgłoszenia (dziecko, lokalizacja, data zgłoszenia)." />
+          )}
           <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             Zgłoszenie dotarło do szkoły. Czekamy na propozycję grupy.
           </div>
@@ -335,10 +649,16 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
     }
 
     if (currentStep.key === 'proposed') {
-      const anyActionInFlight = acceptingId != null || rejectingId != null;
+      const anyActionInFlight =
+        acceptingId != null || negotiatingId != null || sendingContactMessageId != null;
       return (
         <section className="space-y-4">
           <h3 className="text-lg font-semibold text-zinc-900">Propozycja grupy</h3>
+          {isReadOnlyPreview && (
+            <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-700">
+              Podgląd wcześniejszego etapu. Zmiany są zablokowane.
+            </div>
+          )}
 
           {proposalsLoading && proposals.length === 0 ? (
             <EmptyState message="Ładujemy szczegóły propozycji…" />
@@ -350,22 +670,29 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
             <div className="space-y-4">
               {proposals.length > 1 && (
                 <p className="text-sm text-zinc-600">
-                  Mamy propozycje dla {proposals.length} dzieci. Każdą możesz zaakceptować lub
-                  odrzucić niezależnie.
+                  Mamy propozycje dla {proposals.length} dzieci. Każde dziecko ma jedną przypisaną
+                  grupę — zaakceptuj propozycję, aby przejść dalej w procesie zapisu.
+                </p>
+              )}
+              {proposals.some((p) => childAccessLevel(p) === 'PROPOSED') && (
+                <p className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+                  Szkoła przygotowała propozycję grupy dla{' '}
+                  {proposals.length > 1 ? 'każdego dziecka' : 'Twojego dziecka'}. Zaakceptuj ją, aby
+                  przejść do uzupełnienia danych do umowy.
                 </p>
               )}
               {proposals.map((p) => {
                 const isAccepting = acceptingId === p.request_id;
-                const isRejecting = rejectingId === p.request_id;
+                const isContactStarting = negotiatingId === p.request_id;
+                const isSendingMessage = sendingContactMessageId === p.request_id;
                 const level = childAccessLevel(p);
                 const isActionable = level === 'PROPOSED';
                 const isNegotiating = level === 'NEGOTIATING';
-                const history = (proposalHistoryByRequestId[p.request_id] ?? []).filter(
-                  (h) => h.status !== 'PENDING',
-                );
-                const buttonsDisabled = anyActionInFlight;
-                const isOpen = rejectOpenFor[p.request_id] === true;
-                const comment = rejectComments[p.request_id] ?? '';
+                const showContactForm =
+                  contactOpenFor[p.request_id] === true || isNegotiating;
+                const buttonsDisabled = anyActionInFlight || isReadOnlyPreview;
+                const contactSubject = contactSubjects[p.request_id] ?? '';
+                const contactMessage = contactMessages[p.request_id] ?? '';
                 return (
                   <div
                     key={p.request_id}
@@ -389,9 +716,9 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
                         {level === 'PROPOSED'
                           ? 'Do decyzji'
                           : level === 'NEGOTIATING'
-                            ? 'Oczekuje na nową propozycję szkoły'
+                            ? 'Kontakt ze szkołą'
                             : level === 'ACCEPTED'
-                              ? 'Zaakceptowana — czekaj na umowę'
+                              ? 'Zaakceptowana — uzupełnij dane do umowy'
                               : 'Umowa podpisana'}
                       </span>
                     </div>
@@ -404,15 +731,12 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
                       <span>{p.schedule}</span>
                     </div>
 
-                    {isNegotiating && (
-                      <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
-                        Odrzuciłeś(-aś) ostatnią propozycję. Szkoła przygotuje nową propozycję grupy — wrócimy do
-                        Ciebie wkrótce.
-                      </div>
-                    )}
-
                     {isActionable && (
                       <div className="mt-4 space-y-3">
+                        <p className="text-sm text-zinc-600">
+                          W niektórych sytuacjach możliwa jest zmiana terminu zajęć — wymaga to
+                          kontaktu ze szkołą.
+                        </p>
                         <div className="flex flex-wrap gap-3">
                           <button
                             type="button"
@@ -420,88 +744,82 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
                             disabled={buttonsDisabled}
                             className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
                           >
-                            {isAccepting ? 'Akceptowanie…' : 'Akceptuję'}
+                            {isAccepting ? 'Akceptowanie…' : 'Akceptuję propozycję'}
                           </button>
                           <button
                             type="button"
-                            onClick={() =>
-                              setRejectOpenFor((prev) => ({
-                                ...prev,
-                                [p.request_id]: !prev[p.request_id],
-                              }))
-                            }
+                            onClick={() => handleContactSchool(p)}
                             disabled={buttonsDisabled}
-                            className="rounded-full bg-[#ffc94a] px-5 py-2.5 text-sm font-semibold text-[#3b2a10] transition hover:bg-[#ffd76f] disabled:cursor-not-allowed disabled:opacity-60"
+                            className="rounded-full border border-zinc-300 bg-white px-5 py-2.5 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
                           >
-                            Odrzucam
+                            {isContactStarting ? 'Przygotowanie…' : 'Kontakt ze szkołą'}
                           </button>
                         </div>
-                        {isOpen && (
-                          <div className="space-y-3 rounded-2xl border border-zinc-200 bg-white p-4">
-                            <label
-                              htmlFor={`reject-comment-${p.request_id}`}
-                              className="text-sm font-medium text-zinc-800"
-                            >
-                              Komentarz do odrzucenia{' '}
-                              <span className="text-zinc-500">(opcjonalnie)</span>
-                            </label>
-                            <textarea
-                              id={`reject-comment-${p.request_id}`}
-                              value={comment}
-                              onChange={(event) =>
-                                setRejectComments((prev) => ({
-                                  ...prev,
-                                  [p.request_id]: event.target.value,
-                                }))
-                              }
-                              placeholder="Np. nie pasuje mi termin / wolimy inną lokalizację…"
-                              maxLength={2000}
-                              className="min-h-24 w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => handleRejectProposal(p.request_id)}
-                              disabled={buttonsDisabled}
-                              className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              {isRejecting ? 'Wysyłanie…' : 'Wyślij odrzucenie'}
-                            </button>
-                          </div>
-                        )}
                       </div>
                     )}
-                    {history.length > 0 && (
-                      <details className="mt-4 rounded-2xl border border-zinc-200 bg-zinc-50/90">
-                        <summary className="cursor-pointer px-4 py-2 text-sm font-medium text-zinc-800">
-                          Historia wcześniejszych propozycji grup ({history.length})
-                        </summary>
-                        <div className="space-y-2 border-t border-zinc-200 px-4 py-3 text-sm">
-                          {history.map((h) => (
-                            <div key={h.id} className="rounded-lg border border-white bg-white p-2">
-                              <p className="font-semibold text-zinc-900">{h.group_name}</p>
-                              <p className="text-xs text-zinc-600">
-                                {h.location_name} · {h.schedule}
-                              </p>
-                              <p className="mt-1 text-xs text-zinc-500">
-                                {new Date(h.proposed_at).toLocaleString('pl-PL', {
-                                  dateStyle: 'short',
-                                  timeStyle: 'short',
-                                })}{' '}
-                                · {h.status}
-                                {h.responded_at
-                                  ? ` · ${new Date(h.responded_at).toLocaleString('pl-PL', {
-                                      dateStyle: 'short',
-                                      timeStyle: 'short',
-                                    })}`
-                                  : ''}
-                              </p>
-                              {h.status === 'REJECTED' && h.rejection_comment && (
-                                <p className="mt-1 text-xs text-rose-800">Twój komentarz: {h.rejection_comment}</p>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </details>
+
+                    {showContactForm && (
+                      <div className="mt-4 space-y-3 rounded-2xl border border-zinc-200 bg-white p-4">
+                        {isNegotiating && (
+                          <p className="text-sm text-amber-900">
+                            Status zgłoszenia: kontakt ze szkołą. Wyślij wiadomość poniżej — odpowiedź
+                            znajdziesz też w zakładce Wiadomości.
+                          </p>
+                        )}
+                        <p className="text-sm font-medium text-zinc-800">
+                          Wiadomość do szkoły
+                        </p>
+                        <p className="text-sm text-zinc-600">
+                          Opisz swoją sytuację — odpowiedź otrzymasz w zakładce Wiadomości w portalu.
+                        </p>
+                        <label
+                          htmlFor={`contact-subject-${p.request_id}`}
+                          className="text-sm font-medium text-zinc-800"
+                        >
+                          Temat
+                        </label>
+                        <input
+                          id={`contact-subject-${p.request_id}`}
+                          type="text"
+                          value={contactSubject}
+                          onChange={(event) =>
+                            setContactSubjects((prev) => ({
+                              ...prev,
+                              [p.request_id]: event.target.value,
+                            }))
+                          }
+                          maxLength={255}
+                          disabled={isReadOnlyPreview}
+                          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                        />
+                        <label
+                          htmlFor={`contact-message-${p.request_id}`}
+                          className="text-sm font-medium text-zinc-800"
+                        >
+                          Treść
+                        </label>
+                        <textarea
+                          id={`contact-message-${p.request_id}`}
+                          value={contactMessage}
+                          onChange={(event) =>
+                            setContactMessages((prev) => ({
+                              ...prev,
+                              [p.request_id]: event.target.value,
+                            }))
+                          }
+                          maxLength={5000}
+                          disabled={isReadOnlyPreview}
+                          className="min-h-32 w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleSendContactMessage(p.request_id)}
+                          disabled={buttonsDisabled || isReadOnlyPreview}
+                          className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {isSendingMessage ? 'Wysyłanie…' : 'Wyślij wiadomość'}
+                        </button>
+                      </div>
                     )}
                   </div>
                 );
@@ -527,65 +845,345 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
     }
 
     if (currentStep.key === 'contractSent') {
+      const acceptedProposals = proposals.filter((p) => childAccessLevel(p) === 'ACCEPTED');
+
       return (
         <section className="space-y-4">
           <h3 className="text-lg font-semibold text-zinc-900">Umowa</h3>
-          <p className="text-sm text-zinc-600">
-            Uzupełnij dane do umowy i podpisz dokument w tym samym kroku.
-          </p>
-          <div className="grid gap-4 md:grid-cols-2">
-            <input
-              type="text"
-              placeholder="Imię"
-              className="rounded-xl border border-zinc-300 px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-            />
-            <input
-              type="text"
-              placeholder="Nazwisko"
-              className="rounded-xl border border-zinc-300 px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-            />
-            <input
-              type="text"
-              placeholder="Adres"
-              className="rounded-xl border border-zinc-300 px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 md:col-span-2"
-            />
-            <input
-              type="text"
-              placeholder="Miasto"
-              className="rounded-xl border border-zinc-300 px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-            />
-            <input
-              type="text"
-              placeholder="Kod pocztowy"
-              className="rounded-xl border border-zinc-300 px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-            />
-          </div>
-          <div className="space-y-2">
-            <p className="text-sm font-medium text-zinc-800">Sposób rozliczeń</p>
-            <div className="flex flex-wrap gap-4">
-              <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
-                <input type="radio" name="billingType" className="accent-[#0f6e56]" />
-                Miesięczny
-              </label>
-              <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
-                <input type="radio" name="billingType" className="accent-[#0f6e56]" />
-                Jednorazowy
-              </label>
+          {isReadOnlyPreview && (
+            <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-700">
+              Podgląd wcześniejszego etapu. Zmiany są zablokowane.
             </div>
-          </div>
-          <button
-            type="button"
-            className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46]"
-          >
-            Zapisz
-          </button>
-          <EmptyState message="Brak dostępnego podglądu umowy do podpisania." />
-          <button
-            type="button"
-            className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46]"
-          >
-            Podpisz umowę
-          </button>
+          )}
+          <p className="text-sm text-zinc-600">
+            Uzupełnij dane potrzebne do przygotowania umowy. Każde dziecko ma osobną umowę —
+            wypełnij formularz i zapisz dane dla każdego dziecka z osobna.
+          </p>
+
+          {proposalsLoading && acceptedProposals.length === 0 ? (
+            <EmptyState message="Ładujemy dane umowy…" />
+          ) : acceptedProposals.length === 0 ? (
+            <EmptyState message="Brak dzieci oczekujących na uzupełnienie danych do umowy." />
+          ) : (
+            <div className="space-y-6">
+              {acceptedProposals.map((p) => {
+                const childId = p.child_id ?? p.request_id;
+                const paymentType =
+                  paymentTypeByChild[childId] ??
+                  (p.contract?.payment_type === 'YEARLY' ? 'YEARLY' : 'MONTHLY');
+                const displayAmount = resolveContractAmount(p, paymentType);
+                const generated = generatedContracts[childId];
+                const includeAttachment2 =
+                  includeAttachment2ByChild[childId] ?? p.contract?.include_attachment_2 ?? false;
+                const sentContract =
+                  generated ??
+                  (p.contract?.status === 'SENT' && p.contract.content_html
+                    ? {
+                        id: p.contract.id,
+                        content_html: p.contract.content_html,
+                        attachment_1_html: p.contract.attachment_1_html,
+                        attachment_2_html: p.contract.attachment_2_html,
+                        status: p.contract.status,
+                      }
+                    : null);
+                const isSaving = savingContractChildId === childId;
+
+                return (
+                  <div
+                    key={p.request_id}
+                    className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 space-y-4"
+                  >
+                    <p className="text-base font-semibold text-zinc-900">
+                      {p.child_first_name} {p.child_last_name}
+                      {p.group_name ? (
+                        <span className="ml-2 text-sm font-normal text-zinc-600">
+                          · {p.group_name}
+                        </span>
+                      ) : null}
+                    </p>
+
+                    <div className="space-y-4">
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <div className="space-y-1">
+                            <label className="text-sm font-medium text-zinc-800">Imię</label>
+                            <input
+                              type="text"
+                              readOnly
+                              value={userInfo.firstName}
+                              className="w-full rounded-xl border border-zinc-200 bg-zinc-100 px-3 py-2.5 text-sm text-zinc-700"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-sm font-medium text-zinc-800">Nazwisko</label>
+                            <input
+                              type="text"
+                              readOnly
+                              value={userInfo.lastName}
+                              className="w-full rounded-xl border border-zinc-200 bg-zinc-100 px-3 py-2.5 text-sm text-zinc-700"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-sm font-medium text-zinc-800">E-mail</label>
+                            <input
+                              type="email"
+                              readOnly
+                              value={userInfo.email}
+                              className="w-full rounded-xl border border-zinc-200 bg-zinc-100 px-3 py-2.5 text-sm text-zinc-700"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-sm font-medium text-zinc-800">Telefon</label>
+                            <input
+                              type="text"
+                              readOnly
+                              value={
+                                userInfo.phone?.trim() ||
+                                enrollmentRequestSummary?.parentPhone?.trim() ||
+                                '—'
+                              }
+                              className="w-full rounded-xl border border-zinc-200 bg-zinc-100 px-3 py-2.5 text-sm text-zinc-700"
+                            />
+                          </div>
+                          <div className="space-y-1 md:col-span-2">
+                            <label className="text-sm font-medium text-zinc-800">Adres</label>
+                            <input
+                              type="text"
+                              disabled={isReadOnlyPreview}
+                              value={contractProfile.address}
+                              onChange={(e) =>
+                                setContractProfile((prev) => ({ ...prev, address: e.target.value }))
+                              }
+                              className="w-full rounded-xl border border-zinc-300 px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-sm font-medium text-zinc-800">Miasto</label>
+                            <input
+                              type="text"
+                              disabled={isReadOnlyPreview}
+                              value={contractProfile.city}
+                              onChange={(e) =>
+                                setContractProfile((prev) => ({ ...prev, city: e.target.value }))
+                              }
+                              className="w-full rounded-xl border border-zinc-300 px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-sm font-medium text-zinc-800">Kod pocztowy</label>
+                            <input
+                              type="text"
+                              disabled={isReadOnlyPreview}
+                              value={contractProfile.zipCode}
+                              onChange={(e) =>
+                                setContractProfile((prev) => ({ ...prev, zipCode: e.target.value }))
+                              }
+                              className="w-full rounded-xl border border-zinc-300 px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <p className="text-sm font-medium text-zinc-800">Rozliczenie</p>
+                          <div className="flex flex-wrap gap-4">
+                            <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
+                              <input
+                                type="radio"
+                                name={`billingType-${childId}`}
+                                className="accent-[#0f6e56]"
+                                disabled={isReadOnlyPreview}
+                                checked={contractProfile.billingType === 'private'}
+                                onChange={() =>
+                                  setContractProfile((prev) => ({ ...prev, billingType: 'private' }))
+                                }
+                              />
+                              Osoba prywatna (PESEL)
+                            </label>
+                            <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
+                              <input
+                                type="radio"
+                                name={`billingType-${childId}`}
+                                className="accent-[#0f6e56]"
+                                disabled={isReadOnlyPreview}
+                                checked={contractProfile.billingType === 'company'}
+                                onChange={() =>
+                                  setContractProfile((prev) => ({ ...prev, billingType: 'company' }))
+                                }
+                              />
+                              Firma (faktura)
+                            </label>
+                          </div>
+                        </div>
+
+                        {contractProfile.billingType === 'private' ? (
+                          <div className="space-y-1 max-w-sm">
+                            <label className="text-sm font-medium text-zinc-800">PESEL</label>
+                            <input
+                              type="text"
+                              maxLength={11}
+                              disabled={isReadOnlyPreview}
+                              value={contractProfile.pesel}
+                              onChange={(e) =>
+                                setContractProfile((prev) => ({ ...prev, pesel: e.target.value }))
+                              }
+                              className="w-full rounded-xl border border-zinc-300 px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                            />
+                          </div>
+                        ) : (
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div className="space-y-1">
+                              <label className="text-sm font-medium text-zinc-800">Nazwa firmy</label>
+                              <input
+                                type="text"
+                                disabled={isReadOnlyPreview}
+                                value={contractProfile.companyName}
+                                onChange={(e) =>
+                                  setContractProfile((prev) => ({
+                                    ...prev,
+                                    companyName: e.target.value,
+                                  }))
+                                }
+                                className="w-full rounded-xl border border-zinc-300 px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-sm font-medium text-zinc-800">NIP</label>
+                              <input
+                                type="text"
+                                disabled={isReadOnlyPreview}
+                                value={contractProfile.nip}
+                                onChange={(e) =>
+                                  setContractProfile((prev) => ({ ...prev, nip: e.target.value }))
+                                }
+                                className="w-full rounded-xl border border-zinc-300 px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="space-y-2">
+                          <p className="text-sm font-medium text-zinc-800">Sposób rozliczeń</p>
+                          <div className="flex flex-wrap gap-4">
+                            <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
+                              <input
+                                type="radio"
+                                name={`paymentType-${childId}`}
+                                className="accent-[#0f6e56]"
+                                disabled={isReadOnlyPreview}
+                                checked={paymentType === 'MONTHLY'}
+                                onChange={() =>
+                                  setPaymentTypeByChild((prev) => ({
+                                    ...prev,
+                                    [childId]: 'MONTHLY',
+                                  }))
+                                }
+                              />
+                              Miesięczny
+                            </label>
+                            <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
+                              <input
+                                type="radio"
+                                name={`paymentType-${childId}`}
+                                className="accent-[#0f6e56]"
+                                disabled={isReadOnlyPreview}
+                                checked={paymentType === 'YEARLY'}
+                                onChange={() =>
+                                  setPaymentTypeByChild((prev) => ({
+                                    ...prev,
+                                    [childId]: 'YEARLY',
+                                  }))
+                                }
+                              />
+                              Roczny
+                            </label>
+                          </div>
+                          <p className="text-sm text-zinc-700">
+                            Kwota:{' '}
+                            <span className="font-semibold text-zinc-900">
+                              {formatPlnAmount(displayAmount)}
+                            </span>
+                            {p.contract?.price_override ? (
+                              <span className="ml-1 text-xs text-zinc-500">(ustalona przez szkołę)</span>
+                            ) : null}
+                          </p>
+                        </div>
+
+                        <div className="rounded-xl border border-zinc-200 bg-white px-4 py-3">
+                          <label className="flex cursor-pointer items-start gap-3">
+                            <input
+                              type="checkbox"
+                              className="mt-0.5 accent-[#0f6e56]"
+                              disabled={isReadOnlyPreview}
+                              checked={includeAttachment2}
+                              onChange={(e) =>
+                                setIncludeAttachment2ByChild((prev) => ({
+                                  ...prev,
+                                  [childId]: e.target.checked,
+                                }))
+                              }
+                            />
+                            <span className="text-sm text-zinc-800">
+                              Zajęcia Harry English odbywają się bezpośrednio po zajęciach
+                              szkolnych/przedszkolnych — wygeneruj{' '}
+                              <strong>Załącznik nr 2</strong> (upoważnienie lektora do odbioru
+                              dziecka).
+                            </span>
+                          </label>
+                        </div>
+
+                        {!isReadOnlyPreview && (
+                          <button
+                            type="button"
+                            disabled={isSaving || !profileLoaded}
+                            onClick={() => void handleSaveContractData(childId, p.request_id)}
+                            className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {isSaving
+                              ? 'Zapisywanie…'
+                              : sentContract
+                                ? 'Wygeneruj ponownie'
+                                : 'Zapisz i wygeneruj umowę'}
+                          </button>
+                        )}
+
+                        {sentContract ? (
+                          <div className="space-y-4 border-t border-emerald-200 pt-4">
+                            <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+                              Umowa i załączniki zostały wygenerowane. Zapoznaj się z treścią poniżej
+                              i podpisz dokumenty.
+                            </div>
+                            <ContractPortal
+                              contract={sentContract}
+                              onSigned={async () => {
+                                setFlash({
+                                  kind: 'success',
+                                  message: 'Umowa podpisana. Dziękujemy!',
+                                });
+                                await loadProposals();
+                                await refreshUserAccessLevel();
+                              }}
+                            />
+                          </div>
+                        ) : null}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {flash && (
+            <div
+              className={`rounded-xl border px-4 py-3 text-sm ${
+                flash.kind === 'success'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                  : flash.kind === 'error'
+                    ? 'border-rose-200 bg-rose-50 text-rose-900'
+                    : 'border-sky-200 bg-sky-50 text-sky-900'
+              }`}
+            >
+              {flash.message}
+            </div>
+          )}
         </section>
       );
     }
@@ -612,13 +1210,20 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
         <div className="flex min-w-max items-center gap-2">
           {enrollmentSteps.map((step, index) => {
             const isDone = index < currentStepIndex;
-            const isCurrent = index === currentStepIndex;
+            const isSelected = index === selectedStepIndex;
+            const isAvailable = index <= currentStepIndex;
             return (
               <div key={step.key} className="flex items-center gap-2">
                 <button
                   type="button"
+                  onClick={() => {
+                    if (!isAvailable) return;
+                    setManualStepSelection(true);
+                    setSelectedStepIndex(index);
+                  }}
+                  disabled={!isAvailable}
                   className={`rounded-full border px-4 py-2 text-xs font-semibold transition sm:text-sm ${
-                    isCurrent
+                    isSelected
                       ? 'border-[#ffc94a] bg-[#fff6dd] text-[#3b2a10]'
                       : isDone
                         ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
