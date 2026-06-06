@@ -104,11 +104,6 @@ export function getEmailPalette(): EmailPalette {
   return EMAIL_PALETTE;
 }
 
-/** @deprecated Użyj getEmailPalette */
-export const getEmailGreenPalette = getEmailPalette;
-/** @deprecated Użyj EmailPalette */
-export type EmailGreenPalette = EmailPalette;
-
 function buildEmailSocialLinksButtons(): string {
   const h = EMAIL_SOCIAL_BTN_HEIGHT;
   const googleW = EMAIL_SOCIAL_GOOGLE_WIDTH;
@@ -262,7 +257,7 @@ function buildDefaultEmailFooter(palette: EmailPalette = getEmailPalette()): str
         <td align="center" style="font-family:${BRAND_FONT};">
           ${buildEmailFooterBrandLine({ marginTop: "0", fontSize: "16px", brandColor: palette.accentWarm })}
           <p style="margin:10px 0 0 0;font-size:13px;line-height:1.75;color:${palette.text};">
-            <a href="mailto:kontakt@harry-english.pl" class="he-email-body-link" style="${linkStyle}">kontakt@harry-english.pl</a><br />
+            ${buildEmailMailtoLink("kontakt@harry-english.pl", palette.link, { underline: true })}<br />
             <a href="${siteUrl}" style="${linkStyle}">www.harry-english.pl</a>
           </p>
           ${buildEmailSocialLinksButtons()}
@@ -325,73 +320,6 @@ ${buildEmailHeadBlock(p)}
     </table>
   </body>
 </html>`;
-}
-
-/** @deprecated Użyj buildEmailShell */
-export const buildEmailShellGreen = buildEmailShell;
-
-// Funkcja do wysyłania emaila powitalnego
-export async function sendWelcomeEmail(
-  to: string,
-  parentFirstName: string,
-  parentLastName: string,
-  childFirstName: string
-) {
-  const appUrl = getAppBaseUrl();
-  const p = getEmailPalette();
-  const mailOptions = {
-    from: {
-      name: 'Harry English',
-      address: process.env.EMAIL_USER || 'kontakt@harry-english.pl',
-    },
-    to,
-    subject: 'Witamy w Harry English!',
-    html: buildEmailShell({
-      title: `Dzień dobry ${escapeHtmlForEmail(parentFirstName)} ${escapeHtmlForEmail(parentLastName)}!`,
-      intro: `Cieszymy się, że dołączyliście do Harry English wraz z ${escapeHtmlForEmail(childFirstName)}.`,
-      contentHtml: `
-        <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;color:${p.text};">
-          Twoje konto zostało pomyślnie utworzone. Czekamy na kontakt z naszej strony i przygotowujemy dla Was spersonalizowany plan zajęć.
-        </p>
-        ${emailSectionHeading("Co dalej?", p)}
-        <ul style="margin:0 0 14px 18px;padding:0;font-size:15px;line-height:1.6;color:${p.text};">
-          <li>Nasz lektor skontaktuje się z Tobą w ciągu 24-48 godzin.</li>
-          <li>Ustalimy dogodne terminy zajęć dla ${escapeHtmlForEmail(childFirstName)}.</li>
-          <li>Otrzymasz harmonogram i materiały do nauki.</li>
-          <li>Już wkrótce będziecie mogli korzystać z pełni możliwości portalu.</li>
-        </ul>
-        <p style="margin:0 0 14px 0;font-size:15px;line-height:1.6;color:${p.text};">
-          <strong>Prosimy o cierpliwość</strong> - skontaktujemy się z Tobą wkrótce, aby potwierdzić możliwe terminy zajęć i omówić szczegóły kursu.
-        </p>
-        ${emailCtaButton(`${appUrl}/portal`, "Przejdź do portalu")}
-      `,
-    }),
-    text: `
-Witaj ${parentFirstName} ${parentLastName}!
-
-Cieszymy się, że dołączyliście do Harry English wraz z ${childFirstName}!
-
-Twoje konto zostało pomyślnie utworzone. Czekamy na kontakt z naszej strony i przygotowujemy dla Was spersonalizowany plan zajęć.
-
-Co dalej?
-- Nasz lektor skontaktuje się z Tobą w ciągu 24-48 godzin
-- Ustalimy dogodne terminy zajęć dla ${childFirstName}
-- Otrzymasz harmonogram i materiały do nauki
-- Już wkrótce będziecie mogli korzystać z pełni możliwości portalu
-
-Prosimy o cierpliwość – skontaktujemy się z Tobą wkrótce, aby potwierdzić możliwe terminy zajęć i omówić szczegóły kursu.
-
-Zaloguj się do portalu: ${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/portal
-
-Masz pytania? Skontaktuj się z nami:
-Email: kontakt@harry-english.pl
-Tel: +48 123 123 123
-
-Harry English
-    `,
-  };
-
-  await sendHarryMail(mailOptions);
 }
 
 // Funkcja do wysyłania emaila z resetem hasła
@@ -484,7 +412,7 @@ export async function sendResignationEmail(
         ${emailInsetCellClose()}
         ${emailInsetCellOpen(p)}
           <p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;color:${p.insetText};"><strong>Rodzic:</strong> ${escapeHtmlForEmail(parentFirstName)} ${escapeHtmlForEmail(parentLastName)}</p>
-          <p style="margin:0;font-size:14px;line-height:1.6;color:${p.insetText};"><strong>Email:</strong> ${escapeHtmlForEmail(parentEmail)}</p>
+          <p style="margin:0;font-size:14px;line-height:1.6;color:${p.insetText};"><strong>Email:</strong> ${buildEmailMailtoLink(parentEmail, p.insetText)}</p>
         ${emailInsetCellClose()}
         <div style="border:2px solid #dc2626;background:#3b1a1a;padding:14px 16px;border-radius:10px;margin-top:12px;">
           <p style="margin:0 0 8px 0;font-size:14px;font-weight:700;color:#fca5a5;">Powód rezygnacji</p>
@@ -525,6 +453,18 @@ export function escapeHtmlForEmail(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+/** Adres e-mail w treści HTML — biały link mailto (bez niebieskiego auto-linkowania w kliencie poczty). */
+function buildEmailMailtoLink(
+  email: string,
+  color?: string,
+  options?: { underline?: boolean }
+): string {
+  const c = color ?? getEmailPalette().text;
+  const safe = escapeHtmlForEmail(email.trim());
+  const deco = options?.underline ? "underline" : "none";
+  return `<a href="mailto:${safe}" class="he-email-body-link" style="color:${c} !important;-webkit-text-fill-color:${c} !important;text-decoration:${deco} !important;">${safe}</a>`;
 }
 
 function splitTrailingUrlPunctuation(token: string): { url: string; suffix: string } {
@@ -771,7 +711,7 @@ export async function sendPublicEnrollmentBackupEmail(params: {
         <ul style="margin:0 0 12px 18px;padding:0;font-size:14px;line-height:1.6;color:${p.text};">
           <li><strong>Imię:</strong> ${escapeHtmlForEmail(params.parentFirstName)}</li>
           <li><strong>Nazwisko:</strong> ${escapeHtmlForEmail(params.parentLastName)}</li>
-          <li><strong>Email:</strong> ${escapeHtmlForEmail(params.parentEmail)}</li>
+          <li><strong>Email:</strong> ${buildEmailMailtoLink(params.parentEmail, p.text)}</li>
           <li><strong>Telefon:</strong> ${escapeHtmlForEmail(params.parentPhone)}</li>
           <li><strong>Zgoda RODO:</strong> ${params.rodoConsent ? "tak" : "nie"}</li>
         </ul>
@@ -956,7 +896,7 @@ export async function sendProposalEmail(
         <tr>
           <td style="padding:4px 12px 4px 0;font-size:15px;color:${p.insetText};"><strong>Login (email):</strong></td>
           <td style="padding:4px 0;font-size:15px;color:${p.insetText};font-family:Consolas,Menlo,monospace;">
-            <a href="mailto:${escapeHtmlForEmail(credentials.loginEmail)}" class="he-email-body-link" style="color:${p.insetText} !important;-webkit-text-fill-color:${p.insetText} !important;text-decoration:none;">${escapeHtmlForEmail(credentials.loginEmail)}</a>
+            ${buildEmailMailtoLink(credentials.loginEmail, p.insetText)}
           </td>
         </tr>
         <tr>
@@ -1025,6 +965,133 @@ Przejdź do portalu: ${portalUrl}
   });
 }
 
+export async function sendCombinedProposalEmail(
+  to: string,
+  parentName: string,
+  proposals: Array<{
+    groupName: string;
+    locationName: string;
+    schedule: string;
+    childFirstName: string;
+    childLastName: string;
+  }>,
+  credentials?: {
+    loginEmail: string;
+    tempPassword: string;
+  }
+) {
+  const portalUrl = `${getAppBaseUrl()}/portal/login`;
+  const p = getEmailPalette();
+
+  const proposalsHtml = proposals
+    .map((proposal) => {
+      const safeChildName = `${escapeHtmlForEmail(proposal.childFirstName)} ${escapeHtmlForEmail(proposal.childLastName)}`;
+      return `
+        <div style="margin:0 0 16px 0;padding:14px 16px;border:2px solid ${p.insetBorder};border-radius:10px;background:${p.insetBg};">
+          <p style="margin:0 0 8px 0;font-size:15px;font-weight:700;color:${p.text};">${safeChildName}</p>
+          <ul style="margin:0 0 0 18px;padding:0;font-size:15px;line-height:1.6;color:${p.text};">
+            <li><strong>Grupa:</strong> ${escapeHtmlForEmail(proposal.groupName)}</li>
+            <li><strong>Lokalizacja:</strong> ${escapeHtmlForEmail(proposal.locationName)}</li>
+            <li><strong>Termin:</strong> ${escapeHtmlForEmail(proposal.schedule)}</li>
+          </ul>
+        </div>
+      `;
+    })
+    .join("");
+
+  const proposalsText = proposals
+    .map((proposal) => {
+      const childName = `${proposal.childFirstName} ${proposal.childLastName}`;
+      return `${childName}:
+- Grupa: ${proposal.groupName}
+- Lokalizacja: ${proposal.locationName}
+- Termin: ${proposal.schedule}`;
+    })
+    .join("\n\n");
+
+  const credentialsHtml = credentials
+    ? `
+      <p style="margin:16px 0 8px 0;font-size:15px;line-height:1.6;color:${p.text};">
+        Założyliśmy dla Ciebie konto w portalu. Zaloguj się poniższymi danymi.
+      </p>
+      ${emailInsetCellOpen(p)}
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;">
+        <tr>
+          <td style="padding:4px 12px 4px 0;font-size:15px;color:${p.insetText};"><strong>Login (email):</strong></td>
+          <td style="padding:4px 0;font-size:15px;color:${p.insetText};font-family:Consolas,Menlo,monospace;">
+            ${buildEmailMailtoLink(credentials.loginEmail, p.insetText)}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:4px 12px 4px 0;font-size:15px;color:${p.insetText};"><strong>Hasło tymczasowe:</strong></td>
+          <td style="padding:4px 0;font-size:16px;color:${p.insetText};font-family:Consolas,Menlo,monospace;letter-spacing:1px;"><strong>${escapeHtmlForEmail(credentials.tempPassword)}</strong></td>
+        </tr>
+      </table>
+      ${emailInsetCellClose()}
+      <p style="margin:12px 0;font-size:14px;line-height:1.6;color:${p.text};opacity:0.85;">
+        Po pierwszym zalogowaniu poprosimy Cię o ustawienie własnego hasła.
+      </p>
+    `
+    : `
+      <p style="margin:16px 0 8px 0;font-size:15px;line-height:1.6;color:${p.text};">
+        Aby zobaczyć szczegóły propozycji i podjąć decyzję, zaloguj się do portalu danymi, których używasz na co dzień.
+      </p>
+      <p style="margin:0 0 12px 0;font-size:14px;line-height:1.6;color:${p.text};opacity:0.85;">
+        Nie pamiętasz hasła? Skorzystaj z opcji „Zapomniałem hasła" na stronie logowania.
+      </p>
+    `;
+
+  const credentialsText = credentials
+    ? `
+Założyliśmy dla Ciebie konto w portalu. Zaloguj się poniższymi danymi.
+- Login (email): ${credentials.loginEmail}
+- Hasło tymczasowe: ${credentials.tempPassword}
+Po pierwszym zalogowaniu poprosimy Cię o ustawienie własnego hasła.
+`
+    : `
+Zaloguj się do portalu danymi, których używasz na co dzień.
+Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logowania.
+`;
+
+  const childCount = proposals.length;
+  const introPlural =
+    childCount === 1
+      ? "Przygotowaliśmy propozycję grupy dla Twojego dziecka."
+      : `Przygotowaliśmy propozycje grup dla ${childCount} dzieci.`;
+
+  await sendHarryMail({
+    from: {
+      name: "Harry English",
+      address: process.env.EMAIL_USER || "kontakt@harry-english.pl",
+    },
+    to,
+    subject:
+      childCount === 1
+        ? "Propozycja grupy - Harry English"
+        : `Propozycje grup (${childCount} dzieci) - Harry English`,
+    html: buildEmailShell({
+      title: `Dzień dobry ${escapeHtmlForEmail(parentName)},`,
+      intro: `${introPlural} Zaakceptuj je w portalu, aby przejść do uzupełnienia danych oraz do podpisania umowy.`,
+      contentHtml: `
+        ${proposalsHtml}
+        ${credentialsHtml}
+        ${emailCtaButton(portalUrl, "Przejdź do portalu")}
+        <p style="margin:14px 0 0 0;font-size:13px;line-height:1.6;color:${p.text};">
+          Lub skopiuj link do przeglądarki: <a href="${portalUrl}" class="he-email-body-link" style="color:${p.link} !important;">${portalUrl}</a>
+        </p>
+      `,
+    }),
+    text: `Dzień dobry ${parentName},
+
+${introPlural} Zaakceptuj je w portalu, aby przejść do uzupełnienia danych oraz do podpisania umowy.
+
+${proposalsText}
+${credentialsText}
+Przejdź do portalu: ${portalUrl}
+`,
+  });
+}
+
 /**
  * Powiadomienie dla szkoły, że rodzic odrzucił propozycję grupy.
  * Wysyłane na `process.env.EMAIL_USER` (kontakt@harry-english.pl).
@@ -1076,7 +1143,7 @@ export async function sendProposalRejectedEmail(params: {
         ${emailInsetCellOpen(p)}
           <p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;color:${p.insetText};"><strong>Dziecko:</strong> ${escapeHtmlForEmail(params.childFirstName)} ${escapeHtmlForEmail(params.childLastName)}</p>
           <p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;color:${p.insetText};"><strong>Rodzic:</strong> ${escapeHtmlForEmail(params.parentFirstName)} ${escapeHtmlForEmail(params.parentLastName)}</p>
-          <p style="margin:0;font-size:14px;line-height:1.6;color:${p.insetText};"><strong>Email rodzica:</strong> ${escapeHtmlForEmail(params.parentEmail)}</p>
+          <p style="margin:0;font-size:14px;line-height:1.6;color:${p.insetText};"><strong>Email rodzica:</strong> ${buildEmailMailtoLink(params.parentEmail, p.insetText)}</p>
         ${emailInsetCellClose()}
         ${emailInsetCellOpen(p)}
           ${emailSectionHeading("Odrzucona propozycja", p)}
@@ -1160,5 +1227,71 @@ export async function sendSignedContractEmail(
       `,
     }),
     text: "Umowa została podpisana elektronicznie. Szczegóły znajdują się w wersji HTML wiadomości.",
+  });
+}
+
+export type SignedContractPdfAttachment = {
+  filename: string;
+  content: Buffer;
+};
+
+export async function sendSignedContractConfirmationEmails(params: {
+  parentEmail: string;
+  parentFirstName: string;
+  parentFullName: string;
+  contractNumber: string | null;
+  childName?: string | null;
+  schoolEmail?: string;
+  pdfFiles: SignedContractPdfAttachment[];
+}) {
+  const from = {
+    name: "Harry English",
+    address: process.env.EMAIL_USER || "kontakt@harry-english.pl",
+  };
+  const schoolEmail = params.schoolEmail?.trim() || "kontakt@harry-english.pl";
+  const contractLabel = params.contractNumber ? ` nr ${params.contractNumber}` : "";
+  const childPart = params.childName?.trim() ? ` Dotyczy: ${params.childName.trim()}.` : "";
+  const attachmentList = params.pdfFiles.map((file) => ({
+    filename: file.filename,
+    content: file.content,
+    contentType: "application/pdf" as const,
+  }));
+
+  const filesListHtml = params.pdfFiles
+    .map((file) => `<li>${escapeHtmlForEmail(file.filename)}</li>`)
+    .join("");
+
+  const sharedContentHtml = `
+    <p>Umowa${escapeHtmlForEmail(contractLabel)} została podpisana elektronicznie.${escapeHtmlForEmail(childPart)}</p>
+    <p>W załączeniu przesyłamy podpisane dokumenty w formacie PDF:</p>
+    <ul style="margin:8px 0;padding-left:20px;">${filesListHtml}</ul>
+  `;
+
+  const sharedText = `Umowa${contractLabel} została podpisana.${childPart} W załączeniu: ${params.pdfFiles.map((f) => f.filename).join(", ")}.`;
+
+  await sendHarryMail({
+    from,
+    to: params.parentEmail,
+    subject: "Potwierdzenie podpisu umowy - Harry English",
+    html: buildEmailShell({
+      title: `Dzień dobry ${escapeHtmlForEmail(params.parentFirstName)},`,
+      intro: "Dziękujemy za podpisanie umowy.",
+      contentHtml: sharedContentHtml,
+    }),
+    text: `Dzień dobry ${params.parentFirstName}, dziękujemy za podpisanie umowy. ${sharedText}`,
+    attachments: attachmentList,
+  });
+
+  await sendHarryMail({
+    from,
+    to: schoolEmail,
+    subject: `Podpisana umowa${contractLabel} - ${params.parentFullName} - Harry English`,
+    html: buildEmailShell({
+      title: "Podpisana umowa",
+      intro: `Rodzic ${escapeHtmlForEmail(params.parentFullName)} podpisał umowę${escapeHtmlForEmail(contractLabel)}.`,
+      contentHtml: sharedContentHtml,
+    }),
+    text: `Rodzic ${params.parentFullName} podpisał umowę${contractLabel}. ${sharedText}`,
+    attachments: attachmentList,
   });
 }

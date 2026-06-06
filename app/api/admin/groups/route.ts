@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   canAccessSchoolAdminApis,
   getRegistrationSchoolId,
+  POLISH_DAY_FROM_ST_SQL,
   queryDb,
   resolveAdminPanelTenant,
 } from "@/lib/db";
@@ -39,6 +40,7 @@ export async function GET(request: NextRequest) {
       location_name: string | null;
       location_id: string | null;
       school_year_id: string | null;
+      schedule: string | null;
       students_count: string;
       price_monthly: string | null;
       price_yearly: string | null;
@@ -56,6 +58,16 @@ export async function GET(request: NextRequest) {
          g.price_yearly::text AS price_yearly,
          CASE WHEN t.id IS NULL THEN NULL ELSE CONCAT(t.first_name, ' ', t.last_name) END AS teacher_name,
          COALESCE(gl.name, MAX(l.name)) AS location_name,
+         COALESCE(
+           NULLIF(
+             STRING_AGG(
+               DISTINCT CONCAT(${POLISH_DAY_FROM_ST_SQL}, ' ', TO_CHAR(st.start_time, 'HH24:MI')),
+               ', '
+             ),
+             ''
+           ),
+           '-'
+         ) AS schedule,
          COUNT(DISTINCT gs.id) FILTER (WHERE gs.left_at IS NULL)::text AS students_count
        FROM groups g
        LEFT JOIN users t ON t.id = g.teacher_id

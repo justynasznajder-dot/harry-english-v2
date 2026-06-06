@@ -2,15 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import Link from 'next/link';
-import {
-  ENROLLMENT_STATUS_COLORS,
-  ENROLLMENT_STATUS_LABELS,
-  formatEnrollmentStatusLabel,
-  type EnrollmentStatus,
-} from '@/lib/enrollment-status';
 import { normalizePolishPhone } from '@/lib/phone';
 import ClassesCalendarPanel from '@/src/components/admin/ClassesCalendarPanel';
 import RenewalsPanel from '@/src/components/admin/RenewalsPanel';
+import EnrollmentAdminPanel from '@/src/components/admin/EnrollmentAdminPanel';
+import type { ComplimentaryParentRow, EnrollmentGroupRow, EnrollmentParentRow } from '@/src/components/enrollment/types';
 import MessagesPanel from '@/src/components/messages/MessagesPanel';
 import MessagesTabLabel from '@/src/components/messages/MessagesTabLabel';
 import { useUnreadMessagesCount } from '@/src/components/messages/useUnreadMessagesCount';
@@ -26,7 +22,7 @@ type TabKey =
   | 'payments';
 type MobileTab = 'organization' | 'users' | 'groups' | 'more';
 type UsersSubTab = 'parents' | 'children' | 'teachers' | 'managers' | 'add';
-type OrganizationSubTab = 'schoolYear' | 'teachers' | 'locations' | 'history';
+type OrganizationSubTab = 'schoolYear' | 'teachers' | 'locations' | 'discounts' | 'history';
 type TeacherOrgSubTab = 'list' | 'add';
 type LocationOrgSubTab = 'list' | 'add' | 'edit';
 type GroupsSubTab = 'list' | 'add' | 'organize';
@@ -74,6 +70,7 @@ interface GroupRow {
   location_name: string | null;
   location_id: string | null;
   school_year_id: string | null;
+  schedule: string | null;
   students_count: string;
   active: boolean;
   max_students: number;
@@ -192,6 +189,7 @@ const organizationTabs: Array<{ key: OrganizationSubTab; label: string }> = [
   { key: 'schoolYear', label: 'Rok szkolny' },
   { key: 'teachers', label: 'Nauczyciele' },
   { key: 'locations', label: 'Lokalizacje' },
+  { key: 'discounts', label: 'Zniżki' },
   { key: 'history', label: 'Historia' },
 ];
 
@@ -314,7 +312,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     firstName: string;
     lastName: string;
     birthDate: string;
-  }>>([{ firstName: '', lastName: '', birthDate: '' }]);
+    preferredLocationId: string;
+  }>>([{ firstName: '', lastName: '', birthDate: '', preferredLocationId: '' }]);
   const [newTeacherForm, setNewTeacherForm] = useState({
     firstName: '',
     lastName: '',
@@ -329,42 +328,34 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     firstName: '',
     lastName: '',
     birthDate: '',
-    accessLevel: 'NEW' as 'NEW' | 'PROPOSED' | 'SIGNED' | 'COMPLETED',
+    preferredLocationId: '',
     parentSearch: '',
   });
-  const [enrollmentParents, setEnrollmentParents] = useState<Array<{
-    id: string;
-    firstName: string;
-    lastName: string;
-    email: string;
-    accessLevel: EnrollmentStatus;
-    children: Array<{
-      id: string;
-      requestId: string;
+  const [enrollmentParents, setEnrollmentParents] = useState<EnrollmentParentRow[]>([]);
+  const [enrollmentGroups, setEnrollmentGroups] = useState<EnrollmentGroupRow[]>([]);
+  const [discountsLoading, setDiscountsLoading] = useState(false);
+  const [discountsSaving, setDiscountsSaving] = useState(false);
+  const [discountPercentsDraft, setDiscountPercentsDraft] = useState({
+    LARGE_FAMILY_CARD: '0',
+    SIBLING: '0',
+  });
+  const [discountSettings, setDiscountSettings] = useState({
+    LARGE_FAMILY_CARD: 0,
+    SIBLING: 0,
+  });
+  const [complimentaryParents, setComplimentaryParents] = useState<ComplimentaryParentRow[]>([]);
+  const [complimentaryCandidates, setComplimentaryCandidates] = useState<
+    Array<{
+      key: string;
+      source: 'USER' | 'ENROLLMENT';
+      parentId: string | null;
+      parentEmail: string | null;
       firstName: string;
       lastName: string;
-      confirmed: boolean;
-      status: EnrollmentStatus;
-      childAccessLevel?: EnrollmentStatus;
-      birthDate: string | null;
-      preferredLocation: string | null;
-      preferredDays: string | null;
-      notes: string | null;
-      proposedGroupId: string | null;
-      proposedAt: string | null;
-    }>;
-  }>>([]);
-  const [enrollmentGroups, setEnrollmentGroups] = useState<Array<{
-    id: string;
-    name: string;
-    location_name: string;
-    schedule: string;
-  }>>([]);
-  const [proposalModalParentId, setProposalModalParentId] = useState<string | null>(null);
-  const [submittingProposalRequestId, setSubmittingProposalRequestId] = useState<string | null>(null);
-  const [proposalDrafts, setProposalDrafts] = useState<
-    Record<string, { groupId: string; amountOverride: string }>
-  >({});
+      email: string;
+    }>
+  >([]);
+  const [selectedComplimentaryCandidateKey, setSelectedComplimentaryCandidateKey] = useState('');
   const [groups, setGroups] = useState<GroupRow[]>([]);
   const [groupSaving, setGroupSaving] = useState(false);
   const [groupForm, setGroupForm] = useState({
@@ -563,6 +554,45 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     }
   }, [pushToast]);
 
+  const loadDiscounts = useCallback(async () => {
+    setDiscountsLoading(true);
+    try {
+      const res = await fetch('/api/admin/discounts');
+      const data = (await res.json().catch(() => ({}))) as {
+        discounts?: Array<{ key: string; label: string; percent: number }>;
+        complimentaryParents?: typeof complimentaryParents;
+        complimentaryCandidates?: typeof complimentaryCandidates;
+        message?: string;
+      };
+      if (!res.ok) {
+        pushToast('error', data.message ?? 'Nie udało się pobrać ustawień zniżek');
+        return;
+      }
+      const nextSettings = { LARGE_FAMILY_CARD: 0, SIBLING: 0 };
+      for (const item of data.discounts ?? []) {
+        if (item.key === 'LARGE_FAMILY_CARD' || item.key === 'SIBLING') {
+          nextSettings[item.key] = Number(item.percent) || 0;
+        }
+      }
+      setDiscountSettings(nextSettings);
+      setDiscountPercentsDraft({
+        LARGE_FAMILY_CARD: String(nextSettings.LARGE_FAMILY_CARD),
+        SIBLING: String(nextSettings.SIBLING),
+      });
+      setComplimentaryParents(
+        Array.isArray(data.complimentaryParents) ? data.complimentaryParents : [],
+      );
+      setComplimentaryCandidates(
+        Array.isArray(data.complimentaryCandidates) ? data.complimentaryCandidates : [],
+      );
+    } catch (e) {
+      console.error('loadDiscounts', e);
+      pushToast('error', 'Błąd pobierania ustawień zniżek');
+    } finally {
+      setDiscountsLoading(false);
+    }
+  }, [pushToast]);
+
   useEffect(() => {
     if (
       activeTab === 'organization' &&
@@ -579,8 +609,32 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   }, [activeTab, organizationSubTab, loadLocations]);
 
   useEffect(() => {
+    if (activeTab === 'organization' && organizationSubTab === 'discounts') {
+      void loadDiscounts();
+    }
+  }, [activeTab, organizationSubTab, loadDiscounts]);
+
+  useEffect(() => {
+    if (activeTab === 'renewals') {
+      void loadDiscounts();
+    }
+  }, [activeTab, loadDiscounts]);
+
+  useEffect(() => {
     if (activeTab === 'classes') void loadLocations();
   }, [activeTab, loadLocations]);
+
+  useEffect(() => {
+    if (activeTab === 'users' && usersSubTab === 'add') {
+      void loadLocations();
+    }
+  }, [activeTab, usersSubTab, loadLocations]);
+
+  useEffect(() => {
+    if (childModalOpen) {
+      void loadLocations();
+    }
+  }, [childModalOpen, loadLocations]);
 
   useEffect(() => {
     if (mobileTab === 'organization') setActiveTab('organization');
@@ -714,6 +768,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     }
   }, [groupsSubTab, organizeExpandedGroupId, organizeFilteredGroups]);
 
+  const resetGroupsToList = useCallback(() => {
+    setSelectedGroupId(null);
+    setGroupDetail(null);
+    setOrganizeExpandedGroupId(null);
+    setGroupsSubTab('list');
+  }, []);
+
   const populateGroupFormFromGroup = useCallback(
     (g: GroupDetail['group']) => {
       setGroupForm({
@@ -834,57 +895,66 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       pushToast('error', 'Uzupełnij wszystkie pola i wybierz rolę');
       return;
     }
+    const activeLocations = schoolLocations.filter((loc) => loc.active);
     if (newUser.role === 'PARENT') {
-      if (newParentChildren.length === 0 || newParentChildren.some((child) => !child.firstName || !child.lastName || !child.birthDate)) {
+      if (
+        newParentChildren.length === 0 ||
+        newParentChildren.some((child) => !child.firstName || !child.lastName || !child.birthDate)
+      ) {
         pushToast('error', 'Dodaj co najmniej jedno dziecko i uzupełnij jego dane');
+        return;
+      }
+      if (
+        activeLocations.length > 0 &&
+        newParentChildren.some((child) => !child.preferredLocationId.trim())
+      ) {
+        pushToast('error', 'Wybierz preferowaną lokalizację dla każdego dziecka');
         return;
       }
     }
     setBusy(true);
     try {
       const normalizedPhone = normalizePolishPhone(newUser.phone ?? '');
+      const payload: Record<string, unknown> = {
+        firstName: newUser.firstName,
+        lastName: newUser.lastName,
+        email: newUser.email,
+        password: newUser.password,
+        role: newUser.role,
+        confirmed: true,
+        accessLevel: newUser.role === 'PARENT' ? 'PENDING' : 'ACTIVE',
+        ...(normalizedPhone ? { phone: normalizedPhone } : {}),
+      };
+      if (newUser.role === 'PARENT') {
+        payload.children = newParentChildren.map((child) => ({
+          firstName: child.firstName.trim(),
+          lastName: child.lastName.trim(),
+          birthDate: child.birthDate,
+          preferredLocationId: child.preferredLocationId.trim() || null,
+        }));
+      }
       const res = await fetch('/api/admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          firstName: newUser.firstName,
-          lastName: newUser.lastName,
-          email: newUser.email,
-          password: newUser.password,
-          role: newUser.role,
-          confirmed: true,
-          accessLevel: newUser.role === 'PARENT' ? 'PENDING' : 'ACTIVE',
-          ...(normalizedPhone ? { phone: normalizedPhone } : {}),
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message ?? 'Nie udało się dodać użytkownika');
 
       if (newUser.role === 'PARENT') {
-        for (const child of newParentChildren) {
-          const childRes = await fetch('/api/admin/children', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              parentId: data.user.id,
-              firstName: child.firstName,
-              lastName: child.lastName,
-              birthDate: child.birthDate,
-            }),
-          });
-          if (!childRes.ok) {
-            const childData = await childRes.json();
-            throw new Error(childData.message ?? 'Nie udało się dodać dziecka');
-          }
-        }
-        pushToast('success', 'Rodzic i dzieci zostali dodani');
+        pushToast(
+          'success',
+          data.message ??
+            `Utworzono konto rodzica i ${data.enrollmentCount ?? newParentChildren.length} zgłoszeń`,
+        );
+        setActiveTab('enrollment');
       } else {
         pushToast('success', 'Dodano użytkownika');
+        setUsersSubTab('parents');
       }
 
-      setUsersSubTab('parents');
       setNewUser({ firstName: '', lastName: '', email: '', password: '', phone: '', role: '' });
-      setNewParentChildren([{ firstName: '', lastName: '', birthDate: '' }]);
+      setNewParentChildren([{ firstName: '', lastName: '', birthDate: '', preferredLocationId: '' }]);
       await loadData();
     } catch (error) {
       pushToast('error', error instanceof Error ? error.message : 'Błąd dodawania');
@@ -1028,7 +1098,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 <p className="mb-2 font-semibold text-zinc-800">Dane dziecka</p>
                 <div className="space-y-2">
                   {newParentChildren.map((child, idx) => (
-                    <div key={idx} className="grid grid-cols-1 gap-2 md:grid-cols-4">
+                    <div key={idx} className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-5">
                       <input
                         className="rounded-xl border border-emerald-200 px-3 py-2"
                         placeholder="Imię dziecka"
@@ -1059,6 +1129,33 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                           )
                         }
                       />
+                      <select
+                        className="rounded-xl border border-emerald-200 px-3 py-2"
+                        value={child.preferredLocationId}
+                        disabled={locationsLoading}
+                        onChange={(e) =>
+                          setNewParentChildren((prev) =>
+                            prev.map((row, i) =>
+                              i === idx ? { ...row, preferredLocationId: e.target.value } : row,
+                            )
+                          )
+                        }
+                      >
+                        <option value="">
+                          {locationsLoading
+                            ? 'Ładowanie lokalizacji…'
+                            : schoolLocations.filter((loc) => loc.active).length === 0
+                              ? 'Brak lokalizacji'
+                              : 'Preferowana lokalizacja'}
+                        </option>
+                        {schoolLocations
+                          .filter((loc) => loc.active)
+                          .map((loc) => (
+                            <option key={loc.id} value={loc.id}>
+                              {loc.name}
+                            </option>
+                          ))}
+                      </select>
                       <button
                         type="button"
                         className="rounded-xl bg-zinc-200 px-3 py-2"
@@ -1076,7 +1173,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   type="button"
                   className="mt-3 rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white"
                   onClick={() =>
-                    setNewParentChildren((prev) => [...prev, { firstName: '', lastName: '', birthDate: '' }])
+                    setNewParentChildren((prev) => [
+                      ...prev,
+                      { firstName: '', lastName: '', birthDate: '', preferredLocationId: '' },
+                    ])
                   }
                 >
                   + Dodaj kolejne dziecko
@@ -1238,7 +1338,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             onClick={() => setChildModalOpen(true)}
             className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white"
           >
-            + Dodaj dziecko
+            + Dodaj zgłoszenie dziecka
           </button>
         </div>
         <div className="overflow-x-auto">
@@ -1946,6 +2046,256 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             </div>
           )}
 
+          {organizationSubTab === 'discounts' && (
+            <div className="mt-4 space-y-6">
+              <p className="text-sm text-zinc-600">
+                Ustaw procentowe zniżki stosowane przy kwotach umów oraz rodziców w trybie bez
+                opłat (bez faktur i płatności).
+              </p>
+
+              {discountsLoading ? (
+                <div className="space-y-3">
+                  <div className="h-24 animate-pulse rounded-2xl bg-emerald-100/80" />
+                  <div className="h-32 animate-pulse rounded-2xl bg-emerald-100/60" />
+                </div>
+              ) : (
+                <>
+                  <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-4">
+                    <h4 className="font-semibold text-[#0f6e56]">Zniżki procentowe</h4>
+                    <p className="mt-1 text-sm text-zinc-600">
+                      Od kwoty dodawanej do umowy odejmowany jest wybrany procent (można łączyć
+                      zniżki).
+                    </p>
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                      <label className="block space-y-1">
+                        <span className="text-sm font-medium text-zinc-700">
+                          Karta Dużej Rodziny (%)
+                        </span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                          value={discountPercentsDraft.LARGE_FAMILY_CARD}
+                          onChange={(e) =>
+                            setDiscountPercentsDraft((prev) => ({
+                              ...prev,
+                              LARGE_FAMILY_CARD: e.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="block space-y-1">
+                        <span className="text-sm font-medium text-zinc-700">Rodzeństwo (%)</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                          value={discountPercentsDraft.SIBLING}
+                          onChange={(e) =>
+                            setDiscountPercentsDraft((prev) => ({
+                              ...prev,
+                              SIBLING: e.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={discountsSaving}
+                      className="mt-4 rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                      onClick={async () => {
+                        setDiscountsSaving(true);
+                        try {
+                          const res = await fetch('/api/admin/discounts', {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              discounts: [
+                                {
+                                  key: 'LARGE_FAMILY_CARD',
+                                  percent: Number(discountPercentsDraft.LARGE_FAMILY_CARD) || 0,
+                                },
+                                {
+                                  key: 'SIBLING',
+                                  percent: Number(discountPercentsDraft.SIBLING) || 0,
+                                },
+                              ],
+                            }),
+                          });
+                          const data = (await res.json().catch(() => ({}))) as {
+                            message?: string;
+                            discounts?: Array<{ key: string; percent: number }>;
+                          };
+                          if (!res.ok) {
+                            pushToast('error', data.message ?? 'Nie udało się zapisać zniżek');
+                            return;
+                          }
+                          const nextSettings = { LARGE_FAMILY_CARD: 0, SIBLING: 0 };
+                          for (const item of data.discounts ?? []) {
+                            if (item.key === 'LARGE_FAMILY_CARD' || item.key === 'SIBLING') {
+                              nextSettings[item.key] = Number(item.percent) || 0;
+                            }
+                          }
+                          setDiscountSettings(nextSettings);
+                          pushToast('success', 'Zapisano ustawienia zniżek');
+                        } catch {
+                          pushToast('error', 'Błąd zapisu zniżek');
+                        } finally {
+                          setDiscountsSaving(false);
+                        }
+                      }}
+                    >
+                      {discountsSaving ? 'Zapisywanie…' : 'Zapisz zniżki'}
+                    </button>
+                  </div>
+
+                  <div className="rounded-xl border border-emerald-100 bg-white p-4">
+                    <h4 className="font-semibold text-[#0f6e56]">Tryb bez opłat</h4>
+                    <p className="mt-1 text-sm text-zinc-600">
+                      Rodzice z tej listy kończą zapis po akceptacji grupy — bez umowy, faktur i
+                      płatności. Możesz dodać konto rodzica lub zgłoszenie z rejestracji (e-mail).
+                    </p>
+                    <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                      <select
+                        className="min-w-0 flex-1 rounded-xl border border-emerald-200 px-3 py-2"
+                        value={selectedComplimentaryCandidateKey}
+                        onChange={(e) => setSelectedComplimentaryCandidateKey(e.target.value)}
+                      >
+                        <option value="">Wybierz rodzica…</option>
+                        {complimentaryCandidates.some((c) => c.source === 'USER') && (
+                          <optgroup label="Konta rodziców">
+                            {complimentaryCandidates
+                              .filter((c) => c.source === 'USER')
+                              .map((c) => (
+                                <option key={c.key} value={c.key}>
+                                  {c.lastName} {c.firstName} · {c.email}
+                                </option>
+                              ))}
+                          </optgroup>
+                        )}
+                        {complimentaryCandidates.some((c) => c.source === 'ENROLLMENT') && (
+                          <optgroup label="Zgłoszenia (enrollment)">
+                            {complimentaryCandidates
+                              .filter((c) => c.source === 'ENROLLMENT')
+                              .map((c) => (
+                                <option key={c.key} value={c.key}>
+                                  {c.lastName} {c.firstName} · {c.email}
+                                </option>
+                              ))}
+                          </optgroup>
+                        )}
+                      </select>
+                      <button
+                        type="button"
+                        disabled={!selectedComplimentaryCandidateKey || discountsSaving}
+                        className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                        onClick={async () => {
+                          if (!selectedComplimentaryCandidateKey) return;
+                          setDiscountsSaving(true);
+                          try {
+                            const res = await fetch('/api/admin/discounts', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                candidateKey: selectedComplimentaryCandidateKey,
+                              }),
+                            });
+                            const data = (await res.json().catch(() => ({}))) as {
+                              message?: string;
+                              complimentaryParents?: typeof complimentaryParents;
+                            };
+                            if (!res.ok) {
+                              pushToast('error', data.message ?? 'Nie udało się dodać rodzica');
+                              return;
+                            }
+                            setComplimentaryParents(
+                              Array.isArray(data.complimentaryParents)
+                                ? data.complimentaryParents
+                                : [],
+                            );
+                            setSelectedComplimentaryCandidateKey('');
+                            pushToast('success', 'Dodano rodzica do trybu bez opłat');
+                          } catch {
+                            pushToast('error', 'Błąd dodawania rodzica');
+                          } finally {
+                            setDiscountsSaving(false);
+                          }
+                        }}
+                      >
+                        Dodaj
+                      </button>
+                    </div>
+                    <div className="mt-4 max-h-64 space-y-2 overflow-y-auto">
+                      {complimentaryParents.length === 0 ? (
+                        <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
+                          Brak rodziców w trybie bez opłat.
+                        </p>
+                      ) : (
+                        complimentaryParents.map((parent) => (
+                          <div
+                            key={parent.id}
+                            className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-100 px-4 py-3"
+                          >
+                            <div>
+                              <p className="font-semibold text-zinc-900">
+                                {parent.firstName} {parent.lastName}
+                              </p>
+                              <p className="text-sm text-zinc-600">{parent.email}</p>
+                              <p className="mt-0.5 text-xs text-zinc-500">
+                                {parent.source === 'ENROLLMENT'
+                                  ? 'Źródło: zgłoszenie · bez umowy po akceptacji grupy'
+                                  : 'Źródło: konto rodzica · bez umowy po akceptacji grupy'}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              className="rounded-lg border border-rose-200 px-3 py-1.5 text-sm text-rose-700 hover:bg-rose-50"
+                              onClick={async () => {
+                                setDiscountsSaving(true);
+                                try {
+                                  const res = await fetch('/api/admin/discounts', {
+                                    method: 'DELETE',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ id: parent.id }),
+                                  });
+                                  const data = (await res.json().catch(() => ({}))) as {
+                                    message?: string;
+                                    complimentaryParents?: typeof complimentaryParents;
+                                  };
+                                  if (!res.ok) {
+                                    pushToast('error', data.message ?? 'Nie udało się usunąć');
+                                    return;
+                                  }
+                                  setComplimentaryParents(
+                                    Array.isArray(data.complimentaryParents)
+                                      ? data.complimentaryParents
+                                      : [],
+                                  );
+                                  pushToast('success', 'Usunięto z trybu bez opłat');
+                                } catch {
+                                  pushToast('error', 'Błąd usuwania rodzica');
+                                } finally {
+                                  setDiscountsSaving(false);
+                                }
+                              }}
+                            >
+                              Usuń
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           {organizationSubTab === 'history' && (
             <div className="mt-4 space-y-3">
               <p className="text-sm text-zinc-600">Zakończone lata szkolne z bazy (nieaktywne).</p>
@@ -1996,10 +2346,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       <button
         type="button"
         className="rounded-xl bg-zinc-200 px-3 py-2 text-sm font-semibold text-zinc-800"
-        onClick={() => {
-          setSelectedGroupId(null);
-          setGroupDetail(null);
-        }}
+        onClick={resetGroupsToList}
       >
         Wróć do listy
       </button>
@@ -2396,13 +2743,14 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           )}
           {groupsSubTab === 'list' ? (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[860px] text-sm">
+              <table className="w-full min-w-[980px] text-sm">
                 <thead className="bg-emerald-50 text-zinc-700">
                   <tr>
                     <th className="px-4 py-3 text-left">Nazwa</th>
                     <th className="px-4 py-3 text-left">Poziom</th>
                     <th className="px-4 py-3 text-left">Nauczyciel</th>
                     <th className="px-4 py-3 text-left">Lokalizacja</th>
+                    <th className="px-4 py-3 text-left">Termin zajęć</th>
                     <th className="px-4 py-3 text-left">Uczniowie</th>
                     <th className="px-4 py-3 text-left">Status</th>
                     <th className="px-4 py-3 text-left">Akcje</th>
@@ -2419,6 +2767,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       <td className="px-4 py-3">{g.level ?? '-'}</td>
                       <td className="px-4 py-3">{g.teacher_name ?? '-'}</td>
                       <td className="px-4 py-3">{g.location_name ?? '-'}</td>
+                      <td className="px-4 py-3 whitespace-normal text-zinc-700">{g.schedule ?? '-'}</td>
                       <td className="px-4 py-3">{g.students_count}/{g.max_students}</td>
                       <td className="px-4 py-3">
                         <span className={`rounded-full px-2 py-1 text-xs font-semibold ${g.active ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-700'}`}>
@@ -2717,51 +3066,15 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       return <RenewalsPanel pushToast={pushToast} />;
     }
     if (activeTab === 'enrollment') {
-      const enrollmentRows = enrollmentParents.filter((parent) => parent.children.length > 0);
-      if (enrollmentRows.length === 0) {
-        return <EmptyDataPanel title="Zgłoszenia" />;
-      }
       return (
-        <section className="rounded-2xl border border-emerald-100 bg-white space-y-3 p-4">
-          {enrollmentRows.map((parent) => (
-            <div key={parent.id} className="rounded-xl border border-emerald-100 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="font-semibold">
-                    {parent.firstName} {parent.lastName}
-                  </p>
-                  <p className="text-sm text-zinc-600">{parent.email}</p>
-                  <p className="mt-1 text-xs text-zinc-500">
-                    Status: {formatEnrollmentStatusLabel(parent.accessLevel)}
-                  </p>
-                </div>
-                <button
-                  className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm text-white"
-                  onClick={() => {
-                    setProposalModalParentId(parent.id);
-                    setProposalDrafts(() => {
-                      const next: Record<string, { groupId: string; amountOverride: string }> = {};
-                      for (const child of parent.children) {
-                        next[child.requestId] = {
-                          groupId: child.proposedGroupId ?? '',
-                          amountOverride: '',
-                        };
-                      }
-                      return next;
-                    });
-                  }}
-                >
-                  Zobacz szczegóły
-                </button>
-              </div>
-              <p className="mt-2 text-sm text-zinc-600">
-                Dzieci:{' '}
-                {parent.children.map((child) => `${child.firstName} ${child.lastName}`).join(', ') ||
-                  'brak'}
-              </p>
-            </div>
-          ))}
-        </section>
+        <EnrollmentAdminPanel
+          pushToast={pushToast}
+          parents={enrollmentParents}
+          groups={enrollmentGroups}
+          complimentaryParents={complimentaryParents}
+          discountSettings={discountSettings}
+          onRefresh={loadData}
+        />
       );
     }
     if (activeTab === 'announcements') {
@@ -2775,16 +3088,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     }
     return <EmptyDataPanel title="Panel" />;
   };
-  const proposalParent =
-    proposalModalParentId == null
-      ? null
-      : enrollmentParents.find((parent) => {
-          const pid = proposalModalParentId.trim();
-          if (parent.id === pid) return true;
-          const em = (parent.email ?? '').trim().toLowerCase();
-          if (em.length > 0 && pid.includes('@') && em === pid.toLowerCase()) return true;
-          return false;
-        }) ?? null;
 
   return (
     <div className="manager-panel pb-24" data-session-school-id={sessionSchoolId ?? ''}>
@@ -2798,6 +3101,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 onClick={() => {
                   if (tab.key === 'announcements' && activeTab === 'announcements') {
                     setMessagesListResetToken((t) => t + 1);
+                  }
+                  if (tab.key === 'groups' && activeTab === 'groups') {
+                    resetGroupsToList();
                   }
                   setActiveTab(tab.key);
                 }}
@@ -2829,7 +3135,12 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           {mobileTabs.map((tab) => (
             <button
               key={tab.key}
-              onClick={() => setMobileTab(tab.key)}
+              onClick={() => {
+                if (tab.key === 'groups' && mobileTab === 'groups') {
+                  resetGroupsToList();
+                }
+                setMobileTab(tab.key);
+              }}
               className={`rounded-full px-2 py-2 text-xs font-semibold ${
                 mobileTab === tab.key ? 'bg-[#0f6e56] text-white' : 'text-zinc-700'
               }`}
@@ -3298,7 +3609,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       {childModalOpen && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white p-5">
-            <h3 className="text-lg font-semibold">Dodaj dziecko</h3>
+            <h3 className="text-lg font-semibold">Dodaj zgłoszenie dziecka</h3>
+            <p className="mt-1 text-sm text-zinc-600">
+              Utworzy wpis w Zgłoszeniach — dziecko trafi do systemu po wysłaniu propozycji grupy.
+            </p>
             <div className="mt-4 space-y-3">
               <input
                 className="w-full rounded-xl border border-emerald-200 px-3 py-2"
@@ -3338,18 +3652,26 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               />
               <select
                 className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-                value={childForm.accessLevel}
+                value={childForm.preferredLocationId}
+                disabled={locationsLoading}
                 onChange={(e) =>
-                  setChildForm((prev) => ({
-                    ...prev,
-                    accessLevel: e.target.value as typeof prev.accessLevel,
-                  }))
+                  setChildForm((prev) => ({ ...prev, preferredLocationId: e.target.value }))
                 }
               >
-                <option value="NEW">Nowe zgłoszenie</option>
-                <option value="PROPOSED">Propozycja wysłana</option>
-                <option value="SIGNED">Umowa podpisana</option>
-                <option value="COMPLETED">Zakończone</option>
+                <option value="">
+                  {locationsLoading
+                    ? 'Ładowanie lokalizacji…'
+                    : schoolLocations.filter((loc) => loc.active).length === 0
+                      ? 'Brak lokalizacji'
+                      : 'Preferowana lokalizacja'}
+                </option>
+                {schoolLocations
+                  .filter((loc) => loc.active)
+                  .map((loc) => (
+                    <option key={loc.id} value={loc.id}>
+                      {loc.name}
+                    </option>
+                  ))}
               </select>
               <div className="flex justify-end gap-2">
                 <button
@@ -3365,6 +3687,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       pushToast('error', 'Uzupełnij wszystkie pola');
                       return;
                     }
+                    const activeLocations = schoolLocations.filter((loc) => loc.active);
+                    if (activeLocations.length > 0 && !childForm.preferredLocationId.trim()) {
+                      pushToast('error', 'Wybierz preferowaną lokalizację');
+                      return;
+                    }
                     const res = await fetch('/api/admin/children', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
@@ -3373,28 +3700,30 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         firstName: childForm.firstName,
                         lastName: childForm.lastName,
                         birthDate: childForm.birthDate,
-                        accessLevel: childForm.accessLevel,
+                        preferredLocationId: childForm.preferredLocationId.trim() || null,
                       }),
                     });
                     if (!res.ok) {
                       const data = await res.json();
-                      pushToast('error', data.message ?? 'Nie udało się dodać dziecka');
+                      pushToast('error', data.message ?? 'Nie udało się utworzyć zgłoszenia');
                       return;
                     }
-                    pushToast('success', 'Dziecko zostało dodane');
+                    const data = (await res.json()) as { message?: string };
+                    pushToast('success', data.message ?? 'Utworzono zgłoszenie');
                     setChildForm({
                       parentId: '',
                       firstName: '',
                       lastName: '',
                       birthDate: '',
-                      accessLevel: 'NEW',
+                      preferredLocationId: '',
                       parentSearch: '',
                     });
                     setChildModalOpen(false);
+                    setActiveTab('enrollment');
                     await loadData();
                   }}
                 >
-                  Dodaj dziecko
+                  Utwórz zgłoszenie
                 </button>
               </div>
             </div>
@@ -3402,282 +3731,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         </div>
       )}
 
-      {proposalModalParentId && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
-          <div className="flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white">
-            <div className="shrink-0 border-b border-emerald-100 px-5 py-3">
-              <h3 className="text-lg font-semibold">Szczegóły zgłoszenia</h3>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3">
-            {proposalParent ? (
-              <div className="mt-3">
-                <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                    Rodzic
-                  </p>
-                  <p className="mt-1 break-words text-lg font-semibold leading-tight text-zinc-900">
-                    {proposalParent.firstName} {proposalParent.lastName}
-                  </p>
-                  <p className="mt-1 break-all text-sm text-zinc-600">{proposalParent.email}</p>
-                </div>
-                <div className="mt-4 space-y-3">
-                  {proposalParent.children.map((child) => {
-                    const proposalAllowed = child.status === 'NEW';
-                    const proposedGroup =
-                      child.proposedGroupId
-                        ? enrollmentGroups.find((g) => g.id === child.proposedGroupId)
-                        : null;
-                    const proposedAtFormatted = child.proposedAt
-                      ? (() => {
-                          const d = new Date(child.proposedAt as string);
-                          return Number.isNaN(d.getTime())
-                            ? child.proposedAt
-                            : d.toLocaleString('pl-PL', {
-                                dateStyle: 'medium',
-                                timeStyle: 'short',
-                              });
-                        })()
-                      : null;
-                    return (
-                    <div key={child.requestId} className="rounded-xl border border-emerald-100 p-4">
-                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                        <div>
-                          <p className="font-semibold">
-                            {child.firstName} {child.lastName}
-                          </p>
-                          <p className="mt-1 flex flex-wrap gap-2">
-                            <span
-                              className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${ENROLLMENT_STATUS_COLORS[child.status] ?? 'bg-zinc-100 text-zinc-700'}`}
-                            >
-                              Zgłoszenie: {ENROLLMENT_STATUS_LABELS[child.status] ?? child.status}
-                            </span>
-                            {child.childAccessLevel && child.childAccessLevel !== child.status && (
-                              <span
-                                className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${ENROLLMENT_STATUS_COLORS[child.childAccessLevel] ?? 'bg-zinc-100 text-zinc-700'}`}
-                              >
-                                Dziecko:{' '}
-                                {ENROLLMENT_STATUS_LABELS[child.childAccessLevel] ?? child.childAccessLevel}
-                              </span>
-                            )}
-                          </p>
-                          <p className="mt-2 text-sm text-zinc-600">Data urodzenia: {child.birthDate ?? 'brak'}</p>
-                          <p className="text-sm text-zinc-600">
-                            Preferowana lokalizacja: {child.preferredLocation ?? 'brak'}
-                          </p>
-                          <p className="text-sm text-zinc-600">
-                            Preferowane dni: {child.preferredDays ?? 'brak'}
-                          </p>
-                        </div>
-                        <div className="space-y-2">
-                          {child.status === 'PROPOSED' ? (
-                            <div className="rounded-xl border border-sky-200 bg-sky-50 p-3 text-sm">
-                              <p className="font-semibold text-sky-900">Propozycja wysłana</p>
-                              {proposedGroup ? (
-                                <p className="mt-1 text-sky-900">
-                                  {proposedGroup.name} · {proposedGroup.location_name} ·{' '}
-                                  {proposedGroup.schedule}
-                                </p>
-                              ) : (
-                                <p className="mt-1 text-sky-900">
-                                  (nie udało się dopasować grupy w aktualnej liście)
-                                </p>
-                              )}
-                              {proposedAtFormatted && (
-                                <p className="mt-1 text-xs text-sky-800">
-                                  Wysłano: {proposedAtFormatted}
-                                </p>
-                              )}
-                              <p className="mt-2 text-xs text-sky-800">
-                                Czekamy na decyzję rodzica. To jedyna propozycja grupy dla tego
-                                zgłoszenia — po odrzuceniu skontaktuj się z rodzicem bezpośrednio.
-                              </p>
-                            </div>
-                          ) : child.status === 'NEGOTIATING' ? (
-                            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm">
-                              <p className="font-semibold text-amber-950">Propozycja odrzucona przez rodzica</p>
-                              {proposedGroup ? (
-                                <p className="mt-1 text-amber-950">
-                                  {proposedGroup.name} · {proposedGroup.location_name} ·{' '}
-                                  {proposedGroup.schedule}
-                                </p>
-                              ) : (
-                                <p className="mt-1 text-amber-950">
-                                  (nie udało się dopasować grupy w aktualnej liście)
-                                </p>
-                              )}
-                              <p className="mt-2 text-xs text-amber-900">
-                                Skontaktuj się z rodzicem, aby ustalić dalsze kroki. Kolejnej
-                                propozycji z systemu nie wyślesz.
-                              </p>
-                            </div>
-                          ) : child.status === 'ACCEPTED' ? (
-                            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm">
-                              <p className="font-semibold text-emerald-900">Propozycja zaakceptowana</p>
-                              {proposedGroup ? (
-                                <p className="mt-1 text-emerald-900">
-                                  {proposedGroup.name} · {proposedGroup.location_name} ·{' '}
-                                  {proposedGroup.schedule}
-                                </p>
-                              ) : null}
-                              <p className="mt-2 text-xs text-emerald-800">
-                                Rodzic przechodzi do uzupełnienia danych do umowy.
-                              </p>
-                            </div>
-                          ) : (
-                            <>
-                              {child.status === 'REJECTED' && (
-                                <p className="rounded-xl border border-rose-200 bg-rose-50 p-2 text-xs text-rose-800">
-                                  Zgłoszenie oznaczone jako odrzucone przez szkołę.
-                                </p>
-                              )}
-                              {proposalAllowed && (
-                                <>
-                              <select
-                                className="w-full rounded-xl border border-emerald-200 px-3 py-2 disabled:cursor-not-allowed disabled:opacity-60"
-                                disabled={!proposalAllowed}
-                                value={proposalDrafts[child.requestId]?.groupId ?? ''}
-                                onChange={(e) =>
-                                  setProposalDrafts((prev) => ({
-                                    ...prev,
-                                    [child.requestId]: {
-                                      groupId: e.target.value,
-                                      amountOverride: prev[child.requestId]?.amountOverride ?? '',
-                                    },
-                                  }))
-                                }
-                              >
-                                <option value="">Wybierz grupę</option>
-                                {enrollmentGroups.map((group) => (
-                                  <option key={group.id} value={group.id}>
-                                    {group.name} - {group.location_name} - {group.schedule}
-                                  </option>
-                                ))}
-                              </select>
-                              <div className="space-y-1">
-                                <label className="block text-xs font-medium text-zinc-600">
-                                  Nadpisanie kwoty (PLN, opcjonalnie)
-                                </label>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step="0.01"
-                                  className="w-full rounded-xl border border-emerald-200 px-3 py-2 disabled:cursor-not-allowed disabled:opacity-60"
-                                  disabled={!proposalAllowed}
-                                  placeholder="Pozostaw puste — kwota z cennika grupy"
-                                  value={proposalDrafts[child.requestId]?.amountOverride ?? ''}
-                                  onChange={(e) =>
-                                    setProposalDrafts((prev) => ({
-                                      ...prev,
-                                      [child.requestId]: {
-                                        groupId: prev[child.requestId]?.groupId ?? '',
-                                        amountOverride: e.target.value,
-                                      },
-                                    }))
-                                  }
-                                />
-                              </div>
-                              <button
-                                disabled={
-                                  !proposalAllowed ||
-                                  submittingProposalRequestId === child.requestId
-                                }
-                                className="rounded-xl bg-emerald-600 px-3 py-2 text-white disabled:opacity-60 disabled:cursor-not-allowed"
-                                onClick={async () => {
-                                  const draft = proposalDrafts[child.requestId];
-                                  const groupId = draft?.groupId ?? '';
-                                  const amountOverrideRaw = draft?.amountOverride?.trim() ?? '';
-                                  if (!groupId) {
-                                    pushToast('error', 'Wybierz grupę');
-                                    return;
-                                  }
-                                  setSubmittingProposalRequestId(child.requestId);
-                                  try {
-                                    const res = await fetch('/api/admin/enrollment', {
-                                      method: 'POST',
-                                      headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify({
-                                        requestId: child.requestId,
-                                        groupId,
-                                        ...(amountOverrideRaw
-                                          ? { amount_override: Number(amountOverrideRaw) }
-                                          : {}),
-                                      }),
-                                    });
-                                    const data = (await res.json().catch(() => ({}))) as {
-                                      message?: string;
-                                      parentCreated?: boolean;
-                                      parentId?: string;
-                                    };
-                                    if (!res.ok) {
-                                      pushToast(
-                                        'error',
-                                        data?.message ?? 'Nie udało się wysłać propozycji',
-                                      );
-                                      return;
-                                    }
-                                    const accountInfo = data?.parentCreated
-                                      ? ' (utworzono konto rodzica)'
-                                      : '';
-                                    pushToast(
-                                      'success',
-                                      `Wysłano propozycję dla: ${child.firstName} ${child.lastName}${accountInfo}`,
-                                    );
-                                    if (
-                                      typeof data.parentId === 'string' &&
-                                      data.parentId.trim().length > 0
-                                    ) {
-                                      setProposalModalParentId(data.parentId.trim());
-                                    }
-                                    // Nie zamykamy modala — rodzic może mieć więcej dzieci,
-                                    // dla których nadal trzeba wysłać propozycję.
-                                    // Sprzątamy tylko draft tego dziecka (jego sekcja zmieni się
-                                    // na "Propozycja wysłana" po loadData, ale czyścimy na wszelki wypadek).
-                                    setProposalDrafts((prev) => {
-                                      const next = { ...prev };
-                                      delete next[child.requestId];
-                                      return next;
-                                    });
-                                    await loadData();
-                                  } catch (err) {
-                                    pushToast(
-                                      'error',
-                                      err instanceof Error ? err.message : 'Błąd wysyłania propozycji',
-                                    );
-                                  } finally {
-                                    setSubmittingProposalRequestId(null);
-                                  }
-                                }}
-                              >
-                                {submittingProposalRequestId === child.requestId
-                                  ? 'Wysyłanie…'
-                                  : 'Wyślij propozycję dla dziecka'}
-                              </button>
-                                </>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : (
-              <p className="mt-3 text-sm text-zinc-600">Nie znaleziono szczegółów zgłoszenia.</p>
-            )}
-            </div>
-            <div className="shrink-0 flex justify-end border-t border-emerald-100 px-5 py-3">
-              <button
-                className="rounded-xl bg-zinc-200 px-3 py-2"
-                onClick={() => setProposalModalParentId(null)}
-              >
-                Zamknij
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       <style jsx>{`
         .manager-panel :global(button:not(:disabled)) {
           transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease,

@@ -1,5 +1,5 @@
 import type { EnrollmentStatus } from "@/lib/enrollment-status";
-import { getDbShape, queryDb } from "@/lib/db";
+import { queryDb } from "@/lib/db";
 
 const SEASON_RE = /^\d{4}\/\d{4}$/;
 
@@ -16,8 +16,5 @@ export async function syncChildAccessLevelForRenewal(
   childId: string,
   accessLevel: EnrollmentStatus
 ): Promise<void> {
-  const shape = await getDbShape();
-  if (!shape.hasChildrenTable || !shape.childHasAccessLevel) return;
-
   await queryDb(`UPDATE children SET access_level = $2 WHERE id = $1`, [childId, accessLevel]);
 }

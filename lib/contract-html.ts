@@ -156,17 +156,36 @@ export function buildTeacherIdSuffix(): string {
   return "";
 }
 
+/** Usuwa etykietę marketingową lokalizacji — nie powinna trafiać do dokumentów umowy. */
+export function stripLocationMarketingSuffix(value: string): string {
+  return value.replace(/\s*\(Nowość!\)\s*$/i, "").trim();
+}
+
 export function buildChildSchoolName(
   preferredLocationName: string | null | undefined,
   preferredLocationRaw: string | null | undefined
 ): string {
-  const named = String(preferredLocationName ?? "").trim();
+  const named = stripLocationMarketingSuffix(String(preferredLocationName ?? "").trim());
   if (named) return named;
-  const raw = String(preferredLocationRaw ?? "").trim();
+  const raw = stripLocationMarketingSuffix(String(preferredLocationRaw ?? "").trim());
   return raw || "—";
 }
 
-export function applySignedAtToDocumentHtml(contentHtml: string, signedAt: Date): string {
+/** Tekst w polu podpisu szkoły (nad linią) po podpisaniu umowy. */
+export const CONTRACT_SCHOOL_SIGNATORY_NAME = "Michał Sznajder";
+
+/** Etykieta pod linią podpisu szkoły w szablonie HTML umowy. */
+export const CONTRACT_SCHOOL_SIGNATURE_NAME = "Harry English – FHU Michał Sznajder";
+
+function escapeHtmlText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function injectSignedAtLine(contentHtml: string, signedAt: Date): string {
   const line = buildSignedAtLine(signedAt);
 
   if (contentHtml.includes("{{signed_at_line}}")) {
@@ -182,4 +201,40 @@ export function applySignedAtToDocumentHtml(contentHtml: string, signedAt: Date)
   }
 
   return contentHtml.replace('<div class="signature-row">', `${line}\n  <div class="signature-row">`);
+}
+
+function fillLegacySignatureLines(
+  contentHtml: string,
+  parentFullName: string,
+  schoolSignatureName: string,
+): string {
+  const parentHtml = `<span class="ph signature-text">${escapeHtmlText(parentFullName)}</span>`;
+  const schoolHtml = `<span class="ph signature-text">${escapeHtmlText(schoolSignatureName)}</span>`;
+  let index = 0;
+  return contentHtml.replace(/<div class="signature-line">[\s\S]*?<\/div>/g, (match) => {
+    index += 1;
+    const inner = index === 1 ? parentHtml : schoolHtml;
+    return `<div class="signature-line">${inner}</div>`;
+  });
+}
+
+/** Po podpisie: data akceptacji + imię rodzica i podpis szkoły w polach podpisu. */
+export function applyContractSignaturesToDocumentHtml(
+  contentHtml: string,
+  params: { signedAt: Date; parentFullName: string },
+): string {
+  const parentFullName = params.parentFullName.trim();
+  const schoolSignatoryName = CONTRACT_SCHOOL_SIGNATORY_NAME;
+
+  let html = injectSignedAtLine(contentHtml, params.signedAt);
+
+  if (html.includes("{{parent_signature_line}}") || html.includes("{{school_signature_line}}")) {
+    html = generateContractHtml(html, {
+      parent_signature_line: parentFullName,
+      school_signature_line: schoolSignatoryName,
+    });
+    return html;
+  }
+
+  return fillLegacySignatureLines(html, parentFullName, schoolSignatoryName);
 }

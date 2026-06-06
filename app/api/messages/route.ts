@@ -181,13 +181,6 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  if (effectiveRecipientIds.length === 0 && emailOnlyRecipients.length === 0) {
-    return NextResponse.json(
-      { message: "Wybierz odbiorców z listy lub podaj co najmniej jeden adres e-mail" },
-      { status: 400 }
-    );
-  }
-
   if (parentMessageId && threadRootId) {
     const rootRes = await queryDb<{ sender_id: string; recipient_id: string }>(
       `SELECT sender_id, recipient_id FROM messages WHERE id = $1 LIMIT 1`,
@@ -200,6 +193,13 @@ export async function POST(request: NextRequest) {
     const otherParty =
       root.sender_id === actor.user.id ? root.recipient_id : root.sender_id;
     effectiveRecipientIds = [otherParty];
+  }
+
+  if (effectiveRecipientIds.length === 0 && emailOnlyRecipients.length === 0) {
+    return NextResponse.json(
+      { message: "Wybierz odbiorców z listy lub podaj co najmniej jeden adres e-mail" },
+      { status: 400 }
+    );
   }
 
   const uniqueRecipients = [...new Set(effectiveRecipientIds)];

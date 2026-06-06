@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getChildrenByParentId, getUserById, queryDb } from "@/lib/db";
 import { getTokenFromRequest } from "@/lib/auth";
+import { isComplimentaryForParent } from "@/lib/school-discounts";
 
 async function resolveSchoolName(schoolId: string | null | undefined): Promise<string | null> {
   const id = String(schoolId ?? "").trim();
@@ -62,7 +63,7 @@ export async function GET(request: NextRequest) {
     if (!user) {
       return NextResponse.json(
         { message: "Użytkownik nie istnieje" },
-        { status: 404 }
+        { status: 401 }
       );
     }
 
@@ -89,6 +90,14 @@ export async function GET(request: NextRequest) {
         ? await resolveParentSchoolName(user.id, user.email, user.school_id)
         : await resolveSchoolName(user.school_id);
 
+    let complimentaryAccess = false;
+    if (user.role === "PARENT" && user.school_id) {
+      complimentaryAccess = await isComplimentaryForParent(user.school_id, {
+        parentId: user.id,
+        parentEmail: user.email,
+      });
+    }
+
     return NextResponse.json({
       user: {
         id: user.id,
@@ -101,17 +110,8 @@ export async function GET(request: NextRequest) {
         mustChangePassword: user.must_change_password === true,
         schoolId: user.school_id,
         schoolName,
+        complimentaryAccess,
         children,
-        accountType: user.account_type,
-        students: children.map((c) => ({
-          studentId: c.childId,
-          firstName: c.firstName,
-          lastName: c.lastName,
-          birthYear: String(c.birthDate).slice(0, 4),
-          active: c.active,
-          resignationRequested: c.resignationRequested,
-          resignationReason: c.resignationReason,
-        })),
       },
     });
   } catch (error) {

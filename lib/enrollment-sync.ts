@@ -1,11 +1,8 @@
 import type { EnrollmentStatus } from "@/lib/enrollment-status";
-import { getDbShape, queryDb } from "@/lib/db";
+import { queryDb } from "@/lib/db";
 
 /** Ustawia `users.access_level` rodzica: ACTIVE gdy ma aktywne dziecko SIGNED/COMPLETED, inaczej PENDING. */
 export async function syncParentUserAccessLevel(parentId: string): Promise<void> {
-  const shape = await getDbShape();
-  if (!shape.userHasAccessLevel) return;
-
   await queryDb(
     `UPDATE users
      SET access_level = CASE
@@ -28,9 +25,6 @@ export async function syncChildrenAccessLevelForEnrollment(
   enrollmentRequestId: string,
   accessLevel: EnrollmentStatus
 ): Promise<void> {
-  const shape = await getDbShape();
-  if (!shape.hasChildrenTable || !shape.childHasAccessLevel) return;
-
   await queryDb(
     `UPDATE children
      SET access_level = $2

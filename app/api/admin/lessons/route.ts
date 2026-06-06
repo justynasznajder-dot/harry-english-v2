@@ -113,6 +113,7 @@ export async function GET(request: NextRequest) {
         l.status,
         l.location_id,
         l.teacher_id,
+        l.schedule_template_id,
         g.name AS group_name,
         COALESCE(loc.name, '') AS location_name,
         CASE WHEN t.id IS NULL THEN NULL ELSE TRIM(CONCAT(t.first_name, ' ', t.last_name)) END AS teacher_name
@@ -137,6 +138,7 @@ export async function GET(request: NextRequest) {
         status: string;
         location_id: string;
         teacher_id: string;
+        schedule_template_id: string | null;
         group_name: string;
         location_name: string;
         teacher_name: string | null;
@@ -158,6 +160,7 @@ export async function GET(request: NextRequest) {
       status: row.status,
       location_id: row.location_id,
       teacher_id: row.teacher_id,
+      schedule_template_id: row.schedule_template_id,
       group_name: row.group_name,
       location_name: row.location_name,
       teacher_name: row.teacher_name,

@@ -5,6 +5,7 @@ import ComposeMessageModal, {
   type ComposeSection,
 } from '@/src/components/messages/ComposeMessageModal';
 import { parseEmailList } from '@/lib/email-address';
+import { normalizePolishPhone } from '@/lib/phone';
 
 type PanelMode = 'manager' | 'teacher' | 'parent';
 
@@ -34,6 +35,7 @@ interface ThreadMessage {
     lastName: string;
     role: string;
     roleLabel: string;
+    phone?: string | null;
   };
 }
 
@@ -77,6 +79,17 @@ function roleLabel(role: string): string {
   if (role === 'TEACHER') return 'Nauczyciel';
   if (role === 'PARENT') return 'Rodzic';
   return role;
+}
+
+function isEnrollmentScheduleInquiry(subject: string | null | undefined): boolean {
+  return (subject ?? '').trim().startsWith('Zgłoszenie —');
+}
+
+function formatPhoneDisplay(phone: string | null | undefined): string | null {
+  const raw = (phone ?? '').trim();
+  if (!raw) return null;
+  const normalized = normalizePolishPhone(raw);
+  return normalized || raw;
 }
 
 interface MessagesPanelProps {
@@ -639,6 +652,7 @@ export default function MessagesPanel({
       );
     }
     const rootSubject = threadMessages[0]?.subject ?? selectedThread.subject ?? '(bez tematu)';
+    const showParentPhoneInThread = isEnrollmentScheduleInquiry(rootSubject);
     return (
       <section className="space-y-4 rounded-3xl border border-emerald-100 bg-white p-5 text-zinc-900 md:p-6 [color-scheme:light]">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -662,7 +676,12 @@ export default function MessagesPanel({
           <p className="text-sm text-zinc-500">Ładowanie wątku…</p>
         ) : (
           <div className="space-y-4 border-t border-zinc-100 pt-4">
-            {threadMessages.map((msg) => (
+            {threadMessages.map((msg) => {
+              const parentPhone =
+                showParentPhoneInThread && msg.sender.role === 'PARENT'
+                  ? formatPhoneDisplay(msg.sender.phone)
+                  : null;
+              return (
               <article
                 key={msg.id}
                 className="rounded-xl border border-zinc-200 bg-zinc-50/80 p-4"
@@ -675,6 +694,11 @@ export default function MessagesPanel({
                     <span className="ml-2 text-xs text-zinc-500">
                       {msg.sender.roleLabel ?? roleLabel(msg.sender.role)}
                     </span>
+                    {parentPhone && (
+                      <span className="ml-2 text-xs text-zinc-600">
+                        · tel. {parentPhone}
+                      </span>
+                    )}
                   </div>
                   <time className="text-xs text-zinc-500">{formatDate(msg.createdAt)}</time>
                 </header>
@@ -682,7 +706,8 @@ export default function MessagesPanel({
                   {msg.content}
                 </p>
               </article>
-            ))}
+              );
+            })}
           </div>
         )}
 

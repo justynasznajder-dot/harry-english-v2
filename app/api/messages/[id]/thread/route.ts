@@ -62,6 +62,7 @@ export async function GET(
           lastName: m.sender_last_name,
           role: m.sender_role_col,
           roleLabel: roleLabelPl(m.sender_role_col),
+          phone: m.sender_phone?.trim() || null,
         },
         recipient: {
           id: m.recipient_id,

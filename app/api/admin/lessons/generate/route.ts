@@ -92,12 +92,13 @@ export async function POST(request: NextRequest) {
     );
 
     const templates = await queryDb<{
+      id: string;
       day_of_week: number;
       start_time: string;
       duration_min: number;
       location_id: string;
     }>(
-      `SELECT day_of_week, start_time::text, duration_min, location_id
+      `SELECT id, day_of_week, start_time::text, duration_min, location_id
        FROM schedule_templates
        WHERE group_id = $1`,
       [groupId]
@@ -126,9 +127,9 @@ export async function POST(request: NextRequest) {
         if (!exists.rows[0]) {
           await queryDb(
             `INSERT INTO lessons (
-              id, group_id, teacher_id, location_id, scheduled_at, duration_min, status, created_at, school_year_id
-             ) VALUES ($1, $2, $3, $4, $5::timestamp, $6, 'SCHEDULED', NOW(), $7::uuid)`,
-            [randomUUID(), groupId, teacherId, st.location_id, iso, st.duration_min, yearId]
+              id, group_id, teacher_id, location_id, scheduled_at, duration_min, status, created_at, school_year_id, schedule_template_id
+             ) VALUES ($1, $2, $3, $4, $5::timestamp, $6, 'SCHEDULED', NOW(), $7::uuid, $8)`,
+            [randomUUID(), groupId, teacherId, st.location_id, iso, st.duration_min, yearId, st.id]
           );
           created += 1;
         }

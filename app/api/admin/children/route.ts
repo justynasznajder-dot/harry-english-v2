@@ -1,24 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  createChild,
+  DuplicateEnrollmentError,
   getUserById,
   canAccessSchoolAdminApis,
+  insertEnrollmentRequestsForParent,
   queryDb,
   getRegistrationSchoolId,
-  type ChildAccessLevel,
 } from "@/lib/db";
 import { getTokenFromRequest } from "@/lib/auth";
-import { syncParentUserAccessLevel } from "@/lib/enrollment-sync";
 
-const MANUAL_CHILD_ACCESS_LEVELS = ["NEW", "PROPOSED", "SIGNED", "COMPLETED"] as const;
-
-function parseManualChildAccessLevel(raw: unknown): ChildAccessLevel | null {
-  if (typeof raw !== "string") return null;
-  const v = raw.trim().toUpperCase();
-  return (MANUAL_CHILD_ACCESS_LEVELS as readonly string[]).includes(v)
-    ? (v as ChildAccessLevel)
-    : null;
-}
+const LOCATION_ID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function GET(request: NextRequest) {
   try {
@@ -121,12 +113,23 @@ export async function POST(request: NextRequest) {
     if (!actor) return NextResponse.json({ message: "Nie znaleziono użytkownika" }, { status: 401 });
 
     const body = await request.json();
-    const { parentId, firstName, lastName, birthDate, accessLevel: accessLevelRaw } = body;
-    if (!parentId || !firstName || !lastName || !birthDate) {
+    const {
+      parentId,
+      firstName,
+      lastName,
+      birthDate,
+      preferredLocationId: preferredLocationIdRaw,
+    } = body as {
+      parentId?: string;
+      firstName?: string;
+      lastName?: string;
+      birthDate?: string;
+      preferredLocationId?: string | null;
+    };
+
+    if (!parentId || !firstName?.trim() || !lastName?.trim() || !birthDate) {
       return NextResponse.json({ message: "Wszystkie pola są wymagane" }, { status: 400 });
     }
-
-    const accessLevel = parseManualChildAccessLevel(accessLevelRaw) ?? "NEW";
 
     const parent = await getUserById(parentId);
     if (!parent || parent.role !== "PARENT" || !parent.school_id) {
@@ -139,42 +142,53 @@ export async function POST(request: NextRequest) {
     if (actor.role === "MANAGER") {
       if (!actor.school_id || parent.school_id !== actor.school_id) {
         return NextResponse.json(
-          { message: "Możesz dodawać dzieci tylko rodzicom ze swojej szkoły" },
+          { message: "Możesz dodawać zgłoszenia tylko dla rodziców ze swojej szkoły" },
           { status: 403 }
         );
       }
     }
 
-    const child = await createChild({
-      parentId,
-      firstName,
-      lastName,
-      birthDate: String(birthDate).slice(0, 10),
-      schoolId: parent.school_id,
-      accessLevel,
-    });
+    const preferredLocationId = String(preferredLocationIdRaw ?? "").trim() || null;
+    if (preferredLocationId) {
+      if (!LOCATION_ID_REGEX.test(preferredLocationId)) {
+        return NextResponse.json({ message: "Nieprawidłowa lokalizacja" }, { status: 400 });
+      }
+      const locOk = await queryDb<{ ok: boolean }>(
+        `SELECT TRUE AS ok
+         FROM locations
+         WHERE id::text = $1 AND school_id::text = $2 AND active = TRUE
+         LIMIT 1`,
+        [preferredLocationId, parent.school_id]
+      );
+      if (!locOk.rows[0]?.ok) {
+        return NextResponse.json({ message: "Nieprawidłowa lokalizacja" }, { status: 400 });
+      }
+    }
 
-    await syncParentUserAccessLevel(parentId);
+    const { enrollmentCount } = await insertEnrollmentRequestsForParent({
+      parentId,
+      children: [
+        {
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          birthDate: String(birthDate).slice(0, 10),
+          preferredLocationId,
+        },
+      ],
+    });
 
     return NextResponse.json({
-      child: {
-        child_id: child.id,
-        parent_id: child.parent_id,
-        first_name: child.first_name,
-        last_name: child.last_name,
-        birth_date: child.birth_date,
-        active: true,
-        confirmed: false,
-        access_level: child.access_level,
-        parent_first_name: parent.first_name,
-        parent_last_name: parent.last_name,
-        parent_email: parent.email,
-        group_name: null,
-      },
-      message: "Dziecko zostało utworzone",
+      enrollmentCount,
+      message: "Utworzono zgłoszenie — przejdź do Zgłoszeń, aby wysłać propozycję grupy",
     });
   } catch (error) {
-    console.error("Create child error:", error);
-    return NextResponse.json({ message: "Wystąpił błąd podczas tworzenia dziecka" }, { status: 500 });
+    console.error("Create child enrollment error:", error);
+    if (error instanceof DuplicateEnrollmentError) {
+      return NextResponse.json({ message: error.message }, { status: 409 });
+    }
+    if (error instanceof Error && error.message.includes("Rodzic nie istnieje")) {
+      return NextResponse.json({ message: error.message }, { status: 400 });
+    }
+    return NextResponse.json({ message: "Wystąpił błąd podczas tworzenia zgłoszenia" }, { status: 500 });
   }
 }

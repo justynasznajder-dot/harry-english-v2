@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { User } from "@/lib/db";
 import {
-  accountTypeToUserRole,
   canAccessSchoolAdminApis,
   getUserById,
   updateUser,
@@ -89,7 +88,6 @@ export async function GET(
         last_name: target.last_name,
         email: target.email,
         role: target.role,
-        account_type: target.account_type,
         confirmed: target.confirmed,
         active: target.active,
         access_level: target.access_level,
@@ -169,7 +167,6 @@ export async function PUT(
         last_name: user.last_name,
         email: user.email,
         role: user.role,
-        account_type: user.account_type,
         confirmed: user.confirmed,
         active: user.active,
         resignation_date: user.resignation_date,
@@ -201,18 +198,6 @@ export async function PUT(
         );
       }
       updateData.role = pr;
-    }
-    if (body.account_type !== undefined) {
-      if (actor.role === "MANAGER") {
-        const elevated = accountTypeToUserRole(body.account_type as "user" | "admin" | "lektor");
-        if (elevated === "ADMIN" || elevated === "MANAGER") {
-          return NextResponse.json(
-            { message: "Zarządca nie może nadać roli ADMIN ani MANAGER" },
-            { status: 403 }
-          );
-        }
-      }
-      updateData.account_type = body.account_type;
     }
     if (body.confirmed !== undefined) updateData.confirmed = body.confirmed;
     if (body.phone !== undefined) {
@@ -247,7 +232,6 @@ export async function PUT(
       last_name: user.last_name,
       email: user.email,
       role: user.role,
-      account_type: user.account_type,
       confirmed: user.confirmed,
       active: user.active,
       phone: user.phone,
@@ -340,7 +324,6 @@ export async function DELETE(
         last_name: user.last_name,
         email: user.email,
         role: user.role,
-        account_type: user.account_type,
         confirmed: user.confirmed,
         active: user.active,
         resignation_date: user.resignation_date,

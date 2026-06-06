@@ -18,6 +18,7 @@ interface UserInfo {
   mustChangePassword?: boolean;
   schoolId?: string | null;
   schoolName?: string | null;
+  complimentaryAccess?: boolean;
   children?: Array<{
     childId?: string;
     firstName: string;
@@ -122,31 +123,16 @@ export default function PortalPage() {
         if (data.user.email) {
           localStorage.setItem('userEmail', data.user.email);
         }
-      } else {
-        const storedUserInfo = localStorage.getItem('userInfo');
-        const storedEmail = localStorage.getItem('userEmail');
-        if (storedUserInfo) {
-          try {
-            setUserInfo(JSON.parse(storedUserInfo));
-          } catch (error) {
-            console.error('Error parsing user info:', error);
-            if (storedEmail) {
-              setUserInfo({
-                id: '',
-                email: storedEmail,
-                firstName: '',
-                lastName: '',
-              });
-            }
-          }
-        } else if (storedEmail) {
-          setUserInfo({
-            id: '',
-            email: storedEmail,
-            firstName: '',
-            lastName: '',
-          });
-        }
+        return;
+      }
+
+      if (response.status === 401 || response.status === 404) {
+        localStorage.removeItem('userToken');
+        localStorage.removeItem('userName');
+        localStorage.removeItem('userEmail');
+        localStorage.removeItem('userInfo');
+        await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+        router.replace('/portal/login');
       }
     } catch (error) {
       console.error('Error fetching user data:', error);

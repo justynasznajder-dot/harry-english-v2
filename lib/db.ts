@@ -2,7 +2,6 @@ import { randomUUID } from "crypto";
 import {
   Pool,
   type PoolClient,
-  type QueryResult,
   type QueryResultRow,
 } from "pg";
 import {
@@ -63,9 +62,6 @@ export type ChildAccessLevel =
   | "COMPLETED"
   | "REJECTED";
 
-/** @deprecated Stary model UI / API — mapowany na `UserRole` */
-export type AccountType = "user" | "admin" | "lektor";
-
 function getConnectionString(): string {
   const url = process.env.DATABASE_URL;
   if (url) return url;
@@ -91,134 +87,6 @@ const pool = new Pool({
     : undefined,
 });
 
-/** Cache kształtu bazy (legacy vs Prisma) — jedno zapytanie na proces. */
-type DbShape = {
-  userHasSchoolId: boolean;
-  userHasRole: boolean;
-  userHasPhone: boolean;
-  userHasAccessLevel: boolean;
-  userHasMustChangePassword: boolean;
-  hasChildrenTable: boolean;
-  childHasConfirmed: boolean;
-  childHasEnrollmentRequestId: boolean;
-  childHasPreferredLocationId: boolean;
-  childHasAccessLevel: boolean;
-  enrollmentHasRejectionComment: boolean;
-  enrollmentHasRejectedAt: boolean;
-};
-
-/** Odświeżanie po migracjach — bez tego stary kształt (np. brak `access_level` w cache) daje błędne INSERT-y aż do restartu. */
-const DB_SHAPE_CACHE_TTL_MS = 60_000;
-let dbShapeCache: DbShape | null = null;
-let dbShapeCacheAt = 0;
-
-/** Testy / ręczne unieważnienie po migracji bez czekania na TTL. */
-export function clearDbShapeCache(): void {
-  dbShapeCache = null;
-  dbShapeCacheAt = 0;
-}
-
-export async function getDbShape(): Promise<DbShape> {
-  if (dbShapeCache != null && Date.now() - dbShapeCacheAt < DB_SHAPE_CACHE_TTL_MS) {
-    return dbShapeCache;
-  }
-  const r = await pool.query<{
-    user_has_school_id: boolean;
-    user_has_role: boolean;
-    user_has_phone: boolean;
-    user_has_access_level: boolean;
-    user_has_must_change_password: boolean;
-    has_children: boolean;
-    child_has_confirmed: boolean;
-    child_has_enrollment_request_id: boolean;
-    child_has_preferred_location_id: boolean;
-    child_has_access_level: boolean;
-    enrollment_has_rejection_comment: boolean;
-    enrollment_has_rejected_at: boolean;
-  }>(
-    `SELECT
-       EXISTS(
-         SELECT 1 FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'school_id'
-       ) AS user_has_school_id,
-       EXISTS(
-         SELECT 1 FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'role'
-       ) AS user_has_role,
-       EXISTS(
-         SELECT 1 FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'phone'
-       ) AS user_has_phone,
-       EXISTS(
-         SELECT 1 FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'access_level'
-       ) AS user_has_access_level,
-       EXISTS(
-         SELECT 1 FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'must_change_password'
-       ) AS user_has_must_change_password,
-       EXISTS(
-         SELECT 1 FROM information_schema.tables
-         WHERE table_schema = 'public' AND table_name = 'children'
-       ) AS has_children,
-       EXISTS(
-         SELECT 1 FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'children' AND column_name = 'confirmed'
-       ) AS child_has_confirmed,
-       EXISTS(
-         SELECT 1 FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'children' AND column_name = 'enrollment_request_id'
-       ) AS child_has_enrollment_request_id,
-       EXISTS(
-         SELECT 1 FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'children' AND column_name = 'preferred_location_id'
-       ) AS child_has_preferred_location_id,
-       EXISTS(
-         SELECT 1 FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'children' AND column_name = 'access_level'
-       ) AS child_has_access_level,
-       EXISTS(
-         SELECT 1 FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'enrollment_requests' AND column_name = 'rejection_comment'
-       ) AS enrollment_has_rejection_comment,
-       EXISTS(
-         SELECT 1 FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'enrollment_requests' AND column_name = 'rejected_at'
-       ) AS enrollment_has_rejected_at`
-  );
-  const row = r.rows[0];
-  dbShapeCache = {
-    userHasSchoolId: Boolean(row?.user_has_school_id),
-    userHasRole: Boolean(row?.user_has_role),
-    userHasPhone: Boolean(row?.user_has_phone),
-    userHasAccessLevel: Boolean(row?.user_has_access_level),
-    userHasMustChangePassword: Boolean(row?.user_has_must_change_password),
-    hasChildrenTable: Boolean(row?.has_children),
-    childHasConfirmed: Boolean(row?.child_has_confirmed),
-    childHasEnrollmentRequestId: Boolean(row?.child_has_enrollment_request_id),
-    childHasPreferredLocationId: Boolean(row?.child_has_preferred_location_id),
-    childHasAccessLevel: Boolean(row?.child_has_access_level),
-    enrollmentHasRejectionComment: Boolean(row?.enrollment_has_rejection_comment),
-    enrollmentHasRejectedAt: Boolean(row?.enrollment_has_rejected_at),
-  };
-  dbShapeCacheAt = Date.now();
-  return dbShapeCache;
-}
-
-// --- Role mapping (legacy API ↔ DB) ---
-
-export function userRoleToAccountType(role: UserRole): AccountType {
-  if (role === "ADMIN" || role === "MANAGER") return "admin";
-  if (role === "TEACHER") return "lektor";
-  return "user";
-}
-
-export function accountTypeToUserRole(t: AccountType): UserRole {
-  if (t === "admin") return "ADMIN";
-  if (t === "lektor") return "TEACHER";
-  return "PARENT";
-}
-
 export interface User {
   id: string;
   /** NULL wyłącznie dla roli ADMIN (globalny super admin). */
@@ -227,8 +95,6 @@ export interface User {
   password_hash: string;
   role: UserRole;
   access_level: AccessLevel;
-  /** Uzupełniane przy odczycie — zgodność ze starym API */
-  account_type: AccountType;
   first_name: string;
   last_name: string;
   phone: string | null;
@@ -313,9 +179,8 @@ function staffManagerEmailSet(): Set<string> {
 }
 
 /**
- * Przy migracji ze starego modelu: `account_type = admin|lektor` jest źródłem prawdy dla personelu,
- * nawet gdy kolumna `role` została błędnie ustawiona (np. PARENT).
- * Dodatkowo: `STAFF_ADMIN_EMAILS` → ADMIN, `STAFF_MANAGER_EMAILS` → MANAGER.
+ * `STAFF_ADMIN_EMAILS` → ADMIN, `STAFF_MANAGER_EMAILS` → MANAGER (nadpisują kolumnę `role`),
+ * potem parsowanie kolumny `role`.
  */
 function resolveUserRoleFromRow(row: QueryResultRow): UserRole {
   const emailNorm =
@@ -327,21 +192,11 @@ function resolveUserRoleFromRow(row: QueryResultRow): UserRole {
     return "MANAGER";
   }
 
-  const atRaw =
-    row.account_type != null
-      ? String(row.account_type).trim().toLowerCase()
-      : "";
-  if (atRaw === "admin") return "ADMIN";
-  if (atRaw === "lektor") return "TEACHER";
-
   const raw = row.role != null ? String(row.role).trim() : "";
-  if (raw) {
-    const parsed = parseUserRole(raw);
-    if (parsed) return parsed;
-  }
+  const parsed = parseUserRole(raw);
+  if (parsed) return parsed;
 
-  const at = row.account_type as AccountType | null | undefined;
-  return accountTypeToUserRole((at as AccountType) || "user");
+  return "PARENT";
 }
 
 type ChildRow = QueryResultRow & {
@@ -379,7 +234,6 @@ function mapUserRow(row: QueryResultRow): User {
     password_hash: row.password_hash as string,
     role,
     access_level: (row.access_level as AccessLevel | undefined) ?? "PENDING",
-    account_type: userRoleToAccountType(role),
     first_name: row.first_name as string,
     last_name: row.last_name as string,
     phone: row.phone != null ? (row.phone as string) : null,
@@ -426,26 +280,18 @@ function mapChildRow(row: ChildRow): Child {
 // --- Users ---
 
 export async function getUserByEmail(email: string): Promise<User | null> {
-  const shape = await getDbShape();
-  const r = shape.userHasSchoolId
-    ? await pool.query<UserRow>(
-        `SELECT * FROM users
-         WHERE LOWER(email::text) = LOWER($1::text)
-           AND (
-             school_id IS NOT DISTINCT FROM $2::text
-             OR (role = 'ADMIN' AND school_id IS NULL)
-           )
-         ORDER BY
-           CASE WHEN school_id IS NOT DISTINCT FROM $2::text THEN 0 ELSE 1 END
-         LIMIT 1`,
-        [email, getRegistrationSchoolId()]
-      )
-    : await pool.query<UserRow>(
-        `SELECT * FROM users
-         WHERE LOWER(email::text) = LOWER($1::text)
-         LIMIT 1`,
-        [email]
-      );
+  const r = await pool.query<UserRow>(
+    `SELECT * FROM users
+     WHERE LOWER(email::text) = LOWER($1::text)
+       AND (
+         school_id IS NOT DISTINCT FROM $2::text
+         OR (role = 'ADMIN' AND school_id IS NULL)
+       )
+     ORDER BY
+       CASE WHEN school_id IS NOT DISTINCT FROM $2::text THEN 0 ELSE 1 END
+     LIMIT 1`,
+    [email, getRegistrationSchoolId()]
+  );
   return r.rows[0] ? mapUserRow(r.rows[0]) : null;
 }
 
@@ -503,22 +349,13 @@ export async function emailExists(
   email: string,
   schoolId: string = DEFAULT_SCHOOL_ID
 ): Promise<boolean> {
-  const shape = await getDbShape();
-  const r = shape.userHasSchoolId
-    ? await pool.query<{ exists: boolean }>(
-        `SELECT EXISTS(
-           SELECT 1 FROM users
-           WHERE school_id = $1 AND LOWER(email::text) = LOWER($2::text)
-         ) AS exists`,
-        [schoolId, email]
-      )
-    : await pool.query<{ exists: boolean }>(
-        `SELECT EXISTS(
-           SELECT 1 FROM users
-           WHERE LOWER(email::text) = LOWER($1::text)
-         ) AS exists`,
-        [email]
-      );
+  const r = await pool.query<{ exists: boolean }>(
+    `SELECT EXISTS(
+       SELECT 1 FROM users
+       WHERE school_id = $1 AND LOWER(email::text) = LOWER($2::text)
+     ) AS exists`,
+    [schoolId, email]
+  );
   return Boolean(r.rows[0]?.exists);
 }
 
@@ -528,7 +365,6 @@ export async function createUser(data: {
   firstName: string;
   lastName: string;
   role?: UserRole;
-  accountType?: AccountType;
   /** Dla ADMIN można pominąć lub podać null (tylko ADMIN może mieć school_id NULL w bazie). */
   schoolId?: string | null;
   phone?: string | null;
@@ -539,16 +375,11 @@ export async function createUser(data: {
   const firstName = formatPersonName(data.firstName);
   const lastName = formatPersonName(data.lastName);
   const id = randomUUID();
-  const role =
-    data.role ??
-    (data.accountType != null
-      ? accountTypeToUserRole(data.accountType)
-      : "PARENT");
+  const role = data.role ?? "PARENT";
   const confirmed = data.confirmed ?? false;
   const accessLevel =
     data.accessLevel ?? (role === "PARENT" ? "PENDING" : "ACTIVE");
   const mustChangePassword = data.mustChangePassword ?? false;
-  const shape = await getDbShape();
 
   let insertSchoolId: string | null;
   if (role === "ADMIN") {
@@ -566,120 +397,39 @@ export async function createUser(data: {
   try {
     await client.query("BEGIN");
 
-    if (shape.userHasSchoolId && insertSchoolId != null) {
+    if (insertSchoolId != null) {
       await ensureDefaultSchoolRow(client, insertSchoolId);
     }
 
-    if (shape.userHasRole) {
-      let r: QueryResult<UserRow>;
-      if (shape.userHasAccessLevel) {
-        r = shape.userHasPhone
-          ? await client.query<UserRow>(
-              `INSERT INTO users (
-               id, school_id, email, password_hash, role,
-               first_name, last_name, phone, active, confirmed, access_level
-             ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9, $10)
-             RETURNING *`,
-              [
-                id,
-                insertSchoolId,
-                data.email,
-                data.passwordHash,
-                role,
-                firstName,
-                lastName,
-                data.phone ?? null,
-                confirmed,
-                accessLevel,
-              ]
-            )
-          : await client.query<UserRow>(
-              `INSERT INTO users (
-               id, school_id, email, password_hash, role,
-               first_name, last_name, active, confirmed, access_level
-             ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, TRUE, $8, $9)
-             RETURNING *`,
-              [
-                id,
-                insertSchoolId,
-                data.email,
-                data.passwordHash,
-                role,
-                firstName,
-                lastName,
-                confirmed,
-                accessLevel,
-              ]
-            );
-      } else {
-        r = shape.userHasPhone
-          ? await client.query<UserRow>(
-              `INSERT INTO users (
-               id, school_id, email, password_hash, role,
-               first_name, last_name, phone, active, confirmed
-             ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9)
-             RETURNING *`,
-              [
-                id,
-                insertSchoolId,
-                data.email,
-                data.passwordHash,
-                role,
-                firstName,
-                lastName,
-                data.phone ?? null,
-                confirmed,
-              ]
-            )
-          : await client.query<UserRow>(
-              `INSERT INTO users (
-               id, school_id, email, password_hash, role,
-               first_name, last_name, active, confirmed
-             ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, TRUE, $8)
-             RETURNING *`,
-              [
-                id,
-                insertSchoolId,
-                data.email,
-                data.passwordHash,
-                role,
-                firstName,
-                lastName,
-                confirmed,
-              ]
-            );
-      }
-      if (role === "PARENT" && insertSchoolId != null) {
-        await insertParentProfileInTx(client, id, insertSchoolId);
-      }
-      if (mustChangePassword && shape.userHasMustChangePassword) {
-        await client.query(
-          `UPDATE users SET must_change_password = TRUE WHERE id = $1`,
-          [id]
-        );
-        (r.rows[0] as UserRow).must_change_password = true;
-      }
-      await client.query("COMMIT");
-      return mapUserRow(r.rows[0]);
-    }
-
-    const legacyType = userRoleToAccountType(role);
     const r = await client.query<UserRow>(
       `INSERT INTO users (
-       id, email, password_hash, account_type,
-       first_name, last_name, confirmed, active
-     ) VALUES ($1, LOWER($2), $3, $4, $5, $6, $7, TRUE)
-     RETURNING *`,
+         id, school_id, email, password_hash, role,
+         first_name, last_name, phone, active, confirmed, access_level
+       ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9, $10)
+       RETURNING *`,
       [
         id,
+        insertSchoolId,
         data.email,
         data.passwordHash,
-        legacyType,
+        role,
         firstName,
         lastName,
+        data.phone ?? null,
         confirmed,
+        accessLevel,
       ]
     );
+    if (role === "PARENT" && insertSchoolId != null) {
+      await insertParentProfileInTx(client, id, insertSchoolId);
+    }
+    if (mustChangePassword) {
+      await client.query(
+        `UPDATE users SET must_change_password = TRUE WHERE id = $1`,
+        [id]
+      );
+      (r.rows[0] as UserRow).must_change_password = true;
+    }
     await client.query("COMMIT");
     return mapUserRow(r.rows[0]);
   } catch (e) {
@@ -697,12 +447,10 @@ export async function updateUser(
     last_name: string;
     email: string;
     role: UserRole;
-    account_type: AccountType;
     confirmed: boolean;
     phone: string | null;
   }>
 ): Promise<boolean> {
-  const shape = await getDbShape();
   const sets: string[] = [];
   const vals: unknown[] = [];
   let i = 1;
@@ -720,27 +468,14 @@ export async function updateUser(
     vals.push(data.email.toLowerCase());
   }
   if (data.role !== undefined) {
-    if (shape.userHasRole) {
-      sets.push(`role = $${i++}`);
-      vals.push(data.role);
-    } else {
-      sets.push(`account_type = $${i++}`);
-      vals.push(userRoleToAccountType(data.role));
-    }
-  } else if (data.account_type !== undefined) {
-    if (shape.userHasRole) {
-      sets.push(`role = $${i++}`);
-      vals.push(accountTypeToUserRole(data.account_type));
-    } else {
-      sets.push(`account_type = $${i++}`);
-      vals.push(data.account_type);
-    }
+    sets.push(`role = $${i++}`);
+    vals.push(data.role);
   }
   if (data.confirmed !== undefined) {
     sets.push(`confirmed = $${i++}`);
     vals.push(data.confirmed);
   }
-  if (data.phone !== undefined && shape.userHasPhone) {
+  if (data.phone !== undefined) {
     sets.push(`phone = $${i++}`);
     vals.push(data.phone);
   }
@@ -765,27 +500,17 @@ export async function findUserBySchoolAndEmail(
   schoolId: string,
   email: string
 ): Promise<User | null> {
-  const shape = await getDbShape();
-  const r = shape.userHasSchoolId
-    ? await pool.query<UserRow>(
-        `SELECT * FROM users
-         WHERE school_id = $1 AND LOWER(email::text) = LOWER($2::text)
-         LIMIT 1`,
-        [schoolId, email]
-      )
-    : await pool.query<UserRow>(
-        `SELECT * FROM users
-         WHERE LOWER(email::text) = LOWER($1::text)
-         LIMIT 1`,
-        [email]
-      );
+  const r = await pool.query<UserRow>(
+    `SELECT * FROM users
+     WHERE school_id = $1 AND LOWER(email::text) = LOWER($2::text)
+     LIMIT 1`,
+    [schoolId, email]
+  );
   return r.rows[0] ? mapUserRow(r.rows[0]) : null;
 }
 
 /** Czyści flagę must_change_password po skutecznej zmianie hasła przez użytkownika. */
 export async function clearMustChangePassword(userId: string): Promise<void> {
-  const shape = await getDbShape();
-  if (!shape.userHasMustChangePassword) return;
   await pool.query(
     `UPDATE users SET must_change_password = FALSE WHERE id = $1`,
     [userId]
@@ -806,13 +531,10 @@ export async function updateUserPasswordHash(
 export async function getAllUsers(
   schoolId: string = DEFAULT_SCHOOL_ID
 ): Promise<User[]> {
-  const shape = await getDbShape();
-  const r = shape.userHasSchoolId
-    ? await pool.query<UserRow>(
-        `SELECT * FROM users WHERE school_id = $1 ORDER BY created_at DESC`,
-        [schoolId]
-      )
-    : await pool.query<UserRow>(`SELECT * FROM users ORDER BY created_at DESC`);
+  const r = await pool.query<UserRow>(
+    `SELECT * FROM users WHERE school_id = $1 ORDER BY created_at DESC`,
+    [schoolId]
+  );
   return r.rows.map(mapUserRow);
 }
 
@@ -820,28 +542,12 @@ export async function getUsersByRole(
   role: UserRole,
   schoolId: string = DEFAULT_SCHOOL_ID
 ): Promise<User[]> {
-  const shape = await getDbShape();
-  const r =
-    shape.userHasRole && shape.userHasSchoolId
-      ? await pool.query<UserRow>(
-          `SELECT * FROM users
-           WHERE school_id = $1 AND role = $2
-           ORDER BY created_at DESC`,
-          [schoolId, role]
-        )
-      : shape.userHasRole
-        ? await pool.query<UserRow>(
-            `SELECT * FROM users
-             WHERE role = $1
-             ORDER BY created_at DESC`,
-            [role]
-          )
-        : await pool.query<UserRow>(
-            `SELECT * FROM users
-             WHERE account_type = $1
-             ORDER BY created_at DESC`,
-            [userRoleToAccountType(role)]
-          );
+  const r = await pool.query<UserRow>(
+    `SELECT * FROM users
+     WHERE school_id = $1 AND role = $2
+     ORDER BY created_at DESC`,
+    [schoolId, role]
+  );
   return r.rows.map(mapUserRow);
 }
 
@@ -853,22 +559,21 @@ export async function deleteUser(
   userId: string,
   tenantSchoolId?: string | null
 ): Promise<boolean> {
-  const shape = await getDbShape();
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    if (shape.hasChildrenTable && tenantSchoolId != null) {
+    const schoolScope =
+      tenantSchoolId === undefined ? DEFAULT_SCHOOL_ID : tenantSchoolId;
+    if (schoolScope != null) {
       await client.query(
         `UPDATE children
          SET active = FALSE, resignation_date = COALESCE(resignation_date, NOW())
          WHERE parent_id = $1 AND school_id = $2 AND active = TRUE`,
-        [userId, tenantSchoolId]
+        [userId, schoolScope]
       );
     }
-    const schoolScope =
-      tenantSchoolId === undefined ? DEFAULT_SCHOOL_ID : tenantSchoolId;
-    const u = shape.userHasSchoolId
-      ? schoolScope === null
+    const u =
+      schoolScope === null
         ? await client.query(
             `UPDATE users
              SET active = FALSE, resignation_date = NOW()
@@ -882,14 +587,7 @@ export async function deleteUser(
              WHERE id = $1 AND school_id = $2
              RETURNING id`,
             [userId, schoolScope]
-          )
-      : await client.query(
-          `UPDATE users
-           SET active = FALSE, resignation_date = NOW()
-           WHERE id = $1
-           RETURNING id`,
-          [userId]
-        );
+          );
     await client.query("COMMIT");
     return (u.rowCount ?? 0) > 0;
   } catch (e) {
@@ -905,11 +603,10 @@ export async function restoreUser(
   userId: string,
   tenantSchoolId?: string | null
 ): Promise<boolean> {
-  const shape = await getDbShape();
   const schoolScope =
     tenantSchoolId === undefined ? DEFAULT_SCHOOL_ID : tenantSchoolId;
-  const r = shape.userHasSchoolId
-    ? schoolScope === null
+  const r =
+    schoolScope === null
       ? await pool.query(
           `UPDATE users
            SET active = TRUE, resignation_date = NULL
@@ -923,34 +620,19 @@ export async function restoreUser(
            WHERE id = $1 AND school_id = $2
            RETURNING id`,
           [userId, schoolScope]
-        )
-    : await pool.query(
-        `UPDATE users
-         SET active = TRUE, resignation_date = NULL
-         WHERE id = $1
-         RETURNING id`,
-        [userId]
-      );
+        );
   return (r.rowCount ?? 0) > 0;
 }
 
 export async function isAdmin(userId: string): Promise<boolean> {
   try {
-    const shape = await getDbShape();
-    if (shape.userHasRole) {
-      const r = await pool.query<QueryResultRow>(
-        `SELECT * FROM users WHERE id = $1 LIMIT 1`,
-        [userId]
-      );
-      const row = r.rows[0];
-      if (!row) return false;
-      return resolveUserRoleFromRow(row) === "ADMIN";
-    }
-    const r = await pool.query<{ account_type: string }>(
-      `SELECT account_type FROM users WHERE id = $1 LIMIT 1`,
+    const r = await pool.query<QueryResultRow>(
+      `SELECT * FROM users WHERE id = $1 LIMIT 1`,
       [userId]
     );
-    return r.rows[0]?.account_type === "admin";
+    const row = r.rows[0];
+    if (!row) return false;
+    return resolveUserRoleFromRow(row) === "ADMIN";
   } catch {
     return false;
   }
@@ -968,27 +650,17 @@ export async function setResetToken(
   token: string,
   expiry: Date
 ): Promise<void> {
-  const shape = await getDbShape();
-  if (shape.userHasSchoolId) {
-    const tenant = getRegistrationSchoolId();
-    await pool.query(
-      `UPDATE users
-       SET reset_token = $1, reset_token_expiry = $2
-       WHERE LOWER(email::text) = LOWER($4::text)
-         AND (
-           school_id IS NOT DISTINCT FROM $3::text
-           OR (role = 'ADMIN' AND school_id IS NULL)
-         )`,
-      [token, expiry, tenant, email]
-    );
-  } else {
-    await pool.query(
-      `UPDATE users
-       SET reset_token = $1, reset_token_expiry = $2
-       WHERE LOWER(email::text) = LOWER($3::text)`,
-      [token, expiry, email]
-    );
-  }
+  const tenant = getRegistrationSchoolId();
+  await pool.query(
+    `UPDATE users
+     SET reset_token = $1, reset_token_expiry = $2
+     WHERE LOWER(email::text) = LOWER($4::text)
+       AND (
+         school_id IS NOT DISTINCT FROM $3::text
+         OR (role = 'ADMIN' AND school_id IS NULL)
+       )`,
+    [token, expiry, tenant, email]
+  );
 }
 
 export async function setResetTokenByUserId(
@@ -1032,15 +704,12 @@ export async function resetPassword(
   token: string,
   newPasswordHash: string
 ): Promise<boolean> {
-  const shape = await getDbShape();
-  const mustChangeSet = shape.userHasMustChangePassword
-    ? `, must_change_password = FALSE`
-    : "";
   const r = await pool.query(
     `UPDATE users
      SET password_hash = $1,
          reset_token = NULL,
-         reset_token_expiry = NULL${mustChangeSet}
+         reset_token_expiry = NULL,
+         must_change_password = FALSE
      WHERE reset_token = $2
        AND reset_token_expiry IS NOT NULL
        AND reset_token_expiry > NOW()
@@ -1061,24 +730,19 @@ export async function createChild(data: {
   avatarUrl?: string | null;
   accessLevel?: ChildAccessLevel;
 }): Promise<Child> {
-  const shape = await getDbShape();
   const firstName = formatPersonName(data.firstName);
   const lastName = formatPersonName(data.lastName);
   const id = randomUUID();
   const schoolId = data.schoolId ?? DEFAULT_SCHOOL_ID;
   const accessLevel = data.accessLevel ?? "NEW";
 
-  if (shape.hasChildrenTable) {
-    const cols = [
-      "id",
-      "school_id",
-      "parent_id",
-      "first_name",
-      "last_name",
-      "birth_date",
-      "avatar_url",
-    ];
-    const vals: unknown[] = [
+  const r = await pool.query<ChildRow>(
+    `INSERT INTO children (
+       id, school_id, parent_id, first_name, last_name, birth_date,
+       avatar_url, confirmed, access_level
+     ) VALUES ($1, $2, $3, $4, $5, $6::date, $7, FALSE, $8)
+     RETURNING *`,
+    [
       id,
       schoolId,
       data.parentId,
@@ -1086,29 +750,10 @@ export async function createChild(data: {
       lastName,
       data.birthDate.slice(0, 10),
       data.avatarUrl ?? null,
-    ];
-    if (shape.childHasConfirmed) {
-      cols.push("confirmed");
-      vals.push(false);
-    }
-    if (shape.childHasAccessLevel) {
-      cols.push("access_level");
-      vals.push(accessLevel);
-    }
-    const placeholders = vals
-      .map((_, i) => {
-        const col = cols[i];
-        return col === "birth_date" ? `$${i + 1}::date` : `$${i + 1}`;
-      })
-      .join(", ");
-    const r = await pool.query<ChildRow>(
-      `INSERT INTO children (${cols.join(", ")}) VALUES (${placeholders}) RETURNING *`,
-      vals
-    );
-    return mapChildRow(r.rows[0]);
-  }
-
-  throw new Error("Brak tabeli children w bazie");
+      accessLevel,
+    ]
+  );
+  return mapChildRow(r.rows[0]);
 }
 
 /**
@@ -1153,12 +798,13 @@ export type ParentProfile = {
   company_name: string | null;
   nip: string | null;
   pesel: string | null;
+  discount_large_family: boolean;
   created_at: Date;
   updated_at: Date;
 };
 
 const PARENT_PROFILE_SELECT = `id, user_id, school_id, address, city, zip_code,
-  company_name, nip, pesel, created_at, updated_at`;
+  company_name, nip, pesel, discount_large_family, created_at, updated_at`;
 
 export async function getParentProfileByUserId(userId: string): Promise<ParentProfile | null> {
   const r = await pool.query<ParentProfile>(
@@ -1181,6 +827,7 @@ export async function upsertParentProfileForUser(params: {
   company_name?: string | null;
   nip?: string | null;
   pesel?: string | null;
+  discount_large_family?: boolean;
 }): Promise<ParentProfile | null> {
   const { userId, schoolId } = params;
   const existing = await getParentProfileByUserId(userId);
@@ -1206,27 +853,46 @@ export async function upsertParentProfileForUser(params: {
         ? String(params.pesel).slice(0, 11)
         : null
       : existing?.pesel ?? null;
+  const discount_large_family =
+    params.discount_large_family !== undefined
+      ? params.discount_large_family
+      : existing?.discount_large_family ?? false;
 
   const updated = await pool.query<ParentProfile>(
     `UPDATE parent_profiles
      SET address = $2, city = $3, zip_code = $4,
          company_name = $5, nip = $6, pesel = $7,
+         discount_large_family = $8,
          updated_at = NOW()
      WHERE user_id = $1
      RETURNING ${PARENT_PROFILE_SELECT}`,
-    [userId, address, city, zip, company_name, nip, pesel]
+    [userId, address, city, zip, company_name, nip, pesel, discount_large_family]
   );
   if (updated.rows[0]) return updated.rows[0];
 
   await pool.query(
     `INSERT INTO parent_profiles (
        id, user_id, school_id, address, city, zip_code,
-       company_name, nip, pesel, created_at, updated_at
+       company_name, nip, pesel, discount_large_family, created_at, updated_at
      )
-     VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
-    [userId, schoolId, address, city, zip, company_name, nip, pesel]
+     VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())`,
+    [userId, schoolId, address, city, zip, company_name, nip, pesel, discount_large_family]
   );
   return getParentProfileByUserId(userId);
+}
+
+/** Czy rodzic ma już wygenerowaną umowę (SENT/SIGNED) — wspólne dane do umowy są wtedy zablokowane. */
+export async function parentHasGeneratedContract(userId: string): Promise<boolean> {
+  const r = await pool.query<{ ok: boolean }>(
+    `SELECT EXISTS(
+       SELECT 1
+       FROM contracts
+       WHERE parent_id = $1
+         AND status IN ('SENT', 'SIGNED')
+     ) AS ok`,
+    [userId]
+  );
+  return Boolean(r.rows[0]?.ok);
 }
 
 async function activeEnrollmentChildExists(
@@ -1261,6 +927,92 @@ async function activeEnrollmentChildExists(
   return Boolean(r.rows[0]?.ok);
 }
 
+type EnrollmentRequestChildInput = {
+  firstName: string;
+  lastName: string;
+  birthDate: string;
+  preferredLocationId?: string | null;
+};
+
+async function insertEnrollmentRequestsInTx(
+  client: PoolClient,
+  params: {
+    schoolId: string;
+    userId: string | null;
+    parentEmail: string;
+    parentFirstName: string;
+    parentLastName: string;
+    parentPhone: string | null;
+    children: EnrollmentRequestChildInput[];
+  }
+): Promise<number> {
+  const seenInBatch = new Set<string>();
+  let created = 0;
+
+  for (const ch of params.children) {
+    const childFirst = formatPersonName(ch.firstName);
+    const childLast = formatPersonName(ch.lastName);
+    const childBirth = ch.birthDate.slice(0, 10);
+    const batchKey = childEnrollmentIdentityKey(childFirst, childLast, childBirth);
+
+    if (seenInBatch.has(batchKey)) {
+      throw new DuplicateEnrollmentError(`${childFirst} ${childLast}`, "batch");
+    }
+    seenInBatch.add(batchKey);
+
+    const alreadySubmitted = await activeEnrollmentChildExists(client, {
+      schoolId: params.schoolId,
+      parentEmail: params.parentEmail,
+      firstName: childFirst,
+      lastName: childLast,
+      birthDate: childBirth,
+    });
+    if (alreadySubmitted) {
+      throw new DuplicateEnrollmentError(`${childFirst} ${childLast}`, "existing");
+    }
+
+    const locId = String(ch.preferredLocationId ?? "").trim() || null;
+
+    await client.query(
+      `INSERT INTO enrollment_requests (
+         id,
+         school_id,
+         parent_first_name,
+         parent_last_name,
+         parent_email,
+         parent_phone,
+         child_first_name,
+         child_last_name,
+         child_birth_date,
+         preferred_location,
+         preferred_days,
+         notes,
+         status,
+         user_id,
+         created_at
+       ) VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9::date, $10, NULL, NULL, 'NEW', $11, NOW()
+       )`,
+      [
+        randomUUID(),
+        params.schoolId,
+        params.parentFirstName,
+        params.parentLastName,
+        params.parentEmail,
+        params.parentPhone,
+        childFirst,
+        childLast,
+        childBirth,
+        locId,
+        params.userId,
+      ]
+    );
+    created += 1;
+  }
+
+  return created;
+}
+
 /** Publiczne zgłoszenie dziecka — tylko wiersze `enrollment_requests`, bez konta w `users` i bez `children`. */
 export async function insertPublicEnrollmentRequests(data: {
   schoolId: string;
@@ -1268,12 +1020,7 @@ export async function insertPublicEnrollmentRequests(data: {
   firstName: string;
   lastName: string;
   phone: string | null;
-  children: Array<{
-    firstName: string;
-    lastName: string;
-    birthDate: string;
-    preferredLocationId?: string | null;
-  }>;
+  children: EnrollmentRequestChildInput[];
 }): Promise<void> {
   const hasTable = await pool.query<{ exists: boolean }>(
     `SELECT EXISTS(
@@ -1285,7 +1032,6 @@ export async function insertPublicEnrollmentRequests(data: {
     throw new Error("Brak tabeli enrollment_requests w bazie danych");
   }
 
-  const shape = await getDbShape();
   const schoolId = data.schoolId?.trim();
   if (!schoolId) {
     throw new Error("Brak schoolId — zgłoszenie wymaga SCHOOL_ID");
@@ -1299,72 +1045,16 @@ export async function insertPublicEnrollmentRequests(data: {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    if (shape.userHasSchoolId) {
-      await ensureDefaultSchoolRow(client, schoolId);
-    }
-
-    const seenInBatch = new Set<string>();
-
-    for (const ch of data.children) {
-      const childFirst = formatPersonName(ch.firstName);
-      const childLast = formatPersonName(ch.lastName);
-      const childBirth = ch.birthDate.slice(0, 10);
-      const batchKey = childEnrollmentIdentityKey(childFirst, childLast, childBirth);
-
-      if (seenInBatch.has(batchKey)) {
-        throw new DuplicateEnrollmentError(`${childFirst} ${childLast}`, "batch");
-      }
-      seenInBatch.add(batchKey);
-
-      const alreadySubmitted = await activeEnrollmentChildExists(client, {
-        schoolId,
-        parentEmail,
-        firstName: childFirst,
-        lastName: childLast,
-        birthDate: childBirth,
-      });
-      if (alreadySubmitted) {
-        throw new DuplicateEnrollmentError(`${childFirst} ${childLast}`, "existing");
-      }
-
-      /* Lokalizacja jest w `enrollment_requests` — nie uzależnij od kształtu tabeli `children`. */
-      const locId = String(ch.preferredLocationId ?? "").trim() || null;
-
-      await client.query(
-        `INSERT INTO enrollment_requests (
-           id,
-           school_id,
-           parent_first_name,
-           parent_last_name,
-           parent_email,
-           parent_phone,
-           child_first_name,
-           child_last_name,
-           child_birth_date,
-           preferred_location,
-           preferred_days,
-           notes,
-           status,
-           user_id,
-           created_at
-         ) VALUES (
-           $1, $2, $3, $4, $5, $6, $7, $8, $9::date, $10, NULL, NULL, 'NEW', NULL, NOW()
-         )`,
-        [
-          randomUUID(),
-          schoolId,
-          parentFirstName,
-          parentLastName,
-          parentEmail,
-          parentPhone,
-          childFirst,
-          childLast,
-          ch.birthDate.slice(0, 10),
-          locId,
-        ]
-      );
-    }
-
+    await ensureDefaultSchoolRow(client, schoolId);
+    await insertEnrollmentRequestsInTx(client, {
+      schoolId,
+      userId: null,
+      parentEmail,
+      parentFirstName,
+      parentLastName,
+      parentPhone,
+      children: data.children,
+    });
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK");
@@ -1374,245 +1064,124 @@ export async function insertPublicEnrollmentRequests(data: {
   }
 }
 
-/** Rodzic + dzieci w jednej transakcji (rejestracja). */
-export async function createParentUserWithChildren(data: {
+/** Panel admina: konto rodzica + zgłoszenia enrollment (bez rekordów `children`). */
+export async function createParentUserWithEnrollmentRequests(data: {
   email: string;
   passwordHash: string;
   firstName: string;
   lastName: string;
-  /** Wymagane — zwykle `process.env.SCHOOL_ID` / `getRegistrationSchoolId()`; rodzic nigdy bez szkoły. */
   schoolId: string;
   phone?: string | null;
-  parentPhone?: string | null;
   confirmed?: boolean;
   accessLevel?: AccessLevel;
-  createEnrollmentRequests?: boolean;
-  children: Array<{
-    firstName: string;
-    lastName: string;
-    birthDate: string;
-    preferredLocationId?: string | null;
-  }>;
-}): Promise<{ user: User; children: Child[] }> {
-  const shape = await getDbShape();
+  children: EnrollmentRequestChildInput[];
+}): Promise<{ user: User; enrollmentCount: number }> {
   const schoolId = data.schoolId?.trim();
   if (!schoolId) {
     throw new Error("Brak schoolId — rejestracja rodzica wymaga SCHOOL_ID");
   }
+  if (!Array.isArray(data.children) || data.children.length === 0) {
+    throw new Error("Wymagane co najmniej jedno dziecko");
+  }
+
   const userId = randomUUID();
   const role: UserRole = "PARENT";
   const confirmed = data.confirmed ?? false;
   const accessLevel = data.accessLevel ?? "PENDING";
-  const shouldCreateEnrollmentRequests = data.createEnrollmentRequests ?? false;
-  const parentPhone = data.parentPhone ?? data.phone ?? null;
-  const firstName = formatPersonName(data.firstName);
-  const lastName = formatPersonName(data.lastName);
+  const parentPhone = data.phone?.trim() || null;
+  const parentFirstName = formatPersonName(data.firstName);
+  const parentLastName = formatPersonName(data.lastName);
+  const parentEmail = String(data.email).trim().toLowerCase();
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await ensureDefaultSchoolRow(client, schoolId);
 
-    if (shape.userHasSchoolId) {
-      await ensureDefaultSchoolRow(client, schoolId);
-    }
+    const ur = await client.query<UserRow>(
+      `INSERT INTO users (
+         id, school_id, email, password_hash, role,
+         first_name, last_name, phone, active, confirmed, access_level
+       ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9, $10)
+       RETURNING *`,
+      [
+        userId,
+        schoolId,
+        data.email,
+        data.passwordHash,
+        role,
+        parentFirstName,
+        parentLastName,
+        parentPhone,
+        confirmed,
+        accessLevel,
+      ]
+    );
 
-    let ur: QueryResult<UserRow>;
-    if (shape.userHasRole) {
-      if (shape.userHasAccessLevel) {
-        ur = shape.userHasPhone
-          ? await client.query<UserRow>(
-              `INSERT INTO users (
-                 id, school_id, email, password_hash, role,
-                 first_name, last_name, phone, active, confirmed, access_level
-               ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9, $10)
-               RETURNING *`,
-              [
-                userId,
-                schoolId,
-                data.email,
-                data.passwordHash,
-                role,
-                firstName,
-                lastName,
-                data.phone ?? null,
-                confirmed,
-                accessLevel,
-              ]
-            )
-          : await client.query<UserRow>(
-              `INSERT INTO users (
-                 id, school_id, email, password_hash, role,
-                 first_name, last_name, active, confirmed, access_level
-               ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, TRUE, $8, $9)
-               RETURNING *`,
-              [
-                userId,
-                schoolId,
-                data.email,
-                data.passwordHash,
-                role,
-                firstName,
-                lastName,
-                confirmed,
-                accessLevel,
-              ]
-            );
-      } else {
-        ur = shape.userHasPhone
-          ? await client.query<UserRow>(
-              `INSERT INTO users (
-                 id, school_id, email, password_hash, role,
-                 first_name, last_name, phone, active, confirmed
-               ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9)
-               RETURNING *`,
-              [
-                userId,
-                schoolId,
-                data.email,
-                data.passwordHash,
-                role,
-                firstName,
-                lastName,
-                data.phone ?? null,
-                confirmed,
-              ]
-            )
-          : await client.query<UserRow>(
-              `INSERT INTO users (
-                 id, school_id, email, password_hash, role,
-                 first_name, last_name, active, confirmed
-               ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, TRUE, $8)
-               RETURNING *`,
-              [
-                userId,
-                schoolId,
-                data.email,
-                data.passwordHash,
-                role,
-                firstName,
-                lastName,
-                confirmed,
-              ]
-            );
-      }
-    } else {
-      ur = await client.query<UserRow>(
-        `INSERT INTO users (
-           id, email, password_hash, account_type,
-           first_name, last_name, confirmed, active
-         ) VALUES ($1, LOWER($2), $3, 'user', $4, $5, $6, TRUE)
-         RETURNING *`,
-        [
-          userId,
-          data.email,
-          data.passwordHash,
-          firstName,
-          lastName,
-          confirmed,
-        ]
-      );
-    }
+    await insertParentProfileInTx(client, userId, schoolId);
 
-    if (shape.userHasRole) {
-      await insertParentProfileInTx(client, userId, schoolId);
-    }
-
-    const children: Child[] = [];
-    if (shape.hasChildrenTable) {
-      for (const ch of data.children) {
-        const childFirstName = formatPersonName(ch.firstName);
-        const childLastName = formatPersonName(ch.lastName);
-        const cid = randomUUID();
-        const cr = shape.childHasConfirmed
-          ? await client.query<ChildRow>(
-              `INSERT INTO children (
-                 id, school_id, parent_id, first_name, last_name, birth_date, avatar_url, active, confirmed
-               ) VALUES ($1, $2, $3, $4, $5, $6::date, $7, TRUE, FALSE)
-               RETURNING *`,
-              [
-                cid,
-                schoolId,
-                userId,
-                childFirstName,
-                childLastName,
-                ch.birthDate.slice(0, 10),
-                null,
-              ]
-            )
-          : await client.query<ChildRow>(
-              `INSERT INTO children (
-                 id, school_id, parent_id, first_name, last_name, birth_date, avatar_url, active
-               ) VALUES ($1, $2, $3, $4, $5, $6::date, $7, TRUE)
-               RETURNING *`,
-              [
-                cid,
-                schoolId,
-                userId,
-                childFirstName,
-                childLastName,
-                ch.birthDate.slice(0, 10),
-                null,
-              ]
-            );
-        if (
-          shape.childHasPreferredLocationId &&
-          ch.preferredLocationId != null &&
-          String(ch.preferredLocationId).trim() !== ""
-        ) {
-          await client.query(
-            `UPDATE children
-             SET preferred_location_id = $1
-             WHERE id = $2 AND school_id = $3`,
-            [String(ch.preferredLocationId).trim(), cid, schoolId]
-          );
-        }
-        const mappedChild = mapChildRow(cr.rows[0]);
-        children.push(mappedChild);
-        if (shouldCreateEnrollmentRequests) {
-          await client.query(
-            `INSERT INTO enrollment_requests (
-               id,
-               school_id,
-               parent_first_name,
-               parent_last_name,
-               parent_email,
-               parent_phone,
-               child_first_name,
-               child_last_name,
-               child_birth_date,
-               preferred_location,
-               preferred_days,
-               notes,
-               status,
-               user_id,
-               created_at
-             ) VALUES (
-               $1, $2, $3, $4, $5, $6, $7, $8, $9::date, $10, NULL, NULL, 'NEW', $11, NOW()
-             )`,
-            [
-              randomUUID(),
-              schoolId,
-              firstName,
-              lastName,
-              String(data.email).trim().toLowerCase(),
-              parentPhone,
-              mappedChild.first_name,
-              mappedChild.last_name,
-              mappedChild.birth_date,
-              ch.preferredLocationId != null && String(ch.preferredLocationId).trim() !== ""
-                ? String(ch.preferredLocationId).trim()
-                : null,
-              userId,
-            ]
-          );
-        }
-      }
-    } else {
-      throw new Error("Brak tabeli children — nie można zapisać dzieci.");
-    }
+    const enrollmentCount = await insertEnrollmentRequestsInTx(client, {
+      schoolId,
+      userId,
+      parentEmail,
+      parentFirstName,
+      parentLastName,
+      parentPhone,
+      children: data.children,
+    });
 
     await client.query("COMMIT");
-    return { user: mapUserRow(ur.rows[0]), children };
+    return { user: mapUserRow(ur.rows[0]), enrollmentCount };
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/** Panel admina: zgłoszenie enrollment dla istniejącego rodzica (bez rekordu `children`). */
+export async function insertEnrollmentRequestsForParent(data: {
+  parentId: string;
+  children: EnrollmentRequestChildInput[];
+}): Promise<{ enrollmentCount: number }> {
+  if (!Array.isArray(data.children) || data.children.length === 0) {
+    throw new Error("Wymagane co najmniej jedno dziecko");
+  }
+
+  const parentRes = await pool.query<{
+    id: string;
+    school_id: string;
+    email: string;
+    first_name: string;
+    last_name: string;
+    phone: string | null;
+    role: string;
+  }>(
+    `SELECT id, school_id, email, first_name, last_name, phone, role
+     FROM users WHERE id = $1 LIMIT 1`,
+    [data.parentId]
+  );
+  const parent = parentRes.rows[0];
+  if (!parent || parent.role !== "PARENT" || !parent.school_id) {
+    throw new Error("Rodzic nie istnieje lub nie ma przypisanej szkoły");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await ensureDefaultSchoolRow(client, parent.school_id);
+    const enrollmentCount = await insertEnrollmentRequestsInTx(client, {
+      schoolId: parent.school_id,
+      userId: parent.id,
+      parentEmail: String(parent.email).trim().toLowerCase(),
+      parentFirstName: formatPersonName(parent.first_name),
+      parentLastName: formatPersonName(parent.last_name),
+      parentPhone: parent.phone?.trim() || null,
+      children: data.children,
+    });
+    await client.query("COMMIT");
+    return { enrollmentCount };
   } catch (e) {
     await client.query("ROLLBACK");
     throw e;
@@ -1622,22 +1191,16 @@ export async function createParentUserWithChildren(data: {
 }
 
 export async function getChildrenByParentId(parentId: string): Promise<Child[]> {
-  const shape = await getDbShape();
-  if (shape.hasChildrenTable) {
-    const r = await pool.query<ChildRow>(
-      `SELECT * FROM children
-       WHERE parent_id = $1 AND school_id = $2
-       ORDER BY created_at ASC`,
-      [parentId, DEFAULT_SCHOOL_ID]
-    );
-    return r.rows.map(mapChildRow);
-  }
-  return [];
+  const r = await pool.query<ChildRow>(
+    `SELECT * FROM children
+     WHERE parent_id = $1 AND school_id = $2
+     ORDER BY created_at ASC`,
+    [parentId, DEFAULT_SCHOOL_ID]
+  );
+  return r.rows.map(mapChildRow);
 }
 
 export async function getChildById(childId: string): Promise<Child | null> {
-  const shape = await getDbShape();
-  if (!shape.hasChildrenTable) return null;
   const r = await pool.query<ChildRow>(
     `SELECT * FROM children WHERE id = $1 LIMIT 1`,
     [childId]
@@ -1646,8 +1209,6 @@ export async function getChildById(childId: string): Promise<Child | null> {
 }
 
 export async function getAllChildren(): Promise<Child[]> {
-  const shape = await getDbShape();
-  if (!shape.hasChildrenTable) return [];
   const r = await pool.query<ChildRow>(
     `SELECT * FROM children WHERE school_id = $1 ORDER BY created_at DESC`,
     [DEFAULT_SCHOOL_ID]
@@ -1671,130 +1232,109 @@ export async function updateChild(
     resignation_date: Date | string | null;
   }>
 ): Promise<boolean> {
-  const shape = await getDbShape();
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  let i = 1;
 
-  if (shape.hasChildrenTable) {
-    const sets: string[] = [];
-    const vals: unknown[] = [];
-    let i = 1;
-
-    if (data.first_name !== undefined) {
-      sets.push(`first_name = $${i++}`);
-      vals.push(formatPersonName(data.first_name));
-    }
-    if (data.last_name !== undefined) {
-      sets.push(`last_name = $${i++}`);
-      vals.push(formatPersonName(data.last_name));
-    }
-    if (data.birth_date !== undefined) {
-      sets.push(`birth_date = $${i++}::date`);
-      vals.push(data.birth_date.slice(0, 10));
-    }
-    if (data.avatar_url !== undefined) {
-      sets.push(`avatar_url = $${i++}`);
-      vals.push(data.avatar_url);
-    }
-    if (data.xp_total !== undefined) {
-      sets.push(`xp_total = $${i++}`);
-      vals.push(data.xp_total);
-    }
-    if (data.active !== undefined) {
-      sets.push(`active = $${i++}`);
-      vals.push(data.active);
-    }
-    if (data.confirmed !== undefined && shape.childHasConfirmed) {
-      sets.push(`confirmed = $${i++}`);
-      vals.push(data.confirmed);
-    }
-    if (data.enrollment_request_id !== undefined && shape.childHasEnrollmentRequestId) {
-      sets.push(`enrollment_request_id = $${i++}`);
-      vals.push(data.enrollment_request_id);
-    }
-    if (data.resignation_requested !== undefined) {
-      sets.push(`resignation_requested = $${i++}`);
-      vals.push(data.resignation_requested);
-    }
-    if (data.resignation_reason !== undefined) {
-      sets.push(`resignation_reason = $${i++}`);
-      vals.push(data.resignation_reason);
-    }
-    if (data.resignation_date !== undefined) {
-      sets.push(`resignation_date = $${i++}`);
-      vals.push(
-        data.resignation_date === null
-          ? null
-          : typeof data.resignation_date === "string"
-            ? data.resignation_date
-            : data.resignation_date.toISOString()
-      );
-    }
-
-    if (sets.length === 0) return false;
-
-    vals.push(childId);
-    const q = `UPDATE children SET ${sets.join(", ")} WHERE id = $${i} RETURNING id`;
-    const r = await pool.query(q, vals);
-    return (r.rowCount ?? 0) > 0;
+  if (data.first_name !== undefined) {
+    sets.push(`first_name = $${i++}`);
+    vals.push(formatPersonName(data.first_name));
+  }
+  if (data.last_name !== undefined) {
+    sets.push(`last_name = $${i++}`);
+    vals.push(formatPersonName(data.last_name));
+  }
+  if (data.birth_date !== undefined) {
+    sets.push(`birth_date = $${i++}::date`);
+    vals.push(data.birth_date.slice(0, 10));
+  }
+  if (data.avatar_url !== undefined) {
+    sets.push(`avatar_url = $${i++}`);
+    vals.push(data.avatar_url);
+  }
+  if (data.xp_total !== undefined) {
+    sets.push(`xp_total = $${i++}`);
+    vals.push(data.xp_total);
+  }
+  if (data.active !== undefined) {
+    sets.push(`active = $${i++}`);
+    vals.push(data.active);
+  }
+  if (data.confirmed !== undefined) {
+    sets.push(`confirmed = $${i++}`);
+    vals.push(data.confirmed);
+  }
+  if (data.enrollment_request_id !== undefined) {
+    sets.push(`enrollment_request_id = $${i++}`);
+    vals.push(data.enrollment_request_id);
+  }
+  if (data.resignation_requested !== undefined) {
+    sets.push(`resignation_requested = $${i++}`);
+    vals.push(data.resignation_requested);
+  }
+  if (data.resignation_reason !== undefined) {
+    sets.push(`resignation_reason = $${i++}`);
+    vals.push(data.resignation_reason);
+  }
+  if (data.resignation_date !== undefined) {
+    sets.push(`resignation_date = $${i++}`);
+    vals.push(
+      data.resignation_date === null
+        ? null
+        : typeof data.resignation_date === "string"
+          ? data.resignation_date
+          : data.resignation_date.toISOString()
+    );
   }
 
-  return false;
+  if (sets.length === 0) return false;
+
+  vals.push(childId);
+  const q = `UPDATE children SET ${sets.join(", ")} WHERE id = $${i} RETURNING id`;
+  const r = await pool.query(q, vals);
+  return (r.rowCount ?? 0) > 0;
 }
 
 export async function deleteChild(childId: string): Promise<boolean> {
-  const shape = await getDbShape();
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    if (shape.hasChildrenTable) {
-      const q = await client.query<{ parent_id: string }>(
-        `SELECT parent_id FROM children WHERE id = $1 AND school_id = $2`,
-        [childId, DEFAULT_SCHOOL_ID]
-      );
-      if (q.rows.length === 0) {
-        await client.query("ROLLBACK");
-        return false;
-      }
-      const parentId = q.rows[0].parent_id;
-
-      const u = await client.query(
-        `UPDATE children
-         SET active = FALSE, resignation_date = COALESCE(resignation_date, NOW())
-         WHERE id = $1 AND school_id = $2
-         RETURNING id`,
-        [childId, DEFAULT_SCHOOL_ID]
-      );
-      if ((u.rowCount ?? 0) === 0) {
-        await client.query("ROLLBACK");
-        return false;
-      }
-
-      const cnt = await client.query<{ c: string }>(
-        `SELECT COUNT(*)::text AS c FROM children
-         WHERE parent_id = $1 AND school_id = $2 AND active = TRUE`,
-        [parentId, DEFAULT_SCHOOL_ID]
-      );
-      const activeChildren = parseInt(cnt.rows[0]?.c ?? "0", 10);
-      if (activeChildren === 0) {
-        if (shape.userHasSchoolId) {
-          await client.query(
-            `UPDATE users
-             SET active = FALSE, resignation_date = NOW()
-             WHERE id = $1 AND school_id = $2`,
-            [parentId, DEFAULT_SCHOOL_ID]
-          );
-        } else {
-          await client.query(
-            `UPDATE users
-             SET active = FALSE, resignation_date = NOW()
-             WHERE id = $1`,
-            [parentId]
-          );
-        }
-      }
-    } else {
+    const q = await client.query<{ parent_id: string }>(
+      `SELECT parent_id FROM children WHERE id = $1 AND school_id = $2`,
+      [childId, DEFAULT_SCHOOL_ID]
+    );
+    if (q.rows.length === 0) {
       await client.query("ROLLBACK");
       return false;
+    }
+    const parentId = q.rows[0].parent_id;
+
+    const u = await client.query(
+      `UPDATE children
+       SET active = FALSE, resignation_date = COALESCE(resignation_date, NOW())
+       WHERE id = $1 AND school_id = $2
+       RETURNING id`,
+      [childId, DEFAULT_SCHOOL_ID]
+    );
+    if ((u.rowCount ?? 0) === 0) {
+      await client.query("ROLLBACK");
+      return false;
+    }
+
+    const cnt = await client.query<{ c: string }>(
+      `SELECT COUNT(*)::text AS c FROM children
+       WHERE parent_id = $1 AND school_id = $2 AND active = TRUE`,
+      [parentId, DEFAULT_SCHOOL_ID]
+    );
+    const activeChildren = parseInt(cnt.rows[0]?.c ?? "0", 10);
+    if (activeChildren === 0) {
+      await client.query(
+        `UPDATE users
+         SET active = FALSE, resignation_date = NOW()
+         WHERE id = $1 AND school_id = $2`,
+        [parentId, DEFAULT_SCHOOL_ID]
+      );
     }
 
     await client.query("COMMIT");
@@ -1808,47 +1348,41 @@ export async function deleteChild(childId: string): Promise<boolean> {
 }
 
 export async function restoreChild(childId: string): Promise<boolean> {
-  const shape = await getDbShape();
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    if (shape.hasChildrenTable) {
-      const q = await client.query<{ parent_id: string }>(
-        `SELECT parent_id FROM children WHERE id = $1`,
-        [childId]
-      );
-      if (q.rows.length === 0) {
-        await client.query("ROLLBACK");
-        return false;
-      }
-      const parentId = q.rows[0].parent_id;
-
-      const u = await client.query(
-        `UPDATE children
-         SET active = TRUE, resignation_date = NULL
-         WHERE id = $1
-         RETURNING id`,
-        [childId]
-      );
-      if ((u.rowCount ?? 0) === 0) {
-        await client.query("ROLLBACK");
-        return false;
-      }
-
-      const p = await client.query<{ active: boolean }>(
-        `SELECT active FROM users WHERE id = $1 LIMIT 1`,
-        [parentId]
-      );
-      if (p.rows[0] && p.rows[0].active === false) {
-        await client.query(
-          `UPDATE users SET active = TRUE, resignation_date = NULL WHERE id = $1`,
-          [parentId]
-        );
-      }
-    } else {
+    const q = await client.query<{ parent_id: string }>(
+      `SELECT parent_id FROM children WHERE id = $1`,
+      [childId]
+    );
+    if (q.rows.length === 0) {
       await client.query("ROLLBACK");
       return false;
+    }
+    const parentId = q.rows[0].parent_id;
+
+    const u = await client.query(
+      `UPDATE children
+       SET active = TRUE, resignation_date = NULL
+       WHERE id = $1
+       RETURNING id`,
+      [childId]
+    );
+    if ((u.rowCount ?? 0) === 0) {
+      await client.query("ROLLBACK");
+      return false;
+    }
+
+    const p = await client.query<{ active: boolean }>(
+      `SELECT active FROM users WHERE id = $1 LIMIT 1`,
+      [parentId]
+    );
+    if (p.rows[0] && p.rows[0].active === false) {
+      await client.query(
+        `UPDATE users SET active = TRUE, resignation_date = NULL WHERE id = $1`,
+        [parentId]
+      );
     }
 
     await client.query("COMMIT");
@@ -1866,8 +1400,6 @@ export async function requestChildResignation(
   parentUserId: string,
   reason: string
 ): Promise<boolean> {
-  const shape = await getDbShape();
-  if (!shape.hasChildrenTable) return false;
   const r = await pool.query(
     `UPDATE children
      SET resignation_requested = TRUE,
@@ -1876,47 +1408,6 @@ export async function requestChildResignation(
      RETURNING id`,
     [reason, childId, parentUserId, DEFAULT_SCHOOL_ID]
   );
-  return (r.rowCount ?? 0) > 0;
-}
-
-export async function getUsersByAccountType(
-  accountType: AccountType
-): Promise<User[]> {
-  return getUsersByRole(accountTypeToUserRole(accountType));
-}
-
-export async function updateAccountType(
-  userId: string,
-  newAccountType: AccountType
-): Promise<boolean> {
-  return updateUser(userId, { account_type: newAccountType });
-}
-
-export async function updateAccountTypeByEmail(
-  email: string,
-  newAccountType: AccountType
-): Promise<boolean> {
-  const shape = await getDbShape();
-  const r = shape.userHasRole
-    ? shape.userHasSchoolId
-      ? await pool.query(
-          `UPDATE users SET role = $1
-           WHERE school_id = $2 AND LOWER(email::text) = LOWER($3::text)
-           RETURNING id`,
-          [accountTypeToUserRole(newAccountType), DEFAULT_SCHOOL_ID, email]
-        )
-      : await pool.query(
-          `UPDATE users SET role = $1
-           WHERE LOWER(email::text) = LOWER($2::text)
-           RETURNING id`,
-          [accountTypeToUserRole(newAccountType), email]
-        )
-    : await pool.query(
-        `UPDATE users SET account_type = $1
-         WHERE LOWER(email::text) = LOWER($2::text)
-         RETURNING id`,
-        [newAccountType, email]
-      );
   return (r.rowCount ?? 0) > 0;
 }
 

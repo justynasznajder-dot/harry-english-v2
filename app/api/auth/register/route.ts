@@ -1,12 +1,10 @@
 import { NextResponse } from "next/server";
 /**
  * Publiczne zgłoszenie dziecka — zapis do `enrollment_requests` (bez tworzenia konta).
- * Przy tworzeniu konta PARENT (np. POST /api/admin/users) w `lib/db.createUser` w tej samej
- * transakcji wykonywany jest INSERT do `parent_profiles` (pusty wiersz + school_id).
+ * Ręczne dodanie rodzica w panelu: `createParentUserWithEnrollmentRequests` (konto + zgłoszenia).
  */
 import {
   DuplicateEnrollmentError,
-  getDbShape,
   getRegistrationSchoolId,
   insertPublicEnrollmentRequests,
   queryDb,
@@ -126,26 +124,6 @@ export async function POST(request: Request) {
       schoolName = schoolRes.rows[0]?.name?.trim() || schoolId;
     } catch (schoolErr) {
       console.error("Enrollment email: school name lookup failed:", schoolErr);
-    }
-    const shape = await getDbShape();
-    if (shape.hasChildrenTable) {
-      const hasBirthDateColumn = await queryDb<{
-        exists: boolean;
-      }>(
-        `SELECT EXISTS(
-           SELECT 1
-           FROM information_schema.columns
-           WHERE table_schema = 'public'
-             AND table_name = 'children'
-             AND column_name = 'birth_date'
-         ) AS exists`
-      );
-      if (!hasBirthDateColumn.rows[0]?.exists) {
-        return NextResponse.json(
-          { message: "Brak kolumny children.birth_date w bazie danych" },
-          { status: 500 }
-        );
-      }
     }
 
     const body = await request.json();

@@ -1,0 +1,227 @@
+# HarryEnglish v2 — Kontekst projektu dla AI (v21)
+
+Ten plik służy do przekazania kontekstu do nowego czatu AI. Wklej go na początku rozmowy.
+
+**Źródło prawdy schematu bazy:** `prisma/schema.prisma` (zsynchronizowany z Neon, 2026-06-06).  
+Projekt używa **raw SQL przez `pg`** (`lib/db.ts`) — **bez Prisma Client** w runtime.
+
+---
+
+## Changelog (czerwiec 2026)
+
+- Pełny audyt bazy ↔ `schema.prisma` (26 tabel modeli).
+- Usunięto tabelę `enrollment_proposals` — flow opiera się na `enrollment_requests` + `children.access_level`.
+- Usunięto legacy: `getDbShape()`, kolumna `account_type`, mapowanie `accountType` w API (tylko `role`).
+- Multi-child enrollment: propozycje zbiorcze (`POST /api/admin/enrollment/batch`), status per dziecko w AdminPortal.
+- Umowy: szablony CONTRACT / ATTACHMENT_1 / ATTACHMENT_2, override stawki monthly/yearly, podpis z załącznikami.
+- Odnowienia: `renewals` + `renewal_proposals` (osobny flow od zapisu).
+
+---
+
+## Prompt startowy
+
+„Pracujemy nad Next.js `HarryEnglish v2` — aplikacja do zarządzania szkołą językową. Backend: route handlers w `app/api/`, baza PostgreSQL (Neon) przez raw SQL (`lib/db.ts`). Schemat: `prisma/schema.prisma`. Auth: JWT (jose), cookie `auth-token` — payload: `{ userId, role, schoolId, accessLevel }`. Portal `/portal`: role `ADMIN`, `MANAGER`, `TEACHER`, `PARENT`, `CHILD`. Kolumna `users.role` to TEXT.
+
+**Stan dziecka w zapisie** = `children.access_level` (NEW / PROPOSED / NEGOTIATING / ACCEPTED / SIGNED / COMPLETED / REJECTED) — źródło prawdy dla steppera rodzica. **`enrollment_requests.status`** aktualizowany równolegle (historia zgłoszenia z formularza).
+
+**Aktywacja konta rodzica** = `users.access_level`: PENDING / ACTIVE (ACTIVE gdy ≥1 dziecko SIGNED lub COMPLETED — `syncParentUserAccessLevel`).
+
+Multi-tenant: `school_id` w tabelach. ADMIN może mieć `school_id = NULL`. MANAGER widzi tylko swoją szkołę (`resolveAdminPanelTenant`).
+
+SCHOOL_ID PROD = c93d5ac1-fa59-497f-b450-a4e50e1fb50d  
+SCHOOL_ID DEV  = efcb641a-e5bd-4e59-aa39-c08fd1b318e9
+
+Przed zmianami przeanalizuj wpływ na tabele, endpointy API i komponenty portalu.”
+
+---
+
+## 1. Stack
+
+- Next.js 16 App Router, React 19, TypeScript, Tailwind CSS v4
+- PostgreSQL (Neon) — `pg`, bez ORM w runtime
+- Auth: jose (JWT), cookie httpOnly 7 dni
+- Maile: nodemailer (Zoho SMTP)
+- Hosting: Vercel
+
+```bash
+npm run dev
+npm run build
+npm run lint
+npm run db:insert-templates      # wgrywa szablony umów HTML
+npm run db:migrate:attachments   # sql/contracts_attachments.sql
+```
+
+---
+
+## 2. Struktura projektu (skrót)
+
+```
+app/
+  page.tsx                    # Landing + formularz zapisu (AuthModal)
+  portal/                     # login, zmien-haslo, router ról
+  api/
+    auth/                     # login, logout, register, forgot/reset/change password
+    admin/
+      users/, children/, groups/, locations/
+      schedule-templates/, group-students/, lessons/
+      enrollment/             # GET lista + POST propozycja
+      enrollment/batch/         # POST zbiorcza propozycja (≥2 dzieci)
+      school-years/, school-holidays/
+      renewals/                 # open, close, propose, proposals
+    enrollment/
+      status/                   # GET — karty per dziecko (children.access_level)
+      accept/                   # PUT — akceptacja propozycji (body: requestId)
+      negotiate/                # PUT — NEGOTIATING (kontakt ze szkołą)
+      sign/                     # POST — podpis umowy
+    parent/contract/generate/   # POST — generowanie umowy HTML
+    user/me/, user/profile/
+    children/resign/
+    messages/, messages/recipients/, messages/[id]/thread/
+    renewals/                   # status, confirm, accept, reject
+    public/locations/, public/site-content/
+    contact/
+    dev/email-preview/          # tylko NODE_ENV !== production
+
+src/components/
+  AdminPortal.tsx             # Manager/admin — zgłoszenia, użytkownicy, grupy, wiadomości
+  UserPortal.tsx              # Rodzic — stepper multi-child, umowy
+  LektorPortal.tsx
+  ContractPortal.tsx
+  messages/MessagesPanel.tsx
+  admin/RenewalsPanel.tsx
+
+lib/
+  db.ts                       # PostgreSQL, typy UserRole, ChildAccessLevel
+  enrollment-sync.ts            # syncParentUserAccessLevel, syncChildrenAccessLevelForEnrollment
+  admin-enrollment-proposal.ts  # submitEnrollmentProposal, maile propozycji
+  enrollment-status.ts          # etykiety/kolory statusów
+  email.ts                      # szablony maili
+  auth.ts                       # JWT
+  messages.ts, renewals.ts
+```
+
+---
+
+## 3. Multi-tenant
+
+| Środowisko | school_id | slug |
+|------------|-----------|------|
+| PROD Harry English | c93d5ac1-fa59-497f-b450-a4e50e1fb50d | harry-english |
+| DEV Harry English Test | efcb641a-e5bd-4e59-aa39-c08fd1b318e9 | harry-english-test |
+
+- `SCHOOL_ID` w `.env` / Vercel — rejestracja publiczna i endpointy rodzica
+- `resolveAdminPanelTenant(userId)` — MANAGER → jego `school_id`, ADMIN → pełny dostęp
+- Wszystkie `app/api/admin/**` filtrują po tenant
+
+---
+
+## 4. Model danych — zasady (szczegóły w schema.prisma)
+
+**26 tabel** (modele Prisma). Kluczowe:
+
+### users
+- `role`: ADMIN | MANAGER | TEACHER | PARENT | CHILD
+- `access_level`: PENDING | ACTIVE (tylko aktywacja konta rodzica)
+- `school_id`: NULL tylko dla ADMIN
+- Brak kolumny `account_type` (usunięte z kodu i bazy)
+
+### children
+- `access_level` — **źródło prawdy** steppera rodzica
+- `enrollment_request_id` — opcjonalne powiązanie ze zgłoszeniem
+- `confirmed` — TRUE po podpisie umowy
+- Brak `preferred_location_id` (preferencja lokalizacji tylko w `enrollment_requests.preferred_location`)
+
+### enrollment_requests
+- Status ENUM `enrollment_status` w PostgreSQL
+- Jedno zgłoszenie = jedno dziecko z formularza publicznego
+- `proposed_group_id`, `proposed_at`, `accepted_at`, `rejected_at`
+- `preferred_days` — kolumna istnieje, UI jej nie zbiera (zostaje NULL)
+
+### contracts
+- `status`: DRAFT → SENT → SIGNED
+- `template_id`, `group_id`, `child_id` — NOT NULL w bazie
+- `override_amount_monthly`, `override_amount_yearly`, `price_override`
+- Załączniki: `attachment_1_html`, `attachment_2_html`, `include_attachment_2`
+
+### renewal_proposals
+- Historia propozycji grup w **odnowieniach** (osobno od enrollment)
+
+**Usunięte:** tabela `enrollment_proposals`.
+
+---
+
+## 5. Przepływ zapisu (enrollment)
+
+```
+Formularz publiczny → enrollment_requests (NEW), bez konta rodzica
+Manager: POST /api/admin/enrollment → tworzy/linkuje konto rodzica, dziecko w children,
+         status PROPOSED, mail z propozycją grupy
+Rodzic: PUT /api/enrollment/accept → ACCEPTED
+Rodzic: POST /api/parent/contract/generate → umowa DRAFT/SENT
+Rodzic: POST /api/enrollment/sign → SIGNED, users.access_level → ACTIVE
+Alternatywa: PUT /api/enrollment/negotiate → NEGOTIATING → manager wysyła nową propozycję
+```
+
+**Multi-child:** jeden rodzic, wiele `enrollment_requests` / `children`. AdminPortal pokazuje status **per dziecko**. Batch mail: `POST /api/admin/enrollment/batch`.
+
+**Synchronizacja:** `lib/enrollment-sync.ts` ustawia `children.access_level` i `users.access_level` po akcjach API.
+
+---
+
+## 6. API — role i uprawnienia
+
+| Endpoint | Kto |
+|----------|-----|
+| `/api/admin/*` | ADMIN, MANAGER (`canAccessSchoolAdminApis`) |
+| `/api/enrollment/*` | PARENT (JWT) |
+| `/api/parent/contract/generate` | PARENT |
+| `/api/auth/register` | Publiczny — tylko INSERT do `enrollment_requests` |
+| `/api/user/me` | Zalogowany — zwraca `role`, `children[]` |
+
+**Uwaga:** `POST /api/enrollment/sign` podpisuje **ostatni** kontrakt SENT rodzica (`LIMIT 1`) — ograniczenie przy równoległym podpisywaniu wielu dzieci.
+
+---
+
+## 7. Komponenty UI
+
+- **AdminPortal** — używa wyłącznie `users.role` (TEACHER, PARENT, MANAGER); lista zgłoszeń z badge per dziecko
+- **UserPortal** — stepper z `GET /api/enrollment/status` → tablica `proposals[]` per dziecko
+- **AuthModal** — formularz publiczny; pole formularza `students[]` mapowane na `children[]` w API register
+
+---
+
+## 8. Maile (lib/email.ts)
+
+Aktywne: propozycja grupy, zbiorcza propozycja, reset hasła, podpis umowy, wiadomości, rezygnacja, kontakt.  
+Podgląd lokalny: `GET /api/dev/email-preview` (tylko dev).
+
+---
+
+## 9. SQL / migracje ręczne
+
+Pliki w `sql/` — uruchamiane ręcznie w Neon (historia migracji, nie runtime):
+
+- `contracts_attachments.sql`, `contracts_price_overrides.sql`, `contracts_enrollment_request_id.sql`
+- `contract_template_harry_english_2025_2026.sql`
+- `users_must_change_password.sql`, `school_years_setup.sql`, `marketing_content.sql`
+
+Skrypty npm: `scripts/insert-contract-template.ts`, `scripts/run-contracts-attachments-migration.ts`.
+
+---
+
+## 10. Znane luki / TODO
+
+- Brak testów automatycznych
+- Portal dziecka (`ChildPortal`) — w budowie
+- `prisma` w package.json — tylko dokumentacja schematu, nie runtime
+- Po dużych zmianach API: wyczyść cache `.next` (`rm -rf .next`)
+
+---
+
+## 11. Czego NIE używać (usunięte)
+
+- `enrollment_proposals` — tabela i endpointy usunięte
+- `getDbShape()` — usunięte
+- `accountType` / `account_type` / `user|admin|lektor` — usunięte; tylko `role`
+- `/api/enrollment/reject`, `/api/students/*`, `/api/enrollment/contract` — nie istnieją
+- `GET /api/user/me` — nie zwraca już aliasu `students[]`

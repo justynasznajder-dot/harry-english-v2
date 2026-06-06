@@ -73,3 +73,67 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ message: "Nie udało się zaktualizować statusu" }, { status: 500 });
   }
 }
+
+/**
+ * Anulowanie kontaktu — powrót do propozycji grupy (NEGOTIATING → PROPOSED).
+ *
+ * Body: `{ requestId: string }`.
+ */
+export async function DELETE(request: NextRequest) {
+  const payload = await getTokenFromRequest(request);
+  const parentId = payload?.userId ?? null;
+  if (!parentId) {
+    return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
+  }
+
+  const SCHOOL_ID = getRegistrationSchoolId();
+
+  let requestId: string | null = null;
+  try {
+    const body = (await request.json()) as { requestId?: unknown; enrollmentRequestId?: unknown };
+    const raw =
+      typeof body.requestId === "string"
+        ? body.requestId
+        : typeof body.enrollmentRequestId === "string"
+          ? body.enrollmentRequestId
+          : "";
+    requestId = raw.trim() || null;
+  } catch {
+    return NextResponse.json({ message: "Nieprawidłowe dane" }, { status: 400 });
+  }
+
+  if (!requestId) {
+    return NextResponse.json({ message: "Brak identyfikatora zgłoszenia" }, { status: 400 });
+  }
+
+  try {
+    const upd = await queryDb<{ id: string }>(
+      `UPDATE enrollment_requests
+       SET status = 'PROPOSED'
+       WHERE id = $1
+         AND user_id = $2
+         AND school_id = $3
+         AND UPPER(BTRIM(COALESCE(status::text, ''))) = 'NEGOTIATING'
+       RETURNING id`,
+      [requestId, parentId, SCHOOL_ID]
+    );
+
+    if ((upd.rowCount ?? 0) === 0) {
+      return NextResponse.json(
+        { message: "Nie można anulować — zgłoszenie nie jest w trybie kontaktu ze szkołą" },
+        { status: 409 }
+      );
+    }
+
+    await syncChildrenAccessLevelForEnrollment(requestId, "PROPOSED");
+    await syncParentUserAccessLevel(parentId);
+
+    return NextResponse.json({
+      message: "Anulowano — możesz ponownie zaakceptować propozycję lub skontaktować się ze szkołą.",
+      status: "PROPOSED",
+    });
+  } catch (error) {
+    console.error("Enrollment negotiate cancel error:", error);
+    return NextResponse.json({ message: "Nie udało się anulować kontaktu ze szkołą" }, { status: 500 });
+  }
+}

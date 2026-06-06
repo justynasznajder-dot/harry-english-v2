@@ -1,6 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTokenFromRequest } from "@/lib/auth";
-import { getParentProfileByUserId, getUserById, upsertParentProfileForUser } from "@/lib/db";
+import {
+  getParentProfileByUserId,
+  getUserById,
+  parentHasGeneratedContract,
+  upsertParentProfileForUser,
+} from "@/lib/db";
+import {
+  isParentContractProfileComplete,
+  resolveBillingTypeFromProfile,
+  validateParentContractProfileInput,
+  type BillingType,
+} from "@/lib/parent-contract-profile";
 
 function normalizeZip(raw: unknown): string | null {
   if (raw == null) return null;
@@ -10,6 +21,7 @@ function normalizeZip(raw: unknown): string | null {
 }
 
 function profileToJson(profile: NonNullable<Awaited<ReturnType<typeof getParentProfileByUserId>>>) {
+  const billingType = resolveBillingTypeFromProfile(profile);
   return {
     id: profile.id,
     userId: profile.user_id,
@@ -17,11 +29,13 @@ function profileToJson(profile: NonNullable<Awaited<ReturnType<typeof getParentP
     address: profile.address,
     city: profile.city,
     zipCode: profile.zip_code,
+    billingType,
     companyName: profile.company_name,
     nip: profile.nip,
     pesel: profile.pesel,
     createdAt: profile.created_at,
     updatedAt: profile.updated_at,
+    complete: isParentContractProfileComplete(profile),
   };
 }
 
@@ -51,9 +65,11 @@ export async function GET(_request: NextRequest) {
     }
 
     const profile = await getParentProfileByUserId(userId);
+    const profileLocked = await parentHasGeneratedContract(userId);
 
     return NextResponse.json({
       profile: profile ? profileToJson(profile) : null,
+      profileLocked,
       user: {
         firstName: user.first_name,
         lastName: user.last_name,
@@ -90,73 +106,60 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    const body = await request.json();
-    const address =
-      body.address !== undefined
-        ? body.address == null || String(body.address).trim() === ""
-          ? null
-          : String(body.address).trim()
-        : undefined;
-    const city =
-      body.city !== undefined
-        ? body.city == null || String(body.city).trim() === ""
-          ? null
-          : String(body.city).trim()
-        : undefined;
-    const zipRaw =
-      body.zipCode !== undefined ? body.zipCode : body.zip_code !== undefined ? body.zip_code : undefined;
-    const zip_code = zipRaw !== undefined ? normalizeZip(zipRaw) : undefined;
-    const company_name =
-      body.companyName !== undefined
-        ? body.companyName == null || String(body.companyName).trim() === ""
-          ? null
-          : String(body.companyName).trim()
-        : body.company_name !== undefined
-          ? body.company_name == null || String(body.company_name).trim() === ""
-            ? null
-            : String(body.company_name).trim()
-          : undefined;
-    const nip =
-      body.nip !== undefined
-        ? body.nip == null || String(body.nip).trim() === ""
-          ? null
-          : String(body.nip).trim().slice(0, 20)
-        : undefined;
-    const pesel =
-      body.pesel !== undefined
-        ? body.pesel == null || String(body.pesel).trim() === ""
-          ? null
-          : String(body.pesel).trim().slice(0, 11)
-        : undefined;
-
-    if (
-      address === undefined &&
-      city === undefined &&
-      zip_code === undefined &&
-      company_name === undefined &&
-      nip === undefined &&
-      pesel === undefined
-    ) {
-      return NextResponse.json({ message: "Brak pól do aktualizacji" }, { status: 400 });
+    if (await parentHasGeneratedContract(userId)) {
+      return NextResponse.json(
+        {
+          message:
+            "Nie można zmienić danych do umowy — umowa została już wygenerowana dla co najmniej jednego dziecka.",
+        },
+        { status: 409 }
+      );
     }
 
-    const existing = await getParentProfileByUserId(userId);
+    const body = await request.json();
+    const billingType = String(body.billingType ?? body.billing_type ?? "private")
+      .trim()
+      .toLowerCase() as BillingType;
+    if (billingType !== "private" && billingType !== "company") {
+      return NextResponse.json({ message: "Nieprawidłowy typ rozliczenia" }, { status: 400 });
+    }
+
+    const address = String(body.address ?? "").trim();
+    const city = String(body.city ?? "").trim();
+    const zipCode = normalizeZip(body.zipCode ?? body.zip_code) ?? "";
+    const pesel = String(body.pesel ?? "").trim();
+    const companyName = String(body.companyName ?? body.company_name ?? "").trim();
+    const nip = String(body.nip ?? "").trim();
+
+    const validationError = validateParentContractProfileInput({
+      billingType,
+      address,
+      city,
+      zipCode,
+      pesel,
+      companyName,
+      nip,
+    });
+    if (validationError) {
+      return NextResponse.json({ message: validationError }, { status: 400 });
+    }
+
     const profile = await upsertParentProfileForUser({
       userId,
       schoolId: user.school_id,
-      address: address !== undefined ? address : existing?.address ?? null,
-      city: city !== undefined ? city : existing?.city ?? null,
-      zip_code: zip_code !== undefined ? zip_code : existing?.zip_code ?? null,
-      company_name: company_name !== undefined ? company_name : existing?.company_name ?? null,
-      nip: nip !== undefined ? nip : existing?.nip ?? null,
-      pesel: pesel !== undefined ? pesel : existing?.pesel ?? null,
+      address,
+      city,
+      zip_code: zipCode,
+      company_name: billingType === "company" ? companyName : null,
+      nip: billingType === "company" ? nip : null,
+      pesel: billingType === "company" ? null : pesel,
     });
 
     if (!profile) {
       return NextResponse.json({ message: "Nie udało się zapisać profilu" }, { status: 500 });
     }
 
-    return NextResponse.json({ profile: profileToJson(profile) });
+    return NextResponse.json({ profile: profileToJson(profile), profileLocked: false });
   } catch (error) {
     console.error("PUT /api/user/profile:", error);
     return NextResponse.json({ message: "Błąd zapisu profilu" }, { status: 500 });

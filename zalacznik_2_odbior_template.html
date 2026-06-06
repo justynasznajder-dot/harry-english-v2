@@ -14,41 +14,53 @@
   }
   h1 {
     text-align: center;
-    font-size: 14pt;
+    font-size: 15pt;
     font-weight: bold;
-    margin-bottom: 28px;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .contract-number {
+    text-align: center;
+    margin-bottom: 24px;
+    font-size: 11pt;
+  }
+  .section-header {
+    text-align: center;
+    font-weight: bold;
+    font-size: 12pt;
+    margin-top: 28px;
+    margin-bottom: 10px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #cccccc;
+  }
+  .party-block {
+    margin: 12px 0;
+  }
+  .field-label {
+    font-size: 10pt;
+    color: #555;
+    margin-bottom: 2px;
+  }
+  .field-value {
+    font-weight: bold;
+    margin-bottom: 8px;
   }
   p {
-    margin: 0 0 12px;
+    margin: 0 0 10px;
     text-align: justify;
-    font-size: 11.5pt;
   }
   .ph {
     color: #1a1a1a;
     font-weight: bold;
     font-style: normal;
   }
-  .field-block {
-    margin: 16px 0;
-  }
-  .field-line {
-    border-bottom: 1px dotted #333;
-    min-height: 28px;
-    padding: 4px 0 2px;
-    font-weight: bold;
-  }
-  .field-caption {
-    font-size: 10pt;
-    color: #555;
-    text-align: center;
-    margin-top: 4px;
-  }
-  .highlight {
-    background: #f0f0f0;
-    padding: 2px 4px;
-  }
   .signatures {
     margin-top: 40px;
+  }
+  .signature-confirm {
+    font-style: italic;
+    margin-bottom: 16px;
   }
   .signature-date {
     margin-bottom: 24px;
@@ -57,55 +69,55 @@
     display: flex;
     justify-content: space-between;
     margin-top: 8px;
-    gap: 24px;
   }
   .signature-col {
-    width: 48%;
+    width: 45%;
   }
   .signature-line {
     border-bottom: 1px solid #333;
     margin-bottom: 4px;
     min-height: 32px;
+    display: flex;
+    align-items: flex-end;
+    padding-bottom: 2px;
   }
-  .signature-caption {
-    font-size: 10pt;
-    color: #555;
-    text-align: center;
+  .signature-text {
+    font-weight: bold;
+    font-size: 11pt;
   }
-  .attachment-note {
-    margin-top: 0;
-    margin-bottom: 20px;
-    font-size: 10pt;
-    color: #666;
-    font-style: italic;
-    text-align: center;
+  .signature-name {
+    font-weight: bold;
+    font-size: 11pt;
   }
 </style>
 </head>
 <body>
 
 <h1>Upoważnienie do odbioru dziecka ze szkoły/przedszkola</h1>
-<p class="attachment-note">Załącznik nr 2 do umowy nr <span class="ph">{{contract_number}}</span></p>
+<div class="contract-number">Załącznik nr 2 do umowy nr <span class="ph">{{contract_number}}</span></div>
 
 <p>
-  Upoważniam <span class="highlight">lektorkę / lektora prowadzącego/a zajęcia w ramach kursów językowych Harry English</span>
+  Upoważniam lektora / lektorkę prowadzącego/a zajęcia w ramach kursów językowych
+  <strong>Harry English</strong>
 </p>
 
-<div class="field-block">
-  <div class="field-line"><span class="ph">{{teacher_full_name}}</span><span class="ph">{{teacher_id_suffix}}</span></div>
-  <div class="field-caption">Imię, nazwisko, numer dowodu osobistego</div>
-</div>
+<div class="party-block">
+  <div class="field-label">Imię, nazwisko, numer dowodu osobistego:</div>
+  <div class="field-value"><span class="ph">{{teacher_full_name}}</span><span class="ph">{{teacher_id_suffix}}</span></div>
 
-<p>do odbioru dziecka, którego jestem rodzicem / prawnym opiekunem</p>
+  <div class="field-label">Imię i nazwisko dziecka:</div>
+  <div class="field-value"><span class="ph">{{child_1_full_name}}</span></div>
 
-<div class="field-block">
-  <div class="field-line"><span class="ph">{{child_1_full_name}}</span></div>
-  <div class="field-caption">Imię i nazwisko dziecka</div>
+  <div class="field-label">Rok szkolny:</div>
+  <div class="field-value"><span class="ph">{{school_year}}</span></div>
+
+  <div class="field-label">Szkoła / przedszkole:</div>
+  <div class="field-value"><span class="ph">{{child_school_name}}</span></div>
 </div>
 
 <p>
-  w roku szkolnym <span class="ph">{{school_year}}</span> ze szkoły/przedszkola
-  <span class="ph">{{child_school_name}}</span>.
+  do odbioru dziecka, którego jestem rodzicem / prawnym opiekunem, w roku szkolnym
+  <span class="ph">{{school_year}}</span> ze wskazanej powyżej placówki.
 </p>
 
 <p>
@@ -114,15 +126,16 @@
 </p>
 
 <div class="signatures">
+  <p class="signature-confirm"><em>Klient potwierdza zapoznanie się z treścią załącznika i akceptuje jego warunki.</em></p>
   {{signed_at_line}}
   <div class="signature-row">
     <div class="signature-col">
-      <div class="signature-line"></div>
-      <div class="signature-caption">Data</div>
+      <div class="signature-line"><span class="ph signature-text">{{parent_signature_line}}</span></div>
+      <div class="signature-name">Klient</div>
     </div>
     <div class="signature-col">
-      <div class="signature-line"><span class="ph">{{parent_full_name}}</span></div>
-      <div class="signature-caption">Imię, nazwisko i czytelny podpis rodzica / opiekuna prawnego dziecka</div>
+      <div class="signature-line"><span class="ph signature-text">{{school_signature_line}}</span></div>
+      <div class="signature-name">Harry English – FHU Michał Sznajder</div>
     </div>
   </div>
 </div>

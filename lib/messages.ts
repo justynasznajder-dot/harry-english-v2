@@ -54,6 +54,7 @@ export type ThreadMessageRow = {
   sender_first_name: string;
   sender_last_name: string;
   sender_role_col: string;
+  sender_phone: string | null;
   recipient_first_name: string;
   recipient_last_name: string;
   recipient_role_col: string;
@@ -271,6 +272,17 @@ export async function fetchThreadMessages(rootId: string): Promise<ThreadMessage
        s.first_name AS sender_first_name,
        s.last_name AS sender_last_name,
        s.role AS sender_role_col,
+       COALESCE(
+         NULLIF(BTRIM(s.phone::text), ''),
+         (
+           SELECT NULLIF(BTRIM(er.parent_phone::text), '')
+           FROM enrollment_requests er
+           WHERE er.user_id = s.id
+              OR LOWER(BTRIM(er.parent_email::text)) = LOWER(BTRIM(s.email::text))
+           ORDER BY er.created_at DESC
+           LIMIT 1
+         )
+       ) AS sender_phone,
        r.first_name AS recipient_first_name,
        r.last_name AS recipient_last_name,
        r.role AS recipient_role_col

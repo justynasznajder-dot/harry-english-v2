@@ -538,7 +538,7 @@ export default function HomePage() {
                 </div>
 
                 <div className="text-center mb-3 py-2 border-y border-gray-200 sm:mb-4 sm:py-3">
-                  <div className="text-4xl font-bold text-[#175244] sm:text-5xl">56 zł</div>
+                  <div className="text-4xl font-bold text-[#175244] sm:text-5xl">112 zł</div>
                   <div className="text-xs text-[#4b5563] mt-0.5 sm:text-sm sm:mt-1">za zajęcia</div>
                 </div>
 
@@ -557,7 +557,7 @@ export default function HomePage() {
                   </div>
                   <div className="flex items-start gap-1.5 text-xs sm:gap-2 sm:text-sm">
                     <span className="text-green-600 flex-shrink-0 mt-0.5">✓</span>
-                    <span className="text-[#4b5563]">1-2x w tygodniu</span>
+                    <span className="text-[#4b5563]">2x w tygodniu</span>
                   </div>
                 </div>
 
@@ -1051,8 +1051,16 @@ export default function HomePage() {
               {/* Informacja o częstotliwości */}
               <div className="mb-4 sm:mb-6 p-3 sm:p-4 bg-blue-50 rounded-xl border border-blue-200">
                 <p className="text-xs sm:text-sm text-[#1f2933]">
-                  <strong>Częstotliwość zajęć:</strong> Poniższe ceny dotyczą zajęć <strong>1x w tygodniu</strong>. 
-                  W wersji intensywnej (<strong>2x w tygodniu</strong>) koszt miesięczny i roczny należy pomnożyć <strong>x2</strong>.
+                  {selectedPlan === "swim" ? (
+                    <>
+                      <strong>Częstotliwość zajęć:</strong> Poniższe ceny dotyczą zajęć <strong>2x w tygodniu</strong>.
+                    </>
+                  ) : (
+                    <>
+                      <strong>Częstotliwość zajęć:</strong> Poniższe ceny dotyczą zajęć <strong>1x w tygodniu</strong>.{" "}
+                      W wersji intensywnej (<strong>2x w tygodniu</strong>) koszt miesięczny i roczny należy pomnożyć <strong>x2</strong>.
+                    </>
+                  )}
                 </p>
               </div>
 
@@ -1061,21 +1069,21 @@ export default function HomePage() {
                 {[
                   {
                     label: "koszt 1 zajęć",
-                    rok: { walk: "41 zł", run: "47 zł", swim: "56 zł", fly: "190 zł" },
-                    ratalna: { walk: "45 zł", run: "51 zł", swim: "60 zł", fly: "—" },
-                    pojedyncze: { walk: "49 zł", run: "55 zł", swim: "64 zł", fly: "199 zł" },
+                    rok: { walk: "41 zł", run: "47 zł", swim: "112 zł", fly: "190 zł" },
+                    ratalna: { walk: "45 zł", run: "51 zł", swim: "120 zł", fly: "—" },
+                    pojedyncze: { walk: "49 zł", run: "55 zł", swim: "128 zł", fly: "199 zł" },
                   },
                   {
                     label: "koszt miesiąca",
-                    rok: { walk: "135 zł", run: "155 zł", swim: "185 zł", fly: "—" },
-                    ratalna: { walk: "149 zł", run: "168 zł", swim: "198 zł", fly: "—" },
-                    pojedyncze: { walk: "162 zł", run: "182 zł", swim: "211 zł", fly: "—" },
+                    rok: { walk: "135 zł", run: "155 zł", swim: "370 zł", fly: "—" },
+                    ratalna: { walk: "149 zł", run: "168 zł", swim: "396 zł", fly: "—" },
+                    pojedyncze: { walk: "162 zł", run: "182 zł", swim: "422 zł", fly: "—" },
                   },
                   {
                     label: "koszt roku",
-                    rok: { walk: "1 353 zł", run: "1 551 zł", swim: "1 848 zł", fly: "—" },
-                    ratalna: { walk: "1 485 zł", run: "1 683 zł", swim: "1 980 zł", fly: "—" },
-                    pojedyncze: { walk: "1 617 zł", run: "1 815 zł", swim: "2 112 zł", fly: "—" },
+                    rok: { walk: "1 353 zł", run: "1 551 zł", swim: "3 696 zł", fly: "—" },
+                    ratalna: { walk: "1 485 zł", run: "1 683 zł", swim: "3 960 zł", fly: "—" },
+                    pojedyncze: { walk: "1 617 zł", run: "1 815 zł", swim: "4 224 zł", fly: "—" },
                   },
                 ].map((row) => (
                   <div key={row.label} className="rounded-xl border border-gray-200 bg-gray-50/50 p-3">
@@ -1116,19 +1124,19 @@ export default function HomePage() {
                         <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933]">
                           {selectedPlan === "walk" && "41 zł"}
                           {selectedPlan === "run" && "47 zł"}
-                          {selectedPlan === "swim" && "56 zł"}
+                          {selectedPlan === "swim" && "112 zł"}
                           {selectedPlan === "fly" && "190 zł"}
                         </td>
                         <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933]">
                           {selectedPlan === "walk" && "45 zł"}
                           {selectedPlan === "run" && "51 zł"}
-                          {selectedPlan === "swim" && "60 zł"}
+                          {selectedPlan === "swim" && "120 zł"}
                           {selectedPlan === "fly" && "—"}
                         </td>
                         <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933]">
                           {selectedPlan === "walk" && "49 zł"}
                           {selectedPlan === "run" && "55 zł"}
-                          {selectedPlan === "swim" && "64 zł"}
+                          {selectedPlan === "swim" && "128 zł"}
                           {selectedPlan === "fly" && "199 zł"}
                         </td>
                       </tr>
@@ -1137,19 +1145,19 @@ export default function HomePage() {
                         <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933]">
                           {selectedPlan === "walk" && "135 zł"}
                           {selectedPlan === "run" && "155 zł"}
-                          {selectedPlan === "swim" && "185 zł"}
+                          {selectedPlan === "swim" && "370 zł"}
                           {selectedPlan === "fly" && "—"}
                         </td>
                         <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933]">
                           {selectedPlan === "walk" && "149 zł"}
                           {selectedPlan === "run" && "168 zł"}
-                          {selectedPlan === "swim" && "198 zł"}
+                          {selectedPlan === "swim" && "396 zł"}
                           {selectedPlan === "fly" && "—"}
                         </td>
                         <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933]">
                           {selectedPlan === "walk" && "162 zł"}
                           {selectedPlan === "run" && "182 zł"}
-                          {selectedPlan === "swim" && "211 zł"}
+                          {selectedPlan === "swim" && "422 zł"}
                           {selectedPlan === "fly" && "—"}
                         </td>
                       </tr>
@@ -1158,19 +1166,19 @@ export default function HomePage() {
                         <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933]">
                           {selectedPlan === "walk" && "1 353 zł"}
                           {selectedPlan === "run" && "1 551 zł"}
-                          {selectedPlan === "swim" && "1 848 zł"}
+                          {selectedPlan === "swim" && "3 696 zł"}
                           {selectedPlan === "fly" && "—"}
                         </td>
                         <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933]">
                           {selectedPlan === "walk" && "1 485 zł"}
                           {selectedPlan === "run" && "1 683 zł"}
-                          {selectedPlan === "swim" && "1 980 zł"}
+                          {selectedPlan === "swim" && "3 960 zł"}
                           {selectedPlan === "fly" && "—"}
                         </td>
                         <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933]">
                           {selectedPlan === "walk" && "1 617 zł"}
                           {selectedPlan === "run" && "1 815 zł"}
-                          {selectedPlan === "swim" && "2 112 zł"}
+                          {selectedPlan === "swim" && "4 224 zł"}
                           {selectedPlan === "fly" && "—"}
                         </td>
                       </tr>

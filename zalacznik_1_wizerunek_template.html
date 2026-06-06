@@ -12,40 +12,30 @@
     margin: 0 auto;
     padding: 40px 48px;
   }
-  .brand {
-    text-align: center;
-    margin-bottom: 8px;
-  }
-  .brand-name {
-    font-size: 22pt;
-    font-weight: bold;
-    color: #1a56db;
-    margin: 0;
-  }
-  .brand-sub {
-    font-size: 11pt;
-    color: #666;
-    margin: 2px 0 0;
-  }
   h1 {
     text-align: center;
-    font-size: 14pt;
+    font-size: 15pt;
     font-weight: bold;
-    margin: 20px 0 6px;
+    margin-bottom: 4px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    color: #1a56db;
-    border-bottom: 2px solid #1a56db;
-    padding-bottom: 8px;
+  }
+  .contract-number {
+    text-align: center;
+    margin-bottom: 24px;
+    font-size: 11pt;
   }
   .section-header {
+    text-align: center;
     font-weight: bold;
     font-size: 12pt;
-    margin-top: 24px;
+    margin-top: 28px;
     margin-bottom: 10px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #cccccc;
   }
-  .field-block {
-    margin: 10px 0 14px;
+  .party-block {
+    margin: 12px 0;
   }
   .field-label {
     font-size: 10pt;
@@ -54,9 +44,7 @@
   }
   .field-value {
     font-weight: bold;
-    border-bottom: 1px solid #333;
-    padding-bottom: 4px;
-    min-height: 22px;
+    margin-bottom: 8px;
   }
   ul.consent-list {
     margin: 8px 0 12px;
@@ -70,7 +58,6 @@
   p {
     margin: 0 0 10px;
     text-align: justify;
-    font-size: 11.5pt;
   }
   .ph {
     color: #1a1a1a;
@@ -78,7 +65,11 @@
     font-style: normal;
   }
   .signatures {
-    margin-top: 36px;
+    margin-top: 40px;
+  }
+  .signature-confirm {
+    font-style: italic;
+    margin-bottom: 16px;
   }
   .signature-date {
     margin-bottom: 24px;
@@ -87,53 +78,42 @@
     display: flex;
     justify-content: space-between;
     margin-top: 8px;
-    gap: 24px;
   }
   .signature-col {
-    width: 48%;
+    width: 45%;
   }
   .signature-line {
     border-bottom: 1px solid #333;
     margin-bottom: 4px;
     min-height: 32px;
+    display: flex;
+    align-items: flex-end;
+    padding-bottom: 2px;
   }
-  .signature-caption {
-    font-size: 10pt;
-    color: #555;
-    text-align: center;
+  .signature-text {
+    font-weight: bold;
+    font-size: 11pt;
   }
-  .attachment-note {
-    margin-top: 8px;
-    font-size: 10pt;
-    color: #666;
-    font-style: italic;
-    text-align: center;
+  .signature-name {
+    font-weight: bold;
+    font-size: 11pt;
   }
 </style>
 </head>
 <body>
 
-<div class="brand">
-  <p class="brand-name">Harry English</p>
-  <p class="brand-sub">Szkoła Języka Angielskiego</p>
-</div>
-
 <h1>Zgoda na wykorzystanie wizerunku dziecka</h1>
-<p class="attachment-note">Załącznik nr 1 do umowy nr <span class="ph">{{contract_number}}</span></p>
+<div class="contract-number">Załącznik nr 1 do umowy nr <span class="ph">{{contract_number}}</span></div>
 
 <div class="section-header">Dane rodzica / opiekuna prawnego</div>
 
-<div class="field-block">
+<div class="party-block">
   <div class="field-label">Imię i nazwisko rodzica / opiekuna prawnego:</div>
   <div class="field-value"><span class="ph">{{parent_full_name}}</span></div>
-</div>
 
-<div class="field-block">
   <div class="field-label">Imię i nazwisko dziecka:</div>
   <div class="field-value"><span class="ph">{{child_1_full_name}}</span></div>
-</div>
 
-<div class="field-block">
   <div class="field-label">Rok szkolny:</div>
   <div class="field-value"><span class="ph">{{school_year}}</span></div>
 </div>
@@ -166,22 +146,23 @@
 <div class="section-header">Klauzula informacyjna (RODO)</div>
 
 <p>
-  Administratorem danych osobowych jest Harry English — Szkoła Języka Angielskiego. Dane przetwarzane
-  są na podstawie zgody (art. 6 ust. 1 lit. a RODO) w celach wskazanych powyżej. Przysługuje Pani/Panu
-  prawo dostępu do danych, ich sprostowania, usunięcia, ograniczenia przetwarzania oraz wycofania zgody.
-  Kontakt: <strong>kontakt@harry-english.pl</strong>.
+  Administratorem danych osobowych jest Firma Handlowo Usługowa Michał Sznajder z siedzibą w Paniówkach
+  (44-177), ul. Powstańców Śląskich 146. Dane przetwarzane są na podstawie zgody (art. 6 ust. 1 lit. a RODO)
+  w celach wskazanych powyżej. Przysługuje Pani/Panu prawo dostępu do danych, ich sprostowania, usunięcia,
+  ograniczenia przetwarzania oraz wycofania zgody. Kontakt: <strong>kontakt@harry-english.pl</strong>.
 </p>
 
 <div class="signatures">
+  <p class="signature-confirm"><em>Klient potwierdza zapoznanie się z treścią załącznika i akceptuje jego warunki.</em></p>
   {{signed_at_line}}
   <div class="signature-row">
     <div class="signature-col">
-      <div class="signature-line"></div>
-      <div class="signature-caption">Data</div>
+      <div class="signature-line"><span class="ph signature-text">{{parent_signature_line}}</span></div>
+      <div class="signature-name">Klient</div>
     </div>
     <div class="signature-col">
-      <div class="signature-line"><span class="ph">{{parent_full_name}}</span></div>
-      <div class="signature-caption">Imię, nazwisko i czytelny podpis rodzica / opiekuna prawnego</div>
+      <div class="signature-line"><span class="ph signature-text">{{school_signature_line}}</span></div>
+      <div class="signature-name">Harry English – FHU Michał Sznajder</div>
     </div>
   </div>
 </div>

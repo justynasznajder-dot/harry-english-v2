@@ -100,7 +100,14 @@
   .signature-line {
     border-bottom: 1px solid #333;
     margin-bottom: 4px;
-    height: 32px;
+    min-height: 32px;
+    display: flex;
+    align-items: flex-end;
+    padding-bottom: 2px;
+  }
+  .signature-text {
+    font-weight: bold;
+    font-size: 11pt;
   }
   .signature-name {
     font-weight: bold;
@@ -231,11 +238,11 @@
   {{signed_at_line}}
   <div class="signature-row">
     <div class="signature-col">
-      <div class="signature-line"></div>
+      <div class="signature-line"><span class="ph signature-text">{{parent_signature_line}}</span></div>
       <div class="signature-name">Klient</div>
     </div>
     <div class="signature-col">
-      <div class="signature-line"></div>
+      <div class="signature-line"><span class="ph signature-text">{{school_signature_line}}</span></div>
       <div class="signature-name">Harry English – FHU Michał Sznajder</div>
     </div>
   </div>

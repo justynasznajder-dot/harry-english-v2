@@ -21,6 +21,7 @@ export type CalendarLessonRow = {
   status: string;
   location_id: string;
   teacher_id: string;
+  schedule_template_id: string | null;
   group_name: string;
   location_name: string;
   teacher_name: string | null;
