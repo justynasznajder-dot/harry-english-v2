@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ContractPortal from '@/src/components/ContractPortal';
 import { computeContractPreviewAmount, type ContractPricingContext } from '@/lib/contract-pricing-preview';
-import { sumChildrenBaseAmounts } from '@/lib/enrollment-pricing';
+import { resolveChildBaseAmount, sumChildrenBaseAmounts } from '@/lib/enrollment-pricing';
 import { validateParentContractProfileInput } from '@/lib/parent-contract-profile';
 
 type ChildEnrollmentLevel = 'NEW' | 'PROPOSED' | 'NEGOTIATING' | 'ACCEPTED' | 'SIGNED' | 'COMPLETED' | 'REJECTED';
@@ -45,8 +45,14 @@ interface ParentContractDocument {
   id: string;
   status: string;
   content_html: string | null;
-  attachment_1_html?: string | null;
-  attachment_2_html?: string | null;
+  child_attachments: Array<{
+    child_id: string;
+    request_id?: string;
+    first_name: string;
+    last_name: string;
+    attachment_1_html: string | null;
+    attachment_2_html: string | null;
+  }>;
   include_attachment_2?: boolean;
   payment_type?: string | null;
   amount?: number | null;
@@ -277,7 +283,6 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
     nip: '',
   });
   const [paymentType, setPaymentType] = useState<'MONTHLY' | 'YEARLY'>('MONTHLY');
-  const [includeAttachment2, setIncludeAttachment2] = useState(false);
   const [savingContract, setSavingContract] = useState(false);
   const [parentContract, setParentContract] = useState<ParentContractDocument | null>(null);
   const [contractReadiness, setContractReadiness] = useState<ContractReadiness>({
@@ -365,9 +370,6 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
       );
       if (data.parentContract?.payment_type === 'YEARLY') {
         setPaymentType('YEARLY');
-      }
-      if (data.parentContract?.include_attachment_2) {
-        setIncludeAttachment2(true);
       }
       setIncludedInContract((prev) => {
         const next = { ...prev };
@@ -547,7 +549,6 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
         body: JSON.stringify({
           includedRequestIds,
           paymentType,
-          includeAttachment2,
         }),
       });
       const data = (await r.json().catch(() => ({}))) as {
@@ -555,8 +556,7 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
         contract?: {
           id: string;
           content_html: string;
-          attachment_1_html?: string | null;
-          attachment_2_html?: string | null;
+          child_attachments: ParentContractDocument['child_attachments'];
           status: string;
         };
       };
@@ -567,7 +567,7 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
       setFlash({
         kind: 'success',
         message:
-          'Umowa wygenerowana. Zapoznaj się z dokumentem i załącznikami, a następnie podpisz je poniżej.',
+          'Umowa wygenerowana. Zapoznaj się z umową, następnie z załącznikami dla każdego dziecka, a na końcu podpisz wszystkie dokumenty.',
       });
       setProfileLocked(true);
       await Promise.all([loadProposals(), loadParentProfile()]);
@@ -578,7 +578,6 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
     }
   }, [
     contractReadiness.canPrepareContract,
-    includeAttachment2,
     includedInContract,
     loadParentProfile,
     loadProposals,
@@ -1126,20 +1125,27 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
           .map((p) => p.request_id),
       );
       const includedCount = includedRequestIds.size;
+      const includedProposals = proposals.filter((p) => includedRequestIds.has(p.request_id));
+      const childAmountBreakdown = includedProposals.map((p) => ({
+        requestId: p.request_id,
+        name: `${p.child_first_name} ${p.child_last_name}`.trim(),
+        groupName: p.group_name,
+        amount: resolveChildBaseAmount(p, paymentType),
+      }));
       const baseTotal = sumIncludedProposalAmounts(proposals, includedRequestIds, paymentType);
       const pricingPreview = computeContractPreviewAmount(
         baseTotal,
         includedCount,
         contractPricing,
       );
+      const paymentTypeLabel = paymentType === 'YEARLY' ? 'rocznie' : 'miesięcznie';
       const contractPreview =
         parentContract?.content_html &&
         (parentContract.status === 'SENT' || parentContract.status === 'SIGNED')
           ? {
               id: parentContract.id,
               content_html: parentContract.content_html,
-              attachment_1_html: parentContract.attachment_1_html,
-              attachment_2_html: parentContract.attachment_2_html,
+              child_attachments: parentContract.child_attachments ?? [],
               status: parentContract.status,
               signed_at: parentContract.signed_at ?? null,
             }
@@ -1364,11 +1370,12 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
                     )}
                   </div>
 
+                  {(profileComplete || profileLocked) && (
                   <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 space-y-4">
                     <div>
                       <p className="text-base font-semibold text-zinc-900">Dzieci w umowie</p>
                       <p className="mt-1 text-sm text-zinc-600">
-                        Odznacz dziecko, aby pominąć je w umowie (zgłoszenie zostanie odrzucone).
+                        Oznacz dzieci, dla których ma zostać wygenerowana umowa.
                       </p>
                     </div>
                     <div className="space-y-3">
@@ -1454,6 +1461,31 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
                               Roczny
                             </label>
                           </div>
+                          {childAmountBreakdown.length > 0 && (
+                            <div className="rounded-xl border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-700">
+                              <p className="font-medium text-zinc-800">
+                                Składniki kwoty ({paymentTypeLabel})
+                              </p>
+                              <ul className="mt-2 space-y-1.5">
+                                {childAmountBreakdown.map((line) => (
+                                  <li
+                                    key={line.requestId}
+                                    className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5"
+                                  >
+                                    <span>
+                                      <span className="font-medium text-zinc-900">{line.name}</span>
+                                      {line.groupName ? (
+                                        <span className="text-zinc-500"> · {line.groupName}</span>
+                                      ) : null}
+                                    </span>
+                                    <span className="font-medium text-zinc-900">
+                                      {formatPlnAmount(line.amount)}
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
                           <p className="text-sm text-zinc-700">
                             Łączna kwota:{' '}
                             {pricingPreview.discountKeys.length > 0 && !formLocked && baseTotal != null && (
@@ -1476,22 +1508,6 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
                           </p>
                         </div>
 
-                        <div className="rounded-xl border border-zinc-200 bg-white px-4 py-3">
-                          <label className="flex cursor-pointer items-start gap-3">
-                            <input
-                              type="checkbox"
-                              className="mt-0.5 accent-[#0f6e56]"
-                              disabled={formLocked}
-                              checked={includeAttachment2}
-                              onChange={(e) => setIncludeAttachment2(e.target.checked)}
-                            />
-                            <span className="text-sm text-zinc-800">
-                              Wygeneruj <strong>Załącznik nr 2</strong> (upoważnienie lektora do
-                              odbioru dziecka po zajęciach szkolnych).
-                            </span>
-                          </label>
-                        </div>
-
                         {!formLocked && (
                           <button
                             type="button"
@@ -1512,17 +1528,12 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
                                 : 'Wygeneruj umowę'}
                           </button>
                         )}
-                        {!profileComplete && contractReadiness.canPrepareContract && !isContractSigned && (
-                          <p className="text-sm text-amber-800">
-                            Najpierw zapisz dane rodzica powyżej.
-                          </p>
-                        )}
-
                         {contractPreview && !isContractSigned ? (
                           <div className="space-y-4 border-t border-emerald-200 pt-4">
                             <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-                              Umowa i załączniki zostały wygenerowane. Zapoznaj się z treścią poniżej
-                              i podpisz dokumenty.
+                              Umowa została wygenerowana wraz z osobnymi załącznikami dla każdego
+                              dziecka. Najpierw zaakceptuj umowę, potem każdy załącznik, a na końcu
+                              podpisz wszystkie dokumenty jednym przyciskiem.
                             </div>
                             <ContractPortal
                               contract={contractPreview}
@@ -1540,6 +1551,7 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
                       </div>
                     )}
                   </div>
+                  )}
                 </div>
           )}
 

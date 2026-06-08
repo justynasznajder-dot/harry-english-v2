@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
          id, school_id, child_id, parent_id, season, status, initiated_at, created_at
        )
        SELECT
-         gen_random_uuid(),
+         gen_random_uuid()::text,
          c.school_id,
          c.id,
          c.parent_id,

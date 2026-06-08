@@ -112,6 +112,7 @@ export async function POST(request: NextRequest) {
       schoolId: bodySchoolIdCamel,
       priceMonthly,
       priceYearly,
+      teacherPickupConsent,
     }: {
       name?: string;
       level?: string;
@@ -124,6 +125,7 @@ export async function POST(request: NextRequest) {
       schoolId?: string;
       priceMonthly?: number | string | null;
       priceYearly?: number | string | null;
+      teacherPickupConsent?: boolean;
     } = body;
 
     if (!name) return NextResponse.json({ message: "Nazwa grupy jest wymagana" }, { status: 400 });
@@ -150,9 +152,10 @@ export async function POST(request: NextRequest) {
     const inserted = await queryDb<{ id: string }>(
       `INSERT INTO groups (
          id, school_id, teacher_id, name, level, max_students, active,
-         created_at, school_year_id, location_id, price_monthly, price_yearly
+         created_at, school_year_id, location_id, price_monthly, price_yearly,
+         teacher_pickup_consent
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, $9, $10, $11)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, $9, $10, $11, $12)
        RETURNING id`,
       [
         randomUUID(),
@@ -166,6 +169,7 @@ export async function POST(request: NextRequest) {
         locationId ?? null,
         priceMonthly != null && priceMonthly !== "" ? Number(priceMonthly) : null,
         priceYearly != null && priceYearly !== "" ? Number(priceYearly) : null,
+        Boolean(teacherPickupConsent),
       ]
     );
 

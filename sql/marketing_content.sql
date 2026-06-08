@@ -1,8 +1,8 @@
 -- Treści marketingowe strony głównej (szkoła z SCHOOL_ID / registration school).
--- Uruchom na bazie po wdrożeniu: psql / konsola Neon.
+-- Wszystkie ID: TEXT + (gen_random_uuid())::text
 
 CREATE TABLE IF NOT EXISTS marketing_gallery (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id TEXT PRIMARY KEY DEFAULT (gen_random_uuid())::text,
   school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
   image_path TEXT NOT NULL,
   caption TEXT,
@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS marketing_gallery (
 CREATE INDEX IF NOT EXISTS marketing_gallery_school_id_idx ON marketing_gallery (school_id);
 
 CREATE TABLE IF NOT EXISTS marketing_faq (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id TEXT PRIMARY KEY DEFAULT (gen_random_uuid())::text,
   school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
   question TEXT NOT NULL,
   answer TEXT NOT NULL,
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS marketing_faq (
 CREATE INDEX IF NOT EXISTS marketing_faq_school_id_idx ON marketing_faq (school_id);
 
 CREATE TABLE IF NOT EXISTS marketing_testimonial (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id TEXT PRIMARY KEY DEFAULT (gen_random_uuid())::text,
   school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
   author_name TEXT NOT NULL,
   body TEXT NOT NULL,

@@ -22,6 +22,7 @@ import {
   buildTeacherIdSuffix,
   formatBirthDatePl,
   formatContractDate,
+  formatSchoolYearFromDate,
   formatLessonDuration,
   formatPaymentTypeLabel,
   generateContractHtml,
@@ -43,7 +44,15 @@ export type ParentContractChildRow = {
   preferred_location_name: string | null;
   teacher_first_name: string | null;
   teacher_last_name: string | null;
+  teacher_pickup_consent: boolean;
 };
+
+/** Załącznik nr 2 jest wymagany, gdy co najmniej jedna grupa dziecka ma włączoną zgodę na odbiór przez lektora. */
+export function resolveIncludeAttachment2FromGroups(
+  included: Pick<ParentContractChildRow, "teacher_pickup_consent">[]
+): boolean {
+  return included.some((child) => child.teacher_pickup_consent === true);
+}
 
 export type ParentContractContext = {
   parentId: string;
@@ -69,7 +78,7 @@ export async function fetchParentEnrollmentChildren(
        c.first_name,
        c.last_name,
        c.birth_date,
-       g.id::text AS group_id,
+       g.id AS group_id,
        g.name AS group_name,
        g.price_monthly::text AS price_monthly,
        g.price_yearly::text AS price_yearly,
@@ -81,7 +90,7 @@ export async function fetchParentEnrollmentChildren(
      JOIN enrollment_requests er ON er.id = c.enrollment_request_id
      LEFT JOIN groups g ON g.id = er.proposed_group_id
      LEFT JOIN users u ON u.id = g.teacher_id
-     LEFT JOIN locations loc ON loc.id::text = er.preferred_location::text
+     LEFT JOIN locations loc ON loc.id = er.preferred_location
      WHERE c.parent_id = $1
        AND c.school_id = $2
        AND c.active = TRUE
@@ -157,13 +166,33 @@ export function buildChildPlaceholders(
   return placeholders;
 }
 
+/** Placeholdery załącznika dla jednego dziecka (szablony używają child_1_*). */
+export function buildSingleChildAttachmentPlaceholders(
+  base: Record<string, string>,
+  child: ParentContractChildRow
+): Record<string, string> {
+  const childFullName =
+    `${formatPersonName(child.first_name)} ${formatPersonName(child.last_name)}`.trim();
+  return {
+    ...base,
+    child_1_full_name: childFullName,
+    child_1_birth_date: formatBirthDatePl(child.birth_date),
+    teacher_full_name:
+      buildTeacherFullName(child.teacher_first_name, child.teacher_last_name) || "Do ustalenia",
+    child_school_name: buildChildSchoolName(
+      child.preferred_location_name,
+      child.preferred_location
+    ),
+  };
+}
+
 async function findContractTemplate(
   schoolId: string,
   schoolYearName: string,
   kind: "CONTRACT" | "ATTACHMENT_1" | "ATTACHMENT_2" = "CONTRACT"
 ): Promise<{ id: string; content_html: string } | null> {
   const exact = await queryDb<{ id: string; content_html: string }>(
-    `SELECT id::text, content_html
+    `SELECT id, content_html
      FROM contract_templates
      WHERE school_id = $1
        AND active = TRUE
@@ -178,7 +207,7 @@ async function findContractTemplate(
   if (kind !== "CONTRACT") {
     return (
       await queryDb<{ id: string; content_html: string }>(
-        `SELECT id::text, content_html
+        `SELECT id, content_html
          FROM contract_templates
          WHERE school_id = $1
            AND active = TRUE
@@ -192,7 +221,7 @@ async function findContractTemplate(
 
   return (
     await queryDb<{ id: string; content_html: string }>(
-      `SELECT id::text, content_html
+      `SELECT id, content_html
        FROM contract_templates
        WHERE school_id = $1
          AND active = TRUE
@@ -250,8 +279,13 @@ export async function generateParentContract(
 ): Promise<{
   contractId: string;
   contentHtml: string;
-  attachment1Html: string | null;
-  attachment2Html: string | null;
+  childAttachments: Array<{
+    child_id: string;
+    first_name: string;
+    last_name: string;
+    attachment_1_html: string | null;
+    attachment_2_html: string | null;
+  }>;
   amount: number;
 }> {
   const { parentId, schoolId, included, excludedRequestIds, paymentType, includeAttachment2 } =
@@ -287,7 +321,7 @@ export async function generateParentContract(
   }
 
   const schoolYearRes = await queryDb<{ id: string; name: string }>(
-    `SELECT id::text, name
+    `SELECT id, name
      FROM school_years
      WHERE school_id = $1 AND active = TRUE
      ORDER BY date_from DESC
@@ -346,7 +380,7 @@ export async function generateParentContract(
   }
 
   const existingSent = await queryDb<{ id: string; content_html: string }>(
-    `SELECT id::text, content_html
+    `SELECT id, content_html
      FROM contracts
      WHERE parent_id = $1
        AND school_id = $2
@@ -358,7 +392,7 @@ export async function generateParentContract(
   );
 
   const existingSigned = await queryDb<{ id: string }>(
-    `SELECT id::text FROM contracts
+    `SELECT id FROM contracts
      WHERE parent_id = $1 AND school_id = $2 AND child_id IS NULL AND status = 'SIGNED'
      LIMIT 1`,
     [parentId, schoolId]
@@ -377,7 +411,7 @@ export async function generateParentContract(
     const countRes = await queryDb<{ count: string }>(
       `SELECT COUNT(*)::text AS count
        FROM contracts
-       WHERE school_id = $1 AND school_year_id IS NOT DISTINCT FROM $2::text`,
+       WHERE school_id = $1 AND school_year_id IS NOT DISTINCT FROM $2`,
       [schoolId, schoolYearId]
     );
     contractNumber = buildContractNumber(
@@ -400,11 +434,14 @@ export async function generateParentContract(
     primary.teacher_last_name
   );
 
+  const contractDate = new Date();
+  const contractSchoolYear = formatSchoolYearFromDate(contractDate);
+
   const placeholders: Record<string, string> = {
     contract_number: contractNumber,
-    contract_date: formatContractDate(),
+    contract_date: formatContractDate(contractDate),
     contract_city: school?.city?.trim() || "Paniówki",
-    school_year: schoolYearName,
+    school_year: contractSchoolYear,
     parent_full_name: parentFullName,
     parent_pesel_or_id: parentPeselOrId,
     parent_address: parentAddress,
@@ -426,20 +463,44 @@ export async function generateParentContract(
   };
 
   const contentHtml = generateContractHtml(template.content_html, placeholders);
-  const attachment1Html = attachment1Template
-    ? generateContractHtml(attachment1Template.content_html, placeholders)
-    : null;
-  let attachment2Html: string | null = null;
-  if (includeAttachment2) {
-    if (!attachment2Template) {
-      throw new Error("Brak szablonu Załącznika nr 2 — skontaktuj się ze szkołą");
-    }
-    if (!teacherFullName) {
-      throw new Error(
-        "Grupa nie ma przypisanego lektora — nie można wygenerować Załącznika nr 2"
+
+  const perChildAttachments: Array<{
+    childId: string;
+    attachment1Html: string | null;
+    attachment2Html: string | null;
+  }> = [];
+
+  for (const child of included) {
+    const childPlaceholders = buildSingleChildAttachmentPlaceholders(placeholders, child);
+    const childAttachment1 = attachment1Template
+      ? generateContractHtml(attachment1Template.content_html, childPlaceholders)
+      : null;
+
+    let childAttachment2: string | null = null;
+    if (includeAttachment2) {
+      if (!attachment2Template) {
+        throw new Error("Brak szablonu Załącznika nr 2 — skontaktuj się ze szkołą");
+      }
+      const childTeacher = buildTeacherFullName(
+        child.teacher_first_name,
+        child.teacher_last_name
+      );
+      if (!childTeacher) {
+        throw new Error(
+          `Grupa dziecka ${child.first_name} ${child.last_name} nie ma przypisanego lektora — nie można wygenerować Załącznika nr 2`
+        );
+      }
+      childAttachment2 = generateContractHtml(
+        attachment2Template.content_html,
+        childPlaceholders
       );
     }
-    attachment2Html = generateContractHtml(attachment2Template.content_html, placeholders);
+
+    perChildAttachments.push({
+      childId: child.child_id,
+      attachment1Html: childAttachment1,
+      attachment2Html: childAttachment2,
+    });
   }
 
   await queryDb(
@@ -462,27 +523,23 @@ export async function generateParentContract(
     await queryDb(
       `UPDATE contracts
        SET content_html = $2,
-           attachment_1_html = $3,
-           attachment_2_html = $4,
-           include_attachment_2 = $5,
+           include_attachment_2 = $3,
            status = 'SENT',
            sent_at = NOW(),
-           payment_type = $6,
-           amount = $7,
-           template_id = $8,
-           group_id = $9,
+           payment_type = $4,
+           amount = $5,
+           template_id = $6,
+           group_id = $7,
            child_id = NULL,
            enrollment_request_id = NULL,
-           discount_large_family = $10,
-           discount_sibling = $11,
-           billing_exempt = $12,
-           school_year_id = $13
+           discount_large_family = $8,
+           discount_sibling = $9,
+           billing_exempt = $10,
+           school_year_id = $11
        WHERE id = $1`,
       [
         contractId,
         contentHtml,
-        attachment1Html,
-        attachment2Html,
         includeAttachment2,
         paymentType,
         amount,
@@ -500,16 +557,16 @@ export async function generateParentContract(
     await queryDb(
       `INSERT INTO contracts (
          id, school_id, child_id, parent_id, group_id, template_id,
-         enrollment_request_id, content_html, attachment_1_html, attachment_2_html,
+         enrollment_request_id, content_html,
          include_attachment_2, status, sent_at,
          payment_type, amount, discount_large_family, discount_sibling, billing_exempt,
          school_year_id, created_at
        ) VALUES (
          $1, $2, NULL, $3, $4, $5,
-         NULL, $6, $7, $8,
-         $9, 'SENT', NOW(),
-         $10, $11, $12, $13, $14,
-         $15, NOW()
+         NULL, $6,
+         $7, 'SENT', NOW(),
+         $8, $9, $10, $11, $12,
+         $13, NOW()
        )`,
       [
         contractId,
@@ -518,8 +575,6 @@ export async function generateParentContract(
         primaryGroupId,
         template.id,
         contentHtml,
-        attachment1Html,
-        attachment2Html,
         includeAttachment2,
         paymentType,
         amount,
@@ -533,22 +588,49 @@ export async function generateParentContract(
 
   for (let i = 0; i < included.length; i++) {
     const child = included[i];
+    const attachments = perChildAttachments.find((a) => a.childId === child.child_id);
     await queryDb(
       `INSERT INTO contract_children (
-         contract_id, child_id, enrollment_request_id, group_id, sort_order
-       ) VALUES ($1, $2, $3, $4, $5)`,
-      [contractId, child.child_id, child.request_id, child.group_id, i]
+         contract_id, child_id, enrollment_request_id, group_id, sort_order,
+         attachment_1_html, attachment_2_html
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        contractId,
+        child.child_id,
+        child.request_id,
+        child.group_id,
+        i,
+        attachments?.attachment1Html ?? null,
+        attachments?.attachment2Html ?? null,
+      ]
     );
   }
 
   return {
     contractId,
     contentHtml,
-    attachment1Html,
-    attachment2Html,
+    childAttachments: perChildAttachments.map((a) => {
+      const child = included.find((c) => c.child_id === a.childId)!;
+      return {
+        child_id: a.childId,
+        first_name: child.first_name,
+        last_name: child.last_name,
+        attachment_1_html: a.attachment1Html,
+        attachment_2_html: a.attachment2Html,
+      };
+    }),
     amount,
   };
 }
+
+export type ParentContractChildAttachment = {
+  child_id: string;
+  request_id: string;
+  first_name: string;
+  last_name: string;
+  attachment_1_html: string | null;
+  attachment_2_html: string | null;
+};
 
 export async function fetchParentContractForPortal(
   parentId: string,
@@ -557,26 +639,23 @@ export async function fetchParentContractForPortal(
   id: string;
   status: string;
   content_html: string | null;
-  attachment_1_html: string | null;
-  attachment_2_html: string | null;
   include_attachment_2: boolean;
   payment_type: string | null;
   amount: number | null;
   signed_at: Date | string | null;
   included_children: Array<{ child_id: string; request_id: string; first_name: string; last_name: string }>;
+  child_attachments: ParentContractChildAttachment[];
 } | null> {
   const res = await queryDb<{
     id: string;
     status: string;
     content_html: string | null;
-    attachment_1_html: string | null;
-    attachment_2_html: string | null;
     include_attachment_2: boolean;
     payment_type: string | null;
     amount: string | null;
     signed_at: Date | string | null;
   }>(
-    `SELECT id::text, status, content_html, attachment_1_html, attachment_2_html,
+    `SELECT id, status, content_html,
             include_attachment_2, payment_type, amount::text, signed_at
      FROM contracts
      WHERE parent_id = $1 AND school_id = $2 AND child_id IS NULL
@@ -593,9 +672,12 @@ export async function fetchParentContractForPortal(
     request_id: string;
     first_name: string;
     last_name: string;
+    attachment_1_html: string | null;
+    attachment_2_html: string | null;
   }>(
     `SELECT cc.child_id, cc.enrollment_request_id AS request_id,
-            c.first_name, c.last_name
+            c.first_name, c.last_name,
+            cc.attachment_1_html, cc.attachment_2_html
      FROM contract_children cc
      JOIN children c ON c.id = cc.child_id
      WHERE cc.contract_id = $1
@@ -603,19 +685,29 @@ export async function fetchParentContractForPortal(
     [row.id]
   );
 
+  const showDocs = row.status === "SENT" || row.status === "SIGNED";
+
   return {
     id: row.id,
     status: row.status,
-    content_html:
-      row.status === "SENT" || row.status === "SIGNED" ? row.content_html : null,
-    attachment_1_html:
-      row.status === "SENT" || row.status === "SIGNED" ? row.attachment_1_html : null,
-    attachment_2_html:
-      row.status === "SENT" || row.status === "SIGNED" ? row.attachment_2_html : null,
+    content_html: showDocs ? row.content_html : null,
     include_attachment_2: row.include_attachment_2,
     payment_type: row.payment_type,
     amount: row.amount != null ? Number(row.amount) : null,
     signed_at: row.signed_at,
-    included_children: childrenRes.rows,
+    included_children: childrenRes.rows.map((c) => ({
+      child_id: c.child_id,
+      request_id: c.request_id,
+      first_name: c.first_name,
+      last_name: c.last_name,
+    })),
+    child_attachments: childrenRes.rows.map((c) => ({
+      child_id: c.child_id,
+      request_id: c.request_id,
+      first_name: c.first_name,
+      last_name: c.last_name,
+      attachment_1_html: showDocs ? c.attachment_1_html : null,
+      attachment_2_html: showDocs ? c.attachment_2_html : null,
+    })),
   };
 }

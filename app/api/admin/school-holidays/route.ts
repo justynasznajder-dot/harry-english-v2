@@ -8,8 +8,62 @@ import {
   resolveAdminPanelTenant,
 } from "@/lib/db";
 import { getTokenFromRequest } from "@/lib/auth";
+import { notifyParents, type ParentNotifyRow } from "@/lib/parent-notifications";
+import { requireMessageActor } from "@/lib/messages";
 
 const HOLIDAY_TYPES = ["HOLIDAY", "PUBLIC", "SCHOOL", "CANCELLED"] as const;
+const TZ = "Europe/Warsaw";
+
+async function cancelScheduledLessonsInHolidayRange(
+  schoolId: string,
+  dateFrom: string,
+  dateTo: string,
+): Promise<number> {
+  const cancelled = await queryDb<{ id: string }>(
+    `UPDATE lessons l
+     SET status = 'CANCELLED',
+         cancellation_reason = COALESCE(NULLIF(TRIM(l.cancellation_reason), ''), 'Dzień wolny')
+     FROM groups g
+     WHERE l.group_id = g.id
+       AND g.school_id = $1
+       AND l.status = 'SCHEDULED'
+       AND (l.scheduled_at AT TIME ZONE '${TZ}')::date >= $2::date
+       AND (l.scheduled_at AT TIME ZONE '${TZ}')::date <= $3::date
+     RETURNING l.id`,
+    [schoolId, dateFrom, dateTo],
+  );
+  return cancelled.rowCount ?? 0;
+}
+
+function formatDatePl(ymd: string): string {
+  const [y, m, d] = ymd.split("-");
+  return `${d}.${m}.${y}`;
+}
+
+async function getParentsWithScheduledLessonsInRange(
+  schoolId: string,
+  dateFrom: string,
+  dateTo: string,
+): Promise<ParentNotifyRow[]> {
+  const res = await queryDb<ParentNotifyRow>(
+    `SELECT DISTINCT u.id, u.first_name, u.last_name, u.email
+     FROM lessons l
+     INNER JOIN groups g ON g.id = l.group_id
+     INNER JOIN group_students gs ON gs.group_id = g.id AND gs.left_at IS NULL
+     INNER JOIN children c ON c.id = gs.child_id AND c.active = TRUE
+     INNER JOIN users u ON u.id = c.parent_id
+     WHERE g.school_id = $1
+       AND l.status = 'SCHEDULED'
+       AND (l.scheduled_at AT TIME ZONE '${TZ}')::date >= $2::date
+       AND (l.scheduled_at AT TIME ZONE '${TZ}')::date <= $3::date
+       AND u.role = 'PARENT'
+       AND u.active = TRUE
+       AND u.email IS NOT NULL
+       AND TRIM(u.email::text) <> ''`,
+    [schoolId, dateFrom, dateTo],
+  );
+  return res.rows;
+}
 
 async function ensureSchoolAdmin(request: NextRequest): Promise<string | null> {
   const payload = await getTokenFromRequest(request);
@@ -65,23 +119,23 @@ export async function GET(request: NextRequest) {
 
     const withYearManager = `SELECT h.id, h.school_id, h.school_year_id, h.name, h.date_from::text, h.date_to::text, h.type, h.created_at
            FROM school_holidays h
-           INNER JOIN school_years sy ON sy.school_id = h.school_id AND sy.id::text = $2 AND sy.school_id = $1
+           INNER JOIN school_years sy ON sy.school_id = h.school_id AND sy.id = $2 AND sy.school_id = $1
            WHERE h.date_from <= sy.date_to
              AND h.date_to >= sy.date_from
              AND (
                h.school_year_id IS NULL
-               OR h.school_year_id::text = sy.id::text
+               OR h.school_year_id = sy.id
              )
            ORDER BY h.date_from ASC`;
 
     const withYearAdmin = `SELECT h.id, h.school_id, h.school_year_id, h.name, h.date_from::text, h.date_to::text, h.type, h.created_at
            FROM school_holidays h
-           INNER JOIN school_years sy ON sy.school_id = h.school_id AND sy.id::text = $1
+           INNER JOIN school_years sy ON sy.school_id = h.school_id AND sy.id = $1
            WHERE h.date_from <= sy.date_to
              AND h.date_to >= sy.date_from
              AND (
                h.school_year_id IS NULL
-               OR h.school_year_id::text = sy.id::text
+               OR h.school_year_id = sy.id
              )
            ORDER BY h.date_from ASC`;
 
@@ -146,6 +200,7 @@ export async function POST(request: NextRequest) {
       date_from,
       date_to,
       type = "HOLIDAY",
+      parent_message,
       school_id: bodySchoolId,
       schoolId: bodySchoolIdCamel,
     } = body as {
@@ -153,6 +208,7 @@ export async function POST(request: NextRequest) {
       date_from?: string;
       date_to?: string;
       type?: string;
+      parent_message?: string;
       school_id?: string;
       schoolId?: string;
     };
@@ -205,6 +261,16 @@ export async function POST(request: NextRequest) {
     }
 
     const id = randomUUID();
+    const parentsToNotify = await getParentsWithScheduledLessonsInRange(insertSchoolId, df, dt);
+
+    let messageActor: Awaited<ReturnType<typeof requireMessageActor>> | null = null;
+    if (parentsToNotify.length > 0) {
+      messageActor = await requireMessageActor(userId);
+      if (!messageActor.ok) {
+        return NextResponse.json({ message: messageActor.message }, { status: messageActor.status });
+      }
+    }
+
     const ins = await queryDb(
       `INSERT INTO school_holidays (id, school_id, school_year_id, name, date_from, date_to, type, created_at)
        VALUES ($1, $2, $3, $4, $5::date, $6::date, $7, NOW())
@@ -212,12 +278,57 @@ export async function POST(request: NextRequest) {
       [id, insertSchoolId, yearId, name.trim(), df, dt, type]
     );
     const row = ins.rows[0] as Record<string, unknown>;
+    const lessonsCancelled = await cancelScheduledLessonsInHolidayRange(insertSchoolId, df, dt);
+
+    let parentsNotified = 0;
+    let emailsSent = 0;
+    let emailsFailed = 0;
+
+    if (parentsToNotify.length > 0 && messageActor?.ok) {
+      const dateRangeLabel =
+        df === dt ? formatDatePl(df) : `${formatDatePl(df)} — ${formatDatePl(dt)}`;
+      const holidayName = name.trim();
+      const customMessage = typeof parent_message === "string" ? parent_message.trim() : "";
+      const subject = `Dzień wolny — ${holidayName}`;
+      const content =
+        `Informujemy o dniu wolnym: ${holidayName} (${dateRangeLabel}).\n\n` +
+        `Zaplanowane zajęcia w tym terminie zostały odwołane.\n\n` +
+        (customMessage ||
+          "Prosimy o uwzględnienie tej informacji w planie dnia dziecka.");
+
+      const notifyResult = await notifyParents({
+        actor: messageActor.user,
+        parents: parentsToNotify,
+        subject,
+        content,
+      });
+      parentsNotified = notifyResult.parentsNotified;
+      emailsSent = notifyResult.emailsSent;
+      emailsFailed = notifyResult.emailsFailed;
+    }
+
+    let message = "Dodano dzień wolny.";
+    if (lessonsCancelled > 0) {
+      message += ` Anulowano ${lessonsCancelled} zaplanowanych zajęć w tym okresie.`;
+    }
+    if (parentsNotified > 0) {
+      message += ` Wysłano powiadomienia do ${parentsNotified} rodziców`;
+      if (emailsSent > 0) message += ` (e-mail: ${emailsSent})`;
+      if (emailsFailed > 0) message += ` — nie udało się wysłać ${emailsFailed} e-maili`;
+      message += ".";
+    }
+
     return NextResponse.json({
       holiday: {
         ...row,
         date_from: String(row.date_from).slice(0, 10),
         date_to: String(row.date_to).slice(0, 10),
       },
+      lessonsCancelled,
+      parentsNotified,
+      emailsSent,
+      emailsFailed,
+      message,
     });
   } catch (error) {
     console.error("POST school-holidays error:", error);

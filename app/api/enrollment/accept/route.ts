@@ -224,7 +224,7 @@ export async function PUT(request: NextRequest) {
 
         : remaining === 0
 
-          ? "Propozycja zaakceptowana — rozstrzygnij pozostałe dzieci, aby przejść do umowy."
+          ? "Propozycja zaakceptowana — przejdź do uzupełnienia danych do umowy."
 
           : "Propozycja zaakceptowana. Pozostałe dzieci czekają na Twoją decyzję lub na odrzucenie przez szkołę.",
 

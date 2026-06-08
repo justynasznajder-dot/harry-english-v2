@@ -6,9 +6,9 @@ export async function GET() {
   try {
     const schoolId = getRegistrationSchoolId();
     const r = await queryDb<{ id: string; name: string }>(
-      `SELECT id::text AS id, name
+      `SELECT id, name
        FROM locations
-       WHERE school_id::text = $1 AND active = TRUE
+       WHERE school_id = $1 AND active = TRUE
        ORDER BY name ASC`,
       [schoolId]
     );

@@ -8,7 +8,7 @@ async function resolveSchoolName(schoolId: string | null | undefined): Promise<s
   if (!id) return null;
   try {
     const res = await queryDb<{ name: string }>(
-      `SELECT name FROM schools WHERE id::text = $1 LIMIT 1`,
+      `SELECT name FROM schools WHERE id = $1 LIMIT 1`,
       [id]
     );
     return res.rows[0]?.name?.trim() || null;
@@ -25,9 +25,9 @@ async function resolveParentSchoolName(
 ): Promise<string | null> {
   try {
     const enrollmentRes = await queryDb<{ name: string; school_id: string }>(
-      `SELECT s.name, er.school_id::text AS school_id
+      `SELECT s.name, er.school_id AS school_id
        FROM enrollment_requests er
-       JOIN schools s ON s.id::text = er.school_id::text
+       JOIN schools s ON s.id = er.school_id
        WHERE (
            er.user_id = $1
            OR LOWER(BTRIM(er.parent_email::text)) = LOWER(BTRIM($2::text))

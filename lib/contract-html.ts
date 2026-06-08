@@ -45,6 +45,24 @@ export function formatContractDate(date: Date = new Date()): string {
   });
 }
 
+/** Rok szkolny w formacie YYYY/YYYY — pierwszy rok to rok z podanej daty (np. podpisu umowy). */
+export function formatSchoolYearFromDate(date: Date = new Date()): string {
+  const year = date.getFullYear();
+  return `${year}/${year + 1}`;
+}
+
+/** Ustawia rok szkolny w wygenerowanym HTML umowy / załączników na podstawie daty podpisu. */
+export function applySchoolYearToDocumentHtml(contentHtml: string, signedAt: Date): string {
+  const schoolYear = formatSchoolYearFromDate(signedAt);
+  if (contentHtml.includes("{{school_year}}")) {
+    return generateContractHtml(contentHtml, { school_year: schoolYear });
+  }
+  return contentHtml.replace(
+    /(<span class="ph">)\d{4}\/\d{4}(<\/span>)/g,
+    `$1${schoolYear}$2`
+  );
+}
+
 export function formatBirthDatePl(value: Date | string | null | undefined): string {
   if (value == null || value === "") return "";
   const d = value instanceof Date ? value : new Date(value);

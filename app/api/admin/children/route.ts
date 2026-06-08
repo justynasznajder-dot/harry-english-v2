@@ -85,7 +85,7 @@ export async function GET(request: NextRequest) {
          g.name AS group_name,
          c.created_at
        FROM children c
-       JOIN users u ON u.id = c.parent_id AND u.school_id = c.school_id
+       JOIN users u ON u.id = c.parent_id
        LEFT JOIN group_students gs ON gs.child_id = c.id AND gs.left_at IS NULL
        LEFT JOIN groups g ON g.id = gs.group_id
        WHERE ${where.join(" AND ")}
@@ -156,7 +156,7 @@ export async function POST(request: NextRequest) {
       const locOk = await queryDb<{ ok: boolean }>(
         `SELECT TRUE AS ok
          FROM locations
-         WHERE id::text = $1 AND school_id::text = $2 AND active = TRUE
+         WHERE id = $1 AND school_id = $2 AND active = TRUE
          LIMIT 1`,
         [preferredLocationId, parent.school_id]
       );

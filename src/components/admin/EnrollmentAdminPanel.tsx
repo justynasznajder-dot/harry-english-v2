@@ -140,15 +140,17 @@ export default function EnrollmentAdminPanel({
           if (em.length > 0 && pid.includes('@') && em === pid.toLowerCase()) return true;
           return false;
         }) ?? null;
-  const proposalBatchChildren =
-    proposalParent?.children.filter(
-      (c) => c.status === 'NEW' || c.status === 'NEGOTIATING',
-    ) ?? [];
+  const proposalNewChildren =
+    proposalParent?.children.filter((c) => c.status === 'NEW') ?? [];
   const proposalBatchReady =
-    proposalBatchChildren.length >= 2 &&
-    proposalBatchChildren.every((c) =>
+    proposalNewChildren.length >= 1 &&
+    proposalNewChildren.every((c) =>
       Boolean((proposalDrafts[c.requestId]?.groupId ?? '').trim()),
     );
+  const hasAcceptedSibling = (requestId: string) =>
+    proposalParent?.children.some(
+      (c) => c.requestId !== requestId && c.status === 'ACCEPTED',
+    ) ?? false;
   const proposalParentIsComplimentary = useMemo(
     () =>
       proposalParent
@@ -578,79 +580,78 @@ const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
                                 return null;
                               })()}
                               <div className="flex flex-wrap gap-2">
-                                <button
-                                  type="button"
-                                  disabled={
-                                    !proposalAllowed ||
-                                    submittingProposalRequestId === child.requestId ||
-                                    rejectingParentResignationId === child.requestId ||
-                                    submittingBatchProposals
-                                  }
-                                  className="rounded-xl bg-emerald-600 px-3 py-2 text-white disabled:cursor-not-allowed disabled:opacity-60"
-                                  onClick={async () => {
-                                    const draft = proposalDrafts[child.requestId];
-                                    const groupId = draft?.groupId ?? '';
-                                    if (!groupId) {
-                                      pushToast('error', 'Wybierz grupę');
-                                      return;
+                                {child.status === 'NEGOTIATING' && (
+                                  <button
+                                    type="button"
+                                    disabled={
+                                      submittingProposalRequestId === child.requestId ||
+                                      rejectingParentResignationId === child.requestId ||
+                                      submittingBatchProposals
                                     }
-                                    setSubmittingProposalRequestId(child.requestId);
-                                    try {
-                                      const res = await fetch('/api/admin/enrollment', {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({
-                                          requestId: child.requestId,
-                                          groupId,
-                                        }),
-                                      });
-                                      const data = (await res.json().catch(() => ({}))) as {
-                                        message?: string;
-                                        parentCreated?: boolean;
-                                        parentId?: string;
-                                      };
-                                      if (!res.ok) {
-                                        pushToast(
-                                          'error',
-                                          data?.message ?? 'Nie udało się wysłać propozycji',
-                                        );
+                                    className="rounded-xl bg-emerald-600 px-3 py-2 text-white disabled:cursor-not-allowed disabled:opacity-60"
+                                    onClick={async () => {
+                                      const draft = proposalDrafts[child.requestId];
+                                      const groupId = draft?.groupId ?? '';
+                                      if (!groupId) {
+                                        pushToast('error', 'Wybierz grupę');
                                         return;
                                       }
-                                      const accountInfo = data?.parentCreated
-                                        ? ' (utworzono konto rodzica)'
-                                        : '';
-                                      pushToast(
-                                        'success',
-                                        `Wysłano propozycję dla: ${child.firstName} ${child.lastName}${accountInfo}`,
-                                      );
-                                      if (
-                                        typeof data.parentId === 'string' &&
-                                        data.parentId.trim().length > 0
-                                      ) {
-                                        setProposalModalParentId(data.parentId.trim());
+                                      setSubmittingProposalRequestId(child.requestId);
+                                      try {
+                                        const res = await fetch('/api/admin/enrollment', {
+                                          method: 'POST',
+                                          headers: { 'Content-Type': 'application/json' },
+                                          body: JSON.stringify({
+                                            requestId: child.requestId,
+                                            groupId,
+                                          }),
+                                        });
+                                        const data = (await res.json().catch(() => ({}))) as {
+                                          message?: string;
+                                          parentId?: string;
+                                        };
+                                        if (!res.ok) {
+                                          pushToast(
+                                            'error',
+                                            data?.message ?? 'Nie udało się wysłać propozycji',
+                                          );
+                                          return;
+                                        }
+                                        pushToast(
+                                          'success',
+                                          `Wysłano nową propozycję dla: ${child.firstName} ${child.lastName}`,
+                                        );
+                                        if (
+                                          typeof data.parentId === 'string' &&
+                                          data.parentId.trim().length > 0
+                                        ) {
+                                          setProposalModalParentId(data.parentId.trim());
+                                        }
+                                        setProposalDrafts((prev) => {
+                                          const next = { ...prev };
+                                          delete next[child.requestId];
+                                          return next;
+                                        });
+                                        await onRefresh();
+                                      } catch (err) {
+                                        pushToast(
+                                          'error',
+                                          err instanceof Error
+                                            ? err.message
+                                            : 'Błąd wysyłania propozycji',
+                                        );
+                                      } finally {
+                                        setSubmittingProposalRequestId(null);
                                       }
-                                      setProposalDrafts((prev) => {
-                                        const next = { ...prev };
-                                        delete next[child.requestId];
-                                        return next;
-                                      });
-                                      await onRefresh();
-                                    } catch (err) {
-                                      pushToast(
-                                        'error',
-                                        err instanceof Error
-                                          ? err.message
-                                          : 'Błąd wysyłania propozycji',
-                                      );
-                                    } finally {
-                                      setSubmittingProposalRequestId(null);
-                                    }
-                                  }}
-                                >
-                                  {submittingProposalRequestId === child.requestId
-                                    ? 'Wysyłanie…'
-                                    : 'Wyślij propozycję dla dziecka'}
-                                </button>
+                                    }}
+                                  >
+                                    {submittingProposalRequestId === child.requestId
+                                      ? 'Wysyłanie…'
+                                      : hasAcceptedSibling(child.requestId)
+                                        ? 'Wyślij nową propozycję dla tego dziecka'
+                                        : 'Wyślij nową propozycję'}
+                                  </button>
+                                )}
                                 {child.status === 'NEGOTIATING' && (
                                   <button
                                     type="button"
@@ -726,7 +727,7 @@ const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
             )}
             </div>
             <div className="shrink-0 flex flex-wrap items-center justify-between gap-2 border-t border-emerald-100 px-5 py-3">
-              {proposalBatchChildren.length >= 2 ? (
+              {proposalNewChildren.length >= 1 ? (
                 <button
                   type="button"
                   disabled={
@@ -738,13 +739,13 @@ const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
                   title={
                     proposalBatchReady
                       ? undefined
-                      : 'Wybierz grupę w preferowanej lokalizacji dla każdego dziecka'
+                      : 'Wybierz grupę dla każdego dziecka ze statusem „Nowe”'
                   }
                   className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0c5a47] disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={async () => {
                     setSubmittingBatchProposals(true);
                     try {
-                      const proposals = proposalBatchChildren.map((child) => {
+                      const proposals = proposalNewChildren.map((child) => {
                         const draft = proposalDrafts[child.requestId];
                         const groupId = draft?.groupId ?? '';
                         return {
@@ -766,16 +767,19 @@ const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
                       if (!res.ok) {
                         pushToast(
                           'error',
-                          data?.message ?? 'Nie udało się wysłać propozycji zbiorczej',
+                          data?.message ?? 'Nie udało się wysłać propozycji',
                         );
                         return;
                       }
                       const accountInfo = data?.parentCreated
                         ? ' (utworzono konto rodzica)'
                         : '';
+                      const childCount = data.count ?? proposalNewChildren.length;
                       pushToast(
                         'success',
-                        `Wysłano zbiorczy mail (${data.count ?? proposalBatchChildren.length} dzieci)${accountInfo}`,
+                        childCount === 1
+                          ? `Wysłano propozycję z danymi do logowania${accountInfo}`
+                          : `Wysłano zbiorczy mail (${childCount} dzieci) z danymi do logowania${accountInfo}`,
                       );
                       if (
                         typeof data.parentId === 'string' &&
@@ -785,7 +789,7 @@ const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
                       }
                       setProposalDrafts((prev) => {
                         const next = { ...prev };
-                        for (const child of proposalBatchChildren) {
+                        for (const child of proposalNewChildren) {
                           delete next[child.requestId];
                         }
                         return next;
@@ -794,7 +798,7 @@ const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
                     } catch (err) {
                       pushToast(
                         'error',
-                        err instanceof Error ? err.message : 'Błąd wysyłania propozycji zbiorczej',
+                        err instanceof Error ? err.message : 'Błąd wysyłania propozycji',
                       );
                     } finally {
                       setSubmittingBatchProposals(false);
@@ -803,7 +807,9 @@ const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
                 >
                   {submittingBatchProposals
                     ? 'Wysyłanie…'
-                    : `Wyślij zbiorczy mail (${proposalBatchChildren.length} dzieci)`}
+                    : proposalNewChildren.length === 1
+                      ? 'Wyślij propozycję z danymi do logowania'
+                      : `Wyślij zbiorczy mail (${proposalNewChildren.length} dzieci)`}
                 </button>
               ) : (
                 <span />

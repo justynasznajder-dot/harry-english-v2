@@ -14,15 +14,14 @@ import { useUnreadMessagesCount } from '@/src/components/messages/useUnreadMessa
 type TabKey =
   | 'organization'
   | 'users'
-  | 'groups'
   | 'classes'
   | 'enrollment'
   | 'renewals'
   | 'announcements'
   | 'payments';
-type MobileTab = 'organization' | 'users' | 'groups' | 'more';
+type MobileTab = 'organization' | 'users' | 'more';
 type UsersSubTab = 'parents' | 'children' | 'teachers' | 'managers' | 'add';
-type OrganizationSubTab = 'schoolYear' | 'teachers' | 'locations' | 'discounts' | 'history';
+type OrganizationSubTab = 'schoolYear' | 'teachers' | 'locations' | 'discounts' | 'groups' | 'history';
 type TeacherOrgSubTab = 'list' | 'add';
 type LocationOrgSubTab = 'list' | 'add' | 'edit';
 type GroupsSubTab = 'list' | 'add' | 'organize';
@@ -54,6 +53,7 @@ interface ChildRow {
   parent_last_name: string;
   parent_email: string;
   group_name: string | null;
+  access_level?: string | null;
 }
 
 interface Toast {
@@ -105,6 +105,14 @@ function formatSchoolYearEndDatePl(dateTo: string): string {
   return parsed.toLocaleDateString('pl-PL', { year: 'numeric', month: 'long', day: 'numeric' });
 }
 
+function todayYmdWarsaw(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Warsaw' });
+}
+
+function isRetroactiveGenerateRange(dateFrom: string): boolean {
+  return dateFrom.slice(0, 10) < todayYmdWarsaw();
+}
+
 interface GroupDetail {
   group: {
     id: string;
@@ -121,6 +129,7 @@ interface GroupDetail {
     active: boolean;
     price_monthly?: string | number | null;
     price_yearly?: string | number | null;
+    teacher_pickup_consent?: boolean;
   };
   scheduleTemplates: Array<{
     id: string;
@@ -129,6 +138,8 @@ interface GroupDetail {
     duration_min: number;
     location_id: string;
     location_name: string | null;
+    future_lessons_count?: number;
+    completed_lessons_count?: number;
   }>;
   students: Array<{
     id: string;
@@ -140,6 +151,7 @@ interface GroupDetail {
     confirmed: boolean;
   }>;
   nearestLessons: Array<{ id: string; scheduled_at: string; status: string }>;
+  generatedLessons?: { futureCount: number; completedCount: number };
   locations: Array<{ id: string; name: string }>;
 }
 
@@ -169,11 +181,10 @@ interface SchoolLocationRow {
 
 const topTabs: Array<{ key: TabKey; label: string }> = [
   { key: 'organization', label: 'Organizacja szkoły' },
-  { key: 'users', label: 'Użytkownicy' },
-  { key: 'groups', label: 'Grupy' },
   { key: 'classes', label: 'Zajęcia' },
   { key: 'enrollment', label: 'Zgłoszenia' },
   { key: 'renewals', label: 'Odnowienia' },
+  { key: 'users', label: 'Użytkownicy' },
   { key: 'announcements', label: 'Wiadomości' },
   { key: 'payments', label: 'Płatności' },
 ];
@@ -181,7 +192,6 @@ const topTabs: Array<{ key: TabKey; label: string }> = [
 const mobileTabs: Array<{ key: MobileTab; label: string }> = [
   { key: 'organization', label: 'Szkoła' },
   { key: 'users', label: 'Uczniowie' },
-  { key: 'groups', label: 'Grupy' },
   { key: 'more', label: 'Więcej' },
 ];
 
@@ -190,6 +200,7 @@ const organizationTabs: Array<{ key: OrganizationSubTab; label: string }> = [
   { key: 'teachers', label: 'Nauczyciele' },
   { key: 'locations', label: 'Lokalizacje' },
   { key: 'discounts', label: 'Zniżki' },
+  { key: 'groups', label: 'Grupy' },
   { key: 'history', label: 'Historia' },
 ];
 
@@ -278,12 +289,14 @@ function EmptyDataPanel({ title }: { title: string }) {
 }
 
 export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
-  const [activeTab, setActiveTab] = useState<TabKey>(initialGroupId ? 'groups' : 'organization');
-  const [mobileTab, setMobileTab] = useState<MobileTab>(initialGroupId ? 'groups' : 'organization');
+  const [activeTab, setActiveTab] = useState<TabKey>('organization');
+  const [mobileTab, setMobileTab] = useState<MobileTab>('organization');
   const [messagesListResetToken, setMessagesListResetToken] = useState(0);
   const { unreadCount: messagesUnreadCount, refresh: refreshMessagesUnreadCount } =
     useUnreadMessagesCount(messagesListResetToken);
-  const [organizationSubTab, setOrganizationSubTab] = useState<OrganizationSubTab>('schoolYear');
+  const [organizationSubTab, setOrganizationSubTab] = useState<OrganizationSubTab>(
+    initialGroupId ? 'groups' : 'schoolYear',
+  );
   const [teacherOrgSubTab, setTeacherOrgSubTab] = useState<TeacherOrgSubTab>('list');
   const [locationOrgSubTab, setLocationOrgSubTab] = useState<LocationOrgSubTab>('list');
   const [groupsSubTab, setGroupsSubTab] = useState<GroupsSubTab>('list');
@@ -370,6 +383,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     active: true,
     priceMonthly: '',
     priceYearly: '',
+    teacherPickupConsent: false,
   });
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [groupDetail, setGroupDetail] = useState<GroupDetail | null>(null);
@@ -391,6 +405,12 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [studentSearch, setStudentSearch] = useState('');
   const [selectedChildId, setSelectedChildId] = useState('');
   const [generateModalOpen, setGenerateModalOpen] = useState(false);
+  const [generateWholeSchoolYear, setGenerateWholeSchoolYear] = useState(true);
+  const [deleteFutureLessonsModal, setDeleteFutureLessonsModal] = useState<{
+    groupId: string;
+    count: number;
+    quietReload?: boolean;
+  } | null>(null);
   const [generateForm, setGenerateForm] = useState(() => {
     const now = new Date();
     const plus = new Date();
@@ -410,6 +430,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     dateFrom: '',
     dateTo: '',
     type: 'HOLIDAY' as 'HOLIDAY' | 'PUBLIC' | 'SCHOOL' | 'CANCELLED',
+    parentMessage: '',
   });
   const [newYearModalOpen, setNewYearModalOpen] = useState(false);
   const [newYearForm, setNewYearForm] = useState({ name: '', dateFrom: '', dateTo: '' });
@@ -431,11 +452,12 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [uRes, cRes, eRes, gRes, meRes] = await Promise.all([
+      const [uRes, cRes, eRes, gRes, dRes, meRes] = await Promise.all([
         fetch('/api/admin/users'),
         fetch('/api/admin/children'),
         fetch('/api/admin/enrollment'),
         fetch('/api/admin/groups'),
+        fetch('/api/admin/discounts'),
         fetch('/api/user/me'),
       ]);
       const failing: string[] = [];
@@ -443,6 +465,25 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       if (!cRes.ok) failing.push(`children(${cRes.status})`);
       if (!eRes.ok) failing.push(`enrollment(${eRes.status})`);
       if (!gRes.ok) failing.push(`groups(${gRes.status})`);
+
+      if (uRes.ok) {
+        const uJson = await uRes.json();
+        setUsers((uJson.users ?? []) as AdminUser[]);
+      }
+      if (cRes.ok) {
+        const cJson = await cRes.json();
+        setChildren((cJson.children ?? []) as ChildRow[]);
+      }
+      if (eRes.ok) {
+        const eJson = await eRes.json();
+        setEnrollmentParents(eJson.parents ?? []);
+        setEnrollmentGroups(eJson.groups ?? []);
+      }
+      if (gRes.ok) {
+        const gJson = await gRes.json();
+        setGroups((gJson.groups ?? []) as GroupRow[]);
+      }
+
       if (failing.length > 0) {
         let detail = "";
         try {
@@ -451,12 +492,32 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         } catch {
           /* ignore */
         }
-        throw new Error(`Nie udało się pobrać danych: ${failing.join(', ')}${detail}`);
+        pushToast(
+          'error',
+          `Część danych panelu nie została wczytana: ${failing.join(', ')}${detail}`,
+        );
       }
-      const uJson = await uRes.json();
-      const cJson = await cRes.json();
-      const eJson = await eRes.json();
-      const gJson = await gRes.json();
+
+      if (dRes.ok) {
+        const dJson = (await dRes.json()) as {
+          discounts?: Array<{ key: string; percent: number }>;
+          complimentaryParents?: ComplimentaryParentRow[];
+        };
+        const nextSettings = { LARGE_FAMILY_CARD: 0, SIBLING: 0 };
+        for (const item of dJson.discounts ?? []) {
+          if (item.key === 'LARGE_FAMILY_CARD' || item.key === 'SIBLING') {
+            nextSettings[item.key] = Number(item.percent) || 0;
+          }
+        }
+        setDiscountSettings(nextSettings);
+        setDiscountPercentsDraft({
+          LARGE_FAMILY_CARD: String(nextSettings.LARGE_FAMILY_CARD),
+          SIBLING: String(nextSettings.SIBLING),
+        });
+        setComplimentaryParents(
+          Array.isArray(dJson.complimentaryParents) ? dJson.complimentaryParents : [],
+        );
+      }
       if (meRes.ok) {
         const meJson = (await meRes.json()) as { user?: { schoolId?: string | null; role?: string } };
         const sid = meJson.user?.schoolId ?? null;
@@ -469,11 +530,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         setSessionSchoolId(null);
         setIsManagerView(false);
       }
-      setUsers((uJson.users ?? []) as AdminUser[]);
-      setChildren((cJson.children ?? []) as ChildRow[]);
-      setEnrollmentParents(eJson.parents ?? []);
-      setEnrollmentGroups(eJson.groups ?? []);
-      setGroups((gJson.groups ?? []) as GroupRow[]);
     } catch (error) {
       console.error(error);
       pushToast(
@@ -615,7 +671,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   }, [activeTab, organizationSubTab, loadDiscounts]);
 
   useEffect(() => {
-    if (activeTab === 'renewals') {
+    if (activeTab === 'renewals' || activeTab === 'enrollment') {
       void loadDiscounts();
     }
   }, [activeTab, loadDiscounts]);
@@ -639,7 +695,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   useEffect(() => {
     if (mobileTab === 'organization') setActiveTab('organization');
     if (mobileTab === 'users') setActiveTab('users');
-    if (mobileTab === 'groups') setActiveTab('groups');
   }, [mobileTab]);
 
   const filteredUsers = useMemo(() => {
@@ -789,6 +844,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         active: g.active,
         priceMonthly: priceFieldFromDb(g.price_monthly),
         priceYearly: priceFieldFromDb(g.price_yearly),
+        teacherPickupConsent: Boolean(g.teacher_pickup_consent),
       });
     },
     [sessionSchoolId],
@@ -813,6 +869,19 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       else setGroupLoading(false);
     }
   }, [pushToast, populateGroupFormFromGroup]);
+
+  const getGroupDetailReloadOptions = useCallback(
+    (groupId: string): { quiet?: boolean } | undefined => {
+      if (groupsSubTab === 'organize' && organizeExpandedGroupId === groupId) {
+        return { quiet: true };
+      }
+      if (groupsSubTab === 'add' && groupForm.id === groupId) {
+        return { quiet: true };
+      }
+      return undefined;
+    },
+    [groupsSubTab, organizeExpandedGroupId, groupForm.id],
+  );
 
   const saveGroupForm = useCallback(async () => {
     if (!groupForm.id) return;
@@ -840,6 +909,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           locationId: groupForm.locationId || null,
           priceMonthly: groupForm.priceMonthly.trim() ? Number(groupForm.priceMonthly) : null,
           priceYearly: groupForm.priceYearly.trim() ? Number(groupForm.priceYearly) : null,
+          teacherPickupConsent: groupForm.teacherPickupConsent,
         }),
       });
       const data = await res.json();
@@ -849,25 +919,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       }
       pushToast('success', 'Grupa zaktualizowana');
       await loadData();
-      await loadGroupDetail(
-        groupForm.id,
-        groupsSubTab === 'organize' && organizeExpandedGroupId === groupForm.id
-          ? { quiet: true }
-          : undefined,
-      );
+      await loadGroupDetail(groupForm.id, getGroupDetailReloadOptions(groupForm.id));
     } catch {
       pushToast('error', 'Nie udało się zapisać grupy');
     } finally {
       setGroupSaving(false);
     }
-  }, [
-    groupForm,
-    pushToast,
-    loadData,
-    loadGroupDetail,
-    groupsSubTab,
-    organizeExpandedGroupId,
-  ]);
+  }, [groupForm, pushToast, loadData, loadGroupDetail, getGroupDetailReloadOptions]);
 
   useEffect(() => {
     if (!initialGroupId || initialGroupLoaded) return;
@@ -875,11 +933,72 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     setInitialGroupLoaded(true);
   }, [initialGroupId, initialGroupLoaded, loadGroupDetail]);
 
+  const loadChildren = useCallback(async () => {
+    try {
+      const res = await fetch('/api/admin/children?active=true');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message ?? 'Nie udało się pobrać listy dzieci');
+      setChildren((data.children ?? []) as ChildRow[]);
+    } catch (error) {
+      pushToast('error', error instanceof Error ? error.message : 'Błąd pobierania dzieci');
+    }
+  }, [pushToast]);
+
+  const openAddStudentModal = useCallback(() => {
+    setStudentSearch('');
+    setSelectedChildId('');
+    setAddStudentModalOpen(true);
+    void loadChildren();
+  }, [loadChildren]);
+
+  const openScheduleModal = useCallback(() => {
+    const defaultLocationId =
+      groupForm.locationId || groupDetail?.group.location_id || '';
+    setScheduleForm({
+      dayOfWeek: 1,
+      startTime: '16:00',
+      locationId: defaultLocationId,
+      durationMin: 60,
+    });
+    setScheduleModalOpen(true);
+  }, [groupForm.locationId, groupDetail?.group.location_id]);
+
+  const activeSchoolYear = useMemo(
+    () => schoolYears.find((y) => y.isActive ?? y.active) ?? null,
+    [schoolYears],
+  );
+
+  const getSchoolYearGenerateDates = useCallback(() => {
+    if (!activeSchoolYear) return null;
+    return {
+      dateFrom: activeSchoolYear.date_from.slice(0, 10),
+      dateTo: activeSchoolYear.date_to.slice(0, 10),
+    };
+  }, [activeSchoolYear]);
+
+  const openGenerateModal = useCallback(() => {
+    const yearDates = getSchoolYearGenerateDates();
+    if (yearDates) {
+      setGenerateForm(yearDates);
+      setGenerateWholeSchoolYear(true);
+    } else {
+      const today = new Date().toISOString().slice(0, 10);
+      const plus = new Date();
+      plus.setMonth(plus.getMonth() + 3);
+      setGenerateForm({
+        dateFrom: today,
+        dateTo: plus.toISOString().slice(0, 10),
+      });
+      setGenerateWholeSchoolYear(false);
+    }
+    setGenerateModalOpen(true);
+  }, [getSchoolYearGenerateDates]);
+
   const availableChildren = useMemo(() => {
     if (!groupDetail) return [];
     const activeInGroup = new Set(groupDetail.students.filter((s) => !s.left_at).map((s) => s.child_id));
     return children
-      .filter((c) => c.confirmed && c.active && !activeInGroup.has(c.child_id))
+      .filter((c) => c.active && !activeInGroup.has(c.child_id))
       .filter((c) => {
         const q = studentSearch.trim().toLowerCase();
         if (!q) return true;
@@ -1390,7 +1509,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         <header className="border-b border-emerald-50 pb-4">
           <h2 className="text-xl font-bold text-[#0f6e56] sm:text-2xl">Organizacja szkoły</h2>
           <p className="mt-1 text-sm text-zinc-600">
-            Konfiguracja roku szkolnego, kadry, sal oraz archiwum zmian.
+            Konfiguracja roku szkolnego, kadry, lokalizacji, grup oraz archiwum zmian.
           </p>
         </header>
 
@@ -1400,6 +1519,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               key={t.key}
               type="button"
               onClick={() => {
+                if (t.key === 'groups' && organizationSubTab === 'groups') {
+                  resetGroupsToList();
+                }
                 setOrganizationSubTab(t.key);
                 if (t.key === 'teachers') setTeacherOrgSubTab('list');
                 if (t.key === 'locations') setLocationOrgSubTab('list');
@@ -1411,6 +1533,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           ))}
         </div>
 
+        {organizationSubTab === 'groups' ? (
+          <div className="mt-6">{renderGroups()}</div>
+        ) : (
         <div className="mt-6 rounded-2xl border border-emerald-100 bg-white p-4 sm:p-5">
           <h3 className="text-lg font-bold text-[#0f6e56] sm:text-xl">{orgTabLabel}</h3>
 
@@ -1540,6 +1665,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                 dateFrom: active?.date_from ?? '',
                                 dateTo: active?.date_from ?? '',
                                 type: 'HOLIDAY',
+                                parentMessage: '',
                               });
                               setHolidayModalOpen(true);
                             }}
@@ -2298,7 +2424,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
 
           {organizationSubTab === 'history' && (
             <div className="mt-4 space-y-3">
-              <p className="text-sm text-zinc-600">Zakończone lata szkolne z bazy (nieaktywne).</p>
+              <p className="text-sm text-zinc-600">Zakończone lata szkolne (nieaktywne).</p>
               {schoolYearLoading ? (
                 <div className="space-y-2">
                   <div className="h-20 animate-pulse rounded-xl bg-emerald-100/80" />
@@ -2337,9 +2463,30 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             </div>
           )}
         </div>
+        )}
       </section>
     );
   };
+
+  const renderParentContractConsentFields = () => (
+    <div className="space-y-1">
+      <label className="block text-sm font-medium text-zinc-700">Umowa rodzica</label>
+      <label className="flex items-start gap-2 rounded-xl border border-emerald-200 px-3 py-2 text-sm text-zinc-700">
+        <input
+          type="checkbox"
+          checked={groupForm.teacherPickupConsent}
+          onChange={(e) =>
+            setGroupForm((p) => ({ ...p, teacherPickupConsent: e.target.checked }))
+          }
+          className="mt-0.5 accent-emerald-600"
+        />
+        <span>
+          Zgoda na odebranie dziecka przez lektora — przy generowaniu umowy rodzic otrzyma Załącznik
+          nr 2 do podpisania.
+        </span>
+      </label>
+    </div>
+  );
 
   const renderGroupEditForm = (options?: { showBackButton?: boolean; groupId?: string }) => {
     const backButton = options?.showBackButton ? (
@@ -2448,6 +2595,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               }
             />
           </div>
+          {renderParentContractConsentFields()}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:col-span-2">
             <div className="space-y-1">
               <label className="block text-sm font-medium text-zinc-700">Stawka miesięczna (PLN)</label>
@@ -2488,7 +2636,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           </div>
         </div>
         <p className="mt-3 text-xs text-zinc-500">
-          Kwoty z bazy są wczytywane automatycznie — możesz je tutaj nadpisać.
+          Stawki miesięczna i roczna dla tej grupy — zapisują się tutaj i trafiają do umowy rodzica.
         </p>
         <div className="mt-4 flex justify-end">
           <button
@@ -2504,9 +2652,30 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     );
   };
 
-  const renderGroupManageSections = (detail: GroupDetail, groupId: string, opts?: { quietReload?: boolean }) => {
+  const renderGroupScheduleAndGenerateSections = (
+    detail: GroupDetail | null,
+    groupId: string | null,
+    opts?: { quietReload?: boolean; disabled?: boolean },
+  ) => {
     const quietReload = opts?.quietReload === true;
-    const reloadDetail = () => loadGroupDetail(groupId, quietReload ? { quiet: true } : undefined);
+    const disabled = opts?.disabled === true || !groupId;
+    const reloadDetail = groupId
+      ? () => loadGroupDetail(groupId, quietReload ? { quiet: true } : getGroupDetailReloadOptions(groupId))
+      : () => Promise.resolve();
+    const scheduleTemplates = detail?.scheduleTemplates ?? [];
+    const futureLessonsCount = detail?.generatedLessons?.futureCount ?? 0;
+    const completedLessonsCount = detail?.generatedLessons?.completedCount ?? 0;
+    const totalGeneratedLessons = futureLessonsCount + completedLessonsCount;
+    const dayNames: Record<number, string> = {
+      1: 'Poniedziałek',
+      2: 'Wtorek',
+      3: 'Środa',
+      4: 'Czwartek',
+      5: 'Piątek',
+      6: 'Sobota',
+      7: 'Niedziela',
+    };
+
     return (
       <>
         <section className="rounded-2xl border border-emerald-100 bg-white p-4 md:p-5">
@@ -2514,28 +2683,52 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             <div>
               <h4 className="font-semibold text-zinc-900">Harmonogram</h4>
               <p className="text-sm text-zinc-500">Stałe terminy grupy (dzień, godzina, czas trwania, lokalizacja).</p>
+              {disabled && (
+                <p className="mt-1 text-xs text-amber-700">Najpierw zapisz grupę, aby dodać terminy.</p>
+              )}
             </div>
             <button
               type="button"
-              className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white"
-              onClick={() => setScheduleModalOpen(true)}
+              disabled={disabled}
+              className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={() => openScheduleModal()}
             >
               + Dodaj termin
             </button>
           </div>
           <div className="space-y-2 text-sm">
-            {detail.scheduleTemplates.length === 0 ? (
+            {scheduleTemplates.length === 0 ? (
               <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-6 text-center text-zinc-600">
                 Brak zdefiniowanych terminów.
               </p>
             ) : (
-              detail.scheduleTemplates.map((st) => (
+              scheduleTemplates.map((st) => (
                 <div key={st.id} className="flex items-center justify-between rounded-xl border border-emerald-100 p-3">
                   <div>
                     <p>
-                      {({ 1: 'Poniedziałek', 2: 'Wtorek', 3: 'Środa', 4: 'Czwartek', 5: 'Piątek', 6: 'Sobota', 7: 'Niedziela' } as Record<number, string>)[st.day_of_week] ?? `Dzień ${st.day_of_week}`} · {st.start_time.slice(0, 5)} · {st.duration_min} min
+                      {dayNames[st.day_of_week] ?? `Dzień ${st.day_of_week}`} · {st.start_time.slice(0, 5)} · {st.duration_min} min
                     </p>
                     <p className="text-zinc-600">{st.location_name ?? '-'}</p>
+                    {(st.future_lessons_count ?? 0) > 0 || (st.completed_lessons_count ?? 0) > 0 ? (
+                      <p className="mt-1 text-xs font-medium text-emerald-700">
+                        Zajęcia wygenerowane (
+                        {[
+                          (st.future_lessons_count ?? 0) > 0
+                            ? `${st.future_lessons_count} nadchodzących`
+                            : null,
+                          (st.completed_lessons_count ?? 0) > 0
+                            ? `${st.completed_lessons_count} odbytych`
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(', ')}
+                        )
+                      </p>
+                    ) : (
+                      !disabled && (
+                        <p className="mt-1 text-xs text-zinc-500">Brak wygenerowanych zajęć dla tego terminu</p>
+                      )
+                    )}
                   </div>
                   <button
                     type="button"
@@ -2559,6 +2752,70 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         </section>
 
         <section className="rounded-2xl border border-emerald-100 bg-white p-4 md:p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h4 className="font-semibold text-zinc-900">Generowanie zajęć</h4>
+              <p className="text-sm text-zinc-500">Wygeneruj kalendarz zajęć na podstawie harmonogramu grupy.</p>
+              {disabled && (
+                <p className="mt-1 text-xs text-amber-700">Najpierw zapisz grupę, aby wygenerować zajęcia.</p>
+              )}
+              {!disabled && totalGeneratedLessons > 0 && (
+                <p className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
+                  Zajęcia wygenerowane —{' '}
+                  {[
+                    futureLessonsCount > 0 ? `${futureLessonsCount} nadchodzących` : null,
+                    completedLessonsCount > 0 ? `${completedLessonsCount} odbytych` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(', ')}{' '}
+                  w kalendarzu.
+                </p>
+              )}
+              {!disabled && scheduleTemplates.length > 0 && totalGeneratedLessons === 0 && (
+                <p className="mt-2 text-xs text-zinc-500">Harmonogram jest ustawiony, ale zajęcia nie zostały jeszcze wygenerowane.</p>
+              )}
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={disabled}
+                className="rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={() => openGenerateModal()}
+              >
+                Generuj zajęcia z harmonogramu
+              </button>
+              {futureLessonsCount > 0 && (
+                <button
+                  type="button"
+                  disabled={disabled || busy}
+                  className="rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => {
+                    if (!groupId) return;
+                    setDeleteFutureLessonsModal({
+                      groupId,
+                      count: futureLessonsCount,
+                      quietReload,
+                    });
+                  }}
+                >
+                  Usuń zajęcia z kalendarza
+                </button>
+              )}
+            </div>
+          </div>
+        </section>
+      </>
+    );
+  };
+
+  const renderGroupManageSections = (detail: GroupDetail, groupId: string, opts?: { quietReload?: boolean }) => {
+    const quietReload = opts?.quietReload === true;
+    const reloadDetail = () => loadGroupDetail(groupId, quietReload ? { quiet: true } : getGroupDetailReloadOptions(groupId));
+    return (
+      <>
+        {renderGroupScheduleAndGenerateSections(detail, groupId, { quietReload })}
+
+        <section className="rounded-2xl border border-emerald-100 bg-white p-4 md:p-5">
           <div className="mb-3 flex items-center justify-between">
             <div>
               <h4 className="font-semibold text-zinc-900">Uczniowie grupy</h4>
@@ -2567,7 +2824,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             <button
               type="button"
               className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white"
-              onClick={() => setAddStudentModalOpen(true)}
+              onClick={() => openAddStudentModal()}
             >
               + Dodaj ucznia
             </button>
@@ -2610,22 +2867,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             )}
           </div>
         </section>
-
-        <section className="rounded-2xl border border-emerald-100 bg-white p-4 md:p-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <h4 className="font-semibold text-zinc-900">Generowanie zajęć</h4>
-              <p className="text-sm text-zinc-500">Wygeneruj kalendarz zajęć na podstawie harmonogramu grupy.</p>
-            </div>
-            <button
-              type="button"
-              className="rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white"
-              onClick={() => setGenerateModalOpen(true)}
-            >
-              Generuj zajęcia z harmonogramu
-            </button>
-          </div>
-        </section>
       </>
     );
   };
@@ -2640,11 +2881,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       );
     }
 
-    if (selectedGroupId && groupDetail && groupsSubTab !== 'organize') {
+    if (selectedGroupId && groupDetail && groupsSubTab !== 'organize' && groupsSubTab !== 'add') {
       return (
         <div className="space-y-4">
           {renderGroupEditForm({ showBackButton: true })}
-          {renderGroupManageSections(groupDetail, selectedGroupId)}
+          {initialGroupId ? renderGroupManageSections(groupDetail, selectedGroupId) : null}
         </div>
       );
     }
@@ -2661,6 +2902,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               setGroupDetail(null);
             }}
             onEnterAddTab={() => {
+              setSelectedGroupId(null);
+              setGroupDetail(null);
               setGroupForm({
                 id: '',
                 schoolId: sessionSchoolId ?? '',
@@ -2673,6 +2916,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 active: true,
                 priceMonthly: '',
                 priceYearly: '',
+                teacherPickupConsent: false,
               });
               void loadLocations();
             }}
@@ -2792,8 +3036,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               </table>
             </div>
           ) : groupsSubTab === 'add' ? (
+            <div className="space-y-4">
             <div className="space-y-3 rounded-2xl border border-emerald-100 bg-white p-4">
-              <h3 className="text-lg font-semibold">Nowa grupa</h3>
+              <h3 className="text-lg font-semibold">{groupForm.id ? 'Edycja grupy' : 'Nowa grupa'}</h3>
               <div className="space-y-1">
                 <label className="block text-sm font-medium text-zinc-700">Rok szkolny</label>
                 <select
@@ -2851,6 +3096,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 <label className="block text-sm font-medium text-zinc-700">Maksymalna liczba uczniów</label>
                 <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="number" min="1" value={groupForm.maxStudents} onChange={(e) => setGroupForm((p) => ({ ...p, maxStudents: Number(e.target.value || 12) }))} />
               </div>
+              {renderParentContractConsentFields()}
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1">
                   <label className="block text-sm font-medium text-zinc-700">Stawka miesięczna (PLN)</label>
@@ -2878,7 +3124,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 </div>
               </div>
               <p className="text-xs text-zinc-500">
-                Kwoty z bazy są wczytywane automatycznie — możesz je tutaj nadpisać.
+                Stawki miesięczna i roczna dla tej grupy — zapisują się tutaj i trafiają do umowy rodzica.
               </p>
               <div className="space-y-1">
                 <label className="block text-sm font-medium text-zinc-700">Status grupy</label>
@@ -2896,13 +3142,18 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 <button
                   type="button"
                   className="rounded-xl bg-zinc-200 px-3 py-2"
-                  onClick={() => setGroupsSubTab('list')}
+                  onClick={() => {
+                    setGroupsSubTab('list');
+                    setSelectedGroupId(null);
+                    setGroupDetail(null);
+                  }}
                 >
                   Anuluj
                 </button>
                 <button
                   type="button"
-                  className="rounded-xl bg-emerald-600 px-3 py-2 text-white"
+                  className="rounded-xl bg-emerald-600 px-3 py-2 text-white disabled:opacity-60"
+                  disabled={groupSaving}
                   onClick={async () => {
                     if (!groupForm.name.trim()) {
                       pushToast('error', 'Podaj nazwę grupy');
@@ -2912,35 +3163,53 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       pushToast('error', 'Wybierz nauczyciela dla grupy');
                       return;
                     }
-                    const res = await fetch('/api/admin/groups', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        name: groupForm.name.trim(),
-                        level: groupForm.level.trim() || null,
-                        teacherId: groupForm.teacherId,
-                        maxStudents: groupForm.maxStudents,
-                        active: groupForm.active,
-                        schoolId: groupForm.schoolId || null,
-                        schoolYearId: groupForm.schoolYearId || null,
-                        locationId: groupForm.locationId || null,
-                        priceMonthly: groupForm.priceMonthly.trim() ? Number(groupForm.priceMonthly) : null,
-                        priceYearly: groupForm.priceYearly.trim() ? Number(groupForm.priceYearly) : null,
-                      }),
-                    });
-                    const data = await res.json();
-                    if (!res.ok) {
-                      pushToast('error', data.message ?? 'Nie udało się zapisać grupy');
+                    if (groupForm.id) {
+                      await saveGroupForm();
                       return;
                     }
-                    pushToast('success', 'Grupa zapisana');
-                    setGroupsSubTab('list');
-                    await loadData();
+                    setGroupSaving(true);
+                    try {
+                      const res = await fetch('/api/admin/groups', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          name: groupForm.name.trim(),
+                          level: groupForm.level.trim() || null,
+                          teacherId: groupForm.teacherId,
+                          maxStudents: groupForm.maxStudents,
+                          active: groupForm.active,
+                          schoolId: groupForm.schoolId || null,
+                          schoolYearId: groupForm.schoolYearId || null,
+                          locationId: groupForm.locationId || null,
+                          priceMonthly: groupForm.priceMonthly.trim() ? Number(groupForm.priceMonthly) : null,
+                          priceYearly: groupForm.priceYearly.trim() ? Number(groupForm.priceYearly) : null,
+                          teacherPickupConsent: groupForm.teacherPickupConsent,
+                        }),
+                      });
+                      const data = await res.json();
+                      if (!res.ok) {
+                        pushToast('error', data.message ?? 'Nie udało się zapisać grupy');
+                        return;
+                      }
+                      pushToast('success', 'Grupa zapisana');
+                      await loadData();
+                      await loadGroupDetail(data.id, { quiet: true });
+                    } catch {
+                      pushToast('error', 'Nie udało się zapisać grupy');
+                    } finally {
+                      setGroupSaving(false);
+                    }
                   }}
                 >
-                  Zapisz
+                  {groupSaving ? 'Zapisywanie…' : groupForm.id ? 'Zapisz zmiany' : 'Zapisz'}
                 </button>
               </div>
+            </div>
+            {renderGroupScheduleAndGenerateSections(
+              groupForm.id && groupDetail?.group.id === groupForm.id ? groupDetail : null,
+              groupForm.id || null,
+              { quietReload: true, disabled: !groupForm.id },
+            )}
             </div>
           ) : (
             <div className="space-y-2">
@@ -3048,7 +3317,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     }
     if (activeTab === 'organization') return renderOrganization();
     if (activeTab === 'users') return renderUsers();
-    if (activeTab === 'groups') return renderGroups();
     if (activeTab === 'classes') {
       return (
         <ClassesCalendarPanel
@@ -3102,9 +3370,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   if (tab.key === 'announcements' && activeTab === 'announcements') {
                     setMessagesListResetToken((t) => t + 1);
                   }
-                  if (tab.key === 'groups' && activeTab === 'groups') {
-                    resetGroupsToList();
-                  }
                   setActiveTab(tab.key);
                 }}
                 className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
@@ -3131,14 +3396,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       <div className="mt-4">{renderContent()}</div>
 
       <nav className="fixed bottom-3 left-1/2 z-40 w-[min(96vw,460px)] -translate-x-1/2 rounded-2xl border border-emerald-200 bg-white p-1 shadow-lg md:hidden">
-        <div className="grid grid-cols-4 gap-1">
+        <div className="grid grid-cols-3 gap-1">
           {mobileTabs.map((tab) => (
             <button
               key={tab.key}
               onClick={() => {
-                if (tab.key === 'groups' && mobileTab === 'groups') {
-                  resetGroupsToList();
-                }
                 setMobileTab(tab.key);
               }}
               className={`rounded-full px-2 py-2 text-xs font-semibold ${
@@ -3294,8 +3556,12 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
 
       {holidayModalOpen && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
             <h3 className="text-lg font-semibold">Dzień wolny</h3>
+            <p className="mt-1 text-sm text-zinc-500">
+              Zaplanowane zajęcia w tym okresie zostaną odwołane. Rodzice dzieci z tymi zajęciami
+              otrzymają wiadomość w panelu oraz e-mail.
+            </p>
             <div className="mt-4 space-y-3">
               <label className="block text-sm">
                 <span className="mb-1 block font-semibold text-zinc-700">Nazwa</span>
@@ -3311,7 +3577,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   type="date"
                   className="w-full rounded-xl border border-emerald-200 px-3 py-2"
                   value={holidayForm.dateFrom}
-                  onChange={(e) => setHolidayForm((p) => ({ ...p, dateFrom: e.target.value }))}
+                  onChange={(e) =>
+                    setHolidayForm((p) => ({ ...p, dateFrom: e.target.value, dateTo: e.target.value }))
+                  }
                 />
               </label>
               <label className="block text-sm">
@@ -3341,6 +3609,19 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   <option value="CANCELLED">CANCELLED</option>
                 </select>
               </label>
+              <label className="block text-sm">
+                <span className="mb-1 block font-semibold text-zinc-700">Wiadomość do rodziców</span>
+                <span className="mb-2 block text-xs text-zinc-500">
+                  Opcjonalna treść dołączona do powiadomienia o odwołanych zajęciach. Jeśli
+                  zostawisz puste, wysłany zostanie domyślny tekst.
+                </span>
+                <textarea
+                  className="min-h-[100px] w-full rounded-xl border border-emerald-200 px-3 py-2"
+                  value={holidayForm.parentMessage}
+                  onChange={(e) => setHolidayForm((p) => ({ ...p, parentMessage: e.target.value }))}
+                  placeholder="Np. Szkoła jest zamknięta z powodu święta państwowego. Zajęcia odbędą się w innym terminie."
+                />
+              </label>
             </div>
             <div className="mt-5 flex justify-end gap-2">
               <button type="button" className="rounded-xl bg-zinc-200 px-4 py-2" onClick={() => setHolidayModalOpen(false)}>
@@ -3365,11 +3646,12 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         date_from: holidayForm.dateFrom,
                         date_to: holidayForm.dateTo,
                         type: holidayForm.type,
+                        parent_message: holidayForm.parentMessage.trim() || undefined,
                       }),
                     });
                     const data = await res.json().catch(() => ({}));
                     if (!res.ok) throw new Error(data.message ?? 'Błąd');
-                    pushToast('success', 'Dodano dzień wolny');
+                    pushToast('success', data.message ?? 'Dodano dzień wolny');
                     setHolidayModalOpen(false);
                     setClassesCalRefreshSignal((s) => s + 1);
                     await loadSchoolYearData();
@@ -3454,6 +3736,64 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         </div>
       )}
 
+      {deleteFutureLessonsModal && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+            <h3 className="text-lg font-semibold text-zinc-900">Usuń zajęcia z kalendarza</h3>
+            <p className="mt-3 text-sm text-zinc-600">
+              Czy na pewno chcesz usunąć{' '}
+              <strong>{deleteFutureLessonsModal.count} nadchodzących zajęć</strong> tej grupy z kalendarza?
+            </p>
+            <p className="mt-2 text-sm text-zinc-500">
+              Zajęcia, które już się odbyły, pozostaną bez zmian. Tej operacji nie można cofnąć.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-xl bg-zinc-200 px-4 py-2 text-sm font-semibold"
+                onClick={() => setDeleteFutureLessonsModal(null)}
+              >
+                Anuluj
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                onClick={async () => {
+                  const { groupId, quietReload } = deleteFutureLessonsModal;
+                  setBusy(true);
+                  try {
+                    const res = await fetch('/api/admin/lessons/future', {
+                      method: 'DELETE',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ groupId }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok) {
+                      pushToast('error', data.message ?? 'Nie udało się usunąć zajęć');
+                      return;
+                    }
+                    pushToast('success', data.message ?? 'Usunięto zajęcia');
+                    setDeleteFutureLessonsModal(null);
+                    setClassesCalRefreshSignal((s) => s + 1);
+                    await loadGroupDetail(
+                      groupId,
+                      quietReload ? { quiet: true } : getGroupDetailReloadOptions(groupId),
+                    );
+                  } catch {
+                    pushToast('error', 'Nie udało się usunąć zajęć');
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                Usuń z kalendarza
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {scheduleModalOpen && selectedGroupId && groupDetail && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white p-5">
@@ -3497,12 +3837,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     }
                     pushToast('success', 'Termin dodany');
                     setScheduleModalOpen(false);
-                    await loadGroupDetail(
-                      selectedGroupId,
-                      groupsSubTab === 'organize' && organizeExpandedGroupId === selectedGroupId
-                        ? { quiet: true }
-                        : undefined,
-                    );
+                    await loadGroupDetail(selectedGroupId, getGroupDetailReloadOptions(selectedGroupId));
                   }}
                 >
                   Sprawdź konflikty i zapisz
@@ -3527,6 +3862,12 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   </option>
                 ))}
               </select>
+              {availableChildren.length === 0 ? (
+                <p className="text-sm text-zinc-600">
+                  Brak dostępnych dzieci do przypisania (aktywne, spoza tej grupy). Odśwież stronę lub
+                  sprawdź, czy dziecko jest aktywne w bazie.
+                </p>
+              ) : null}
               <div className="flex justify-end gap-2">
                 <button className="rounded-xl bg-zinc-200 px-3 py-2" onClick={() => setAddStudentModalOpen(false)}>Anuluj</button>
                 <button
@@ -3549,12 +3890,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     pushToast('success', 'Uczeń dodany do grupy');
                     setAddStudentModalOpen(false);
                     setSelectedChildId('');
-                    await loadGroupDetail(
-                      selectedGroupId,
-                      groupsSubTab === 'organize' && organizeExpandedGroupId === selectedGroupId
-                        ? { quiet: true }
-                        : undefined,
-                    );
+                    await loadGroupDetail(selectedGroupId, getGroupDetailReloadOptions(selectedGroupId));
                   }}
                 >
                   Dodaj ucznia
@@ -3569,9 +3905,68 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white p-5">
             <h3 className="text-lg font-semibold">Generuj zajęcia</h3>
+            <p className="mt-2 text-sm text-zinc-600">
+              Na podstawie harmonogramu grupy system utworzy pojedyncze terminy zajęć w wybranym okresie.
+              Dni wolne z roku szkolnego są pomijane automatycznie. Wszystkie terminy — także z przeszłości —
+              trafiają do kalendarza jako zaplanowane.
+            </p>
             <div className="mt-4 space-y-3">
-              <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="date" value={generateForm.dateFrom} onChange={(e) => setGenerateForm((p) => ({ ...p, dateFrom: e.target.value }))} />
-              <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="date" value={generateForm.dateTo} onChange={(e) => setGenerateForm((p) => ({ ...p, dateTo: e.target.value }))} />
+              {isRetroactiveGenerateRange(generateForm.dateFrom) && (
+                <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+                  <span className="font-semibold">Generowanie wsteczne.</span> Data początkowa jest w
+                  przeszłości — minione terminy też pojawią się w kalendarzu (zielone, zaplanowane).
+                </p>
+              )}
+              {activeSchoolYear ? (
+                <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-emerald-200 px-3 py-2.5 text-sm text-zinc-700">
+                  <input
+                    type="checkbox"
+                    checked={generateWholeSchoolYear}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setGenerateWholeSchoolYear(checked);
+                      if (checked) {
+                        const yearDates = getSchoolYearGenerateDates();
+                        if (yearDates) setGenerateForm(yearDates);
+                      }
+                    }}
+                    className="mt-0.5 accent-emerald-600"
+                  />
+                  <span>
+                    <span className="font-semibold text-zinc-900">Cały rok szkolny</span>
+                    <span className="mt-0.5 block text-xs text-zinc-500">
+                      {activeSchoolYear.name} ({activeSchoolYear.date_from.slice(0, 10)} —{' '}
+                      {activeSchoolYear.date_to.slice(0, 10)})
+                    </span>
+                  </span>
+                </label>
+              ) : (
+                <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  Brak aktywnego roku szkolnego — ustaw daty ręcznie.
+                </p>
+              )}
+              <label className="block text-sm">
+                <span className="mb-1 block font-semibold text-zinc-700">Od — pierwsze zajęcia</span>
+                <input
+                  className="w-full rounded-xl border border-emerald-200 px-3 py-2 disabled:bg-zinc-100 disabled:text-zinc-500"
+                  type="date"
+                  value={generateForm.dateFrom}
+                  disabled={generateWholeSchoolYear}
+                  onChange={(e) => setGenerateForm((p) => ({ ...p, dateFrom: e.target.value }))}
+                />
+                <span className="mt-1 block text-xs text-zinc-500">Od tej daty system zacznie tworzyć zajęcia.</span>
+              </label>
+              <label className="block text-sm">
+                <span className="mb-1 block font-semibold text-zinc-700">Do — ostatnie zajęcia</span>
+                <input
+                  className="w-full rounded-xl border border-emerald-200 px-3 py-2 disabled:bg-zinc-100 disabled:text-zinc-500"
+                  type="date"
+                  value={generateForm.dateTo}
+                  disabled={generateWholeSchoolYear}
+                  onChange={(e) => setGenerateForm((p) => ({ ...p, dateTo: e.target.value }))}
+                />
+                <span className="mt-1 block text-xs text-zinc-500">Ostatni dzień, w którym mogą powstać zajęcia.</span>
+              </label>
               <div className="flex justify-end gap-2">
                 <button className="rounded-xl bg-zinc-200 px-3 py-2" onClick={() => setGenerateModalOpen(false)}>Anuluj</button>
                 <button
@@ -3590,12 +3985,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     pushToast('success', data.message ?? `Wygenerowano ${data.created ?? 0} zajęć`);
                     setGenerateModalOpen(false);
                     setClassesCalRefreshSignal((s) => s + 1);
-                    await loadGroupDetail(
-                      selectedGroupId,
-                      groupsSubTab === 'organize' && organizeExpandedGroupId === selectedGroupId
-                        ? { quiet: true }
-                        : undefined,
-                    );
+                    await loadGroupDetail(selectedGroupId, getGroupDetailReloadOptions(selectedGroupId));
                   }}
                 >
                   Generuj

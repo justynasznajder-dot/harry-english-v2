@@ -1,7 +1,7 @@
 // ============================================================
 // HarryEnglish — Prisma Schema
 // Zsynchronizowany z bazą Neon: 2026-06-06
-// Generator ID: gen_random_uuid() (PostgreSQL native)
+// Wszystkie PK/FK (id, school_id, *_id): TEXT + DEFAULT (gen_random_uuid())::text
 // Provider: PostgreSQL (Neon)
 // UWAGA: schema.prisma pełni rolę dokumentacyjną — projekt używa
 //        raw SQL via pg, bez Prisma Client/migrations.
@@ -53,6 +53,9 @@ model School {
   renewalProposals   RenewalProposal[]
   discountSettings   SchoolDiscountSetting[]
   complimentaryParents SchoolComplimentaryParent[]
+  marketingGallery     MarketingGallery[]
+  marketingFaq         MarketingFaq[]
+  marketingTestimonial MarketingTestimonial[]
 
   @@map("schools")
 }
@@ -280,6 +283,8 @@ model Group {
   createdAt    DateTime @default(now()) @map("created_at")
   priceMonthly Decimal? @map("price_monthly") @db.Decimal(10, 2)
   priceYearly  Decimal? @map("price_yearly") @db.Decimal(10, 2)
+  /// Gdy true — przy generowaniu umowy rodzic dostaje Załącznik nr 2 (upoważnienie lektora).
+  teacherPickupConsent Boolean @default(false) @map("teacher_pickup_consent")
 
   school     School      @relation(fields: [schoolId], references: [id])
   schoolYear SchoolYear? @relation(fields: [schoolYearId], references: [id])
@@ -640,6 +645,8 @@ model ContractChild {
   enrollmentRequestId String? @map("enrollment_request_id")
   groupId             String? @map("group_id")
   sortOrder           Int     @default(0) @map("sort_order")
+  attachment1Html     String? @map("attachment_1_html") @db.Text
+  attachment2Html     String? @map("attachment_2_html") @db.Text
 
   contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
   child    Child    @relation(fields: [childId], references: [id])
@@ -853,4 +860,52 @@ model RenewalProposal {
   @@unique([renewalId], name: "idx_renewal_proposals_one_pending")
   @@index([renewalId], name: "idx_renewal_proposals_renewal")
   @@map("renewal_proposals")
+}
+
+// ============================================================
+// MARKETING (strona główna)
+// ============================================================
+
+model MarketingGallery {
+  id        String   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  schoolId  String   @map("school_id")
+  imagePath String   @map("image_path") @db.Text
+  caption   String?  @db.Text
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  @@index([schoolId], name: "marketing_gallery_school_id_idx")
+  @@map("marketing_gallery")
+}
+
+model MarketingFaq {
+  id        String   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  schoolId  String   @map("school_id")
+  question  String   @db.Text
+  answer    String   @db.Text
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  @@index([schoolId], name: "marketing_faq_school_id_idx")
+  @@map("marketing_faq")
+}
+
+model MarketingTestimonial {
+  id         String   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  schoolId   String   @map("school_id")
+  authorName String   @map("author_name") @db.Text
+  body       String   @db.Text
+  sortLabel  String?  @map("sort_label") @db.Text
+  rating     Int?     @default(5) @db.SmallInt
+  sortOrder  Int      @default(0) @map("sort_order")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  @@index([schoolId], name: "marketing_testimonial_school_id_idx")
+  @@map("marketing_testimonial")
 }

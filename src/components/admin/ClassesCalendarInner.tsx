@@ -5,7 +5,7 @@ import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import plLocale from '@fullcalendar/core/locales/pl';
-import type { DatesSetArg, EventInput } from '@fullcalendar/core';
+import type { DatesSetArg, EventClickArg, EventInput } from '@fullcalendar/core';
 
 const SCHOOL_TZ = 'Europe/Warsaw';
 
@@ -13,9 +13,15 @@ export type ClassesCalendarInnerProps = {
   events: EventInput[];
   initialView: 'dayGridMonth' | 'timeGridWeek' | 'timeGridDay';
   onDatesSet: (arg: DatesSetArg) => void;
+  onLessonClick?: (arg: EventClickArg) => void;
 };
 
-export default function ClassesCalendarInner({ events, initialView, onDatesSet }: ClassesCalendarInnerProps) {
+export default function ClassesCalendarInner({
+  events,
+  initialView,
+  onDatesSet,
+  onLessonClick,
+}: ClassesCalendarInnerProps) {
   return (
     <div className="classes-fc min-h-[520px] w-full text-sm">
       <FullCalendar
@@ -39,6 +45,14 @@ export default function ClassesCalendarInner({ events, initialView, onDatesSet }
         allDaySlot
         events={events}
         datesSet={onDatesSet}
+        eventClick={(arg) => {
+          if (!onLessonClick) return;
+          if (arg.event.display === 'background') return;
+          onLessonClick(arg);
+        }}
+        eventClassNames={(arg) =>
+          arg.event.display === 'background' ? [] : ['cursor-pointer']
+        }
         height="auto"
         nowIndicator
         eventTimeFormat={{ hour: '2-digit', minute: '2-digit', meridiem: false }}

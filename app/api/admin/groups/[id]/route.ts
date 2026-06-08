@@ -35,12 +35,57 @@ export async function GET(
     );
     if (!group.rows[0]) return NextResponse.json({ message: "Nie znaleziono grupy" }, { status: 404 });
 
-    const scheduleTemplates = await queryDb(
+    const scheduleTemplatesRaw = await queryDb(
       `SELECT st.*, l.name AS location_name
        FROM schedule_templates st
        LEFT JOIN locations l ON l.id = st.location_id
        WHERE st.group_id = $1
        ORDER BY st.day_of_week, st.start_time`,
+      [id]
+    );
+    const futureLessonsByTemplate = await queryDb<{ schedule_template_id: string; cnt: number }>(
+      `SELECT schedule_template_id, COUNT(*)::int AS cnt
+       FROM lessons
+       WHERE group_id = $1
+         AND schedule_template_id IS NOT NULL
+         AND scheduled_at > NOW()
+         AND status = 'SCHEDULED'
+       GROUP BY schedule_template_id`,
+      [id]
+    );
+    const completedLessonsByTemplate = await queryDb<{ schedule_template_id: string; cnt: number }>(
+      `SELECT schedule_template_id, COUNT(*)::int AS cnt
+       FROM lessons
+       WHERE group_id = $1
+         AND schedule_template_id IS NOT NULL
+         AND status = 'COMPLETED'
+       GROUP BY schedule_template_id`,
+      [id]
+    );
+    const templateFutureMap = new Map(
+      futureLessonsByTemplate.rows.map((r) => [r.schedule_template_id, r.cnt]),
+    );
+    const templateCompletedMap = new Map(
+      completedLessonsByTemplate.rows.map((r) => [r.schedule_template_id, r.cnt]),
+    );
+    const scheduleTemplates = scheduleTemplatesRaw.rows.map((st) => ({
+      ...st,
+      future_lessons_count: templateFutureMap.get(st.id) ?? 0,
+      completed_lessons_count: templateCompletedMap.get(st.id) ?? 0,
+    }));
+    const futureLessonsTotal = await queryDb<{ cnt: number }>(
+      `SELECT COUNT(*)::int AS cnt
+       FROM lessons
+       WHERE group_id = $1
+         AND scheduled_at > NOW()
+         AND status = 'SCHEDULED'`,
+      [id]
+    );
+    const completedLessonsTotal = await queryDb<{ cnt: number }>(
+      `SELECT COUNT(*)::int AS cnt
+       FROM lessons
+       WHERE group_id = $1
+         AND status = 'COMPLETED'`,
       [id]
     );
     const students = await queryDb(
@@ -77,10 +122,14 @@ export async function GET(
 
     return NextResponse.json({
       group: group.rows[0],
-      scheduleTemplates: scheduleTemplates.rows,
+      scheduleTemplates,
       students: students.rows,
       nearestLessons: nearestLessons.rows,
       locations: locations.rows,
+      generatedLessons: {
+        futureCount: futureLessonsTotal.rows[0]?.cnt ?? 0,
+        completedCount: completedLessonsTotal.rows[0]?.cnt ?? 0,
+      },
     });
   } catch (error) {
     console.error("GET group detail error:", error);
@@ -114,6 +163,7 @@ export async function PUT(
       locationId,
       priceMonthly,
       priceYearly,
+      teacherPickupConsent,
     } = body;
     await queryDb(
       `UPDATE groups
@@ -125,8 +175,9 @@ export async function PUT(
            school_year_id = $7,
            location_id = $8,
            price_monthly = $9,
-           price_yearly = $10
-       WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $11" : ""}`,
+           price_yearly = $10,
+           teacher_pickup_consent = COALESCE($11, teacher_pickup_consent)
+       WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $12" : ""}`,
       tenant.role === "MANAGER"
         ? [
             id,
@@ -139,6 +190,7 @@ export async function PUT(
             locationId ?? null,
             priceMonthly != null && priceMonthly !== "" ? Number(priceMonthly) : null,
             priceYearly != null && priceYearly !== "" ? Number(priceYearly) : null,
+            teacherPickupConsent ?? null,
             tenant.tenantSchoolId,
           ]
         : [
@@ -152,6 +204,7 @@ export async function PUT(
             locationId ?? null,
             priceMonthly != null && priceMonthly !== "" ? Number(priceMonthly) : null,
             priceYearly != null && priceYearly !== "" ? Number(priceYearly) : null,
+            teacherPickupConsent ?? null,
           ]
     );
     return NextResponse.json({ message: "Grupa została zaktualizowana" });

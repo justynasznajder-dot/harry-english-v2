@@ -117,7 +117,7 @@ export async function POST(request: Request) {
       const schoolRes = await queryDb<{ name: string }>(
         `SELECT name
          FROM schools
-         WHERE id::text = $1
+         WHERE id = $1
          LIMIT 1`,
         [schoolId]
       );
@@ -169,10 +169,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: phoneNorm.message }, { status: 400 });
     }
 
-    /* school_id / id mogą być w PG typu uuid lub text — porównanie przez ::text unika „operator does not exist”. */
     const schoolLocationsRes = await queryDb<{ ok: boolean }>(
       `SELECT EXISTS(
-         SELECT 1 FROM locations WHERE school_id::text = $1 AND active = TRUE
+         SELECT 1 FROM locations WHERE school_id = $1 AND active = TRUE
        ) AS ok`,
       [schoolId]
     );
@@ -236,7 +235,7 @@ export async function POST(request: Request) {
         const locOk = await queryDb<{ ok: boolean }>(
           `SELECT TRUE AS ok
            FROM locations
-           WHERE id::text = $1 AND school_id::text = $2 AND active = TRUE
+           WHERE id = $1 AND school_id = $2 AND active = TRUE
            LIMIT 1`,
           [locIdRaw, schoolId]
         );
@@ -256,7 +255,7 @@ export async function POST(request: Request) {
         const locOk = await queryDb<{ ok: boolean }>(
           `SELECT TRUE AS ok
            FROM locations
-           WHERE id::text = $1 AND school_id::text = $2 AND active = TRUE
+           WHERE id = $1 AND school_id = $2 AND active = TRUE
            LIMIT 1`,
           [locIdRaw, schoolId]
         );
@@ -288,7 +287,7 @@ export async function POST(request: Request) {
       try {
         const placeholders = locIds.map((_, j) => `$${j + 2}`).join(", ");
         const locRes = await queryDb<{ id: string; name: string }>(
-          `SELECT id::text AS id, name FROM locations WHERE school_id::text = $1 AND id::text IN (${placeholders})`,
+          `SELECT id, name FROM locations WHERE school_id = $1 AND id IN (${placeholders})`,
           [schoolId, ...locIds]
         );
         for (const row of locRes.rows) {

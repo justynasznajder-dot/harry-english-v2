@@ -50,6 +50,32 @@ export type ProposalInput = {
   groupId: string;
 };
 
+export type EnrollmentProposalStatus = "NEW" | "NEGOTIATING";
+
+/** Dane logowania do pierwszego maila z propozycją (zbiorczego) — zawsze zwraca login i hasło tymczasowe. */
+export async function ensureInitialProposalEmailCredentials(params: {
+  parentUserId: string;
+  parentEmail: string;
+  parentCreated: boolean;
+  tempPasswordFromCreate: string | null;
+  excludeRequestIds: string[];
+}): Promise<{ loginEmail: string; tempPassword: string }> {
+  const resolved = await resolveProposalEmailCredentials(params);
+  if (resolved) return resolved;
+
+  if (params.parentCreated && params.tempPasswordFromCreate) {
+    return {
+      loginEmail: params.parentEmail,
+      tempPassword: params.tempPasswordFromCreate,
+    };
+  }
+
+  const tempPassword = generateTempPassword();
+  const passwordHash = await bcrypt.hash(tempPassword, 10);
+  await updateUserPasswordHash(params.parentUserId, passwordHash);
+  return { loginEmail: params.parentEmail, tempPassword };
+}
+
 /** Czy dołączyć login/hasło do maila — nie resetuj hasła, jeśli rodzic dostał je przy wcześniejszej propozycji. */
 export async function resolveProposalEmailCredentials(params: {
   parentUserId: string;
@@ -93,7 +119,10 @@ export async function resolveProposalEmailCredentials(params: {
 export async function submitEnrollmentProposal(
   input: ProposalInput,
   sharedParent: SharedParentState | null,
-  options?: { restrictToSchoolId?: string }
+  options?: {
+    restrictToSchoolId?: string;
+    allowedStatuses?: EnrollmentProposalStatus[];
+  }
 ): Promise<
   | {
       ok: true;
@@ -103,6 +132,7 @@ export async function submitEnrollmentProposal(
   | { ok: false; status: number; message: string }
 > {
   const { requestId, groupId } = input;
+  const allowedStatuses = options?.allowedStatuses ?? ["NEW", "NEGOTIATING"];
 
   const enrollmentRes = await queryDb<EnrollmentRow>(
     `SELECT er.id,
@@ -119,17 +149,20 @@ export async function submitEnrollmentProposal(
      FROM enrollment_requests er
      WHERE er.id = $1
        AND ($2::text IS NULL OR er.school_id = $2::text)
-       AND UPPER(BTRIM(COALESCE(er.status::text, ''))) IN ('NEW', 'NEGOTIATING')
+       AND UPPER(BTRIM(COALESCE(er.status::text, ''))) = ANY($3::text[])
      LIMIT 1`,
-    [requestId, options?.restrictToSchoolId ?? null]
+    [requestId, options?.restrictToSchoolId ?? null, allowedStatuses]
   );
   const enrollment = enrollmentRes.rows[0];
   if (!enrollment) {
+    const onlyNegotiating =
+      allowedStatuses.length === 1 && allowedStatuses[0] === "NEGOTIATING";
     return {
       ok: false,
       status: 409,
-      message:
-        "Propozycję można wysłać tylko dla zgłoszenia „Nowe” lub gdy rodzic negocjuje termin zajęć.",
+      message: onlyNegotiating
+        ? "Propozycję dla jednego dziecka można wysłać tylko gdy rodzic negocjuje termin zajęć."
+        : "Propozycję można wysłać tylko dla zgłoszenia „Nowe”.",
     };
   }
 

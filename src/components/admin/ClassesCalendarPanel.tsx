@@ -2,7 +2,7 @@
 
 import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { DatesSetArg, EventInput } from '@fullcalendar/core';
+import type { DatesSetArg, EventClickArg, EventInput } from '@fullcalendar/core';
 import type { CalendarApi } from '@fullcalendar/core';
 import { visibleRangeToInclusiveYmd } from '@/lib/calendar-range';
 
@@ -114,6 +114,7 @@ export default function ClassesCalendarPanel({
   pushToast,
 }: ClassesCalendarPanelProps) {
   const calendarApiRef = useRef<CalendarApi | null>(null);
+  const filtersReadyRef = useRef(false);
   const [range, setRange] = useState<{ fromYmd: string; toYmd: string } | null>(null);
   const [events, setEvents] = useState<EventInput[]>([]);
   const [loading, setLoading] = useState(false);
@@ -121,6 +122,15 @@ export default function ClassesCalendarPanel({
   const [selTeachers, setSelTeachers] = useState<string[]>([]);
   const [selGroups, setSelGroups] = useState<string[]>([]);
   const [pickDate, setPickDate] = useState('');
+  const [localRefresh, setLocalRefresh] = useState(0);
+  const [cancelLessonModal, setCancelLessonModal] = useState<{
+    id: string;
+    title: string;
+    whenLabel: string;
+    status: string;
+  } | null>(null);
+  const [cancelLessonParentMessage, setCancelLessonParentMessage] = useState('');
+  const [cancelLessonBusy, setCancelLessonBusy] = useState(false);
 
   const filterKey = useMemo(
     () => JSON.stringify({ selLocations, selTeachers, selGroups }),
@@ -134,6 +144,25 @@ export default function ClassesCalendarPanel({
 
   const pushToastRef = useRef(pushToast);
   pushToastRef.current = pushToast;
+
+  useEffect(() => {
+    const locIds = locations.map((l) => l.id);
+    const teacherIds = teachers.map((t) => t.id);
+    const groupIds = groups.map((g) => g.id);
+
+    if (!filtersReadyRef.current) {
+      if (locIds.length === 0 && teacherIds.length === 0 && groupIds.length === 0) return;
+      setSelLocations(locIds);
+      setSelTeachers(teacherIds);
+      setSelGroups(groupIds);
+      filtersReadyRef.current = true;
+      return;
+    }
+
+    setSelLocations((prev) => [...new Set([...prev, ...locIds])].filter((id) => locIds.includes(id)));
+    setSelTeachers((prev) => [...new Set([...prev, ...teacherIds])].filter((id) => teacherIds.includes(id)));
+    setSelGroups((prev) => [...new Set([...prev, ...groupIds])].filter((id) => groupIds.includes(id)));
+  }, [locations, teachers, groups]);
 
   useEffect(() => {
     if (!isActive || !range) return;
@@ -177,7 +206,46 @@ export default function ClassesCalendarPanel({
       cancelled = true;
       ac.abort();
     };
-  }, [isActive, range, filterKey, refreshSignal, selLocations, selTeachers, selGroups]);
+  }, [isActive, range, filterKey, refreshSignal, localRefresh, selLocations, selTeachers, selGroups]);
+
+  const handleLessonClick = useCallback(
+    (arg: EventClickArg) => {
+      const id = arg.event.id;
+      if (!id || id.startsWith('holiday-')) return;
+
+      const status = String(arg.event.extendedProps.status ?? 'SCHEDULED');
+      if (status === 'CANCELLED') {
+        pushToast('error', 'Te zajęcia są już anulowane');
+        return;
+      }
+      if (status !== 'SCHEDULED') {
+        pushToast('error', 'Można anulować tylko zaplanowane zajęcia');
+        return;
+      }
+
+      const start = arg.event.start;
+      const whenLabel = start
+        ? start.toLocaleString('pl-PL', {
+            timeZone: TZ,
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+        : arg.event.title;
+
+      setCancelLessonParentMessage('');
+      setCancelLessonModal({
+        id,
+        title: arg.event.title,
+        whenLabel,
+        status,
+      });
+    },
+    [pushToast],
+  );
 
   const toggleId = (list: string[], setList: (v: string[]) => void, id: string) => {
     setList(list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
@@ -187,9 +255,9 @@ export default function ClassesCalendarPanel({
     allIds.length > 0 && allIds.every((id) => selected.includes(id));
 
   const clearFilters = () => {
-    setSelLocations([]);
-    setSelTeachers([]);
-    setSelGroups([]);
+    setSelLocations(locations.map((l) => l.id));
+    setSelTeachers(teachers.map((t) => t.id));
+    setSelGroups(groups.map((g) => g.id));
   };
 
   const goToPickedDate = () => {
@@ -370,9 +438,89 @@ export default function ClassesCalendarPanel({
             events={events}
             initialView="timeGridWeek"
             onDatesSet={handleDatesSet}
+            onLessonClick={handleLessonClick}
           />
         </div>
       </div>
+
+      {cancelLessonModal && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
+            <h3 className="text-lg font-semibold text-zinc-900">Anuluj zajęcia</h3>
+            <p className="mt-3 text-sm text-zinc-600">
+              Czy na pewno chcesz anulować te zajęcia?
+            </p>
+            <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2.5 text-sm text-zinc-800">
+              <p className="font-semibold">{cancelLessonModal.title}</p>
+              <p className="mt-1 capitalize text-zinc-600">{cancelLessonModal.whenLabel}</p>
+            </div>
+            <p className="mt-3 text-sm text-zinc-500">
+              Rodzice dzieci z tej grupy otrzymają wiadomość w panelu oraz powiadomienie e-mail.
+            </p>
+            <label className="mt-4 block text-sm">
+              <span className="mb-1 block font-semibold text-zinc-700">Wiadomość do rodziców</span>
+              <span className="mb-2 block text-xs text-zinc-500">
+                Opcjonalna treść dołączona do powiadomienia. Jeśli zostawisz puste, wysłany zostanie
+                domyślny tekst.
+              </span>
+              <textarea
+                className="min-h-[100px] w-full rounded-xl border border-emerald-200 px-3 py-2"
+                value={cancelLessonParentMessage}
+                onChange={(e) => setCancelLessonParentMessage(e.target.value)}
+                placeholder="Np. Zajęcia odbędą się w innym terminie — informacja wkrótce."
+              />
+            </label>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-xl bg-zinc-200 px-4 py-2 text-sm font-semibold"
+                disabled={cancelLessonBusy}
+                onClick={() => {
+                  setCancelLessonModal(null);
+                  setCancelLessonParentMessage('');
+                }}
+              >
+                Zamknij
+              </button>
+              <button
+                type="button"
+                disabled={cancelLessonBusy}
+                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                onClick={async () => {
+                  setCancelLessonBusy(true);
+                  try {
+                    const res = await fetch(
+                      `/api/admin/lessons/${cancelLessonModal.id}/cancel`,
+                      {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          parent_message: cancelLessonParentMessage.trim() || undefined,
+                        }),
+                      },
+                    );
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) {
+                      pushToast('error', data.message ?? 'Nie udało się anulować zajęć');
+                      return;
+                    }
+                    pushToast('success', data.message ?? 'Zajęcia anulowane');
+                    setCancelLessonModal(null);
+                    setCancelLessonParentMessage('');
+                    setLocalRefresh((s) => s + 1);
+                  } catch {
+                    pushToast('error', 'Nie udało się anulować zajęć');
+                  } finally {
+                    setCancelLessonBusy(false);
+                  }
+                }}
+              >
+                {cancelLessonBusy ? 'Anulowanie…' : 'Anuluj i powiadom rodziców'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

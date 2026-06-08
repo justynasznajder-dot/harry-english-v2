@@ -191,7 +191,7 @@ export async function GET(request: NextRequest) {
 
        FROM enrollment_requests er
 
-       LEFT JOIN locations l ON l.id::text = er.preferred_location::text
+       LEFT JOIN locations l ON l.id = er.preferred_location
 
        WHERE er.school_id = $1
 
@@ -282,9 +282,7 @@ export async function GET(request: NextRequest) {
 
             content_html: parentContract.content_html,
 
-            attachment_1_html: parentContract.attachment_1_html,
-
-            attachment_2_html: parentContract.attachment_2_html,
+            child_attachments: parentContract.child_attachments,
 
             include_attachment_2: parentContract.include_attachment_2,
 

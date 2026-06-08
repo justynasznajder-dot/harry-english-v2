@@ -23,6 +23,7 @@ import {
 import {
   fetchParentEnrollmentChildren,
   generateParentContract,
+  resolveIncludeAttachment2FromGroups,
   validateParentContractSelection,
 } from "@/lib/parent-contract";
 import {
@@ -96,12 +97,6 @@ export async function POST(request: NextRequest) {
 
       .toUpperCase();
 
-    const includeAttachment2 = Boolean(
-
-      body.includeAttachment2 ?? body.include_attachment_2 ?? false
-
-    );
-
     if (paymentType !== "MONTHLY" && paymentType !== "YEARLY") {
 
       return NextResponse.json(
@@ -172,6 +167,8 @@ export async function POST(request: NextRequest) {
         String(c.access_level).toUpperCase() === "ACCEPTED"
 
     );
+
+    const includeAttachment2 = resolveIncludeAttachment2FromGroups(included);
 
     const excludedRequestIds = children
       .filter((c) => {
@@ -249,9 +246,7 @@ export async function POST(request: NextRequest) {
 
         content_html: result.contentHtml,
 
-        attachment_1_html: result.attachment1Html,
-
-        attachment_2_html: result.attachment2Html,
+        child_attachments: result.childAttachments,
 
         include_attachment_2: includeAttachment2,
 

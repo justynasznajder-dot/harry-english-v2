@@ -41,10 +41,15 @@ export async function renderHtmlToPdf(html: string): Promise<Buffer> {
   }
 }
 
-export async function buildSignedContractPdfFiles(params: {
-  contentHtml: string;
+export type SignedChildAttachmentPdf = {
+  childName: string;
   attachment1Html?: string | null;
   attachment2Html?: string | null;
+};
+
+export async function buildSignedContractPdfFiles(params: {
+  contentHtml: string;
+  childAttachments: SignedChildAttachmentPdf[];
 }): Promise<ContractPdfFile[]> {
   const contractNumber = extractContractNumber(params.contentHtml);
   const files: ContractPdfFile[] = [];
@@ -54,18 +59,26 @@ export async function buildSignedContractPdfFiles(params: {
     content: await renderHtmlToPdf(params.contentHtml),
   });
 
-  if (params.attachment1Html) {
-    files.push({
-      filename: buildContractPdfFilename("Zalacznik-1-wizerunek", contractNumber),
-      content: await renderHtmlToPdf(params.attachment1Html),
-    });
-  }
-
-  if (params.attachment2Html) {
-    files.push({
-      filename: buildContractPdfFilename("Zalacznik-2-odbior-dziecka", contractNumber),
-      content: await renderHtmlToPdf(params.attachment2Html),
-    });
+  for (const child of params.childAttachments) {
+    const childSlug = safePdfSlug(child.childName);
+    if (child.attachment1Html) {
+      files.push({
+        filename: buildContractPdfFilename(
+          childSlug ? `Zalacznik-1-wizerunek-${childSlug}` : "Zalacznik-1-wizerunek",
+          contractNumber
+        ),
+        content: await renderHtmlToPdf(child.attachment1Html),
+      });
+    }
+    if (child.attachment2Html) {
+      files.push({
+        filename: buildContractPdfFilename(
+          childSlug ? `Zalacznik-2-odbior-${childSlug}` : "Zalacznik-2-odbior-dziecka",
+          contractNumber
+        ),
+        content: await renderHtmlToPdf(child.attachment2Html),
+      });
+    }
   }
 
   return files;

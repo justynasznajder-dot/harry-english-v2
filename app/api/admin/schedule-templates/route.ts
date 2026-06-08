@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
 
     await queryDb(
       `INSERT INTO schedule_templates (id, group_id, location_id, day_of_week, start_time, duration_min, school_year_id)
-       VALUES ($1, $2, $3, $4, $5::time, $6, $7::uuid)`,
+       VALUES ($1, $2, $3, $4, $5::time, $6, $7)`,
       [randomUUID(), groupId, locationId, dayOfWeek, startTime, durationMin, schoolYearId]
     );
 

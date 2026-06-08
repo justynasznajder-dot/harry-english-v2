@@ -3,7 +3,7 @@ import { canAccessSchoolAdminApis, resolveAdminPanelTenant } from "@/lib/db";
 import { sendCombinedProposalEmail } from "@/lib/email";
 import { getTokenFromRequest } from "@/lib/auth";
 import {
-  resolveProposalEmailCredentials,
+  ensureInitialProposalEmailCredentials,
   submitEnrollmentProposal,
   type ProposalEmailItem,
   type SharedParentState,
@@ -31,9 +31,9 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
     const proposals = (body as { proposals?: BatchProposalBody[] }).proposals;
-    if (!Array.isArray(proposals) || proposals.length < 2) {
+    if (!Array.isArray(proposals) || proposals.length < 1) {
       return NextResponse.json(
-        { message: "Wysyłka zbiorcza wymaga co najmniej dwóch propozycji" },
+        { message: "Wybierz co najmniej jedno dziecko do propozycji" },
         { status: 400 }
       );
     }
@@ -58,7 +58,10 @@ export async function POST(request: NextRequest) {
           groupId: p.groupId!,
         },
         sharedParent,
-        schoolRestrict
+        {
+          ...schoolRestrict,
+          allowedStatuses: ["NEW"],
+        }
       );
       if (!result.ok) {
         return NextResponse.json({ message: result.message }, { status: result.status });
@@ -72,7 +75,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: "Nie udało się przetworzyć propozycji" }, { status: 500 });
     }
 
-    const credentials = await resolveProposalEmailCredentials({
+    const credentials = await ensureInitialProposalEmailCredentials({
       parentUserId: sharedParent.parentUserId,
       parentEmail: sharedParent.parentEmail,
       parentCreated: sharedParent.parentCreated,
@@ -89,8 +92,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       message: sharedParent.parentCreated
-        ? "Propozycje zostały wysłane w jednym mailu, konto rodzica utworzone"
-        : "Propozycje zostały wysłane w jednym mailu",
+        ? "Propozycja została wysłana wraz z danymi do logowania, konto rodzica utworzone"
+        : "Propozycja została wysłana wraz z danymi do logowania",
       parentCreated: sharedParent.parentCreated,
       parentId: sharedParent.parentUserId,
       count: emailItems.length,

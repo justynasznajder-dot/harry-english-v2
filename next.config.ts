@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  serverExternalPackages: ["@aws-sdk/client-s3", "puppeteer"],
 };
 
 export default nextConfig;

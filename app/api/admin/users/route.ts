@@ -453,7 +453,7 @@ export async function POST(request: NextRequest) {
           const locOk = await queryDb<{ ok: boolean }>(
             `SELECT TRUE AS ok
              FROM locations
-             WHERE id::text = $1 AND school_id::text = $2 AND active = TRUE
+             WHERE id = $1 AND school_id = $2 AND active = TRUE
              LIMIT 1`,
             [preferredLocationId, targetSchoolId]
           );

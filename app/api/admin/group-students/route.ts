@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
 
     await queryDb(
       `INSERT INTO group_students (id, group_id, child_id, enrolled_at, school_year_id)
-       VALUES ($1, $2, $3, NOW(), $4::uuid)`,
+       VALUES ($1, $2, $3, NOW(), $4)`,
       [randomUUID(), groupId, childId, schoolYearId]
     );
     return NextResponse.json({ message: "Uczeń został dodany do grupy" });

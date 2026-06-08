@@ -8,10 +8,7 @@ import {
 import { sendProposalEmail } from "@/lib/email";
 import { getTokenFromRequest } from "@/lib/auth";
 import type { EnrollmentStatus } from "@/lib/enrollment-status";
-import {
-  resolveProposalEmailCredentials,
-  submitEnrollmentProposal,
-} from "@/lib/admin-enrollment-proposal";
+import { submitEnrollmentProposal } from "@/lib/admin-enrollment-proposal";
 export async function GET(request: NextRequest) {
   try {
     const payload = await getTokenFromRequest(request);
@@ -41,7 +38,7 @@ export async function GET(request: NextRequest) {
     }>(
       `SELECT
          COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id, er.parent_email) AS id,
-         MAX(COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id::text, '')) AS parent_user_id,
+         MAX(COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id, '')) AS parent_user_id,
          COALESCE(
            MAX(NULLIF(BTRIM(u.first_name), '')),
            MAX(NULLIF(BTRIM(er.parent_first_name), '')),
@@ -78,8 +75,8 @@ export async function GET(request: NextRequest) {
                'status', UPPER(BTRIM(COALESCE(er.status::text, 'NEW'))),
                'childAccessLevel', UPPER(BTRIM(COALESCE(c.access_level::text, er.status::text, 'NEW'))),
                'birthDate', er.child_birth_date::text,
-               'preferredLocation', COALESCE(loc.name, NULLIF(TRIM(er.preferred_location::text), '')),
-               'preferredLocationId', NULLIF(TRIM(BOTH FROM COALESCE(er.preferred_location::text, '')), ''),
+               'preferredLocation', COALESCE(loc.name, NULLIF(TRIM(er.preferred_location), '')),
+               'preferredLocationId', NULLIF(TRIM(BOTH FROM COALESCE(er.preferred_location, '')), ''),
                'notes', er.notes,
                'proposedGroupId', er.proposed_group_id,
                'proposedAt', er.proposed_at
@@ -94,7 +91,7 @@ export async function GET(request: NextRequest) {
        FROM enrollment_requests er
        LEFT JOIN locations loc
          ON loc.school_id = er.school_id
-        AND loc.id::text = NULLIF(TRIM(BOTH FROM COALESCE(er.preferred_location::text, '')), '')
+        AND loc.id = NULLIF(TRIM(BOTH FROM COALESCE(er.preferred_location, '')), '')
        LEFT JOIN users u
          ON (
            u.id = NULLIF(BTRIM(er.user_id), '')
@@ -112,7 +109,7 @@ export async function GET(request: NextRequest) {
          ON pp.user_id = COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id)
        WHERE UPPER(BTRIM(COALESCE(er.status::text, ''))) <> 'COMPLETED'
          AND (
-           COALESCE(u.id, NULLIF(BTRIM(er.user_id::text), '')) IS NOT NULL
+           COALESCE(u.id, NULLIF(BTRIM(er.user_id), '')) IS NOT NULL
            OR NULLIF(BTRIM(COALESCE(er.parent_email::text, '')), '') IS NOT NULL
          )
          ${parentsSchoolClause}
@@ -150,12 +147,12 @@ export async function GET(request: NextRequest) {
                 (
                   SELECT ARRAY_AGG(DISTINCT x.lid)
                   FROM (
-                    SELECT st2.location_id::text AS lid
+                    SELECT st2.location_id AS lid
                     FROM schedule_templates st2
                     WHERE st2.group_id = g.id
                       AND st2.location_id IS NOT NULL
                     UNION
-                    SELECT g.location_id::text
+                    SELECT g.location_id
                     WHERE g.location_id IS NOT NULL
                   ) x
                 ),
@@ -218,33 +215,28 @@ export async function POST(request: NextRequest) {
         groupId,
       },
       null,
-      tenant.role === "MANAGER" ? { restrictToSchoolId: tenant.tenantSchoolId } : undefined
+      {
+        ...(tenant.role === "MANAGER"
+          ? { restrictToSchoolId: tenant.tenantSchoolId }
+          : {}),
+        allowedStatuses: ["NEGOTIATING"],
+      }
     );
     if (!result.ok) {
       return NextResponse.json({ message: result.message }, { status: result.status });
     }
 
     const { sharedParent, emailItem } = result;
-    const credentials = await resolveProposalEmailCredentials({
-      parentUserId: sharedParent.parentUserId,
-      parentEmail: sharedParent.parentEmail,
-      parentCreated: sharedParent.parentCreated,
-      tempPasswordFromCreate: sharedParent.tempPassword,
-      excludeRequestIds: [requestId],
-    });
 
     await sendProposalEmail(
       sharedParent.parentEmail,
       `${sharedParent.parentFirstName} ${sharedParent.parentLastName}`.trim(),
-      emailItem,
-      credentials
+      emailItem
     );
 
     return NextResponse.json({
-      message: sharedParent.parentCreated
-        ? "Propozycja została wysłana, konto rodzica utworzone"
-        : "Propozycja została wysłana",
-      parentCreated: sharedParent.parentCreated,
+      message: "Nowa propozycja została wysłana",
+      parentCreated: false,
       parentId: sharedParent.parentUserId,
     });
   } catch (error) {

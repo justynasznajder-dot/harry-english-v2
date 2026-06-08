@@ -14,7 +14,7 @@ export async function GET(
     const { id: renewalId } = await params;
 
     const ownRes = await queryDb<{ ok: string }>(
-      `SELECT id::text AS ok FROM renewals WHERE id = $1 AND school_id = $2 LIMIT 1`,
+      `SELECT id AS ok FROM renewals WHERE id = $1 AND school_id = $2 LIMIT 1`,
       [renewalId, schoolId]
     );
     if (!ownRes.rows[0]) {

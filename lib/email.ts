@@ -866,14 +866,7 @@ export async function sendProposalEmail(
     childFirstName?: string;
     childLastName?: string;
   },
-  /**
-   * Podane tylko dla nowo utworzonego konta rodzica.
-   * `undefined` → konto już istniało, w mailu prosimy o zalogowanie istniejącymi danymi.
-   */
-  credentials?: {
-    loginEmail: string;
-    tempPassword: string;
-  }
+  /** Mail uzupełniający po negocjacji — bez danych logowania (rodzic ma już konto). */
 ) {
   const portalUrl = `${getAppBaseUrl()}/portal/login`;
   const p = getEmailPalette();
@@ -886,30 +879,7 @@ export async function sendProposalEmail(
       ? `${proposal.childFirstName} ${proposal.childLastName}`
       : "Twojego dziecka";
 
-  const credentialsHtml = credentials
-    ? `
-      <p style="margin:16px 0 8px 0;font-size:15px;line-height:1.6;color:${p.text};">
-        Założyliśmy dla Ciebie konto w portalu. Zaloguj się poniższymi danymi.
-      </p>
-      ${emailInsetCellOpen(p)}
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;">
-        <tr>
-          <td style="padding:4px 12px 4px 0;font-size:15px;color:${p.insetText};"><strong>Login (email):</strong></td>
-          <td style="padding:4px 0;font-size:15px;color:${p.insetText};font-family:Consolas,Menlo,monospace;">
-            ${buildEmailMailtoLink(credentials.loginEmail, p.insetText)}
-          </td>
-        </tr>
-        <tr>
-          <td style="padding:4px 12px 4px 0;font-size:15px;color:${p.insetText};"><strong>Hasło tymczasowe:</strong></td>
-          <td style="padding:4px 0;font-size:16px;color:${p.insetText};font-family:Consolas,Menlo,monospace;letter-spacing:1px;"><strong>${escapeHtmlForEmail(credentials.tempPassword)}</strong></td>
-        </tr>
-      </table>
-      ${emailInsetCellClose()}
-      <p style="margin:12px 0;font-size:14px;line-height:1.6;color:${p.text};opacity:0.85;">
-        Po pierwszym zalogowaniu poprosimy Cię o ustawienie własnego hasła.
-      </p>
-    `
-    : `
+  const loginHtml = `
       <p style="margin:16px 0 8px 0;font-size:15px;line-height:1.6;color:${p.text};">
         Aby zobaczyć szczegóły propozycji i podjąć decyzję, zaloguj się do portalu danymi, których używasz na co dzień.
       </p>
@@ -918,14 +888,7 @@ export async function sendProposalEmail(
       </p>
     `;
 
-  const credentialsText = credentials
-    ? `
-Założyliśmy dla Ciebie konto w portalu. Zaloguj się poniższymi danymi.
-- Login (email): ${credentials.loginEmail}
-- Hasło tymczasowe: ${credentials.tempPassword}
-Po pierwszym zalogowaniu poprosimy Cię o ustawienie własnego hasła.
-`
-    : `
+  const loginText = `
 Zaloguj się do portalu danymi, których używasz na co dzień.
 Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logowania.
 `;
@@ -936,17 +899,17 @@ Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logow
       address: process.env.EMAIL_USER || "kontakt@harry-english.pl",
     },
     to,
-    subject: "Propozycja grupy - Harry English",
+    subject: "Nowa propozycja grupy - Harry English",
     html: buildEmailShell({
       title: `Dzień dobry ${escapeHtmlForEmail(parentName)},`,
-      intro: `Przygotowaliśmy propozycję grupy dla ${safeChildName}. Zaakceptuj ją w portalu, aby przejść do uzupełnienia danych oraz do podpisania umowy.`,
+      intro: `Przygotowaliśmy nową propozycję grupy dla ${safeChildName}. Zaakceptuj ją w portalu, aby przejść dalej w procesie zapisu.`,
       contentHtml: `
         <ul style="margin:0 0 12px 18px;padding:0;font-size:15px;line-height:1.6;color:${p.text};">
           <li><strong>Grupa:</strong> ${escapeHtmlForEmail(proposal.groupName)}</li>
           <li><strong>Lokalizacja:</strong> ${escapeHtmlForEmail(proposal.locationName)}</li>
           <li><strong>Termin:</strong> ${escapeHtmlForEmail(proposal.schedule)}</li>
         </ul>
-        ${credentialsHtml}
+        ${loginHtml}
         ${emailCtaButton(portalUrl, "Przejdź do portalu")}
         <p style="margin:14px 0 0 0;font-size:13px;line-height:1.6;color:${p.text};">
           Lub skopiuj link do przeglądarki: <a href="${portalUrl}" class="he-email-body-link" style="color:${p.link} !important;">${portalUrl}</a>
@@ -955,11 +918,11 @@ Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logow
     }),
     text: `Dzień dobry ${parentName},
 
-Przygotowaliśmy propozycję grupy dla ${childNameText}. Zaakceptuj ją w portalu, aby przejść do uzupełnienia danych oraz do podpisania umowy:
+Przygotowaliśmy nową propozycję grupy dla ${childNameText}. Zaakceptuj ją w portalu, aby przejść dalej w procesie zapisu:
 - Grupa: ${proposal.groupName}
 - Lokalizacja: ${proposal.locationName}
 - Termin: ${proposal.schedule}
-${credentialsText}
+${loginText}
 Przejdź do portalu: ${portalUrl}
 `,
   });
@@ -975,7 +938,7 @@ export async function sendCombinedProposalEmail(
     childFirstName: string;
     childLastName: string;
   }>,
-  credentials?: {
+  credentials: {
     loginEmail: string;
     tempPassword: string;
   }
@@ -1009,8 +972,7 @@ export async function sendCombinedProposalEmail(
     })
     .join("\n\n");
 
-  const credentialsHtml = credentials
-    ? `
+  const credentialsHtml = `
       <p style="margin:16px 0 8px 0;font-size:15px;line-height:1.6;color:${p.text};">
         Założyliśmy dla Ciebie konto w portalu. Zaloguj się poniższymi danymi.
       </p>
@@ -1031,26 +993,13 @@ export async function sendCombinedProposalEmail(
       <p style="margin:12px 0;font-size:14px;line-height:1.6;color:${p.text};opacity:0.85;">
         Po pierwszym zalogowaniu poprosimy Cię o ustawienie własnego hasła.
       </p>
-    `
-    : `
-      <p style="margin:16px 0 8px 0;font-size:15px;line-height:1.6;color:${p.text};">
-        Aby zobaczyć szczegóły propozycji i podjąć decyzję, zaloguj się do portalu danymi, których używasz na co dzień.
-      </p>
-      <p style="margin:0 0 12px 0;font-size:14px;line-height:1.6;color:${p.text};opacity:0.85;">
-        Nie pamiętasz hasła? Skorzystaj z opcji „Zapomniałem hasła" na stronie logowania.
-      </p>
     `;
 
-  const credentialsText = credentials
-    ? `
+  const credentialsText = `
 Założyliśmy dla Ciebie konto w portalu. Zaloguj się poniższymi danymi.
 - Login (email): ${credentials.loginEmail}
 - Hasło tymczasowe: ${credentials.tempPassword}
 Po pierwszym zalogowaniu poprosimy Cię o ustawienie własnego hasła.
-`
-    : `
-Zaloguj się do portalu danymi, których używasz na co dzień.
-Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logowania.
 `;
 
   const childCount = proposals.length;
@@ -1272,7 +1221,7 @@ export async function sendSignedContractConfirmationEmails(params: {
   await sendHarryMail({
     from,
     to: params.parentEmail,
-    subject: "Potwierdzenie podpisu umowy - Harry English",
+    subject: "Potwierdzenie podpisania umowy - Harry English",
     html: buildEmailShell({
       title: `Dzień dobry ${escapeHtmlForEmail(params.parentFirstName)},`,
       intro: "Dziękujemy za podpisanie umowy.",

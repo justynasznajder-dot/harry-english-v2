@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { getRegistrationSchoolId, queryDb } from "@/lib/db";
+import { getParentProfileByUserId, getRegistrationSchoolId, queryDb } from "@/lib/db";
 
 import { sendSignedContractConfirmationEmails } from "@/lib/email";
 
@@ -9,6 +9,8 @@ import { getTokenFromRequest } from "@/lib/auth";
 import {
 
   applyContractSignaturesToDocumentHtml,
+
+  applySchoolYearToDocumentHtml,
 
   extractContractNumber,
 
@@ -19,6 +21,8 @@ import { buildSignedContractPdfFiles } from "@/lib/contract-pdf";
 import { formatPersonName } from "@/lib/format-person-name";
 
 import { syncParentUserAccessLevel } from "@/lib/enrollment-sync";
+import { resolveBillingTypeFromProfile } from "@/lib/parent-contract-profile";
+import { storeSignedContractPdfsInR2 } from "@/lib/r2-storage";
 
 
 
@@ -90,13 +94,9 @@ export async function POST(request: NextRequest) {
 
       content_html: string;
 
-      attachment_1_html: string | null;
-
-      attachment_2_html: string | null;
-
     }>(
 
-      `SELECT c.id, c.content_html, c.attachment_1_html, c.attachment_2_html
+      `SELECT c.id, c.content_html
 
        FROM contracts c
 
@@ -136,9 +136,15 @@ export async function POST(request: NextRequest) {
 
       last_name: string;
 
+      attachment_1_html: string | null;
+
+      attachment_2_html: string | null;
+
     }>(
 
-      `SELECT cc.child_id, cc.enrollment_request_id, ch.first_name, ch.last_name
+      `SELECT cc.child_id, cc.enrollment_request_id, ch.first_name, ch.last_name,
+
+              cc.attachment_1_html, cc.attachment_2_html
 
        FROM contract_children cc
 
@@ -186,39 +192,54 @@ export async function POST(request: NextRequest) {
 
 
 
-    const signedContentHtml = applyContractSignaturesToDocumentHtml(contract.content_html, {
+    const signedContentHtml = applyContractSignaturesToDocumentHtml(
+      applySchoolYearToDocumentHtml(contract.content_html, signedAt),
+      {
+        signedAt,
+        parentFullName,
+      }
+    );
 
-      signedAt,
+    const signedChildAttachments: Array<{
+      child_id: string;
+      childName: string;
+      attachment1Html: string | null;
+      attachment2Html: string | null;
+    }> = [];
 
-      parentFullName,
+    for (const row of included) {
+      const signedAttachment1 = row.attachment_1_html
+        ? applyContractSignaturesToDocumentHtml(
+            applySchoolYearToDocumentHtml(row.attachment_1_html, signedAt),
+            { signedAt, parentFullName }
+          )
+        : null;
+      const signedAttachment2 = row.attachment_2_html
+        ? applyContractSignaturesToDocumentHtml(
+            applySchoolYearToDocumentHtml(row.attachment_2_html, signedAt),
+            { signedAt, parentFullName }
+          )
+        : null;
 
-    });
+      if (signedAttachment1 || signedAttachment2) {
+        signedChildAttachments.push({
+          child_id: row.child_id,
+          childName:
+            `${formatPersonName(row.first_name)} ${formatPersonName(row.last_name)}`.trim(),
+          attachment1Html: signedAttachment1,
+          attachment2Html: signedAttachment2,
+        });
+      }
 
-    const signedAttachment1Html = contract.attachment_1_html
-
-      ? applyContractSignaturesToDocumentHtml(contract.attachment_1_html, {
-
-          signedAt,
-
-          parentFullName,
-
-        })
-
-      : null;
-
-    const signedAttachment2Html = contract.attachment_2_html
-
-      ? applyContractSignaturesToDocumentHtml(contract.attachment_2_html, {
-
-          signedAt,
-
-          parentFullName,
-
-        })
-
-      : null;
-
-
+      if (signedAttachment1 || signedAttachment2) {
+        await queryDb(
+          `UPDATE contract_children
+           SET attachment_1_html = $2, attachment_2_html = $3
+           WHERE contract_id = $1 AND child_id = $4`,
+          [contract.id, signedAttachment1, signedAttachment2, row.child_id]
+        );
+      }
+    }
 
     await queryDb(
 
@@ -230,27 +251,11 @@ export async function POST(request: NextRequest) {
 
            signed_ip = $2,
 
-           content_html = $3,
-
-           attachment_1_html = $4,
-
-           attachment_2_html = $5
+           content_html = $3
 
        WHERE id = $1`,
 
-      [
-
-        contract.id,
-
-        ip,
-
-        signedContentHtml,
-
-        signedAttachment1Html,
-
-        signedAttachment2Html,
-
-      ]
+      [contract.id, ip, signedContentHtml]
 
     );
 
@@ -295,37 +300,44 @@ export async function POST(request: NextRequest) {
 
 
     try {
-
       const pdfFiles = await buildSignedContractPdfFiles({
-
         contentHtml: signedContentHtml,
-
-        attachment1Html: signedAttachment1Html,
-
-        attachment2Html: signedAttachment2Html,
-
+        childAttachments: signedChildAttachments,
       });
 
-      await sendSignedContractConfirmationEmails({
+      const profile = await getParentProfileByUserId(parentId);
+      const billingType = resolveBillingTypeFromProfile(profile);
+      const parentPesel =
+        billingType === "company"
+          ? String(profile?.nip ?? "").trim()
+          : String(profile?.pesel ?? "").trim();
 
-        parentEmail: parent.email,
+      try {
+        await storeSignedContractPdfsInR2({
+          schoolId: SCHOOL_ID,
+          parentFullName,
+          parentPesel,
+          signedAt,
+          pdfFiles,
+        });
+      } catch (r2Err) {
+        console.error("Signed contract R2 backup error:", r2Err);
+      }
 
-        parentFirstName: formatPersonName(parent.first_name ?? "Rodzicu"),
-
-        parentFullName,
-
-        contractNumber: extractContractNumber(signedContentHtml),
-
-        childName,
-
-        pdfFiles,
-
-      });
-
-    } catch (mailErr) {
-
-      console.error("Signed contract PDF/email error:", mailErr);
-
+      try {
+        await sendSignedContractConfirmationEmails({
+          parentEmail: parent.email,
+          parentFirstName: formatPersonName(parent.first_name ?? "Rodzicu"),
+          parentFullName,
+          contractNumber: extractContractNumber(signedContentHtml),
+          childName,
+          pdfFiles,
+        });
+      } catch (mailErr) {
+        console.error("Signed contract email error:", mailErr);
+      }
+    } catch (pdfErr) {
+      console.error("Signed contract PDF generation error:", pdfErr);
     }
 
 

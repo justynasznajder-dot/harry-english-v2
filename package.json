@@ -7,10 +7,13 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "db:migrate:attachments": "tsx scripts/run-contracts-attachments-migration.ts",
-    "db:insert-templates": "tsx scripts/insert-contract-template.ts"
+    "db:migrate:attachments": "npx tsx scripts/run-contracts-attachments-migration.ts",
+    "db:migrate:unify-ids": "npx tsx scripts/run-unify-ids-migration.ts",
+    "db:verify-ids": "npx tsx scripts/verify-text-ids.ts",
+    "db:insert-templates": "npx tsx scripts/insert-contract-template.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1063.0",
     "@fullcalendar/core": "^6.1.20",
     "@fullcalendar/daygrid": "^6.1.20",
     "@fullcalendar/interaction": "^6.1.20",

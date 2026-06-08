@@ -3,6 +3,8 @@ import { randomUUID } from "crypto";
 import { canAccessSchoolAdminApis, DEFAULT_SCHOOL_ID, getActiveSchoolYear, queryDb } from "@/lib/db";
 import { getTokenFromRequest } from "@/lib/auth";
 
+const TZ = "Europe/Warsaw";
+
 async function ensureAdmin(request: NextRequest): Promise<boolean> {
   const payload = await getTokenFromRequest(request);
   const userId = payload?.userId;
@@ -32,7 +34,7 @@ function ymdFromDb(v: string | Date): string {
 
 function isDayInHolidayRanges(
   day: Date,
-  rows: { date_from: string | Date; date_to: string | Date }[]
+  rows: { date_from: string | Date; date_to: string | Date }[],
 ): boolean {
   const ds = dateOnlyYmd(day);
   for (const r of rows) {
@@ -41,6 +43,19 @@ function isDayInHolidayRanges(
     if (from <= ds && to >= ds) return true;
   }
   return false;
+}
+
+function buildGenerateMessage(opts: { created: number; retroactive: boolean }): string {
+  const { created, retroactive } = opts;
+  if (created === 0) {
+    return "Wszystkie zajęcia w tym zakresie już istnieją w kalendarzu.";
+  }
+  let message = `Wygenerowano ${created} zajęć (status: zaplanowane).`;
+  if (retroactive) {
+    message +=
+      " Uwaga: generowano zajęcia wstecznie — minione terminy też trafią do kalendarza jako zaplanowane i można je anulować.";
+  }
+  return message;
 }
 
 export async function POST(request: NextRequest) {
@@ -56,7 +71,7 @@ export async function POST(request: NextRequest) {
 
     const groupRes = await queryDb<{ teacher_id: string | null; school_id: string }>(
       `SELECT teacher_id, school_id FROM groups WHERE id = $1 LIMIT 1`,
-      [groupId]
+      [groupId],
     );
     const gRow = groupRes.rows[0];
     const teacherId = gRow?.teacher_id ?? null;
@@ -77,18 +92,24 @@ export async function POST(request: NextRequest) {
         {
           message: `Daty poza zakresem aktywnego roku szkolnego (${yFrom} - ${yTo})`,
         },
-        { status: 400 }
+        { status: 400 },
       );
     }
+
+    const todayRes = await queryDb<{ today: string }>(
+      `SELECT (NOW() AT TIME ZONE '${TZ}')::date::text AS today`,
+    );
+    const todayYmd = todayRes.rows[0]?.today ?? dateOnlyYmd(new Date());
+    const retroactive = dateFrom < todayYmd;
 
     const holidays = await queryDb<{ date_from: string; date_to: string }>(
       `SELECT date_from::text, date_to::text
        FROM school_holidays
        WHERE school_id = $1
-         AND (school_year_id::text = $2 OR school_year_id IS NULL)
+         AND (school_year_id = $2 OR school_year_id IS NULL)
          AND date_from <= $3::date
          AND date_to >= $4::date`,
-      [schoolId, yearId, dateTo, dateFrom]
+      [schoolId, yearId, dateTo, dateFrom],
     );
 
     const templates = await queryDb<{
@@ -101,7 +122,7 @@ export async function POST(request: NextRequest) {
       `SELECT id, day_of_week, start_time::text, duration_min, location_id
        FROM schedule_templates
        WHERE group_id = $1`,
-      [groupId]
+      [groupId],
     );
 
     const from = new Date(dateFrom + "T12:00:00");
@@ -110,26 +131,41 @@ export async function POST(request: NextRequest) {
 
     for (const st of templates.rows) {
       let d = nextDateForWeekday(from, st.day_of_week);
+      const startTime = st.start_time.slice(0, 8);
       while (d <= to) {
         if (isDayInHolidayRanges(d, holidays.rows)) {
           d.setDate(d.getDate() + 7);
           continue;
         }
-        const [hh, mm] = st.start_time.slice(0, 5).split(":").map(Number);
-        const scheduled = new Date(d);
-        scheduled.setHours(hh, mm, 0, 0);
-        const iso = scheduled.toISOString();
+        const dateStr = dateOnlyYmd(d);
 
         const exists = await queryDb<{ id: string }>(
-          `SELECT id FROM lessons WHERE group_id = $1 AND scheduled_at = $2::timestamp LIMIT 1`,
-          [groupId, iso]
+          `SELECT id FROM lessons
+           WHERE group_id = $1
+             AND scheduled_at = (($2::date + $3::time) AT TIME ZONE '${TZ}')
+           LIMIT 1`,
+          [groupId, dateStr, startTime],
         );
         if (!exists.rows[0]) {
           await queryDb(
             `INSERT INTO lessons (
               id, group_id, teacher_id, location_id, scheduled_at, duration_min, status, created_at, school_year_id, schedule_template_id
-             ) VALUES ($1, $2, $3, $4, $5::timestamp, $6, 'SCHEDULED', NOW(), $7::uuid, $8)`,
-            [randomUUID(), groupId, teacherId, st.location_id, iso, st.duration_min, yearId, st.id]
+             ) VALUES (
+              $1, $2, $3, $4,
+              (($5::date + $6::time) AT TIME ZONE '${TZ}'),
+              $7, 'SCHEDULED', NOW(), $8, $9
+             )`,
+            [
+              randomUUID(),
+              groupId,
+              teacherId,
+              st.location_id,
+              dateStr,
+              startTime,
+              st.duration_min,
+              yearId,
+              st.id,
+            ],
           );
           created += 1;
         }
@@ -137,7 +173,13 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ created, message: `Wygenerowano ${created} zajęć` });
+    const message = buildGenerateMessage({ created, retroactive });
+
+    return NextResponse.json({
+      created,
+      retroactive,
+      message,
+    });
   } catch (error) {
     console.error("POST lessons/generate error:", error);
     return NextResponse.json({ message: "Błąd generowania zajęć" }, { status: 500 });

@@ -909,7 +909,7 @@ async function activeEnrollmentChildExists(
     `SELECT EXISTS(
        SELECT 1
        FROM enrollment_requests
-       WHERE school_id::text = $1
+       WHERE school_id = $1
          AND LOWER(BTRIM(parent_email::text)) = $2
          AND LOWER(BTRIM(child_first_name::text)) = LOWER($3)
          AND LOWER(BTRIM(child_last_name::text)) = LOWER($4)
