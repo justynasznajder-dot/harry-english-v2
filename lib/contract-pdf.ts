@@ -20,12 +20,30 @@ export function buildContractPdfFilename(label: string, contractNumber: string |
   return `${safePdfSlug(label)}-${suffix}.pdf`;
 }
 
-export async function renderHtmlToPdf(html: string): Promise<Buffer> {
+function isServerlessRuntime(): boolean {
+  return process.env.VERCEL === "1" || Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
+}
+
+async function launchPdfBrowser() {
+  if (isServerlessRuntime()) {
+    const chromium = await import("@sparticuz/chromium");
+    const puppeteer = await import("puppeteer-core");
+    return puppeteer.default.launch({
+      args: chromium.default.args,
+      executablePath: await chromium.default.executablePath(),
+      headless: true,
+    });
+  }
+
   const puppeteer = await import("puppeteer");
-  const browser = await puppeteer.default.launch({
+  return puppeteer.default.launch({
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
   });
+}
+
+export async function renderHtmlToPdf(html: string): Promise<Buffer> {
+  const browser = await launchPdfBrowser();
 
   try {
     const page = await browser.newPage();

@@ -24,7 +24,8 @@ import { syncParentUserAccessLevel } from "@/lib/enrollment-sync";
 import { resolveBillingTypeFromProfile } from "@/lib/parent-contract-profile";
 import { storeSignedContractPdfsInR2 } from "@/lib/r2-storage";
 
-
+/** PDF (Chromium) + R2 + mail — wymaga więcej czasu niż domyślne 10 s na Vercel. */
+export const maxDuration = 60;
 
 function extractIp(request: NextRequest): string {
 
