@@ -20,7 +20,7 @@ import { buildSignedContractPdfFiles } from "@/lib/contract-pdf";
 
 import { formatPersonName } from "@/lib/format-person-name";
 
-import { syncParentUserAccessLevel } from "@/lib/enrollment-sync";
+import { enrollChildInGroup, syncParentUserAccessLevel } from "@/lib/enrollment-sync";
 import { resolveBillingTypeFromProfile } from "@/lib/parent-contract-profile";
 import { storeSignedContractPdfsInR2 } from "@/lib/r2-storage";
 
@@ -133,6 +133,8 @@ export async function POST(request: NextRequest) {
 
       enrollment_request_id: string | null;
 
+      group_id: string | null;
+
       first_name: string;
 
       last_name: string;
@@ -143,7 +145,7 @@ export async function POST(request: NextRequest) {
 
     }>(
 
-      `SELECT cc.child_id, cc.enrollment_request_id, ch.first_name, ch.last_name,
+      `SELECT cc.child_id, cc.enrollment_request_id, cc.group_id, ch.first_name, ch.last_name,
 
               cc.attachment_1_html, cc.attachment_2_html
 
@@ -290,6 +292,10 @@ export async function POST(request: NextRequest) {
 
         );
 
+      }
+
+      if (row.group_id) {
+        await enrollChildInGroup(row.child_id, row.group_id);
       }
 
     }

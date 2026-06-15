@@ -51,6 +51,7 @@ export const ENROLLMENT_LIST_FILTERS = [
   { value: "NEGOTIATING", label: "Negocjacje" },
   { value: "ACCEPTED", label: "Zaakceptowane" },
   { value: "SIGNED", label: "Podpisane" },
+  { value: "REJECTED", label: "Odrzucone" },
 ] as const;
 
 export function filterEnrollmentChildrenByStatus<T extends { status: EnrollmentStatus }>(

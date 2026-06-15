@@ -1,5 +1,6 @@
 import { queryDb } from "@/lib/db";
 import {
+  enrollChildrenForEnrollmentRequest,
   syncChildrenAccessLevelForEnrollment,
   syncParentUserAccessLevel,
 } from "@/lib/enrollment-sync";
@@ -31,5 +32,6 @@ export async function completeComplimentaryEnrollment(
     [enrollmentRequestId, parentId, schoolId]
   );
 
+  await enrollChildrenForEnrollmentRequest(enrollmentRequestId);
   await syncParentUserAccessLevel(parentId);
 }

@@ -462,6 +462,25 @@ const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
                               </p>
                             </div>
                           )}
+                          {(child.status === 'SIGNED' || child.status === 'COMPLETED') && (
+                            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm">
+                              <p className="font-semibold text-emerald-900">
+                                {child.status === 'SIGNED'
+                                  ? 'Umowa podpisana — uczeń w grupie'
+                                  : 'Zapis zakończony — uczeń w grupie'}
+                              </p>
+                              {proposedGroup ? (
+                                <p className="mt-1 text-emerald-900">
+                                  {proposedGroup.name} · {proposedGroup.location_name} ·{' '}
+                                  {proposedGroup.schedule}
+                                </p>
+                              ) : (
+                                <p className="mt-1 text-emerald-900">
+                                  (grupa niedostępna w aktualnej liście — sprawdź w zakładce Grupy)
+                                </p>
+                              )}
+                            </div>
+                          )}
                           {child.status === 'REJECTED' && (
                             <p className="rounded-xl border border-rose-200 bg-rose-50 p-2 text-xs text-rose-800">
                               Zgłoszenie odrzucone (rezygnacja rodzica lub decyzja szkoły).

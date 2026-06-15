@@ -369,6 +369,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     }>
   >([]);
   const [selectedComplimentaryCandidateKey, setSelectedComplimentaryCandidateKey] = useState('');
+  const [complimentaryFilterFirstName, setComplimentaryFilterFirstName] = useState('');
+  const [complimentaryFilterLastName, setComplimentaryFilterLastName] = useState('');
   const [groups, setGroups] = useState<GroupRow[]>([]);
   const [groupSaving, setGroupSaving] = useState(false);
   const [groupForm, setGroupForm] = useState({
@@ -732,6 +734,48 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       }),
     [users, childForm.parentSearch]
   );
+
+  const matchesComplimentaryNameFilters = useCallback(
+    (firstName: string, lastName: string) => {
+      const firstNameQuery = complimentaryFilterFirstName.trim().toLocaleLowerCase('pl');
+      const lastNameQuery = complimentaryFilterLastName.trim().toLocaleLowerCase('pl');
+      if (firstNameQuery && !firstName.toLocaleLowerCase('pl').includes(firstNameQuery)) {
+        return false;
+      }
+      if (lastNameQuery && !lastName.toLocaleLowerCase('pl').includes(lastNameQuery)) {
+        return false;
+      }
+      return true;
+    },
+    [complimentaryFilterFirstName, complimentaryFilterLastName],
+  );
+
+  const filteredComplimentaryCandidates = useMemo(
+    () =>
+      complimentaryCandidates.filter((candidate) =>
+        matchesComplimentaryNameFilters(candidate.firstName, candidate.lastName),
+      ),
+    [complimentaryCandidates, matchesComplimentaryNameFilters],
+  );
+
+  const filteredComplimentaryParents = useMemo(
+    () =>
+      complimentaryParents.filter((parent) =>
+        matchesComplimentaryNameFilters(parent.firstName, parent.lastName),
+      ),
+    [complimentaryParents, matchesComplimentaryNameFilters],
+  );
+
+  useEffect(() => {
+    if (
+      selectedComplimentaryCandidateKey &&
+      !filteredComplimentaryCandidates.some(
+        (candidate) => candidate.key === selectedComplimentaryCandidateKey,
+      )
+    ) {
+      setSelectedComplimentaryCandidateKey('');
+    }
+  }, [filteredComplimentaryCandidates, selectedComplimentaryCandidateKey]);
 
   const organizeFilterNameOptions = useMemo(() => {
     const set = new Set(groups.map((g) => g.name).filter(Boolean));
@@ -2286,16 +2330,56 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       Rodzice z tej listy kończą zapis po akceptacji grupy — bez umowy, faktur i
                       płatności. Możesz dodać konto rodzica lub zgłoszenie z rejestracji (e-mail).
                     </p>
-                    <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                    <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                      <div className="space-y-1">
+                        <label
+                          htmlFor="complimentary-filter-first-name"
+                          className="block text-xs font-medium text-zinc-600"
+                        >
+                          Imię
+                        </label>
+                        <input
+                          id="complimentary-filter-first-name"
+                          type="text"
+                          className="w-full rounded-xl border border-emerald-200 px-3 py-2 text-sm"
+                          placeholder="Filtruj po imieniu…"
+                          value={complimentaryFilterFirstName}
+                          onChange={(e) => setComplimentaryFilterFirstName(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label
+                          htmlFor="complimentary-filter-last-name"
+                          className="block text-xs font-medium text-zinc-600"
+                        >
+                          Nazwisko
+                        </label>
+                        <input
+                          id="complimentary-filter-last-name"
+                          type="text"
+                          className="w-full rounded-xl border border-emerald-200 px-3 py-2 text-sm"
+                          placeholder="Filtruj po nazwisku…"
+                          value={complimentaryFilterLastName}
+                          onChange={(e) => setComplimentaryFilterLastName(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                       <select
                         className="min-w-0 flex-1 rounded-xl border border-emerald-200 px-3 py-2"
                         value={selectedComplimentaryCandidateKey}
                         onChange={(e) => setSelectedComplimentaryCandidateKey(e.target.value)}
                       >
-                        <option value="">Wybierz rodzica…</option>
-                        {complimentaryCandidates.some((c) => c.source === 'USER') && (
+                        <option value="">
+                          {complimentaryCandidates.length === 0
+                            ? 'Brak kandydatów do dodania'
+                            : filteredComplimentaryCandidates.length === 0
+                              ? 'Brak wyników — zmień filtry'
+                              : 'Wybierz rodzica…'}
+                        </option>
+                        {filteredComplimentaryCandidates.some((c) => c.source === 'USER') && (
                           <optgroup label="Konta rodziców">
-                            {complimentaryCandidates
+                            {filteredComplimentaryCandidates
                               .filter((c) => c.source === 'USER')
                               .map((c) => (
                                 <option key={c.key} value={c.key}>
@@ -2304,9 +2388,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                               ))}
                           </optgroup>
                         )}
-                        {complimentaryCandidates.some((c) => c.source === 'ENROLLMENT') && (
+                        {filteredComplimentaryCandidates.some((c) => c.source === 'ENROLLMENT') && (
                           <optgroup label="Zgłoszenia (enrollment)">
-                            {complimentaryCandidates
+                            {filteredComplimentaryCandidates
                               .filter((c) => c.source === 'ENROLLMENT')
                               .map((c) => (
                                 <option key={c.key} value={c.key}>
@@ -2356,13 +2440,23 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         Dodaj
                       </button>
                     </div>
+                    {(complimentaryFilterFirstName.trim() || complimentaryFilterLastName.trim()) && (
+                      <p className="mt-2 text-xs text-zinc-500">
+                        Wyniki: {filteredComplimentaryCandidates.length} kandydatów ·{' '}
+                        {filteredComplimentaryParents.length} na liście
+                      </p>
+                    )}
                     <div className="mt-4 max-h-64 space-y-2 overflow-y-auto">
                       {complimentaryParents.length === 0 ? (
                         <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
                           Brak rodziców w trybie bez opłat.
                         </p>
+                      ) : filteredComplimentaryParents.length === 0 ? (
+                        <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
+                          Brak wyników dla podanych filtrów.
+                        </p>
                       ) : (
-                        complimentaryParents.map((parent) => (
+                        filteredComplimentaryParents.map((parent) => (
                           <div
                             key={parent.id}
                             className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-100 px-4 py-3"
@@ -3359,39 +3453,37 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
 
   return (
     <div className="manager-panel pb-24" data-session-school-id={sessionSchoolId ?? ''}>
-      <div className="rounded-3xl border border-emerald-100 bg-white">
-        <nav className="no-scrollbar overflow-x-auto border-b border-emerald-100">
-          <div className="flex min-w-max gap-2 p-2">
-            {topTabs.map((tab) => (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => {
-                  if (tab.key === 'announcements' && activeTab === 'announcements') {
-                    setMessagesListResetToken((t) => t + 1);
-                  }
-                  setActiveTab(tab.key);
-                }}
-                className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
-                  activeTab === tab.key
-                    ? 'border-[#0f6e56] bg-[#0f6e56] text-white shadow-sm'
-                    : 'border-transparent bg-emerald-50/60 text-zinc-800 hover:border-emerald-200 hover:bg-emerald-50'
-                }`}
-              >
-                {tab.key === 'announcements' ? (
-                  <MessagesTabLabel
-                    label={tab.label}
-                    unreadCount={messagesUnreadCount}
-                    isActive={activeTab === 'announcements'}
-                  />
-                ) : (
-                  tab.label
-                )}
-              </button>
-            ))}
-          </div>
-        </nav>
-      </div>
+      <nav className="admin-top-nav no-scrollbar overflow-x-auto rounded-3xl bg-white p-2 shadow-sm">
+        <div className="flex min-w-max gap-2">
+          {topTabs.map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => {
+                if (tab.key === 'announcements' && activeTab === 'announcements') {
+                  setMessagesListResetToken((t) => t + 1);
+                }
+                setActiveTab(tab.key);
+              }}
+              className={`admin-top-tab rounded-full px-4 py-2 text-sm font-semibold transition ${
+                activeTab === tab.key
+                  ? 'bg-[#0f6e56] text-white shadow-sm'
+                  : 'bg-emerald-50/60 text-zinc-800 hover:bg-emerald-50'
+              }`}
+            >
+              {tab.key === 'announcements' ? (
+                <MessagesTabLabel
+                  label={tab.label}
+                  unreadCount={messagesUnreadCount}
+                  isActive={activeTab === 'announcements'}
+                />
+              ) : (
+                tab.label
+              )}
+            </button>
+          ))}
+        </div>
+      </nav>
 
       <div className="mt-4">{renderContent()}</div>
 
@@ -4122,11 +4214,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       )}
 
       <style jsx>{`
-        .manager-panel :global(button:not(:disabled)) {
+        .manager-panel :global(button:not(:disabled):not(.admin-top-tab)) {
           transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease,
             box-shadow 180ms ease;
         }
-        .manager-panel :global(button:not(:disabled):hover) {
+        .manager-panel :global(button:not(:disabled):not(.admin-top-tab):hover) {
           background-color: #d8f3ea;
           border-color: #2f8f7b;
           color: #0a4f3e;
