@@ -7,10 +7,17 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "db:migrate:attachments": "npx tsx scripts/run-contracts-attachments-migration.ts",
-    "db:migrate:unify-ids": "npx tsx scripts/run-unify-ids-migration.ts",
+    "db:migrate:attachments": "npx tsx scripts/prisma-migrate-guard.ts attachments",
+    "db:migrate:unify-ids": "npx tsx scripts/prisma-migrate-guard.ts unify-ids",
     "db:verify-ids": "npx tsx scripts/verify-text-ids.ts",
-    "db:insert-templates": "npx tsx scripts/insert-contract-template.ts"
+    "db:insert-templates": "npx tsx scripts/prisma-migrate-guard.ts insert-templates",
+    "db:pull": "prisma db pull",
+    "db:migrate:status": "prisma migrate status",
+    "db:migrate:diff": "npx tsx scripts/prisma-migrate-diff.ts",
+    "db:migrate:create-only": "npx tsx scripts/prisma-migrate-guard.ts create-only",
+    "db:migrate:resolve-init": "npx tsx scripts/prisma-migrate-guard.ts resolve-init",
+    "db:migrate:deploy": "npx tsx scripts/prisma-migrate-guard.ts deploy",
+    "db:migrate:dev": "npx tsx scripts/prisma-migrate-guard.ts dev"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1063.0",

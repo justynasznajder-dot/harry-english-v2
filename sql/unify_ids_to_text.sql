@@ -160,28 +160,6 @@ BEGIN
   END IF;
 END $$;
 
--- Marketing (id było UUID)
-DO $$
-DECLARE
-  tbl TEXT;
-BEGIN
-  FOREACH tbl IN ARRAY ARRAY['marketing_gallery', 'marketing_faq', 'marketing_testimonial']
-  LOOP
-    IF EXISTS (
-      SELECT 1 FROM information_schema.columns
-      WHERE table_schema = 'public' AND table_name = tbl AND column_name = 'id'
-        AND udt_name = 'uuid'
-    ) THEN
-      EXECUTE format('ALTER TABLE %I ALTER COLUMN id DROP DEFAULT', tbl);
-      EXECUTE format('ALTER TABLE %I ALTER COLUMN id TYPE TEXT USING id::text', tbl);
-      EXECUTE format(
-        'ALTER TABLE %I ALTER COLUMN id SET DEFAULT (gen_random_uuid())::text',
-        tbl
-      );
-    END IF;
-  END LOOP;
-END $$;
-
 -- Indeksy school_years (idempotent)
 CREATE INDEX IF NOT EXISTS idx_school_years_school_id ON school_years (school_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_school_years_one_active ON school_years (school_id) WHERE active = TRUE;

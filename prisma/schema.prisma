@@ -1,406 +1,640 @@
-// ============================================================
-// HarryEnglish — Prisma Schema
-// Zsynchronizowany z bazą Neon: 2026-06-06
-// Wszystkie PK/FK (id, school_id, *_id): TEXT + DEFAULT (gen_random_uuid())::text
-// Provider: PostgreSQL (Neon)
-// UWAGA: schema.prisma pełni rolę dokumentacyjną — projekt używa
-//        raw SQL via pg, bez Prisma Client/migrations.
-// ============================================================
+// HarryEnglish — schemat bazy (źródło prawdy). Połączenie CLI: prisma.config.ts
+// Migracje: prisma/migrations/ — patrz prisma/MIGRATE.md
+// Runtime aplikacji: pg + raw SQL (lib/db.ts), bez Prisma Client
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["partialIndexes"]
 }
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
-// ============================================================
-// SZKOŁY (multi-tenant — school_id wszędzie)
-// ============================================================
+model announcements {
+  id           String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id    String
+  author_id    String
+  title        String    @db.VarChar(255)
+  body         String
+  target_role  String?   @db.VarChar(50)
+  published_at DateTime  @default(now()) @db.Timestamp(6)
+  expires_at   DateTime? @db.Timestamp(6)
+  users        users     @relation(fields: [author_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  schools      schools   @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
-model School {
-  id             String   @id @default(dbgenerated("(gen_random_uuid())::text"))
-  name           String   @db.VarChar(255)
-  slug           String   @unique @db.VarChar(255)
-  timezone       String   @default("Europe/Warsaw") @db.VarChar(100)
-  active         Boolean  @default(true)
-  /// Czy okno odnowień jest otwarte dla rodziców
-  renewalsOpen   Boolean  @default(false) @map("renewals_open")
-  /// Sezon odnowień np. "2025/2026"
-  renewalsSeason String?  @map("renewals_season") @db.VarChar(20)
-  city           String?  @db.VarChar(100)
-  createdAt      DateTime @default(now()) @map("created_at")
-
-  users              User[]
-  children           Child[]
-  groups             Group[]
-  locations          Location[]
-  materials          Material[]
-  subscriptions      Subscription[]
-  announcements      Announcement[]
-  rewards            Reward[]
-  messages           Message[]
-  payments           Payment[]
-  contracts          Contract[]
-  contractTemplates  ContractTemplate[]
-  parentProfiles     ParentProfile[]
-  enrollmentRequests EnrollmentRequest[]
-  schoolYears        SchoolYear[]
-  schoolHolidays     SchoolHoliday[]
-  renewals           Renewal[]
-  renewalProposals   RenewalProposal[]
-  discountSettings   SchoolDiscountSetting[]
-  complimentaryParents SchoolComplimentaryParent[]
-  marketingGallery     MarketingGallery[]
-  marketingFaq         MarketingFaq[]
-  marketingTestimonial MarketingTestimonial[]
-
-  @@map("schools")
+  @@index([school_id], map: "idx_announcements_school_id")
 }
 
-model SchoolDiscountSetting {
-  schoolId    String   @map("school_id")
-  /// LARGE_FAMILY_CARD | SIBLING
-  discountKey String   @map("discount_key") @db.Text
-  percent     Decimal  @default(0) @db.Decimal(5, 2)
-  updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz
+model attendance {
+  id        String           @id @default(dbgenerated("(gen_random_uuid())::text"))
+  lesson_id String
+  child_id  String
+  status    AttendanceStatus @default(PRESENT)
+  note      String?
+  children  children         @relation(fields: [child_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  lessons   lessons          @relation(fields: [lesson_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
-  school School @relation(fields: [schoolId], references: [id])
-
-  @@id([schoolId, discountKey])
-  @@map("school_discount_settings")
+  @@unique([lesson_id, child_id])
+  @@index([child_id], map: "idx_attendance_child_id")
+  @@index([lesson_id], map: "idx_attendance_lesson_id")
 }
 
-model SchoolComplimentaryParent {
-  id          String   @id @default(dbgenerated("(gen_random_uuid())::text"))
-  schoolId    String   @map("school_id")
-  /// Konto rodzica — NULL gdy wpis po e-mailu ze zgłoszenia
-  parentId    String?  @map("parent_id")
-  /// E-mail ze zgłoszenia enrollment — NULL gdy wpis po koncie users
-  parentEmail String?  @map("parent_email") @db.Text
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
-
-  school School @relation(fields: [schoolId], references: [id])
-  parent User?  @relation(fields: [parentId], references: [id])
-
-  @@index([parentId], name: "idx_school_complimentary_parents_parent")
-  @@map("school_complimentary_parents")
+model child_auth {
+  id            String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  child_id      String    @unique
+  username      String    @unique @db.VarChar(100)
+  password_hash String    @db.VarChar(255)
+  last_login    DateTime? @db.Timestamp(6)
+  children      children  @relation(fields: [child_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }
 
-model SchoolYear {
+model child_rewards {
   id        String   @id @default(dbgenerated("(gen_random_uuid())::text"))
-  schoolId  String   @map("school_id")
-  name      String   @db.VarChar(100)
-  dateFrom  DateTime @map("date_from") @db.Date
-  dateTo    DateTime @map("date_to") @db.Date
-  active    Boolean  @default(false)
-  createdAt DateTime @default(now()) @map("created_at")
+  child_id  String
+  reward_id String
+  earned_at DateTime @default(now()) @db.Timestamp(6)
+  children  children @relation(fields: [child_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  rewards   rewards  @relation(fields: [reward_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
-  school            School             @relation(fields: [schoolId], references: [id])
-  holidays          SchoolHoliday[]
-  groups            Group[]
-  lessons           Lesson[]
-  subscriptions     Subscription[]
-  scheduleTemplates ScheduleTemplate[]
-  groupStudents     GroupStudent[]
-
-  @@index([schoolId], name: "idx_school_years_school_id")
-  /// Partial unique — tylko jeden aktywny rok na szkołę (WHERE active = true), wymuszony w bazie
-  @@unique([schoolId], name: "idx_school_years_one_active")
-  @@map("school_years")
+  @@index([child_id], map: "idx_child_rewards_child_id")
 }
 
-model SchoolHoliday {
+model children {
+  id                    String               @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id             String
+  parent_id             String
+  first_name            String               @db.VarChar(100)
+  last_name             String               @db.VarChar(100)
+  birth_date            DateTime             @db.Date
+  avatar_url            String?
+  xp_total              Int                  @default(0)
+  active                Boolean              @default(true)
+  resignation_requested Boolean              @default(false)
+  resignation_reason    String?
+  resignation_date      DateTime?            @db.Timestamp(6)
+  created_at            DateTime             @default(now()) @db.Timestamp(6)
+  confirmed             Boolean              @default(false)
+  enrollment_request_id String?
+  access_level          String               @default("NEW")
+  attendance            attendance[]
+  child_auth            child_auth?
+  child_rewards         child_rewards[]
+  enrollment_requests   enrollment_requests? @relation(fields: [enrollment_request_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users                 users                @relation(fields: [parent_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  schools               schools              @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  contract_children     contract_children[]
+  contracts             contracts[]
+  group_students        group_students[]
+  payments              payments[]
+  progress_notes        progress_notes[]
+  renewals              renewals[]
+  subscriptions         subscriptions[]
+
+  @@index([parent_id], map: "idx_children_parent_id")
+  @@index([school_id], map: "idx_children_school_id")
+}
+
+model contract_children {
+  contract_id           String
+  child_id              String
+  enrollment_request_id String?
+  group_id              String?
+  sort_order            Int                  @default(0)
+  attachment_1_html     String?
+  attachment_2_html     String?
+  children              children             @relation(fields: [child_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  contracts             contracts            @relation(fields: [contract_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  enrollment_requests   enrollment_requests? @relation(fields: [enrollment_request_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  groups                groups?              @relation(fields: [group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([contract_id, child_id])
+  @@index([child_id], map: "idx_contract_children_child")
+}
+
+model contract_templates {
+  id            String      @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id     String
+  name          String      @db.VarChar(255)
+  content_html  String
+  active        Boolean     @default(true)
+  created_at    DateTime    @default(now()) @db.Timestamp(6)
+  school_year   String?     @db.VarChar(9)
+  updated_at    DateTime    @default(now()) @db.Timestamptz(6)
+  template_kind String      @default("CONTRACT")
+  schools       schools     @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  contracts     contracts[]
+
+  @@index([school_id, template_kind, school_year], map: "contract_templates_school_kind_year_idx", where: raw("(active = true)"))
+  @@index([school_id], map: "idx_contract_templates_school_id")
+}
+
+model contracts {
+  id                    String              @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id             String
+  child_id              String?
+  parent_id             String
+  group_id              String?
+  template_id           String
+  content_html          String
+  status                String              @default("DRAFT")
+  sent_at               DateTime?           @db.Timestamp(6)
+  signed_at             DateTime?           @db.Timestamp(6)
+  signed_ip             String?
+  created_at            DateTime            @default(now()) @db.Timestamp(6)
+  school_year_id        String?
+  payment_type          String?
+  amount                Decimal?            @db.Decimal
+  payment_due_day       Int?
+  enrollment_request_id String?
+  attachment_1_html     String?
+  attachment_2_html     String?
+  include_attachment_2  Boolean             @default(false)
+  discount_large_family Boolean             @default(false)
+  discount_sibling      Boolean             @default(false)
+  billing_exempt        Boolean             @default(false)
+  contract_children     contract_children[]
+  children              children?           @relation(fields: [child_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  groups                groups?             @relation(fields: [group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users                 users               @relation(fields: [parent_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  schools               schools             @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  school_years          school_years?       @relation(fields: [school_year_id], references: [id], onUpdate: NoAction)
+  contract_templates    contract_templates  @relation(fields: [template_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  payments              payments[]
+
+  @@index([enrollment_request_id])
+  @@index([child_id], map: "idx_contracts_child_id")
+  @@index([parent_id], map: "idx_contracts_parent_id")
+  @@index([status], map: "idx_contracts_status")
+}
+
+model enrollment_requests {
+  id                 String              @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id          String
+  parent_first_name  String              @db.VarChar(100)
+  parent_last_name   String              @db.VarChar(100)
+  parent_email       String              @db.VarChar(255)
+  parent_phone       String?             @db.VarChar(50)
+  child_first_name   String              @db.VarChar(100)
+  child_last_name    String              @db.VarChar(100)
+  child_birth_date   DateTime            @db.Date
+  preferred_location String?             @db.VarChar(100)
+  preferred_days     String?
+  notes              String?
+  status             enrollment_status   @default(NEW)
+  proposed_group_id  String?
+  proposed_at        DateTime?           @db.Timestamp(6)
+  accepted_at        DateTime?           @db.Timestamp(6)
+  user_id            String?
+  created_at         DateTime            @default(now()) @db.Timestamp(6)
+  rejected_at        DateTime?           @db.Timestamp(6)
+  children           children[]
+  contract_children  contract_children[]
+  groups             groups?             @relation(fields: [proposed_group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  schools            schools             @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users              users?              @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  messages           messages[]
+
+  @@index([parent_email], map: "idx_enrollment_requests_email")
+  @@index([school_id], map: "idx_enrollment_requests_school_id")
+  @@index([status], map: "idx_enrollment_requests_status")
+}
+
+model group_materials {
+  id          String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  group_id    String
+  material_id String
+  assigned_at DateTime  @default(now()) @db.Timestamp(6)
+  groups      groups    @relation(fields: [group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  materials   materials @relation(fields: [material_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([group_id, material_id])
+}
+
+model group_students {
+  id             String        @id @default(dbgenerated("(gen_random_uuid())::text"))
+  group_id       String
+  child_id       String
+  enrolled_at    DateTime      @default(dbgenerated("CURRENT_DATE")) @db.Date
+  left_at        DateTime?     @db.Date
+  school_year_id String?
+  children       children      @relation(fields: [child_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  groups         groups        @relation(fields: [group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  school_years   school_years? @relation(fields: [school_year_id], references: [id], onUpdate: NoAction)
+
+  @@unique([group_id, child_id])
+  @@index([child_id], map: "idx_group_students_child_id")
+  @@index([group_id], map: "idx_group_students_group_id")
+}
+
+model groups {
+  id                     String                @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id              String
+  teacher_id             String
+  name                   String                @db.VarChar(255)
+  level                  String?               @db.VarChar(100)
+  max_students           Int                   @default(12)
+  active                 Boolean               @default(true)
+  created_at             DateTime              @default(now()) @db.Timestamp(6)
+  school_year_id         String?
+  location_id            String?
+  price_monthly          Decimal?              @db.Decimal(10, 2)
+  price_yearly           Decimal?              @db.Decimal(10, 2)
+  teacher_pickup_consent Boolean               @default(false)
+  contract_children      contract_children[]
+  contracts              contracts[]
+  enrollment_requests    enrollment_requests[]
+  group_materials        group_materials[]
+  group_students         group_students[]
+  locations              locations?            @relation(fields: [location_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  schools                schools               @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  school_years           school_years?         @relation(fields: [school_year_id], references: [id], onUpdate: NoAction)
+  users                  users                 @relation(fields: [teacher_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  lessons                lessons[]
+  renewal_proposals      renewal_proposals[]
+  renewals               renewals[]
+  schedule_templates     schedule_templates[]
+  subscriptions          subscriptions[]
+
+  @@index([school_id], map: "idx_groups_school_id")
+  @@index([school_year_id], map: "idx_groups_school_year_id")
+  @@index([teacher_id], map: "idx_groups_teacher_id")
+}
+
+model lessons {
+  id                   String              @id @default(dbgenerated("(gen_random_uuid())::text"))
+  group_id             String
+  teacher_id           String
+  location_id          String
+  scheduled_at         DateTime            @db.Timestamp(6)
+  duration_min         Int                 @default(60)
+  status               LessonStatus        @default(SCHEDULED)
+  notes                String?
+  created_at           DateTime            @default(now()) @db.Timestamp(6)
+  cancellation_reason  String?
+  school_year_id       String?
+  schedule_template_id String?
+  attendance           attendance[]
+  groups               groups              @relation(fields: [group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  locations            locations           @relation(fields: [location_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  schedule_templates   schedule_templates? @relation(fields: [schedule_template_id], references: [id], onUpdate: NoAction)
+  school_years         school_years?       @relation(fields: [school_year_id], references: [id], onUpdate: NoAction)
+  users                users               @relation(fields: [teacher_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  progress_notes       progress_notes[]
+
+  @@index([group_id], map: "idx_lessons_group_id")
+  @@index([schedule_template_id], map: "idx_lessons_schedule_template_id")
+  @@index([scheduled_at], map: "idx_lessons_scheduled_at")
+  @@index([school_year_id], map: "idx_lessons_school_year_id")
+}
+
+model locations {
+  id                 String               @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id          String
+  name               String               @db.VarChar(255)
+  address            String?
+  active             Boolean              @default(true)
+  groups             groups[]
+  lessons            lessons[]
+  schools            schools              @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  schedule_templates schedule_templates[]
+
+  @@index([school_id], map: "idx_locations_school_id")
+}
+
+model materials {
+  id              String            @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id       String
+  uploaded_by     String
+  title           String            @db.VarChar(255)
+  type            MaterialType
+  url             String
+  level           String?           @db.VarChar(100)
+  created_at      DateTime          @default(now()) @db.Timestamp(6)
+  group_materials group_materials[]
+  schools         schools           @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users           users             @relation(fields: [uploaded_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([school_id], map: "idx_materials_school_id")
+}
+
+model messages {
+  id                                 String               @id
+  school_id                          String?
+  parent_id                          String?
+  sender_id                          String?
+  sender_role                        String?
+  enrollment_request_id              String?
+  content                            String?
+  read_at                            DateTime?            @db.Timestamp(6)
+  created_at                         DateTime?            @default(now()) @db.Timestamp(6)
+  parent_message_id                  String?
+  recipient_id                       String?
+  broadcast_id                       String?
+  subject                            String?              @db.VarChar(255)
+  email_status                       String?              @default("PENDING")
+  enrollment_requests                enrollment_requests? @relation(fields: [enrollment_request_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_messages_parent_idTousers    users?               @relation("messages_parent_idTousers", fields: [parent_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  messages                           messages?            @relation("messagesTomessages", fields: [parent_message_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  other_messages                     messages[]           @relation("messagesTomessages")
+  users_messages_recipient_idTousers users?               @relation("messages_recipient_idTousers", fields: [recipient_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  schools                            schools?             @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_messages_sender_idTousers    users?               @relation("messages_sender_idTousers", fields: [sender_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([broadcast_id], map: "idx_messages_broadcast")
+  @@index([parent_message_id], map: "idx_messages_parent")
+  @@index([recipient_id], map: "idx_messages_recipient")
+}
+
+model parent_profiles {
+  id                    String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  user_id               String
+  school_id             String
+  address               String?
+  city                  String?
+  zip_code              String?   @db.VarChar(10)
+  created_at            DateTime? @default(now()) @db.Timestamp(6)
+  updated_at            DateTime? @default(now()) @db.Timestamp(6)
+  company_name          String?   @db.VarChar(255)
+  nip                   String?   @db.VarChar(20)
+  pesel                 String?   @db.VarChar(11)
+  discount_large_family Boolean   @default(false)
+  schools               schools   @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users                 users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model payments {
+  id           String     @id
+  school_id    String?
+  child_id     String?
+  parent_id    String?
+  contract_id  String?
+  amount       Decimal?   @db.Decimal
+  status       String?
+  due_date     DateTime?  @db.Date
+  paid_at      DateTime?  @db.Timestamp(6)
+  period_month DateTime?  @db.Date
+  description  String?
+  created_at   DateTime?  @default(now()) @db.Timestamp(6)
+  children     children?  @relation(fields: [child_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  contracts    contracts? @relation(fields: [contract_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users        users?     @relation(fields: [parent_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  schools      schools?   @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model progress_notes {
+  id         String   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  child_id   String
+  teacher_id String
+  lesson_id  String?
+  note       String
+  rating     Int?
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  children   children @relation(fields: [child_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  lessons    lessons? @relation(fields: [lesson_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users      users    @relation(fields: [teacher_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([child_id], map: "idx_progress_notes_child_id")
+  @@index([teacher_id], map: "idx_progress_notes_teacher_id")
+}
+
+model renewal_proposals {
+  id                String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id         String
+  renewal_id        String    @unique(map: "idx_renewal_proposals_one_pending", where: raw("(status = 'PENDING'::text)"))
+  group_id          String
+  proposed_by       String
+  proposed_at       DateTime  @default(now()) @db.Timestamp(6)
+  status            String    @default("PENDING")
+  responded_at      DateTime? @db.Timestamp(6)
+  rejection_comment String?
+  created_at        DateTime  @default(now()) @db.Timestamp(6)
+  groups            groups    @relation(fields: [group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users             users     @relation(fields: [proposed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  renewals          renewals  @relation(fields: [renewal_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  schools           schools   @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([renewal_id], map: "idx_renewal_proposals_renewal")
+}
+
+model renewals {
+  id                String             @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id         String
+  child_id          String
+  parent_id         String
+  season            String             @db.VarChar(20)
+  status            String             @default("PENDING_CONFIRMATION")
+  initiated_at      DateTime           @default(now()) @db.Timestamp(6)
+  confirmed_at      DateTime?          @db.Timestamp(6)
+  proposed_group_id String?
+  created_at        DateTime           @default(now()) @db.Timestamp(6)
+  renewal_proposals renewal_proposals?
+  children          children           @relation(fields: [child_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users             users              @relation(fields: [parent_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  groups            groups?            @relation(fields: [proposed_group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  schools           schools            @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([child_id, season], map: "idx_renewals_child_season")
+  @@index([parent_id], map: "idx_renewals_parent")
+  @@index([school_id], map: "idx_renewals_school")
+  @@index([school_id, status], map: "idx_renewals_status")
+}
+
+model rewards {
+  id            String          @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id     String
+  name          String          @db.VarChar(255)
+  type          RewardType
+  xp_cost       Int             @default(0)
+  asset_url     String?
+  child_rewards child_rewards[]
+  schools       schools         @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([school_id], map: "idx_rewards_school_id")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model schedule_templates {
+  id             String        @id @default(dbgenerated("(gen_random_uuid())::text"))
+  group_id       String
+  location_id    String
+  day_of_week    Int
+  start_time     DateTime      @db.Time(6)
+  duration_min   Int           @default(60)
+  school_year_id String?
+  lessons        lessons[]
+  groups         groups        @relation(fields: [group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  locations      locations     @relation(fields: [location_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  school_years   school_years? @relation(fields: [school_year_id], references: [id], onUpdate: NoAction)
+
+  @@index([group_id], map: "idx_schedule_templates_group_id")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model school_complimentary_parents {
+  school_id    String
+  parent_id    String?
+  created_at   DateTime @default(now()) @db.Timestamptz(6)
   id           String   @id @default(dbgenerated("(gen_random_uuid())::text"))
-  schoolId     String   @map("school_id")
-  schoolYearId String?  @map("school_year_id")
-  name         String   @db.VarChar(255)
-  dateFrom     DateTime @map("date_from") @db.Date
-  dateTo       DateTime @map("date_to") @db.Date
-  type         String   @default("HOLIDAY") @db.Text
-  createdAt    DateTime @default(now()) @map("created_at")
+  parent_email String?
+  users        users?   @relation(fields: [parent_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  schools      schools  @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
-  school     School      @relation(fields: [schoolId], references: [id])
-  schoolYear SchoolYear? @relation(fields: [schoolYearId], references: [id])
-
-  @@index([schoolId], name: "idx_school_holidays_school_id")
-  @@index([dateFrom, dateTo], name: "idx_school_holidays_date")
-  @@map("school_holidays")
+  @@unique([school_id, parent_id], map: "idx_school_complimentary_parents_user", where: raw("(parent_id IS NOT NULL)"))
+  @@index([parent_id], map: "idx_school_complimentary_parents_parent")
 }
 
-// ============================================================
-// UŻYTKOWNICY DOROŚLI (admin, manager, teacher, parent)
-// ============================================================
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model school_discount_settings {
+  school_id    String
+  discount_key String
+  percent      Decimal  @default(0) @db.Decimal(5, 2)
+  updated_at   DateTime @default(now()) @db.Timestamptz(6)
+  schools      schools  @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
-model User {
-  id           String    @id @default(dbgenerated("(gen_random_uuid())::text"))
-  /// Nullable w bazie — superadmin może nie mieć przypisanej szkoły
-  schoolId     String?   @map("school_id")
-  email        String    @db.VarChar(255)
-  passwordHash String    @map("password_hash") @db.VarChar(255)
-  /// ADMIN | MANAGER | TEACHER | PARENT | CHILD
-  role         String    @db.Text
-  firstName    String    @map("first_name") @db.VarChar(100)
-  lastName     String    @map("last_name") @db.VarChar(100)
-  phone        String?   @db.VarChar(50)
-  active       Boolean   @default(true)
-  confirmed    Boolean   @default(false)
-  /// PENDING | PROPOSED | CONTRACT_SENT | ACTIVE | RESIGNED
-  accessLevel  String    @default("PENDING") @map("access_level") @db.Text
-
-  resetToken       String?   @map("reset_token") @db.VarChar(255)
-  resetTokenExpiry DateTime? @map("reset_token_expiry")
-
-  mustChangePassword Boolean @default(false) @map("must_change_password")
-
-  resignationDate DateTime? @map("resignation_date")
-  lastLogin       DateTime? @map("last_login")
-  createdAt       DateTime  @default(now()) @map("created_at")
-
-  school School? @relation(fields: [schoolId], references: [id])
-
-  children                 Child[]           @relation("ParentChildren")
-  taughtGroups             Group[]           @relation("TeacherGroups")
-  uploadedMaterials        Material[]        @relation("UploadedMaterials")
-  progressNotes            ProgressNote[]    @relation("TeacherNotes")
-  sentMessages             Message[]         @relation("SenderMessages")
-  parentMessages           Message[]         @relation("ParentMessages")
-  receivedMessages         Message[]         @relation("RecipientMessages")
-  enrollmentRequests       EnrollmentRequest[]
-  contracts                Contract[]
-  payments                 Payment[]
-  announcements            Announcement[]
-  parentProfile            ParentProfile?
-  renewals                 Renewal[]
-  renewalProposalsAuthored RenewalProposal[] @relation("RenewalProposalProposedBy")
-  complimentarySchools     SchoolComplimentaryParent[]
-
-  @@unique([schoolId, email], name: "users_school_id_email_key")
-  @@index([schoolId], name: "idx_users_school_id")
-  @@index([email], name: "idx_users_email")
-  @@index([resetToken], name: "idx_users_reset_token")
-  @@index([role], name: "idx_users_role")
-  @@map("users")
+  @@id([school_id, discount_key])
 }
 
-// ============================================================
-// DZIECI (osobne konta z loginem)
-// ============================================================
+model school_holidays {
+  id             String        @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id      String
+  name           String        @db.VarChar(255)
+  date_from      DateTime      @db.Date
+  date_to        DateTime      @db.Date
+  type           String        @default("HOLIDAY")
+  created_at     DateTime      @default(now()) @db.Timestamp(6)
+  school_year_id String?
+  schools        schools       @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  school_years   school_years? @relation(fields: [school_year_id], references: [id], onUpdate: NoAction)
 
-model Child {
-  id        String   @id @default(dbgenerated("(gen_random_uuid())::text"))
-  schoolId  String   @map("school_id")
-  parentId  String   @map("parent_id")
-  firstName String   @map("first_name") @db.VarChar(100)
-  lastName  String   @map("last_name") @db.VarChar(100)
-  birthDate DateTime @map("birth_date") @db.Date
-  avatarUrl String?  @map("avatar_url") @db.Text
-  xpTotal   Int      @default(0) @map("xp_total")
-  active    Boolean  @default(true)
-
-  resignationRequested Boolean   @default(false) @map("resignation_requested")
-  resignationReason    String?   @map("resignation_reason") @db.Text
-  resignationDate      DateTime? @map("resignation_date")
-
-  createdAt           DateTime @default(now()) @map("created_at")
-  confirmed           Boolean  @default(false)
-  enrollmentRequestId String?  @map("enrollment_request_id")
-
-  /// Status zapisu dziecka — równoległy do access_level rodzica
-  /// NEW | PROPOSED | ACCEPTED | SIGNED | COMPLETED | REJECTED | NEGOTIATING
-  accessLevel String @default("NEW") @map("access_level") @db.Text
-
-  school School @relation(fields: [schoolId], references: [id])
-  parent User   @relation("ParentChildren", fields: [parentId], references: [id])
-
-  /// enrollment_request_id jako FK do enrollment_requests (opcjonalne)
-  enrollmentRequest EnrollmentRequest? @relation(fields: [enrollmentRequestId], references: [id])
-
-  childAuth     ChildAuth?
-  groupStudents GroupStudent[]
-  attendance    Attendance[]
-  progressNotes ProgressNote[]
-  childRewards  ChildReward[]
-  payments         Payment[]
-  renewals         Renewal[]
-  contracts        Contract[]
-  contractChildren ContractChild[]
-
-  @@index([schoolId], name: "idx_children_school_id")
-  @@index([parentId], name: "idx_children_parent_id")
-  @@map("children")
+  @@index([date_from, date_to], map: "idx_school_holidays_date")
+  @@index([school_id], map: "idx_school_holidays_school")
+  @@index([school_id], map: "idx_school_holidays_school_id")
+  @@index([school_year_id], map: "idx_school_holidays_school_year")
 }
 
-model ChildAuth {
-  id           String    @id @default(dbgenerated("(gen_random_uuid())::text"))
-  childId      String    @unique @map("child_id")
-  username     String    @unique @db.VarChar(100)
-  passwordHash String    @map("password_hash") @db.VarChar(255)
-  lastLogin    DateTime? @map("last_login")
+model school_years {
+  id                 String               @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id          String               @unique(map: "idx_school_years_one_active", where: raw("(active = true)"))
+  name               String               @db.VarChar(100)
+  date_from          DateTime             @db.Date
+  date_to            DateTime             @db.Date
+  active             Boolean              @default(false)
+  created_at         DateTime             @default(now()) @db.Timestamp(6)
+  contracts          contracts[]
+  group_students     group_students[]
+  groups             groups[]
+  lessons            lessons[]
+  schedule_templates schedule_templates[]
+  school_holidays    school_holidays[]
+  schools            schools              @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  subscriptions      subscriptions[]
 
-  child Child @relation(fields: [childId], references: [id], onDelete: Cascade)
-
-  @@map("child_auth")
+  @@index([school_id], map: "idx_school_years_school_id")
 }
 
-// ============================================================
-// LOKALIZACJE / SALE
-// ============================================================
-
-model Location {
-  id       String  @id @default(dbgenerated("(gen_random_uuid())::text"))
-  schoolId String  @map("school_id")
-  name     String  @db.VarChar(255)
-  address  String? @db.Text
-  active   Boolean @default(true)
-
-  school School @relation(fields: [schoolId], references: [id])
-
-  groups            Group[]
-  scheduleTemplates ScheduleTemplate[]
-  lessons           Lesson[]
-
-  @@index([schoolId], name: "idx_locations_school_id")
-  @@map("locations")
+model schools {
+  id                           String                         @id @default(dbgenerated("(gen_random_uuid())::text"))
+  name                         String                         @db.VarChar(255)
+  slug                         String                         @unique @db.VarChar(255)
+  timezone                     String                         @default("Europe/Warsaw") @db.VarChar(100)
+  active                       Boolean                        @default(true)
+  created_at                   DateTime                       @default(now()) @db.Timestamp(6)
+  renewals_open                Boolean                        @default(false)
+  renewals_season              String?                        @db.VarChar(20)
+  city                         String?                        @db.VarChar(100)
+  announcements                announcements[]
+  children                     children[]
+  contract_templates           contract_templates[]
+  contracts                    contracts[]
+  enrollment_requests          enrollment_requests[]
+  groups                       groups[]
+  locations                    locations[]
+  materials                    materials[]
+  messages                     messages[]
+  parent_profiles              parent_profiles[]
+  payments                     payments[]
+  renewal_proposals            renewal_proposals[]
+  renewals                     renewals[]
+  rewards                      rewards[]
+  school_complimentary_parents school_complimentary_parents[]
+  school_discount_settings     school_discount_settings[]
+  school_holidays              school_holidays[]
+  school_years                 school_years?
+  subscriptions                subscriptions[]
+  users                        users[]
 }
 
-// ============================================================
-// GRUPY
-// ============================================================
+model subscriptions {
+  id             String             @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id      String
+  parent_id      String
+  child_id       String
+  group_id       String
+  status         SubscriptionStatus @default(ACTIVE)
+  price_cents    Int
+  billing_period String             @default("MONTHLY") @db.VarChar(50)
+  valid_from     DateTime           @db.Date
+  valid_to       DateTime?          @db.Date
+  created_at     DateTime           @default(now()) @db.Timestamp(6)
+  school_year_id String?
+  children       children           @relation(fields: [child_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  groups         groups             @relation(fields: [group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users          users              @relation(fields: [parent_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  schools        schools            @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  school_years   school_years?      @relation(fields: [school_year_id], references: [id], onUpdate: NoAction)
 
-model Group {
-  id           String   @id @default(dbgenerated("(gen_random_uuid())::text"))
-  schoolId     String   @map("school_id")
-  schoolYearId String?  @map("school_year_id")
-  locationId   String?  @map("location_id")
-  teacherId    String   @map("teacher_id")
-  name         String   @db.VarChar(255)
-  level        String?  @db.VarChar(100)
-  maxStudents  Int      @default(12) @map("max_students")
-  active       Boolean  @default(true)
-  createdAt    DateTime @default(now()) @map("created_at")
-  priceMonthly Decimal? @map("price_monthly") @db.Decimal(10, 2)
-  priceYearly  Decimal? @map("price_yearly") @db.Decimal(10, 2)
-  /// Gdy true — przy generowaniu umowy rodzic dostaje Załącznik nr 2 (upoważnienie lektora).
-  teacherPickupConsent Boolean @default(false) @map("teacher_pickup_consent")
-
-  school     School      @relation(fields: [schoolId], references: [id])
-  schoolYear SchoolYear? @relation(fields: [schoolYearId], references: [id])
-  location   Location?   @relation(fields: [locationId], references: [id])
-  teacher    User        @relation("TeacherGroups", fields: [teacherId], references: [id])
-
-  groupStudents      GroupStudent[]
-  scheduleTemplates  ScheduleTemplate[]
-  lessons            Lesson[]
-  groupMaterials     GroupMaterial[]
-  subscriptions      Subscription[]
-  renewals           Renewal[]
-  renewalProposals   RenewalProposal[]
-  contracts          Contract[]
-  enrollmentRequests EnrollmentRequest[]
-
-  @@index([schoolId], name: "idx_groups_school_id")
-  @@index([teacherId], name: "idx_groups_teacher_id")
-  @@map("groups")
+  @@index([child_id], map: "idx_subscriptions_child_id")
+  @@index([parent_id], map: "idx_subscriptions_parent_id")
+  @@index([school_id], map: "idx_subscriptions_school_id")
+  @@index([school_year_id], map: "idx_subscriptions_school_year_id")
 }
 
-model GroupStudent {
-  id           String    @id @default(dbgenerated("(gen_random_uuid())::text"))
-  groupId      String    @map("group_id")
-  childId      String    @map("child_id")
-  enrolledAt   DateTime  @default(dbgenerated("CURRENT_DATE")) @map("enrolled_at") @db.Date
-  leftAt       DateTime? @map("left_at") @db.Date
-  schoolYearId String?   @map("school_year_id")
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model users {
+  id                                    String                         @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id                             String?
+  email                                 String                         @db.VarChar(255)
+  password_hash                         String                         @db.VarChar(255)
+  role                                  String
+  first_name                            String                         @db.VarChar(100)
+  last_name                             String                         @db.VarChar(100)
+  phone                                 String?                        @db.VarChar(50)
+  active                                Boolean                        @default(true)
+  confirmed                             Boolean                        @default(false)
+  reset_token                           String?                        @db.VarChar(255)
+  reset_token_expiry                    DateTime?                      @db.Timestamp(6)
+  resignation_date                      DateTime?                      @db.Timestamp(6)
+  last_login                            DateTime?                      @db.Timestamp(6)
+  created_at                            DateTime                       @default(now()) @db.Timestamp(6)
+  access_level                          String                         @default("PENDING")
+  must_change_password                  Boolean                        @default(false)
+  announcements                         announcements[]
+  children                              children[]
+  contracts                             contracts[]
+  enrollment_requests                   enrollment_requests[]
+  groups                                groups[]
+  lessons                               lessons[]
+  materials                             materials[]
+  messages_messages_parent_idTousers    messages[]                     @relation("messages_parent_idTousers")
+  messages_messages_recipient_idTousers messages[]                     @relation("messages_recipient_idTousers")
+  messages_messages_sender_idTousers    messages[]                     @relation("messages_sender_idTousers")
+  parent_profiles                       parent_profiles[]
+  payments                              payments[]
+  progress_notes                        progress_notes[]
+  renewal_proposals                     renewal_proposals[]
+  renewals                              renewals[]
+  school_complimentary_parents          school_complimentary_parents[]
+  subscriptions                         subscriptions[]
+  schools                               schools?                       @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
-  group      Group       @relation(fields: [groupId], references: [id])
-  child      Child       @relation(fields: [childId], references: [id])
-  schoolYear SchoolYear? @relation(fields: [schoolYearId], references: [id])
-
-  @@unique([groupId, childId])
-  @@index([groupId], name: "idx_group_students_group_id")
-  @@index([childId], name: "idx_group_students_child_id")
-  @@map("group_students")
-}
-
-// ============================================================
-// HARMONOGRAM
-// ============================================================
-
-model ScheduleTemplate {
-  id           String   @id @default(dbgenerated("(gen_random_uuid())::text"))
-  groupId      String   @map("group_id")
-  locationId   String   @map("location_id")
-  dayOfWeek    Int      @map("day_of_week")
-  startTime    DateTime @map("start_time") @db.Time
-  durationMin  Int      @default(60) @map("duration_min")
-  schoolYearId String?  @map("school_year_id")
-
-  group      Group       @relation(fields: [groupId], references: [id])
-  location   Location    @relation(fields: [locationId], references: [id])
-  schoolYear SchoolYear? @relation(fields: [schoolYearId], references: [id])
-
-  lessons Lesson[]
-
-  @@index([groupId], name: "idx_schedule_templates_group_id")
-  @@map("schedule_templates")
-}
-
-model Lesson {
-  id                 String       @id @default(dbgenerated("(gen_random_uuid())::text"))
-  groupId            String       @map("group_id")
-  schoolYearId       String?      @map("school_year_id")
-  teacherId          String       @map("teacher_id")
-  locationId         String       @map("location_id")
-  scheduledAt        DateTime     @map("scheduled_at")
-  durationMin        Int          @default(60) @map("duration_min")
-  status             LessonStatus @default(SCHEDULED)
-  notes              String?      @db.Text
-  cancellationReason String?      @map("cancellation_reason") @db.Text
-  createdAt          DateTime     @default(now()) @map("created_at")
-  /// FK do szablonu harmonogramu z którego powstała lekcja (nullable — starsze lekcje nie mają powiązania)
-  scheduleTemplateId String?      @map("schedule_template_id")
-
-  group            Group            @relation(fields: [groupId], references: [id])
-  schoolYear       SchoolYear?      @relation(fields: [schoolYearId], references: [id])
-  location         Location         @relation(fields: [locationId], references: [id])
-  teacher          User             @relation(fields: [teacherId], references: [id])
-  scheduleTemplate ScheduleTemplate? @relation(fields: [scheduleTemplateId], references: [id], onDelete: SetNull)
-
-  attendance    Attendance[]
-  progressNotes ProgressNote[]
-
-  @@index([groupId], name: "idx_lessons_group_id")
-  @@index([scheduledAt], name: "idx_lessons_scheduled_at")
-  @@index([scheduleTemplateId], name: "idx_lessons_schedule_template_id")
-  @@map("lessons")
-}
-
-enum LessonStatus {
-  SCHEDULED
-  COMPLETED
-  CANCELLED
-}
-
-// ============================================================
-// OBECNOŚCI
-// ============================================================
-
-model Attendance {
-  id       String           @id @default(dbgenerated("(gen_random_uuid())::text"))
-  lessonId String           @map("lesson_id")
-  childId  String           @map("child_id")
-  status   AttendanceStatus @default(PRESENT)
-  note     String?          @db.Text
-
-  lesson Lesson @relation(fields: [lessonId], references: [id])
-  child  Child  @relation(fields: [childId], references: [id])
-
-  @@unique([lessonId, childId])
-  @@index([lessonId], name: "idx_attendance_lesson_id")
-  @@index([childId], name: "idx_attendance_child_id")
-  @@map("attendance")
+  @@unique([school_id, email])
+  @@index([email], map: "idx_users_email")
+  @@index([reset_token], map: "idx_users_reset_token")
+  @@index([role], map: "idx_users_role")
+  @@index([school_id], map: "idx_users_school_id")
 }
 
 enum AttendanceStatus {
@@ -410,27 +644,10 @@ enum AttendanceStatus {
   LATE
 }
 
-// ============================================================
-// MATERIAŁY
-// ============================================================
-
-model Material {
-  id           String       @id @default(dbgenerated("(gen_random_uuid())::text"))
-  schoolId     String       @map("school_id")
-  uploadedById String       @map("uploaded_by")
-  title        String       @db.VarChar(255)
-  type         MaterialType
-  url          String       @db.Text
-  level        String?      @db.VarChar(100)
-  createdAt    DateTime     @default(now()) @map("created_at")
-
-  school     School @relation(fields: [schoolId], references: [id])
-  uploadedBy User   @relation("UploadedMaterials", fields: [uploadedById], references: [id])
-
-  groupMaterials GroupMaterial[]
-
-  @@index([schoolId], name: "idx_materials_school_id")
-  @@map("materials")
+enum LessonStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
 }
 
 enum MaterialType {
@@ -442,68 +659,17 @@ enum MaterialType {
   EXERCISE
 }
 
-model GroupMaterial {
-  id         String   @id @default(dbgenerated("(gen_random_uuid())::text"))
-  groupId    String   @map("group_id")
-  materialId String   @map("material_id")
-  assignedAt DateTime @default(now()) @map("assigned_at")
-
-  group    Group    @relation(fields: [groupId], references: [id])
-  material Material @relation(fields: [materialId], references: [id])
-
-  @@unique([groupId, materialId])
-  @@map("group_materials")
+enum PaymentStatus {
+  PENDING
+  PAID
+  OVERDUE
+  CANCELLED
 }
 
-// ============================================================
-// POSTĘPY
-// ============================================================
-
-model ProgressNote {
-  id        String   @id @default(dbgenerated("(gen_random_uuid())::text"))
-  childId   String   @map("child_id")
-  teacherId String   @map("teacher_id")
-  lessonId  String?  @map("lesson_id")
-  note      String   @db.Text
-  rating    Int?
-  createdAt DateTime @default(now()) @map("created_at")
-
-  child   Child   @relation(fields: [childId], references: [id])
-  teacher User    @relation("TeacherNotes", fields: [teacherId], references: [id])
-  lesson  Lesson? @relation(fields: [lessonId], references: [id])
-
-  @@index([childId], name: "idx_progress_notes_child_id")
-  @@index([teacherId], name: "idx_progress_notes_teacher_id")
-  @@map("progress_notes")
-}
-
-// ============================================================
-// SUBSKRYPCJE / PŁATNOŚCI
-// ============================================================
-
-model Subscription {
-  id            String             @id @default(dbgenerated("(gen_random_uuid())::text"))
-  schoolId      String             @map("school_id")
-  schoolYearId  String?            @map("school_year_id")
-  parentId      String             @map("parent_id")
-  childId       String             @map("child_id")
-  groupId       String             @map("group_id")
-  status        SubscriptionStatus @default(ACTIVE)
-  priceCents    Int                @map("price_cents")
-  billingPeriod String             @default("MONTHLY") @map("billing_period") @db.VarChar(50)
-  validFrom     DateTime           @map("valid_from") @db.Date
-  validTo       DateTime?          @map("valid_to") @db.Date
-  createdAt     DateTime           @default(now()) @map("created_at")
-
-  school     School      @relation(fields: [schoolId], references: [id])
-  schoolYear SchoolYear? @relation(fields: [schoolYearId], references: [id])
-  group      Group       @relation(fields: [groupId], references: [id])
-  parent     User        @relation(fields: [parentId], references: [id])
-
-  @@index([schoolId], name: "idx_subscriptions_school_id")
-  @@index([parentId], name: "idx_subscriptions_parent_id")
-  @@index([childId], name: "idx_subscriptions_child_id")
-  @@map("subscriptions")
+enum RewardType {
+  AVATAR
+  BADGE
+  ITEM
 }
 
 enum SubscriptionStatus {
@@ -513,80 +679,7 @@ enum SubscriptionStatus {
   EXPIRED
 }
 
-model Payment {
-  id          String    @id @default(dbgenerated(""))
-  schoolId    String?   @map("school_id")
-  childId     String?   @map("child_id")
-  parentId    String?   @map("parent_id")
-  contractId  String?   @map("contract_id")
-  amount      Decimal?  @db.Decimal(10, 2)
-  /// PAID | PENDING | OVERDUE | CANCELLED
-  status      String?   @db.Text
-  dueDate     DateTime? @map("due_date") @db.Date
-  paidAt      DateTime? @map("paid_at")
-  periodMonth DateTime? @map("period_month") @db.Date
-  description String?   @db.Text
-  createdAt   DateTime? @default(now()) @map("created_at")
-
-  school   School?   @relation(fields: [schoolId], references: [id])
-  child    Child?    @relation(fields: [childId], references: [id])
-  parent   User?     @relation(fields: [parentId], references: [id])
-  contract Contract? @relation(fields: [contractId], references: [id])
-
-  @@map("payments")
-}
-
-/// Enum PaymentStatus istnieje w bazie ale payments.status jest kolumną TEXT
-enum PaymentStatus {
-  PENDING
-  PAID
-  OVERDUE
-  CANCELLED
-}
-
-// ============================================================
-// KOMUNIKACJA
-// ============================================================
-
-model Message {
-  id                  String    @id
-  /// Nullable w bazie
-  schoolId            String?   @map("school_id")
-  parentId            String?   @map("parent_id")
-  /// Nullable w bazie
-  senderId            String?   @map("sender_id")
-  senderRole          String?   @map("sender_role") @db.Text
-  recipientId         String?   @map("recipient_id")
-  parentMessageId     String?   @map("parent_message_id")
-  broadcastId         String?   @map("broadcast_id")
-  subject             String?   @db.VarChar(255)
-  emailStatus         String?   @default("PENDING") @map("email_status") @db.Text
-  enrollmentRequestId String?   @map("enrollment_request_id")
-  /// Nullable w bazie
-  content             String?   @db.Text
-  readAt              DateTime? @map("read_at")
-  createdAt           DateTime? @default(now()) @map("created_at")
-
-  school            School?            @relation(fields: [schoolId], references: [id])
-  parent            User?              @relation("ParentMessages", fields: [parentId], references: [id])
-  sender            User?              @relation("SenderMessages", fields: [senderId], references: [id])
-  recipient         User?              @relation("RecipientMessages", fields: [recipientId], references: [id])
-  parentMessage     Message?           @relation("MessageThread", fields: [parentMessageId], references: [id])
-  replies           Message[]          @relation("MessageThread")
-  enrollmentRequest EnrollmentRequest? @relation(fields: [enrollmentRequestId], references: [id])
-
-  @@index([broadcastId], name: "idx_messages_broadcast")
-  @@index([parentMessageId], name: "idx_messages_parent")
-  @@index([recipientId], name: "idx_messages_recipient")
-  @@map("messages")
-}
-
-// ============================================================
-// ZAPISY / ENROLLMENT
-// ============================================================
-
-/// Enum enrollment_status istnieje w bazie jako USER-DEFINED TYPE (lowercase)
-enum EnrollmentStatus {
+enum enrollment_status {
   NEW
   PROPOSED
   ACCEPTED
@@ -594,318 +687,4 @@ enum EnrollmentStatus {
   COMPLETED
   REJECTED
   NEGOTIATING
-
-  @@map("enrollment_status")
-}
-
-model EnrollmentRequest {
-  id                String          @id @default(dbgenerated("(gen_random_uuid())::text"))
-  schoolId          String          @map("school_id")
-  userId            String?         @map("user_id")
-  parentFirstName   String          @map("parent_first_name") @db.VarChar(100)
-  parentLastName    String          @map("parent_last_name") @db.VarChar(100)
-  parentEmail       String          @map("parent_email") @db.VarChar(255)
-  parentPhone       String?         @map("parent_phone") @db.VarChar(50)
-  childFirstName    String          @map("child_first_name") @db.VarChar(100)
-  childLastName     String          @map("child_last_name") @db.VarChar(100)
-  childBirthDate    DateTime        @map("child_birth_date") @db.Date
-  preferredLocation String?         @map("preferred_location") @db.VarChar(100)
-  preferredDays     String?         @map("preferred_days") @db.Text
-  notes             String?         @db.Text
-  /// Używa enum enrollment_status z bazy
-  status            EnrollmentStatus @default(NEW)
-  proposedGroupId     String?  @map("proposed_group_id")
-  proposedAt          DateTime? @map("proposed_at")
-  acceptedAt        DateTime?       @map("accepted_at")
-  rejectedAt        DateTime?       @map("rejected_at")
-  createdAt         DateTime        @default(now()) @map("created_at")
-
-  school        School    @relation(fields: [schoolId], references: [id])
-  parent        User?     @relation(fields: [userId], references: [id])
-  proposedGroup Group?    @relation(fields: [proposedGroupId], references: [id])
-  messages      Message[]
-  contracts     Contract[]
-  children      Child[]
-
-  @@index([schoolId], name: "idx_enrollment_requests_school_id")
-  @@index([userId])
-  @@index([proposedGroupId])
-  @@index([parentEmail], name: "idx_enrollment_requests_email")
-  @@index([status], name: "idx_enrollment_requests_status")
-  @@map("enrollment_requests")
-}
-
-// ============================================================
-// UMOWY
-// ============================================================
-
-model ContractChild {
-  contractId          String  @map("contract_id")
-  childId             String  @map("child_id")
-  enrollmentRequestId String? @map("enrollment_request_id")
-  groupId             String? @map("group_id")
-  sortOrder           Int     @default(0) @map("sort_order")
-  attachment1Html     String? @map("attachment_1_html") @db.Text
-  attachment2Html     String? @map("attachment_2_html") @db.Text
-
-  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
-  child    Child    @relation(fields: [childId], references: [id])
-
-  @@id([contractId, childId])
-  @@index([childId], name: "idx_contract_children_child")
-  @@map("contract_children")
-}
-
-model Contract {
-  id                  String    @id @default(dbgenerated("(gen_random_uuid())::text"))
-  schoolId            String    @map("school_id")
-  /// NULL dla umowy zbiorczej rodzica
-  childId             String?   @map("child_id")
-  parentId            String    @map("parent_id")
-  /// NULL dla umowy zbiorczej rodzica
-  groupId             String?   @map("group_id")
-  /// NOT NULL w bazie
-  templateId          String    @map("template_id")
-  enrollmentRequestId String?   @map("enrollment_request_id")
-  contentHtml         String    @map("content_html") @db.Text
-  attachment1Html     String?   @map("attachment_1_html") @db.Text
-  attachment2Html     String?   @map("attachment_2_html") @db.Text
-  includeAttachment2  Boolean   @default(false) @map("include_attachment_2")
-  /// DRAFT | SENT | SIGNED | CANCELLED
-  status              String    @default("DRAFT") @map("status") @db.Text
-  sentAt              DateTime? @map("sent_at")
-  signedAt            DateTime? @map("signed_at")
-  signedIp            String?   @map("signed_ip") @db.Text
-  /// MONTHLY | YEARLY
-  paymentType         String?   @map("payment_type") @db.Text
-  amount              Decimal?  @db.Decimal(10, 2)
-  discountLargeFamily Boolean   @default(false) @map("discount_large_family")
-  discountSibling     Boolean   @default(false) @map("discount_sibling")
-  billingExempt       Boolean   @default(false) @map("billing_exempt")
-  paymentDueDay       Int?      @map("payment_due_day")
-  schoolYearId        String?   @map("school_year_id")
-  createdAt           DateTime  @default(now()) @map("created_at")
-
-  school            School             @relation(fields: [schoolId], references: [id])
-  child             Child?             @relation(fields: [childId], references: [id])
-  parent            User               @relation(fields: [parentId], references: [id])
-  group             Group?             @relation(fields: [groupId], references: [id])
-  template          ContractTemplate   @relation(fields: [templateId], references: [id])
-  enrollmentRequest EnrollmentRequest? @relation(fields: [enrollmentRequestId], references: [id])
-  schoolYear        SchoolYear?        @relation(fields: [schoolYearId], references: [id])
-  payments          Payment[]
-  contractChildren  ContractChild[]
-
-  @@index([schoolId])
-  @@index([childId], name: "idx_contracts_child_id")
-  @@index([parentId], name: "idx_contracts_parent_id")
-  @@index([enrollmentRequestId], name: "contracts_enrollment_request_id_idx")
-  @@index([status], name: "idx_contracts_status")
-  @@map("contracts")
-}
-
-model ContractTemplate {
-  id           String   @id @default(dbgenerated("(gen_random_uuid())::text"))
-  schoolId     String   @map("school_id")
-  name         String   @db.VarChar(255)
-  contentHtml  String   @map("content_html") @db.Text
-  /// CONTRACT | ATTACHMENT_1 | ATTACHMENT_2
-  templateKind String   @default("CONTRACT") @map("template_kind") @db.Text
-  active       Boolean  @default(true)
-  schoolYear   String?  @map("school_year") @db.VarChar(9)
-  createdAt    DateTime @default(now()) @map("created_at")
-  /// NOT NULL w bazie z default now() — timestamptz
-  updatedAt    DateTime @default(now()) @map("updated_at") @db.Timestamptz
-
-  school    School     @relation(fields: [schoolId], references: [id])
-  contracts Contract[]
-
-  @@index([schoolId], name: "idx_contract_templates_school_id")
-  @@index([schoolId, templateKind, schoolYear], name: "contract_templates_school_kind_year_idx")
-  @@map("contract_templates")
-}
-
-model ParentProfile {
-  id                  String   @id @default(dbgenerated("(gen_random_uuid())::text"))
-  userId              String   @unique @map("user_id")
-  schoolId            String   @map("school_id")
-  address             String?  @db.Text
-  city                String?  @db.Text
-  zipCode             String?  @map("zip_code") @db.VarChar(10)
-  companyName         String?  @map("company_name") @db.VarChar(255)
-  nip                 String?  @db.VarChar(20)
-  pesel               String?  @db.VarChar(11)
-  discountLargeFamily Boolean  @default(false) @map("discount_large_family")
-  createdAt           DateTime? @default(now()) @map("created_at")
-  /// NOT NULL w bazie z default now()
-  updatedAt           DateTime  @default(now()) @map("updated_at")
-
-  school School @relation(fields: [schoolId], references: [id])
-  user   User   @relation(fields: [userId], references: [id])
-
-  @@index([schoolId])
-  @@map("parent_profiles")
-}
-
-model Announcement {
-  id          String    @id @default(dbgenerated("(gen_random_uuid())::text"))
-  schoolId    String    @map("school_id")
-  authorId    String    @map("author_id")
-  title       String    @db.VarChar(255)
-  body        String    @db.Text
-  targetRole  String?   @map("target_role") @db.VarChar(50)
-  publishedAt DateTime  @default(now()) @map("published_at")
-  expiresAt   DateTime? @map("expires_at")
-
-  school School @relation(fields: [schoolId], references: [id])
-  author User   @relation(fields: [authorId], references: [id])
-
-  @@index([schoolId], name: "idx_announcements_school_id")
-  @@map("announcements")
-}
-
-// ============================================================
-// SYSTEM NAGRÓD
-// ============================================================
-
-model Reward {
-  id       String     @id @default(dbgenerated("(gen_random_uuid())::text"))
-  schoolId String     @map("school_id")
-  name     String     @db.VarChar(255)
-  type     RewardType
-  xpCost   Int        @default(0) @map("xp_cost")
-  assetUrl String?    @map("asset_url") @db.Text
-
-  school School @relation(fields: [schoolId], references: [id])
-
-  childRewards ChildReward[]
-
-  @@index([schoolId], name: "idx_rewards_school_id")
-  @@map("rewards")
-}
-
-enum RewardType {
-  AVATAR
-  BADGE
-  ITEM
-}
-
-model ChildReward {
-  id       String   @id @default(dbgenerated("(gen_random_uuid())::text"))
-  childId  String   @map("child_id")
-  rewardId String   @map("reward_id")
-  earnedAt DateTime @default(now()) @map("earned_at")
-
-  child  Child  @relation(fields: [childId], references: [id])
-  reward Reward @relation(fields: [rewardId], references: [id])
-
-  @@index([childId], name: "idx_child_rewards_child_id")
-  @@map("child_rewards")
-}
-
-// ============================================================
-// ODNOWIENIA
-// ============================================================
-
-model Renewal {
-  id              String    @id @default(dbgenerated("(gen_random_uuid())::text"))
-  schoolId        String    @map("school_id")
-  childId         String    @map("child_id")
-  parentId        String    @map("parent_id")
-  season          String    @db.VarChar(20)
-  /// PENDING_CONFIRMATION | CONFIRMED | REJECTED | CANCELLED
-  status          String    @default("PENDING_CONFIRMATION") @db.Text
-  initiatedAt     DateTime  @default(now()) @map("initiated_at")
-  confirmedAt     DateTime? @map("confirmed_at")
-  proposedGroupId String?   @map("proposed_group_id")
-  createdAt       DateTime  @default(now()) @map("created_at")
-
-  school           School            @relation(fields: [schoolId], references: [id])
-  child            Child             @relation(fields: [childId], references: [id])
-  parent           User              @relation(fields: [parentId], references: [id])
-  proposedGroup    Group?            @relation(fields: [proposedGroupId], references: [id])
-  renewalProposals RenewalProposal[]
-
-  /// Unique: jedno aktywne odnowienie na dziecko na sezon
-  @@unique([childId, season], name: "idx_renewals_child_season")
-  @@index([parentId], name: "idx_renewals_parent")
-  @@index([schoolId], name: "idx_renewals_school")
-  /// Composite index do filtrowania po szkole i statusie
-  @@index([schoolId, status], name: "idx_renewals_status")
-  @@map("renewals")
-}
-
-model RenewalProposal {
-  id               String    @id @default(dbgenerated("(gen_random_uuid())::text"))
-  schoolId         String    @map("school_id")
-  renewalId        String    @map("renewal_id")
-  groupId          String    @map("group_id")
-  proposedByUserId String    @map("proposed_by")
-  proposedAt       DateTime  @default(now()) @map("proposed_at")
-  /// PENDING | ACCEPTED | REJECTED
-  status           String    @default("PENDING") @db.Text
-  respondedAt      DateTime? @map("responded_at")
-  rejectionComment String?   @map("rejection_comment") @db.Text
-  createdAt        DateTime  @default(now()) @map("created_at")
-
-  school     School  @relation(fields: [schoolId], references: [id])
-  renewal    Renewal @relation(fields: [renewalId], references: [id])
-  group      Group   @relation(fields: [groupId], references: [id])
-  proposedBy User    @relation("RenewalProposalProposedBy", fields: [proposedByUserId], references: [id])
-
-  @@index([schoolId])
-  @@index([groupId])
-  /// W bazie jest UNIQUE na renewal_id — prawdopodobnie partial (WHERE status='PENDING')
-  /// Prisma nie obsługuje partial unique — zamodelowane jako @@unique ale wymuszanie przez aplikację
-  @@unique([renewalId], name: "idx_renewal_proposals_one_pending")
-  @@index([renewalId], name: "idx_renewal_proposals_renewal")
-  @@map("renewal_proposals")
-}
-
-// ============================================================
-// MARKETING (strona główna)
-// ============================================================
-
-model MarketingGallery {
-  id        String   @id @default(dbgenerated("(gen_random_uuid())::text"))
-  schoolId  String   @map("school_id")
-  imagePath String   @map("image_path") @db.Text
-  caption   String?  @db.Text
-  sortOrder Int      @default(0) @map("sort_order")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
-
-  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
-
-  @@index([schoolId], name: "marketing_gallery_school_id_idx")
-  @@map("marketing_gallery")
-}
-
-model MarketingFaq {
-  id        String   @id @default(dbgenerated("(gen_random_uuid())::text"))
-  schoolId  String   @map("school_id")
-  question  String   @db.Text
-  answer    String   @db.Text
-  sortOrder Int      @default(0) @map("sort_order")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
-
-  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
-
-  @@index([schoolId], name: "marketing_faq_school_id_idx")
-  @@map("marketing_faq")
-}
-
-model MarketingTestimonial {
-  id         String   @id @default(dbgenerated("(gen_random_uuid())::text"))
-  schoolId   String   @map("school_id")
-  authorName String   @map("author_name") @db.Text
-  body       String   @db.Text
-  sortLabel  String?  @map("sort_label") @db.Text
-  rating     Int?     @default(5) @db.SmallInt
-  sortOrder  Int      @default(0) @map("sort_order")
-  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
-
-  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
-
-  @@index([schoolId], name: "marketing_testimonial_school_id_idx")
-  @@map("marketing_testimonial")
 }

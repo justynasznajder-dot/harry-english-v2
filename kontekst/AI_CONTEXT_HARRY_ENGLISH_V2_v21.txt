@@ -2,8 +2,9 @@
 
 Ten plik służy do przekazania kontekstu do nowego czatu AI. Wklej go na początku rozmowy.
 
-**Źródło prawdy schematu bazy:** `prisma/schema.prisma` (zsynchronizowany z Neon, 2026-06-06).  
-Projekt używa **raw SQL przez `pg`** (`lib/db.ts`) — **bez Prisma Client** w runtime.
+**Źródło prawdy schematu bazy:** `prisma/schema.prisma` (introspekcja Neon + Prisma Migrate).  
+Projekt używa **raw SQL przez `pg`** (`lib/db.ts`) — **bez Prisma Client** w runtime.  
+Migracje: `prisma/migrations/` — patrz `prisma/MIGRATE.md`. Zapis w bazie wymaga `CONFIRM=1`.
 
 ---
 
@@ -117,7 +118,7 @@ lib/
 
 ## 4. Model danych — zasady (szczegóły w schema.prisma)
 
-**26 tabel** (modele Prisma). Kluczowe:
+**30 modeli** (introspekcja Neon). Kluczowe:
 
 ### users
 - `role`: ADMIN | MANAGER | TEACHER | PARENT | CHILD
@@ -197,15 +198,18 @@ Podgląd lokalny: `GET /api/dev/email-preview` (tylko dev).
 
 ---
 
-## 9. SQL / migracje ręczne
+## 9. Migracje bazy
 
-Pliki w `sql/` — uruchamiane ręcznie w Neon (historia migracji, nie runtime):
+**Nowe zmiany schematu:** Prisma Migrate — `prisma/migrations/`, instrukcja `prisma/MIGRATE.md`.  
+Zapis w bazie (`migrate deploy`, `resolve`) wymaga `CONFIRM=1`.
 
-- `contracts_attachments.sql`, `contracts_price_overrides.sql`, `contracts_enrollment_request_id.sql`
+Pliki w `sql/` — historyczne migracje ręczne (nie rozwijaj):
+
+- `contracts_attachments.sql`, `contracts_enrollment_request_id.sql`
 - `contract_template_harry_english_2025_2026.sql`
-- `users_must_change_password.sql`, `school_years_setup.sql`, `marketing_content.sql`
+- `users_must_change_password.sql`, `school_years_setup.sql`
 
-Skrypty npm: `scripts/insert-contract-template.ts`, `scripts/run-contracts-attachments-migration.ts`.
+Skrypty npm: `db:pull`, `db:migrate:*`, `scripts/insert-contract-template.ts`.
 
 ---
 
@@ -213,7 +217,7 @@ Skrypty npm: `scripts/insert-contract-template.ts`, `scripts/run-contracts-attac
 
 - Brak testów automatycznych
 - Portal dziecka (`ChildPortal`) — w budowie
-- `prisma` w package.json — tylko dokumentacja schematu, nie runtime
+- `prisma` — Migrate + introspekcja schematu; runtime nadal `pg`, nie Prisma Client
 - Po dużych zmianach API: wyczyść cache `.next` (`rm -rf .next`)
 
 ---

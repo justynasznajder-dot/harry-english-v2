@@ -120,7 +120,7 @@ export const FALLBACK_TESTIMONIALS: HomeTestimonial[] = [
   },
 ];
 
-/** Zdjęcia z `public/images/gallery/` gdy w bazie brak `marketing_gallery`. */
+/** Zdjęcia z `public/images/gallery/` — statyczna galeria strony głównej. */
 export const FALLBACK_GALLERY: { image_path: string; caption: string | null }[] = [
   { image_path: "/images/gallery/20.jpg", caption: "Zajęcia z Harry English" },
   { image_path: "/images/gallery/11.jpg", caption: "Zajęcia z Harry English" },
