@@ -21,6 +21,7 @@ import {
   buildPerLessonClause,
   buildTeacherFullName,
   buildTeacherIdSuffix,
+  extractContractNumber,
   formatBirthDatePl,
   formatContractDate,
   formatSchoolYearFromDate,
@@ -467,9 +468,12 @@ export async function generateParentContract(
     throw new Error("Umowa została już podpisana");
   }
 
+  const contractDate = new Date();
+  const contractYear = contractDate.getFullYear();
+
   let contractNumber: string;
   const existingNumber = existingSent.rows[0]?.content_html
-    ? existingSent.rows[0].content_html.match(/HE\/[\d/]+\/\d{3}/)?.[0]
+    ? extractContractNumber(existingSent.rows[0].content_html)
     : null;
   if (existingNumber) {
     contractNumber = existingNumber;
@@ -477,11 +481,12 @@ export async function generateParentContract(
     const countRes = await queryDb<{ count: string }>(
       `SELECT COUNT(*)::text AS count
        FROM contracts
-       WHERE school_id = $1 AND school_year_id IS NOT DISTINCT FROM $2`,
-      [schoolId, schoolYearId]
+       WHERE school_id = $1
+         AND EXTRACT(YEAR FROM created_at) = $2`,
+      [schoolId, contractYear]
     );
     contractNumber = buildContractNumber(
-      schoolYearName,
+      contractYear,
       Number(countRes.rows[0]?.count ?? 0) + 1
     );
   }
@@ -508,7 +513,6 @@ export async function generateParentContract(
     primary.teacher_last_name
   );
 
-  const contractDate = new Date();
   const contractSchoolYear = formatSchoolYearFromDate(contractDate);
 
   const placeholders: Record<string, string> = {

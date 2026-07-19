@@ -152,15 +152,25 @@ export function buildParentAddress(
   return `${address}, ${zipCode} ${city}`;
 }
 
-export function buildContractNumber(schoolYearName: string, sequence: number): string {
-  const yearPart = schoolYearName.replace(/\s+/g, "").replace(/-/g, "/");
-  return `HE/${yearPart}/${String(sequence).padStart(3, "0")}`;
+/** Numer umowy: kolejny numer w roku zawarcia, np. 1/2026. */
+export function buildContractNumber(year: number, sequence: number): string {
+  return `${sequence}/${year}`;
 }
 
-/** Wyciąga numer umowy z wygenerowanego HTML (np. HE/2026/001). */
+/** Wyciąga numer umowy z wygenerowanego HTML (np. 1/2026; legacy HE/2025/2026/001). */
 export function extractContractNumber(contentHtml: string): string | null {
-  const match = contentHtml.match(/HE\/[\d/]+\/\d{3}/);
-  return match?.[0] ?? null;
+  const modern = contentHtml.match(
+    /Nr umowy:\s*(?:<[^>]*>\s*)*(\d{1,6}\/\d{4})/i
+  );
+  if (modern?.[1]) return modern[1];
+
+  const attachment = contentHtml.match(
+    /do umowy nr\s*(?:<[^>]*>\s*)*(\d{1,6}\/\d{4})/i
+  );
+  if (attachment?.[1]) return attachment[1];
+
+  const legacy = contentHtml.match(/HE\/[\d/]+\/\d{3}/);
+  return legacy?.[0] ?? null;
 }
 
 export function buildSignedAtLine(signedAt: Date = new Date()): string {
