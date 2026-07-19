@@ -1,26 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { canAccessSchoolAdminApis, runPgTransaction, resolveAdminPanelTenant } from "@/lib/db";
-import { getTokenFromRequest } from "@/lib/auth";
-
-async function ensureSchoolAdmin(request: NextRequest): Promise<string | null> {
-  const payload = await getTokenFromRequest(request);
-  const userId = payload?.userId;
-  if (!userId) return null;
-  return (await canAccessSchoolAdminApis(userId)) ? userId : null;
-}
+import { runPgTransaction } from "@/lib/db";
+import { requireAdminSchoolContext } from "@/lib/admin-school-context";
+import { runSchoolYearCloseSteps } from "@/lib/school-year-history";
+import { randomUUID } from "crypto";
 
 type RouteCtx = { params: Promise<{ id: string }> };
 
 export async function PUT(request: NextRequest, context: RouteCtx) {
-  const userId = await ensureSchoolAdmin(request);
-  if (!userId) {
-    return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
-  }
-  const resolved = await resolveAdminPanelTenant(userId);
-  if (!resolved.ok) {
-    return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-  }
-  const { tenant } = resolved;
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
+
   const { id: yearId } = await context.params;
   try {
     const body = await request.json();
@@ -35,10 +24,10 @@ export async function PUT(request: NextRequest, context: RouteCtx) {
 
     const result = await runPgTransaction(async (c) => {
       const cur = await c.query<{ active: boolean }>(
-        tenant.role === "MANAGER"
+        ctx.tenant.role === "MANAGER"
           ? `SELECT active FROM school_years WHERE id = $1 AND school_id = $2 LIMIT 1`
           : `SELECT active FROM school_years WHERE id = $1 LIMIT 1`,
-        tenant.role === "MANAGER" ? [yearId, tenant.tenantSchoolId] : [yearId]
+        ctx.tenant.role === "MANAGER" ? [yearId, ctx.schoolId] : [yearId]
       );
       if (!cur.rows[0]) return { kind: "not_found" as const };
       if (cur.rows[0].active) return { kind: "active_edit" as const };
@@ -49,7 +38,7 @@ export async function PUT(request: NextRequest, context: RouteCtx) {
         date_to: string;
         active: boolean;
       }>(
-        tenant.role === "MANAGER"
+        ctx.tenant.role === "MANAGER"
           ? `UPDATE school_years
              SET name = $1, date_from = $2::date, date_to = $3::date
              WHERE id = $4 AND school_id = $5 AND active = FALSE
@@ -58,8 +47,8 @@ export async function PUT(request: NextRequest, context: RouteCtx) {
              SET name = $1, date_from = $2::date, date_to = $3::date
              WHERE id = $4 AND active = FALSE
              RETURNING id, name, date_from::text, date_to::text, active`,
-        tenant.role === "MANAGER"
-          ? [name.trim(), date_from, date_to, yearId, tenant.tenantSchoolId]
+        ctx.tenant.role === "MANAGER"
+          ? [name.trim(), date_from, date_to, yearId, ctx.schoolId]
           : [name.trim(), date_from, date_to, yearId]
       );
       if (!r.rows[0]) return { kind: "update_fail" as const };
@@ -95,15 +84,9 @@ export async function PUT(request: NextRequest, context: RouteCtx) {
 }
 
 export async function DELETE(request: NextRequest, context: RouteCtx) {
-  const userId = await ensureSchoolAdmin(request);
-  if (!userId) {
-    return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
-  }
-  const resolved = await resolveAdminPanelTenant(userId);
-  if (!resolved.ok) {
-    return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-  }
-  const { tenant } = resolved;
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
+
   const { id: yearId } = await context.params;
   try {
     let body: { action?: string } = {};
@@ -117,65 +100,81 @@ export async function DELETE(request: NextRequest, context: RouteCtx) {
     }
 
     const result = await runPgTransaction(async (c) => {
-      const y = await c.query<{ active: boolean; school_id: string }>(
-        tenant.role === "MANAGER"
-          ? `SELECT active, school_id FROM school_years WHERE id = $1 AND school_id = $2 LIMIT 1`
-          : `SELECT active, school_id FROM school_years WHERE id = $1 LIMIT 1`,
-        tenant.role === "MANAGER" ? [yearId, tenant.tenantSchoolId] : [yearId]
+      const y = await c.query<{ active: boolean; school_id: string; date_to: string }>(
+        ctx.tenant.role === "MANAGER"
+          ? `SELECT active, school_id, date_to::text FROM school_years WHERE id = $1 AND school_id = $2 LIMIT 1`
+          : `SELECT active, school_id, date_to::text FROM school_years WHERE id = $1 LIMIT 1`,
+        ctx.tenant.role === "MANAGER" ? [yearId, ctx.schoolId] : [yearId]
       );
       if (!y.rows[0]) return { kind: "not_found" as const };
       if (!y.rows[0].active) return { kind: "not_active" as const };
       const yearSchoolId = y.rows[0].school_id;
+      const dateTo = String(y.rows[0].date_to).slice(0, 10);
 
-      const lessons = await c.query(
-        `UPDATE lessons l
-         SET status = 'CANCELLED'
-         FROM groups g
-         WHERE l.group_id = g.id
-           AND g.school_id = $1
-           AND g.school_year_id = $2
-           AND l.status = 'SCHEDULED'
-           AND l.scheduled_at > NOW()
-         RETURNING l.id`,
-        [yearSchoolId, yearId]
-      );
-
-      const groups = await c.query(
-        `UPDATE groups
-         SET active = FALSE
-         WHERE school_id = $1 AND school_year_id = $2
-         RETURNING id`,
-        [yearSchoolId, yearId]
-      );
-
-      const subs = await c.query(
-        `UPDATE subscriptions s
-         SET status = 'EXPIRED'
-         WHERE s.school_id = $1
-           AND s.status IN ('ACTIVE', 'PAUSED')
-           AND (
-             s.school_year_id = $2
-             OR s.group_id IN (SELECT id FROM groups WHERE school_id = $1 AND school_year_id = $2)
-           )
-         RETURNING s.id`,
-        [yearSchoolId, yearId]
-      );
+      const closeCounts = await runSchoolYearCloseSteps(c, yearSchoolId, yearId, dateTo);
 
       const closedYear = await c.query(
-        tenant.role === "MANAGER"
-          ? `UPDATE school_years SET active = FALSE WHERE id = $1 AND school_id = $2 AND active = TRUE RETURNING id`
-          : `UPDATE school_years SET active = FALSE WHERE id = $1 AND active = TRUE RETURNING id`,
-        tenant.role === "MANAGER" ? [yearId, yearSchoolId] : [yearId]
+        ctx.tenant.role === "MANAGER"
+          ? `UPDATE school_years
+             SET active = FALSE, closed_at = NOW(), closed_by = $3
+             WHERE id = $1 AND school_id = $2 AND active = TRUE
+             RETURNING id`
+          : `UPDATE school_years
+             SET active = FALSE, closed_at = NOW(), closed_by = $2
+             WHERE id = $1 AND active = TRUE
+             RETURNING id`,
+        ctx.tenant.role === "MANAGER" ? [yearId, yearSchoolId, ctx.userId] : [yearId, ctx.userId]
       );
       if (!closedYear.rows[0]) {
         throw new Error("YEAR_CLOSE_CONFLICT");
       }
 
+      await c.query(
+        `INSERT INTO school_year_close_logs (
+           id, school_id, school_year_id, closed_by, closed_at,
+           lessons_cancelled, lessons_completed, groups_deactivated,
+           memberships_closed, subscriptions_expired, schedule_templates_deactivated
+         ) VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8, $9, $10)`,
+        [
+          randomUUID(),
+          yearSchoolId,
+          yearId,
+          ctx.userId,
+          closeCounts.lessonsCancelled,
+          closeCounts.lessonsCompleted,
+          closeCounts.groupsClosed,
+          closeCounts.membershipsClosed,
+          closeCounts.subscriptionsExpired,
+          closeCounts.scheduleTemplatesDeactivated,
+        ]
+      );
+
+      const nextYear = await c.query<{ id: string; name: string }>(
+        `SELECT id, name FROM school_years
+         WHERE school_id = $1
+           AND active = FALSE
+           AND closed_at IS NULL
+           AND date_from > $2::date
+         ORDER BY date_from ASC
+         LIMIT 1`,
+        [yearSchoolId, dateTo]
+      );
+      let activatedNextYear: { id: string; name: string } | null = null;
+      if (nextYear.rows[0]) {
+        const activated = await c.query<{ id: string; name: string }>(
+          `UPDATE school_years
+           SET active = TRUE
+           WHERE id = $1 AND school_id = $2 AND active = FALSE
+           RETURNING id, name`,
+          [nextYear.rows[0].id, yearSchoolId]
+        );
+        activatedNextYear = activated.rows[0] ?? null;
+      }
+
       return {
         kind: "ok" as const,
-        lessonsCancelled: lessons.rowCount ?? 0,
-        groupsClosed: groups.rowCount ?? 0,
-        subscriptionsExpired: subs.rowCount ?? 0,
+        ...closeCounts,
+        activatedNextYear,
       };
     });
 
@@ -188,8 +187,12 @@ export async function DELETE(request: NextRequest, context: RouteCtx) {
 
     return NextResponse.json({
       lessonsCancelled: result.lessonsCancelled,
+      lessonsCompleted: result.lessonsCompleted,
       groupsClosed: result.groupsClosed,
+      membershipsClosed: result.membershipsClosed,
       subscriptionsExpired: result.subscriptionsExpired,
+      scheduleTemplatesDeactivated: result.scheduleTemplatesDeactivated,
+      activatedNextYear: result.activatedNextYear ?? null,
     });
   } catch (error) {
     console.error("DELETE school-years/[id] error:", error);

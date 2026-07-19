@@ -18,6 +18,7 @@ import {
   buildGroupSchedule,
   buildParentAddress,
   buildParentPeselOrId,
+  buildPerLessonClause,
   buildTeacherFullName,
   buildTeacherIdSuffix,
   formatBirthDatePl,
@@ -28,6 +29,7 @@ import {
   generateContractHtml,
   paymentTypeToClauseKey,
 } from "@/lib/contract-html";
+import { resolveLessonUnitPrice, resolveMonthlyUnitPrice, resolveYearlyUnitPrice, type PaymentType } from "@/lib/lesson-pricing";
 
 export type ParentContractChildRow = {
   child_id: string;
@@ -40,6 +42,10 @@ export type ParentContractChildRow = {
   group_name: string | null;
   price_monthly: string | null;
   price_yearly: string | null;
+  price_per_lesson: string | null;
+  lesson_unit_price: string | null;
+  monthly_unit_price: string | null;
+  yearly_unit_price: string | null;
   preferred_location: string | null;
   preferred_location_name: string | null;
   teacher_first_name: string | null;
@@ -59,8 +65,10 @@ export type ParentContractContext = {
   schoolId: string;
   included: ParentContractChildRow[];
   excludedRequestIds: string[];
-  paymentType: "MONTHLY" | "YEARLY";
+  paymentType: PaymentType;
   includeAttachment2: boolean;
+  /** Umowa odnowienia — rok docelowy zamiast aktywnego. */
+  schoolYearOverride?: { id: string; name: string };
 };
 
 const MAX_CHILD_PLACEHOLDERS = 5;
@@ -82,6 +90,10 @@ export async function fetchParentEnrollmentChildren(
        g.name AS group_name,
        g.price_monthly::text AS price_monthly,
        g.price_yearly::text AS price_yearly,
+       g.price_per_lesson::text AS price_per_lesson,
+       er.lesson_unit_price::text AS lesson_unit_price,
+       er.monthly_unit_price::text AS monthly_unit_price,
+       er.yearly_unit_price::text AS yearly_unit_price,
        er.preferred_location,
        loc.name AS preferred_location_name,
        u.first_name AS teacher_first_name,
@@ -136,7 +148,7 @@ export function validateParentContractSelection(
 
 export function computeParentContractAmount(
   included: ParentContractChildRow[],
-  paymentType: "MONTHLY" | "YEARLY",
+  paymentType: PaymentType,
   options: {
     billingExempt: boolean;
     discountSettings: SchoolDiscountSettings;
@@ -144,11 +156,56 @@ export function computeParentContractAmount(
   }
 ): number | null {
   if (options.billingExempt) return 0;
+  if (paymentType === "PER_LESSON") return null;
 
   const total = sumChildrenBaseAmounts(included, paymentType);
   if (total == null || total <= 0) return null;
 
   return applyDiscountsToAmount(total, options.discountKeys, options.discountSettings);
+}
+
+export function resolveChildLessonUnitPriceForContract(
+  child: ParentContractChildRow
+): number | null {
+  return resolveLessonUnitPrice({
+    groupPricePerLesson: child.price_per_lesson,
+    enrollmentOverride: child.lesson_unit_price,
+  });
+}
+
+export function resolveChildMonthlyUnitPriceForContract(
+  child: ParentContractChildRow
+): number | null {
+  return resolveMonthlyUnitPrice({
+    groupPriceMonthly: child.price_monthly,
+    enrollmentOverride: child.monthly_unit_price,
+  });
+}
+
+export function resolveChildYearlyUnitPriceForContract(
+  child: ParentContractChildRow
+): number | null {
+  return resolveYearlyUnitPrice({
+    groupPriceYearly: child.price_yearly,
+    enrollmentOverride: child.yearly_unit_price,
+  });
+}
+
+export function validatePerLessonContractRates(
+  included: ParentContractChildRow[],
+  billingExempt: boolean
+): { ok: true } | { ok: false; message: string } {
+  if (billingExempt) return { ok: true };
+  for (const child of included) {
+    const price = resolveChildLessonUnitPriceForContract(child);
+    if (price == null || price <= 0) {
+      return {
+        ok: false,
+        message: `Brak stawki za pojedyncze zajęcia dla ${child.first_name} ${child.last_name} — skontaktuj się ze szkołą.`,
+      };
+    }
+  }
+  return { ok: true };
 }
 
 export function buildChildPlaceholders(
@@ -286,12 +343,14 @@ export async function generateParentContract(
     attachment_1_html: string | null;
     attachment_2_html: string | null;
   }>;
-  amount: number;
+  amount: number | null;
 }> {
-  const { parentId, schoolId, included, excludedRequestIds, paymentType, includeAttachment2 } =
+  const { parentId, schoolId, included, excludedRequestIds, paymentType, includeAttachment2, schoolYearOverride } =
     ctx;
 
-  await rejectExcludedEnrollmentRequests(parentId, schoolId, excludedRequestIds);
+  if (excludedRequestIds.length > 0) {
+    await rejectExcludedEnrollmentRequests(parentId, schoolId, excludedRequestIds);
+  }
 
   const billingExempt = await isComplimentaryForParent(schoolId, {
     parentId,
@@ -312,22 +371,29 @@ export async function generateParentContract(
       billingExempt,
       discountSettings,
       discountKeys,
-    }) ?? 0;
+    });
 
-  if (!billingExempt && amount <= 0) {
+  if (paymentType === "PER_LESSON") {
+    const perLessonValidation = validatePerLessonContractRates(included, billingExempt);
+    if (!perLessonValidation.ok) {
+      throw new Error(perLessonValidation.message);
+    }
+  } else if (!billingExempt && (amount == null || amount <= 0)) {
     throw new Error(
       "Brak stawki dla wybranych dzieci — skontaktuj się ze szkołą, aby ustalić kwotę w umowie."
     );
   }
 
-  const schoolYearRes = await queryDb<{ id: string; name: string }>(
-    `SELECT id, name
-     FROM school_years
-     WHERE school_id = $1 AND active = TRUE
-     ORDER BY date_from DESC
-     LIMIT 1`,
-    [schoolId]
-  );
+  const schoolYearRes = schoolYearOverride
+    ? { rows: [{ id: schoolYearOverride.id, name: schoolYearOverride.name }] }
+    : await queryDb<{ id: string; name: string }>(
+        `SELECT id, name
+         FROM school_years
+         WHERE school_id = $1 AND active = TRUE
+         ORDER BY date_from DESC
+         LIMIT 1`,
+        [schoolId]
+      );
   const activeSchoolYear = schoolYearRes.rows[0];
   const schoolYearName = activeSchoolYear?.name ?? "2025/2026";
   const schoolYearId = activeSchoolYear?.id ?? null;
@@ -428,7 +494,15 @@ export async function generateParentContract(
     profile.pesel,
     profile.nip
   );
-  const amountClause = buildAmountClause(paymentTypeToClauseKey(paymentType), amount);
+  const amountClause =
+    paymentType === "PER_LESSON"
+      ? buildPerLessonClause(
+          included.map((child) => ({
+            name: `${formatPersonName(child.first_name)} ${formatPersonName(child.last_name)}`.trim(),
+            unitPrice: resolveChildLessonUnitPriceForContract(child) ?? 0,
+          }))
+        )
+      : buildAmountClause(paymentTypeToClauseKey(paymentType), amount);
   const teacherFullName = buildTeacherFullName(
     primary.teacher_first_name,
     primary.teacher_last_name
@@ -542,7 +616,7 @@ export async function generateParentContract(
         contentHtml,
         includeAttachment2,
         paymentType,
-        amount,
+        billingExempt ? 0 : amount,
         template.id,
         primaryGroupId,
         discountLargeFamily,
@@ -577,7 +651,7 @@ export async function generateParentContract(
         contentHtml,
         includeAttachment2,
         paymentType,
-        amount,
+        billingExempt ? 0 : amount,
         discountLargeFamily,
         discountSibling,
         billingExempt,
@@ -592,8 +666,9 @@ export async function generateParentContract(
     await queryDb(
       `INSERT INTO contract_children (
          contract_id, child_id, enrollment_request_id, group_id, sort_order,
-         attachment_1_html, attachment_2_html
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+         attachment_1_html, attachment_2_html, lesson_unit_price,
+         monthly_unit_price, yearly_unit_price
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
       [
         contractId,
         child.child_id,
@@ -602,6 +677,15 @@ export async function generateParentContract(
         i,
         attachments?.attachment1Html ?? null,
         attachments?.attachment2Html ?? null,
+        paymentType === "PER_LESSON"
+          ? resolveChildLessonUnitPriceForContract(child)
+          : null,
+        paymentType === "MONTHLY"
+          ? resolveChildMonthlyUnitPriceForContract(child)
+          : null,
+        paymentType === "YEARLY"
+          ? resolveChildYearlyUnitPriceForContract(child)
+          : null,
       ]
     );
   }

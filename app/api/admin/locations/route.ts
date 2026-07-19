@@ -1,55 +1,41 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import {
-  canAccessSchoolAdminApis,
-  getRegistrationSchoolId,
-  queryDb,
-  resolveAdminPanelTenant,
-} from "@/lib/db";
-import { getTokenFromRequest } from "@/lib/auth";
-
-async function ensureAdmin(request: NextRequest): Promise<string | null> {
-  const payload = await getTokenFromRequest(request);
-  const userId = payload?.userId;
-  if (!userId) return null;
-  return (await canAccessSchoolAdminApis(userId)) ? userId : null;
-}
+import { queryDb } from "@/lib/db";
+import { requireAdminSchoolContext, resolveInsertSchoolId } from "@/lib/admin-school-context";
 
 export async function GET(request: NextRequest) {
-  const adminId = await ensureAdmin(request);
-  if (!adminId) return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
-
-  const resolved = await resolveAdminPanelTenant(adminId);
-  if (!resolved.ok) {
-    return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-  }
-  const { tenant } = resolved;
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
 
   try {
     const rows =
-      tenant.role === "MANAGER"
+      ctx.tenant.role === "MANAGER"
         ? await queryDb<{
             id: string;
             name: string;
             address: string | null;
             active: boolean;
+            sort_order: number;
+            is_featured: boolean;
           }>(
-            `SELECT id, name, address, active
+            `SELECT id, name, address, active, sort_order, is_featured
              FROM locations
              WHERE school_id = $1
-             ORDER BY name ASC`,
-            [tenant.tenantSchoolId]
+             ORDER BY sort_order ASC, is_featured DESC, name ASC`,
+            [ctx.schoolId]
           )
         : await queryDb<{
             id: string;
             name: string;
             address: string | null;
             active: boolean;
+            sort_order: number;
+            is_featured: boolean;
           }>(
-            `SELECT id, name, address, active
+            `SELECT id, name, address, active, sort_order, is_featured
              FROM locations
              WHERE active = TRUE
-             ORDER BY name ASC`
+             ORDER BY sort_order ASC, is_featured DESC, name ASC`
           );
 
     return NextResponse.json({ locations: rows.rows });
@@ -60,14 +46,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const adminId = await ensureAdmin(request);
-  if (!adminId) return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
-
-  const resolved = await resolveAdminPanelTenant(adminId);
-  if (!resolved.ok) {
-    return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-  }
-  const { tenant } = resolved;
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
 
   try {
     const body = await request.json();
@@ -81,42 +61,39 @@ export async function POST(request: NextRequest) {
     const address =
       addressRaw != null && String(addressRaw).trim() !== "" ? String(addressRaw).trim() : null;
 
-    let insertSchoolId: string | null =
-      tenant.role === "MANAGER" ? tenant.tenantSchoolId : null;
-    if (tenant.role === "MANAGER") {
-      const fromBody =
-        (typeof body?.school_id === "string" && body.school_id.trim()) ||
-        (typeof body?.schoolId === "string" && body.schoolId.trim()) ||
-        "";
-      if (fromBody && fromBody !== tenant.tenantSchoolId) {
-        return NextResponse.json(
-          { message: "Manager może dodać lokalizację tylko dla swojej szkoły" },
-          { status: 403 }
-        );
-      }
-    }
-    if (tenant.role === "ADMIN") {
-      const fromBody =
-        (typeof body?.school_id === "string" && body.school_id.trim()) ||
-        (typeof body?.schoolId === "string" && body.schoolId.trim()) ||
-        "";
-      insertSchoolId = fromBody || getRegistrationSchoolId() || null;
-    }
+    const insertSchoolId = resolveInsertSchoolId(ctx.tenant, {
+      bodySchoolId: body?.school_id,
+      bodySchoolIdCamel: body?.schoolId,
+    });
     if (!insertSchoolId) {
       return NextResponse.json(
         {
           message:
-            "Brak identyfikatora szkoły — konto zarządcy musi mieć przypisaną szkołę lub podaj schoolId (ADMIN).",
+            ctx.tenant.role === "MANAGER"
+              ? "Manager może dodać lokalizację tylko dla swojej szkoły"
+              : "Brak identyfikatora szkoły — podaj schoolId lub ustaw SCHOOL_ID w środowisku.",
         },
-        { status: 400 }
+        { status: ctx.tenant.role === "MANAGER" ? 403 : 400 }
       );
     }
 
+    let sortOrder = 100;
+    if (body?.sort_order !== undefined) {
+      const parsed = Number(body.sort_order);
+      if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 0 || parsed > 9999) {
+        return NextResponse.json(
+          { message: "Kolejność musi być liczbą całkowitą od 0 do 9999" },
+          { status: 400 }
+        );
+      }
+      sortOrder = parsed;
+    }
+
     const inserted = await queryDb<{ id: string }>(
-      `INSERT INTO locations (id, school_id, name, address, active)
-       VALUES ($1, $2, $3, $4, TRUE)
+      `INSERT INTO locations (id, school_id, name, address, active, sort_order)
+       VALUES ($1, $2, $3, $4, TRUE, $5)
        RETURNING id`,
-      [randomUUID(), insertSchoolId, name, address]
+      [randomUUID(), insertSchoolId, name, address, sortOrder]
     );
 
     return NextResponse.json({

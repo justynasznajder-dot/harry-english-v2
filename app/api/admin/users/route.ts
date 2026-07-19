@@ -1,40 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import {
-
-  canAccessSchoolAdminApis,
-
   createParentUserWithEnrollmentRequests,
-
   DuplicateEnrollmentError,
-
   getAllUsers,
-
   getRegistrationSchoolId,
-
   getUserById,
-
   getUsersByRole,
-
   isAdmin,
-
   parseUserRole,
-
   queryDb,
-
-  resolveAdminPanelTenant,
-
   resolveAdminUsersSchoolScope,
-
   UserRole,
-
 } from "@/lib/db";
 
 import bcrypt from "bcryptjs";
 
 import { createUser } from "@/lib/db";
 
-import { getTokenFromRequest } from "@/lib/auth";
+import { requireAdminSchoolContext } from "@/lib/admin-school-context";
 
 const LOCATION_ID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -54,39 +38,10 @@ export async function GET(request: NextRequest) {
 
   try {
 
-    const payload = await getTokenFromRequest(request);
+    const ctx = await requireAdminSchoolContext(request);
+    if (!ctx.ok) return ctx.response;
 
-    const userId = payload?.userId;
-
-    if (!userId) {
-
-      return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-
-    }
-
-
-
-    const userCanStaff = await canAccessSchoolAdminApis(userId);
-
-    if (!userCanStaff) {
-
-      return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
-
-    }
-
-
-
-    const resolved = await resolveAdminPanelTenant(userId);
-
-    if (!resolved.ok) {
-
-      return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-
-    }
-
-    const { tenant } = resolved;
-
-    const schoolScope = resolveAdminUsersSchoolScope(tenant);
+    const schoolScope = resolveAdminUsersSchoolScope(ctx.tenant);
 
 
 
@@ -120,7 +75,7 @@ export async function GET(request: NextRequest) {
 
 
 
-    if (tenant.role === "MANAGER") {
+    if (ctx.tenant.role === "MANAGER") {
 
       users = users.filter((u) => u.role !== "ADMIN");
 
@@ -194,29 +149,10 @@ export async function POST(request: NextRequest) {
 
   try {
 
-    const payload = await getTokenFromRequest(request);
+    const ctx = await requireAdminSchoolContext(request);
+    if (!ctx.ok) return ctx.response;
 
-    const userId = payload?.userId;
-
-    if (!userId) {
-
-      return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-
-    }
-
-
-
-    const userCanStaff = await canAccessSchoolAdminApis(userId);
-
-    if (!userCanStaff) {
-
-      return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
-
-    }
-
-
-
-    const actor = await getUserById(userId);
+    const actor = await getUserById(ctx.userId);
 
     if (!actor) {
 
@@ -326,7 +262,7 @@ export async function POST(request: NextRequest) {
 
 
 
-    if (targetRole === "ADMIN" && !(await isAdmin(userId))) {
+    if (targetRole === "ADMIN" && !(await isAdmin(ctx.userId))) {
 
       return NextResponse.json(
 

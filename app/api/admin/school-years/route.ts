@@ -1,32 +1,18 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { queryDb } from "@/lib/db";
 import {
-  canAccessSchoolAdminApis,
-  getRegistrationSchoolId,
-  queryDb,
-  resolveAdminPanelTenant,
-} from "@/lib/db";
-import { getTokenFromRequest } from "@/lib/auth";
-
-async function ensureSchoolAdmin(request: NextRequest): Promise<string | null> {
-  const payload = await getTokenFromRequest(request);
-  const userId = payload?.userId;
-  if (!userId) return null;
-  return (await canAccessSchoolAdminApis(userId)) ? userId : null;
-}
+  requireAdminSchoolContext,
+  resolveInsertSchoolId,
+} from "@/lib/admin-school-context";
 
 export async function GET(request: NextRequest) {
-  const userId = await ensureSchoolAdmin(request);
-  if (!userId) {
-    return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
-  }
-  const resolved = await resolveAdminPanelTenant(userId);
-  if (!resolved.ok) {
-    return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-  }
-  const { tenant } = resolved;
-  const schoolClause = tenant.role === "MANAGER" ? `WHERE school_id = $1` : "";
-  const listParams = tenant.role === "MANAGER" ? [tenant.tenantSchoolId] : [];
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
+
+  const schoolClause = ctx.tenant.role === "MANAGER" ? `WHERE school_id = $1` : "";
+  const listParams = ctx.tenant.role === "MANAGER" ? [ctx.schoolId] : [];
+
   try {
     const r = await queryDb<{
       id: string;
@@ -57,15 +43,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const userId = await ensureSchoolAdmin(request);
-  if (!userId) {
-    return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
-  }
-  const resolved = await resolveAdminPanelTenant(userId);
-  if (!resolved.ok) {
-    return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-  }
-  const { tenant } = resolved;
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
+
   try {
     const body = await request.json();
     const {
@@ -85,26 +65,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: "Brak nazwy lub zakresu dat" }, { status: 400 });
     }
 
-    let insertSchoolId: string | null =
-      tenant.role === "MANAGER" ? tenant.tenantSchoolId : null;
-    if (tenant.role === "MANAGER") {
-      const fromBody =
-        (typeof bodySchoolId === "string" && bodySchoolId.trim()) ||
-        (typeof bodySchoolIdCamel === "string" && bodySchoolIdCamel.trim()) ||
-        "";
-      if (fromBody && fromBody !== tenant.tenantSchoolId) {
-        return NextResponse.json(
-          { message: "Manager może tworzyć rok szkolny tylko dla swojej szkoły" },
-          { status: 403 }
-        );
-      }
-    }
-    if (tenant.role === "ADMIN") {
-      const fromBody =
-        (typeof bodySchoolId === "string" && bodySchoolId.trim()) ||
-        (typeof bodySchoolIdCamel === "string" && bodySchoolIdCamel.trim()) ||
-        "";
-      insertSchoolId = fromBody || getRegistrationSchoolId() || null;
+    const insertSchoolId = resolveInsertSchoolId(ctx.tenant, { bodySchoolId, bodySchoolIdCamel });
+    if (ctx.tenant.role === "MANAGER" && insertSchoolId === null) {
+      return NextResponse.json(
+        { message: "Manager może tworzyć rok szkolny tylko dla swojej szkoły" },
+        { status: 403 }
+      );
     }
     if (!insertSchoolId) {
       return NextResponse.json(
@@ -113,17 +79,35 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const active = await queryDb<{ id: string }>(
-      `SELECT id FROM school_years WHERE school_id = $1 AND active = TRUE LIMIT 1`,
+    const active = await queryDb<{ id: string; date_from: string }>(
+      `SELECT id, date_from::text AS date_from FROM school_years WHERE school_id = $1 AND active = TRUE LIMIT 1`,
       [insertSchoolId]
     );
-    if (active.rows[0]) {
-      return NextResponse.json(
-        { message: "Najpierw zakończ bieżący rok szkolny" },
-        { status: 400 }
+    const activeRow = active.rows[0];
+
+    if (activeRow) {
+      const planned = await queryDb<{ id: string }>(
+        `SELECT id FROM school_years
+         WHERE school_id = $1 AND active = FALSE AND closed_at IS NULL AND date_from > $2::date
+         ORDER BY date_from ASC
+         LIMIT 1`,
+        [insertSchoolId, String(activeRow.date_from).slice(0, 10)]
       );
+      if (planned.rows[0]) {
+        return NextResponse.json(
+          { message: "Kolejny rok szkolny jest już dodany. Edytuj go lub zakończ bieżący rok, aby go aktywować." },
+          { status: 409 }
+        );
+      }
+      if (date_from <= String(activeRow.date_from).slice(0, 10)) {
+        return NextResponse.json(
+          { message: "Data rozpoczęcia kolejnego roku musi być późniejsza niż rok aktywny" },
+          { status: 400 }
+        );
+      }
     }
 
+    const createActive = !activeRow;
     const id = randomUUID();
     const ins = await queryDb<{
       id: string;
@@ -135,9 +119,9 @@ export async function POST(request: NextRequest) {
       created_at: Date;
     }>(
       `INSERT INTO school_years (id, school_id, name, date_from, date_to, active, created_at)
-       VALUES ($1, $2, $3, $4::date, $5::date, TRUE, NOW())
+       VALUES ($1, $2, $3, $4::date, $5::date, $6, NOW())
        RETURNING id, school_id, name, date_from::text, date_to::text, active, created_at`,
-      [id, insertSchoolId, name.trim(), date_from, date_to]
+      [id, insertSchoolId, name.trim(), date_from, date_to, createActive]
     );
     const row = ins.rows[0];
     return NextResponse.json({

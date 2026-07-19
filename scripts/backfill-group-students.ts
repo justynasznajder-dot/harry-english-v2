@@ -30,25 +30,29 @@ async function main() {
   `);
   console.log("Missing enrollments:", missing.rows.length);
   for (const row of missing.rows) {
-    const groupRow = await pool.query<{ school_year_id: string | null }>(
-      "SELECT school_year_id FROM groups WHERE id = $1",
+    const groupRow = await pool.query<{ school_id: string; school_year_id: string | null }>(
+      "SELECT school_id, school_year_id FROM groups WHERE id = $1",
       [row.group_id]
     );
-    const schoolYearId = groupRow.rows[0]?.school_year_id ?? null;
-    const prior = await pool.query<{ id: string }>(
-      "SELECT id FROM group_students WHERE group_id = $1 AND child_id = $2 LIMIT 1",
-      [row.group_id, row.child_id]
+    if (!groupRow.rows[0]) continue;
+    const { school_id: schoolId, school_year_id: schoolYearId } = groupRow.rows[0];
+    const prior = await pool.query<{ id: string; school_year_id: string | null; left_at: string | null }>(
+      `SELECT id, school_year_id, left_at::text FROM group_students
+       WHERE group_id = $1 AND child_id = $2 AND school_year_id IS NOT DISTINCT FROM $3
+       LIMIT 1`,
+      [row.group_id, row.child_id, schoolYearId]
     );
     if (prior.rows[0]) {
+      if (prior.rows[0].left_at == null) continue;
       await pool.query(
-        "UPDATE group_students SET left_at = NULL, enrolled_at = NOW(), school_year_id = $2 WHERE id = $1",
-        [prior.rows[0].id, schoolYearId]
+        `UPDATE group_students SET left_at = NULL, enrolled_at = NOW(), school_id = $2 WHERE id = $1`,
+        [prior.rows[0].id, schoolId]
       );
     } else {
       await pool.query(
-        `INSERT INTO group_students (id, group_id, child_id, enrolled_at, school_year_id)
-         VALUES ($1, $2, $3, NOW(), $4)`,
-        [randomUUID(), row.group_id, row.child_id, schoolYearId]
+        `INSERT INTO group_students (id, school_id, group_id, child_id, enrolled_at, school_year_id)
+         VALUES ($1, $2, $3, $4, NOW(), $5)`,
+        [randomUUID(), schoolId, row.group_id, row.child_id, schoolYearId]
       );
     }
     console.log("Enrolled:", row.first_name, row.last_name, "->", row.group_name);

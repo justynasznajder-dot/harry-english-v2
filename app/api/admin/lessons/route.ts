@@ -1,16 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { canAccessSchoolAdminApis, queryDb, resolveAdminPanelTenant } from "@/lib/db";
-import { getTokenFromRequest } from "@/lib/auth";
+import { queryDb } from "@/lib/db";
+import { completePastScheduledLessons } from "@/lib/lesson-completion";
+import { requireAdminSchoolContext } from "@/lib/admin-school-context";
 
 const TZ = "Europe/Warsaw";
 const MAX_RANGE_DAYS = 120;
-
-async function ensureAdmin(request: NextRequest): Promise<string | null> {
-  const payload = await getTokenFromRequest(request);
-  const userId = payload?.userId;
-  if (!userId) return null;
-  return (await canAccessSchoolAdminApis(userId)) ? userId : null;
-}
 
 function isYmd(s: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(s);
@@ -31,15 +25,8 @@ function toIso(v: unknown): string {
 }
 
 export async function GET(request: NextRequest) {
-  const userId = await ensureAdmin(request);
-  if (!userId) {
-    return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
-  }
-  const resolved = await resolveAdminPanelTenant(userId);
-  if (!resolved.ok) {
-    return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-  }
-  const { tenant } = resolved;
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
 
   const { searchParams } = new URL(request.url);
   const fromYmd = searchParams.get("from")?.trim() ?? "";
@@ -74,9 +61,9 @@ export async function GET(request: NextRequest) {
     `l.scheduled_at < (($2::date + interval '1 day') AT TIME ZONE '${TZ}')`,
   ];
   let p = 3;
-  if (tenant.role === "MANAGER") {
+  if (ctx.tenant.role === "MANAGER") {
     lessonWhere.push(`g.school_id = $${p}`);
-    lessonParams.push(tenant.tenantSchoolId);
+    lessonParams.push(ctx.schoolId);
     p++;
   }
   if (locationIds.length > 0) {
@@ -98,13 +85,15 @@ export async function GET(request: NextRequest) {
   const holidayParams: unknown[] = [fromYmd, toYmd];
   const holidayWhere = [`h.date_to >= $1::date`, `h.date_from <= $2::date`];
   let hp = 3;
-  if (tenant.role === "MANAGER") {
+  if (ctx.tenant.role === "MANAGER") {
     holidayWhere.push(`h.school_id = $${hp}`);
-    holidayParams.push(tenant.tenantSchoolId);
+    holidayParams.push(ctx.schoolId);
     hp++;
   }
 
   try {
+    await completePastScheduledLessons();
+
     const lessonsSql = `SELECT
         l.id,
         l.group_id,

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { canAccessSchoolAdminApis, resolveAdminPanelTenant } from "@/lib/db";
 import { sendCombinedProposalEmail } from "@/lib/email";
-import { getTokenFromRequest } from "@/lib/auth";
+import { requireAdminSchoolContext } from "@/lib/admin-school-context";
 import {
   ensureInitialProposalEmailCredentials,
   submitEnrollmentProposal,
@@ -12,22 +11,15 @@ import {
 type BatchProposalBody = {
   requestId?: string;
   groupId?: string;
+  lessonUnitPrice?: number | string | null;
+  monthlyUnitPrice?: number | string | null;
+  yearlyUnitPrice?: number | string | null;
 };
 
 export async function POST(request: NextRequest) {
   try {
-    const payload = await getTokenFromRequest(request);
-    const userId = payload?.userId;
-    if (!userId) return NextResponse.json({ message: "Nieprawidłowy token" }, { status: 401 });
-    if (!(await canAccessSchoolAdminApis(userId))) {
-      return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
-    }
-
-    const resolved = await resolveAdminPanelTenant(userId);
-    if (!resolved.ok) {
-      return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-    }
-    const { tenant } = resolved;
+    const ctx = await requireAdminSchoolContext(request);
+    if (!ctx.ok) return ctx.response;
 
     const body = await request.json();
     const proposals = (body as { proposals?: BatchProposalBody[] }).proposals;
@@ -46,7 +38,7 @@ export async function POST(request: NextRequest) {
 
     const requestIds = proposals.map((p) => p.requestId!);
     const schoolRestrict =
-      tenant.role === "MANAGER" ? { restrictToSchoolId: tenant.tenantSchoolId } : undefined;
+      ctx.tenant.role === "MANAGER" ? { restrictToSchoolId: ctx.schoolId } : undefined;
 
     let sharedParent: SharedParentState | null = null;
     const emailItems: ProposalEmailItem[] = [];
@@ -56,6 +48,9 @@ export async function POST(request: NextRequest) {
         {
           requestId: p.requestId!,
           groupId: p.groupId!,
+          lessonUnitPrice: p.lessonUnitPrice,
+          monthlyUnitPrice: p.monthlyUnitPrice,
+          yearlyUnitPrice: p.yearlyUnitPrice,
         },
         sharedParent,
         {

@@ -1,16 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { canAccessSchoolAdminApis, DEFAULT_SCHOOL_ID, getActiveSchoolYear, queryDb } from "@/lib/db";
-import { getTokenFromRequest } from "@/lib/auth";
+import { getActiveSchoolYear, queryDb } from "@/lib/db";
+import { assertGroupInSchool, requireAdminSchoolContext, tenantNotFoundResponse } from "@/lib/admin-school-context";
 
 const TZ = "Europe/Warsaw";
-
-async function ensureAdmin(request: NextRequest): Promise<boolean> {
-  const payload = await getTokenFromRequest(request);
-  const userId = payload?.userId;
-  if (!userId) return false;
-  return canAccessSchoolAdminApis(userId);
-}
 
 function nextDateForWeekday(base: Date, dayOfWeek: number): Date {
   const current = ((base.getDay() + 6) % 7) + 1;
@@ -59,9 +52,9 @@ function buildGenerateMessage(opts: { created: number; retroactive: boolean }): 
 }
 
 export async function POST(request: NextRequest) {
-  if (!(await ensureAdmin(request))) {
-    return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
-  }
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
+
   try {
     const body = await request.json();
     const { groupId, dateFrom, dateTo } = body as { groupId?: string; dateFrom?: string; dateTo?: string };
@@ -69,15 +62,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: "Brak wymaganych pól" }, { status: 400 });
     }
 
-    const groupRes = await queryDb<{ teacher_id: string | null; school_id: string }>(
-      `SELECT teacher_id, school_id FROM groups WHERE id = $1 LIMIT 1`,
-      [groupId],
-    );
-    const gRow = groupRes.rows[0];
-    const teacherId = gRow?.teacher_id ?? null;
-    if (!teacherId) return NextResponse.json({ message: "Grupa nie ma przypisanego nauczyciela" }, { status: 400 });
+    const group = await assertGroupInSchool(groupId, ctx.schoolId);
+    if (!group.ok) return tenantNotFoundResponse("Nie znaleziono grupy");
 
-    const schoolId = gRow?.school_id ?? DEFAULT_SCHOOL_ID;
+    const teacherId = group.teacherId;
+    if (!teacherId) {
+      return NextResponse.json({ message: "Grupa nie ma przypisanego nauczyciela" }, { status: 400 });
+    }
+
+    const schoolId = ctx.schoolId;
     const activeYear = await getActiveSchoolYear(schoolId);
     if (!activeYear) {
       return NextResponse.json({ message: "Brak aktywnego roku szkolnego" }, { status: 400 });

@@ -1,11 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  canAccessSchoolAdminApis,
-  queryDb,
-  resolveAdminPanelTenant,
-  resolveAdminUsersSchoolScope,
-} from "@/lib/db";
-import { getTokenFromRequest } from "@/lib/auth";
+import { queryDb, resolveAdminUsersSchoolScope } from "@/lib/db";
+import { requireAdminSchoolContext } from "@/lib/admin-school-context";
 import {
   resolveParentUserIdForEnrollment,
   setParentLargeFamilyCard,
@@ -13,18 +8,8 @@ import {
 
 export async function PATCH(request: NextRequest) {
   try {
-    const payload = await getTokenFromRequest(request);
-    const userId = payload?.userId;
-    if (!userId) return NextResponse.json({ message: "Nieprawidłowy token" }, { status: 401 });
-    if (!(await canAccessSchoolAdminApis(userId))) {
-      return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
-    }
-
-    const resolved = await resolveAdminPanelTenant(userId);
-    if (!resolved.ok) {
-      return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-    }
-    const { tenant } = resolved;
+    const ctx = await requireAdminSchoolContext(request);
+    if (!ctx.ok) return ctx.response;
 
     const body = await request.json();
     const parentUserId = String(body.parentUserId ?? body.parent_user_id ?? "").trim();
@@ -34,9 +19,9 @@ export async function PATCH(request: NextRequest) {
     );
 
     const schoolScope =
-      tenant.role === "MANAGER"
-        ? tenant.tenantSchoolId
-        : resolveAdminUsersSchoolScope(tenant);
+      ctx.tenant.role === "MANAGER"
+        ? ctx.schoolId
+        : resolveAdminUsersSchoolScope(ctx.tenant);
 
     const resolvedParentId = await resolveParentUserIdForEnrollment({
       schoolId: schoolScope,

@@ -1,40 +1,45 @@
 import { NextRequest, NextResponse } from "next/server";
-import { canAccessSchoolAdminApis, queryDb, resolveAdminPanelTenant } from "@/lib/db";
-import { getTokenFromRequest } from "@/lib/auth";
-
-async function ensureSchoolAdmin(request: NextRequest): Promise<string | null> {
-  const payload = await getTokenFromRequest(request);
-  const userId = payload?.userId;
-  if (!userId) return null;
-  return (await canAccessSchoolAdminApis(userId)) ? userId : null;
-}
+import { queryDb } from "@/lib/db";
+import { requireAdminSchoolContext } from "@/lib/admin-school-context";
 
 type RouteCtx = { params: Promise<{ id: string }> };
 
-export async function PUT(request: NextRequest, context: RouteCtx) {
-  const userId = await ensureSchoolAdmin(request);
-  if (!userId) {
-    return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
-  }
+type LocationUpdateBody = {
+  active?: boolean;
+  name?: string;
+  address?: string | null;
+  sort_order?: number | string;
+  is_featured?: boolean;
+};
 
-  const resolved = await resolveAdminPanelTenant(userId);
-  if (!resolved.ok) {
-    return NextResponse.json({ message: resolved.message }, { status: resolved.status });
+function parseSortOrder(value: number | string | undefined): number | null {
+  if (value === undefined) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 0 || parsed > 9999) {
+    return null;
   }
+  return parsed;
+}
+
+export async function PUT(request: NextRequest, context: RouteCtx) {
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
 
   const { id } = await context.params;
-  const { tenant } = resolved;
+  const { tenant } = ctx;
 
   try {
-    let body: { active?: boolean; name?: string; address?: string | null } = {};
+    let body: LocationUpdateBody = {};
     try {
-      body = (await request.json()) as { active?: boolean; name?: string; address?: string | null };
+      body = (await request.json()) as LocationUpdateBody;
     } catch {
       /* brak body - domyślnie dezaktywacja */
     }
 
-    const hasEditPayload = body.name !== undefined || body.address !== undefined;
-    if (hasEditPayload) {
+    const hasNameEdit = body.name !== undefined || body.address !== undefined;
+    const hasDisplayEdit = body.sort_order !== undefined || body.is_featured !== undefined;
+
+    if (hasNameEdit) {
       const name = typeof body.name === "string" ? body.name.trim() : "";
       if (!name) {
         return NextResponse.json({ message: "Nazwa lokalizacji jest wymagana" }, { status: 400 });
@@ -42,22 +47,85 @@ export async function PUT(request: NextRequest, context: RouteCtx) {
       const address =
         body.address != null && String(body.address).trim() !== "" ? String(body.address).trim() : null;
 
+      const sortOrderParam = parseSortOrder(body.sort_order);
+      if (body.sort_order !== undefined && sortOrderParam === null) {
+        return NextResponse.json(
+          { message: "Kolejność musi być liczbą całkowitą od 0 do 9999" },
+          { status: 400 }
+        );
+      }
+
+      let featuredParam: boolean | null = null;
+      if (body.is_featured !== undefined) {
+        if (typeof body.is_featured !== "boolean") {
+          return NextResponse.json({ message: "Nieprawidłowa wartość wyróżnienia" }, { status: 400 });
+        }
+        featuredParam = body.is_featured;
+      }
+
       const update = await queryDb<{ id: string }>(
         tenant.role === "MANAGER"
           ? `UPDATE locations
-             SET name = $3, address = $4
+             SET name = $3,
+                 address = $4,
+                 sort_order = COALESCE($5, sort_order),
+                 is_featured = COALESCE($6, is_featured)
              WHERE id = $1 AND school_id = $2
              RETURNING id`
           : `UPDATE locations
-             SET name = $2, address = $3
+             SET name = $2,
+                 address = $3,
+                 sort_order = COALESCE($4, sort_order),
+                 is_featured = COALESCE($5, is_featured)
              WHERE id = $1
              RETURNING id`,
-        tenant.role === "MANAGER" ? [id, tenant.tenantSchoolId, name, address] : [id, name, address]
+        tenant.role === "MANAGER"
+          ? [id, ctx.schoolId, name, address, sortOrderParam, featuredParam]
+          : [id, name, address, sortOrderParam, featuredParam]
       );
       if (!update.rows[0]) {
         return NextResponse.json({ message: "Nie znaleziono lokalizacji" }, { status: 404 });
       }
       return NextResponse.json({ message: "Lokalizacja została zaktualizowana" });
+    }
+
+    if (hasDisplayEdit) {
+      const sortOrderParam = parseSortOrder(body.sort_order);
+      if (body.sort_order !== undefined && sortOrderParam === null) {
+        return NextResponse.json(
+          { message: "Kolejność musi być liczbą całkowitą od 0 do 9999" },
+          { status: 400 }
+        );
+      }
+
+      let featuredParam: boolean | null = null;
+      if (body.is_featured !== undefined) {
+        if (typeof body.is_featured !== "boolean") {
+          return NextResponse.json({ message: "Nieprawidłowa wartość wyróżnienia" }, { status: 400 });
+        }
+        featuredParam = body.is_featured;
+      }
+
+      const update = await queryDb<{ id: string }>(
+        tenant.role === "MANAGER"
+          ? `UPDATE locations
+             SET sort_order = COALESCE($3, sort_order),
+                 is_featured = COALESCE($4, is_featured)
+             WHERE id = $1 AND school_id = $2
+             RETURNING id`
+          : `UPDATE locations
+             SET sort_order = COALESCE($2, sort_order),
+                 is_featured = COALESCE($3, is_featured)
+             WHERE id = $1
+             RETURNING id`,
+        tenant.role === "MANAGER"
+          ? [id, ctx.schoolId, sortOrderParam, featuredParam]
+          : [id, sortOrderParam, featuredParam]
+      );
+      if (!update.rows[0]) {
+        return NextResponse.json({ message: "Nie znaleziono lokalizacji" }, { status: 404 });
+      }
+      return NextResponse.json({ message: "Ustawienia wyświetlania zostały zapisane" });
     }
 
     const nextActive = typeof body.active === "boolean" ? body.active : false;
@@ -66,7 +134,7 @@ export async function PUT(request: NextRequest, context: RouteCtx) {
       tenant.role === "MANAGER"
         ? `UPDATE locations SET active = $3 WHERE id = $1 AND school_id = $2 RETURNING id`
         : `UPDATE locations SET active = $2 WHERE id = $1 RETURNING id`,
-      tenant.role === "MANAGER" ? [id, tenant.tenantSchoolId, nextActive] : [id, nextActive]
+      tenant.role === "MANAGER" ? [id, ctx.schoolId, nextActive] : [id, nextActive]
     );
 
     if (!update.rows[0]) {

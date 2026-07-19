@@ -1,0 +1,55 @@
+---
+description: HarryEnglish v2 — kontekst projektu, multi-tenant, migracje, zasady pracy
+alwaysApply: true
+---
+
+# HarryEnglish v2
+
+Aplikacja do zarządzania szkołą językową: zapisy, umowy, grupy, zajęcia, obecności, płatności, odnowienia. Panele: admin (`AdminPortal.tsx`), lektor (`LektorPortal.tsx`), rodzic, dziecko.
+
+## Stack
+
+- Next.js 16 (App Router) + React + TypeScript + Tailwind
+- PostgreSQL (Neon); runtime: `pg` + raw SQL w `lib/db.ts` — **bez Prisma Client**
+- Schemat: `prisma/schema.prisma`; migracje: `prisma/migrations/` (patrz `prisma/MIGRATE.md`)
+- Env: `.env.local` (`DATABASE_URL`, `SCHOOL_ID`)
+
+## Multi-tenant (krytyczne)
+
+- **Dev i prod = ta sama baza Neon** — migracje/backfill dotykają obu szkół
+- Dev `school_id`: `efcb641a-e5bd-4e59-aa39-c08fd1b318e9`
+- Prod `school_id`: `c93d5ac1-fa59-497f-b450-a4e50e1fb50d`
+- `SCHOOL_ID` w env = domyślna szkoła lokalnie (rejestracja, publiczne API)
+- Role: `ADMIN` (bez filtra szkoły), `MANAGER` (tylko `users.school_id`), `TEACHER`, `PARENT`, `CHILD`
+- Tenant admina: `resolveAdminPanelTenant()` w `lib/db.ts`
+
+## Kluczowe pliki
+
+- `lib/db.ts`, `lib/enrollment-sync.ts`, `lib/school-year-history.ts`
+- `app/api/admin/school-years/[id]/route.ts` (zamknięcie roku)
+- `app/api/admin/school-years/[id]/history/route.ts`
+- `src/components/AdminPortal.tsx`, `src/components/LektorPortal.tsx`
+
+## Model roku szkolnego
+
+- Historia przez `school_year_id` (grupy, zajęcia, umowy, członkostwa)
+- `group_students`: unikalność `(group_id, child_id, school_year_id)` — nowy wiersz per rok
+- Zamknięcie: `DELETE .../school-years/[id]` + `{ "action": "close" }`
+- Statystyki: `school_year_teacher_stats`; log: `school_year_close_logs`
+
+## Migracje — nigdy bez zgody użytkownika
+
+1. Edytuj `schema.prisma` → `npm run db:migrate:diff -- --name opis`
+2. Pokaż cały `migration.sql`, czekaj na akceptację
+3. Deploy dopiero po backupie Neon i wyraźnej zgodzie:
+   - PowerShell: `$env:CONFIRM="1"; npm run db:migrate:deploy`
+   - CMD: `set CONFIRM=1` potem `npm run db:migrate:deploy`
+4. **Zakazane bez zgody:** `migrate dev`, `migrate reset`, `db push`
+5. Backfill: `npm run db:backfill:school-year-history`
+
+## Zasady pracy agenta
+
+- Minimalny scope; bez over-engineeringu; dopasuj styl do istniejącego kodu
+- Nie commituj bez prośby; nie edytuj `.env` ani plików planów
+- Uruchamiaj komendy sam; komunikuj po polsku gdy użytkownik pisze po polsku
+- Pełniejszy kontekst (do edycji): `PROJECT_CONTEXT.md`

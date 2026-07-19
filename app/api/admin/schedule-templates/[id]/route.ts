@@ -1,24 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
-import { canAccessSchoolAdminApis, queryDb } from "@/lib/db";
-import { getTokenFromRequest } from "@/lib/auth";
-
-async function ensureAdmin(request: NextRequest): Promise<boolean> {
-  const payload = await getTokenFromRequest(request);
-  const userId = payload?.userId;
-  if (!userId) return false;
-  return canAccessSchoolAdminApis(userId);
-}
+import { queryDb } from "@/lib/db";
+import { requireAdminSchoolContext, tenantNotFoundResponse } from "@/lib/admin-school-context";
 
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  if (!(await ensureAdmin(request))) {
-    return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
-  }
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
+
   const { id } = await params;
   try {
-    await queryDb(`DELETE FROM schedule_templates WHERE id = $1`, [id]);
+    const res = await queryDb<{ id: string }>(
+      `DELETE FROM schedule_templates st
+       USING groups g
+       WHERE st.id = $1
+         AND st.group_id = g.id
+         AND g.school_id = $2
+       RETURNING st.id`,
+      [id, ctx.schoolId]
+    );
+    if (!res.rows[0]) {
+      return tenantNotFoundResponse("Nie znaleziono terminu");
+    }
     return NextResponse.json({ message: "Termin usunięty" });
   } catch (error) {
     console.error("DELETE schedule template error:", error);

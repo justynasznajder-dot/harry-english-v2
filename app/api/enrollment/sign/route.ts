@@ -23,6 +23,7 @@ import { formatPersonName } from "@/lib/format-person-name";
 import { enrollChildInGroup, syncParentUserAccessLevel } from "@/lib/enrollment-sync";
 import { resolveBillingTypeFromProfile } from "@/lib/parent-contract-profile";
 import { storeSignedContractPdfsInR2 } from "@/lib/r2-storage";
+import { createContractYearlyInvoice } from "@/lib/invoicing";
 
 /** PDF (Chromium) + R2 + mail — wymaga więcej czasu niż domyślne 10 s na Vercel. */
 export const maxDuration = 60;
@@ -90,31 +91,20 @@ export async function POST(request: NextRequest) {
 
 
     const contractRes = await queryDb<{
-
       id: string;
-
       content_html: string;
-
+      payment_type: string | null;
+      school_year_id: string | null;
     }>(
-
-      `SELECT c.id, c.content_html
-
+      `SELECT c.id, c.content_html, c.payment_type, c.school_year_id
        FROM contracts c
-
        WHERE c.parent_id = $1
-
          AND c.school_id = $2
-
          AND c.child_id IS NULL
-
          AND c.status = 'SENT'
-
        ORDER BY c.created_at DESC
-
        LIMIT 1`,
-
       [parentId, SCHOOL_ID]
-
     );
 
     const contract = contractRes.rows[0];
@@ -135,6 +125,10 @@ export async function POST(request: NextRequest) {
 
       group_id: string | null;
 
+      lesson_unit_price: string | null;
+      monthly_unit_price: string | null;
+      yearly_unit_price: string | null;
+
       first_name: string;
 
       last_name: string;
@@ -145,7 +139,11 @@ export async function POST(request: NextRequest) {
 
     }>(
 
-      `SELECT cc.child_id, cc.enrollment_request_id, cc.group_id, ch.first_name, ch.last_name,
+      `SELECT cc.child_id, cc.enrollment_request_id, cc.group_id,
+              cc.lesson_unit_price::text AS lesson_unit_price,
+              cc.monthly_unit_price::text AS monthly_unit_price,
+              cc.yearly_unit_price::text AS yearly_unit_price,
+              ch.first_name, ch.last_name,
 
               cc.attachment_1_html, cc.attachment_2_html
 
@@ -295,7 +293,26 @@ export async function POST(request: NextRequest) {
       }
 
       if (row.group_id) {
-        await enrollChildInGroup(row.child_id, row.group_id);
+        await enrollChildInGroup(row.child_id, row.group_id, {
+          lessonUnitPrice: row.lesson_unit_price,
+          monthlyUnitPrice: row.monthly_unit_price,
+          yearlyUnitPrice: row.yearly_unit_price,
+        });
+      }
+
+      if (!row.enrollment_request_id && contract.school_year_id) {
+        await queryDb(
+          `UPDATE renewals
+           SET status = 'SIGNED'
+           WHERE child_id = $1
+             AND parent_id = $2
+             AND school_id = $3
+             AND season = (
+               SELECT name FROM school_years WHERE id = $4 LIMIT 1
+             )
+             AND UPPER(BTRIM(COALESCE(status::text, ''))) = 'ACCEPTED'`,
+          [row.child_id, parentId, SCHOOL_ID, contract.school_year_id]
+        );
       }
 
     }
@@ -303,6 +320,16 @@ export async function POST(request: NextRequest) {
 
 
     await syncParentUserAccessLevel(parentId);
+
+
+
+    if (contract.payment_type === "YEARLY") {
+      try {
+        await createContractYearlyInvoice(contract.id);
+      } catch (invoiceErr) {
+        console.error("Yearly invoice on sign error:", invoiceErr);
+      }
+    }
 
 
 

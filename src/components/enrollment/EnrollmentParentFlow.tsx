@@ -2,8 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ContractPortal from '@/src/components/ContractPortal';
+import RenewalParentFlowSection from '@/src/components/parent/RenewalParentFlowSection';
 import { computeContractPreviewAmount, type ContractPricingContext } from '@/lib/contract-pricing-preview';
 import { resolveChildBaseAmount, sumChildrenBaseAmounts } from '@/lib/enrollment-pricing';
+import { resolveLessonUnitPrice } from '@/lib/lesson-pricing';
+import { paymentTypePeriodLabel, paymentTypeShortLabel } from '@/lib/payment-labels';
 import { validateParentContractProfileInput } from '@/lib/parent-contract-profile';
 
 type ChildEnrollmentLevel = 'NEW' | 'PROPOSED' | 'NEGOTIATING' | 'ACCEPTED' | 'SIGNED' | 'COMPLETED' | 'REJECTED';
@@ -39,6 +42,10 @@ interface EnrollmentProposal {
   proposed_at?: string | null;
   price_monthly?: number | null;
   price_yearly?: number | null;
+  price_per_lesson?: number | null;
+  lesson_unit_price?: number | null;
+  monthly_unit_price?: number | null;
+  yearly_unit_price?: number | null;
 }
 
 interface ParentContractDocument {
@@ -103,11 +110,27 @@ function validateContractProfile(profile: ParentProfileForm): string | null {
   });
 }
 
+function resolveProposalLessonUnitPrice(p: EnrollmentProposal): number | null {
+  return resolveLessonUnitPrice({
+    groupPricePerLesson: p.price_per_lesson,
+    enrollmentOverride: p.lesson_unit_price,
+  });
+}
+
 function sumIncludedProposalAmounts(
   proposals: EnrollmentProposal[],
   includedRequestIds: Set<string>,
-  paymentType: 'MONTHLY' | 'YEARLY',
+  paymentType: 'MONTHLY' | 'YEARLY' | 'PER_LESSON',
 ): number | null {
+  if (paymentType === 'PER_LESSON') {
+    const included = proposals.filter((p) => includedRequestIds.has(p.request_id));
+    if (included.length === 0) return null;
+    for (const p of included) {
+      const price = resolveProposalLessonUnitPrice(p);
+      if (price == null || price <= 0) return null;
+    }
+    return 0;
+  }
   return sumChildrenBaseAmounts(
     proposals.filter((p) => includedRequestIds.has(p.request_id)),
     paymentType,
@@ -257,7 +280,10 @@ export interface EnrollmentParentFlowProps {
   onUserInfoUpdate: (updated: UserInfo) => void;
 }
 
-export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: EnrollmentParentFlowProps) {
+export default function EnrollmentParentFlow({
+  userInfo,
+  onUserInfoUpdate,
+}: EnrollmentParentFlowProps) {
   const [contactOpenFor, setContactOpenFor] = useState<Record<string, boolean>>({});
   const [contactSubjects, setContactSubjects] = useState<Record<string, string>>({});
   const [contactMessages, setContactMessages] = useState<Record<string, string>>({});
@@ -282,7 +308,7 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
     companyName: '',
     nip: '',
   });
-  const [paymentType, setPaymentType] = useState<'MONTHLY' | 'YEARLY'>('MONTHLY');
+  const [paymentType, setPaymentType] = useState<'MONTHLY' | 'YEARLY' | 'PER_LESSON'>('MONTHLY');
   const [savingContract, setSavingContract] = useState(false);
   const [parentContract, setParentContract] = useState<ParentContractDocument | null>(null);
   const [contractReadiness, setContractReadiness] = useState<ContractReadiness>({
@@ -370,6 +396,8 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
       );
       if (data.parentContract?.payment_type === 'YEARLY') {
         setPaymentType('YEARLY');
+      } else if (data.parentContract?.payment_type === 'PER_LESSON') {
+        setPaymentType('PER_LESSON');
       }
       setIncludedInContract((prev) => {
         const next = { ...prev };
@@ -1130,15 +1158,20 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
         requestId: p.request_id,
         name: `${p.child_first_name} ${p.child_last_name}`.trim(),
         groupName: p.group_name,
-        amount: resolveChildBaseAmount(p, paymentType),
+        amount:
+          paymentType === 'PER_LESSON'
+            ? resolveProposalLessonUnitPrice(p)
+            : resolveChildBaseAmount(p, paymentType),
       }));
       const baseTotal = sumIncludedProposalAmounts(proposals, includedRequestIds, paymentType);
       const pricingPreview = computeContractPreviewAmount(
-        baseTotal,
+        paymentType === 'PER_LESSON' ? null : baseTotal,
         includedCount,
         contractPricing,
       );
-      const paymentTypeLabel = paymentType === 'YEARLY' ? 'rocznie' : 'miesięcznie';
+      const paymentTypeLabel = paymentTypePeriodLabel(paymentType);
+      const canGenerateContract =
+        paymentType === 'PER_LESSON' ? baseTotal != null : baseTotal != null;
       const contractPreview =
         parentContract?.content_html &&
         (parentContract.status === 'SENT' || parentContract.status === 'SIGNED')
@@ -1447,7 +1480,7 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
                                 checked={paymentType === 'MONTHLY'}
                                 onChange={() => setPaymentType('MONTHLY')}
                               />
-                              Miesięczny
+                              {paymentTypeShortLabel('MONTHLY')}
                             </label>
                             <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
                               <input
@@ -1458,13 +1491,26 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
                                 checked={paymentType === 'YEARLY'}
                                 onChange={() => setPaymentType('YEARLY')}
                               />
-                              Roczny
+                              {paymentTypeShortLabel('YEARLY')}
+                            </label>
+                            <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
+                              <input
+                                type="radio"
+                                name="paymentType-parent"
+                                className="accent-[#0f6e56]"
+                                disabled={formLocked}
+                                checked={paymentType === 'PER_LESSON'}
+                                onChange={() => setPaymentType('PER_LESSON')}
+                              />
+                              {paymentTypeShortLabel('PER_LESSON')}
                             </label>
                           </div>
                           {childAmountBreakdown.length > 0 && (
                             <div className="rounded-xl border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-700">
                               <p className="font-medium text-zinc-800">
-                                Składniki kwoty ({paymentTypeLabel})
+                                {paymentType === 'PER_LESSON'
+                                  ? 'Stawka za pojedyncze zajęcia'
+                                  : `Składniki kwoty (${paymentTypeLabel})`}
                               </p>
                               <ul className="mt-2 space-y-1.5">
                                 {childAmountBreakdown.map((line) => (
@@ -1480,12 +1526,16 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
                                     </span>
                                     <span className="font-medium text-zinc-900">
                                       {formatPlnAmount(line.amount)}
+                                      {paymentType === 'PER_LESSON' && line.amount != null
+                                        ? ' / zajęcie'
+                                        : ''}
                                     </span>
                                   </li>
                                 ))}
                               </ul>
                             </div>
                           )}
+                          {paymentType !== 'PER_LESSON' && (
                           <p className="text-sm text-zinc-700">
                             Łączna kwota:{' '}
                             {pricingPreview.discountKeys.length > 0 && !formLocked && baseTotal != null && (
@@ -1506,6 +1556,13 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
                               </span>
                             )}
                           </p>
+                          )}
+                          {paymentType === 'PER_LESSON' && !formLocked && (
+                            <p className="text-sm text-zinc-600">
+                              Rozliczenie za pojedyncze zajęcia następuje co miesiąc na podstawie liczby odbytych zajęć —
+                              kwota faktury zostanie ustalona przez szkołę.
+                            </p>
+                          )}
                         </div>
 
                         {!formLocked && (
@@ -1516,7 +1573,7 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
                               !profileLoaded ||
                               !profileComplete ||
                               includedCount === 0 ||
-                              baseTotal == null
+                              !canGenerateContract
                             }
                             onClick={() => void handleGenerateParentContract()}
                             className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
@@ -1619,7 +1676,12 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
   };
 
   const renderEnrollmentTab = () => (
-    <section className="space-y-6 rounded-3xl border border-emerald-100 bg-white p-5 md:p-6">
+    <div className="space-y-4">
+      <RenewalParentFlowSection
+        onFlash={setFlash}
+        onUpdated={refreshUserAccessLevel}
+      />
+      <section className="space-y-6 rounded-3xl border border-emerald-100 bg-white p-5 md:p-6">
       <header>
         <h2 className="text-xl font-bold text-zinc-900 md:text-2xl">Proces zapisu</h2>
         <p className="mt-1 text-sm text-zinc-600">Śledź kolejne etapy od zgłoszenia do aktywacji dziecka.</p>
@@ -1660,7 +1722,8 @@ export default function EnrollmentParentFlow({ userInfo, onUserInfoUpdate }: Enr
       </div>
 
       <div className="rounded-2xl border border-zinc-200 bg-white p-4 md:p-5">{renderEnrollmentStepContent()}</div>
-    </section>
+      </section>
+    </div>
   );
 
   return renderEnrollmentTab();

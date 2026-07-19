@@ -1,30 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  canAccessSchoolAdminApis,
-  POLISH_DAY_FROM_ST_SQL,
-  queryDb,
-  resolveAdminPanelTenant,
-} from "@/lib/db";
+import { POLISH_DAY_FROM_ST_SQL, queryDb } from "@/lib/db";
 import { sendProposalEmail } from "@/lib/email";
-import { getTokenFromRequest } from "@/lib/auth";
+import {
+  managerSchoolAndClause,
+  requireAdminSchoolContext,
+} from "@/lib/admin-school-context";
 import type { EnrollmentStatus } from "@/lib/enrollment-status";
 import { submitEnrollmentProposal } from "@/lib/admin-enrollment-proposal";
+
 export async function GET(request: NextRequest) {
   try {
-    const payload = await getTokenFromRequest(request);
-    const userId = payload?.userId;
-    if (!userId) return NextResponse.json({ message: "Nieprawidłowy token" }, { status: 401 });
-    if (!(await canAccessSchoolAdminApis(userId))) return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
+    const ctx = await requireAdminSchoolContext(request);
+    if (!ctx.ok) return ctx.response;
 
-    const resolved = await resolveAdminPanelTenant(userId);
-    if (!resolved.ok) {
-      return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-    }
-    const { tenant } = resolved;
-
-    const parentsSchoolClause =
-      tenant.role === "MANAGER" ? `AND er.school_id = $1` : "";
-    const parentsParams = tenant.role === "MANAGER" ? [tenant.tenantSchoolId] : [];
+    const { clause: parentsSchoolClause, schoolId: parentsSchoolId } = managerSchoolAndClause(
+      ctx.tenant,
+      "er.school_id",
+      1
+    );
+    const parentsParams = parentsSchoolId ? [parentsSchoolId] : [];
 
     const parentsRes = await queryDb<{
       id: string;
@@ -79,7 +73,10 @@ export async function GET(request: NextRequest) {
                'preferredLocationId', NULLIF(TRIM(BOTH FROM COALESCE(er.preferred_location, '')), ''),
                'notes', er.notes,
                'proposedGroupId', er.proposed_group_id,
-               'proposedAt', er.proposed_at
+               'proposedAt', er.proposed_at,
+               'lessonUnitPrice', er.lesson_unit_price::text,
+               'monthlyUnitPrice', er.monthly_unit_price::text,
+               'yearlyUnitPrice', er.yearly_unit_price::text
              )
            ) FILTER (
              WHERE COALESCE(c.id, er.id) IS NOT NULL
@@ -118,9 +115,12 @@ export async function GET(request: NextRequest) {
       parentsParams
     );
 
-    const groupsSchoolClause =
-      tenant.role === "MANAGER" ? `AND g.school_id = $1` : "";
-    const groupsParams = tenant.role === "MANAGER" ? [tenant.tenantSchoolId] : [];
+    const { clause: groupsSchoolClause, schoolId: groupsSchoolId } = managerSchoolAndClause(
+      ctx.tenant,
+      "g.school_id",
+      1
+    );
+    const groupsParams = groupsSchoolId ? [groupsSchoolId] : [];
 
     const groupsRes = await queryDb<{
       id: string;
@@ -130,11 +130,13 @@ export async function GET(request: NextRequest) {
       location_ids: string[];
       price_monthly: string | null;
       price_yearly: string | null;
+      price_per_lesson: string | null;
     }>(
       `SELECT g.id,
               g.name,
               g.price_monthly::text AS price_monthly,
               g.price_yearly::text AS price_yearly,
+              g.price_per_lesson::text AS price_per_lesson,
               COALESCE(MAX(l.name), 'Do ustalenia') AS location_name,
               COALESCE(
                 STRING_AGG(
@@ -163,7 +165,7 @@ export async function GET(request: NextRequest) {
        LEFT JOIN locations l ON l.id = st.location_id
        WHERE g.active = TRUE
          ${groupsSchoolClause}
-       GROUP BY g.id, g.name, g.price_monthly, g.price_yearly, g.location_id
+       GROUP BY g.id, g.name, g.price_monthly, g.price_yearly, g.price_per_lesson, g.location_id
        ORDER BY g.name`,
       groupsParams
     );
@@ -189,21 +191,16 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const payload = await getTokenFromRequest(request);
-    const userId = payload?.userId;
-    if (!userId) return NextResponse.json({ message: "Nieprawidłowy token" }, { status: 401 });
-    if (!(await canAccessSchoolAdminApis(userId))) return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
-
-    const resolved = await resolveAdminPanelTenant(userId);
-    if (!resolved.ok) {
-      return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-    }
-    const { tenant } = resolved;
+    const ctx = await requireAdminSchoolContext(request);
+    if (!ctx.ok) return ctx.response;
 
     const body = await request.json();
-    const { requestId, groupId } = body as {
+    const { requestId, groupId, lessonUnitPrice, monthlyUnitPrice, yearlyUnitPrice } = body as {
       requestId?: string;
       groupId?: string;
+      lessonUnitPrice?: number | string | null;
+      monthlyUnitPrice?: number | string | null;
+      yearlyUnitPrice?: number | string | null;
     };
     if (!requestId || !groupId) {
       return NextResponse.json({ message: "Brak wymaganych pól" }, { status: 400 });
@@ -213,12 +210,13 @@ export async function POST(request: NextRequest) {
       {
         requestId,
         groupId,
+        lessonUnitPrice,
+        monthlyUnitPrice,
+        yearlyUnitPrice,
       },
       null,
       {
-        ...(tenant.role === "MANAGER"
-          ? { restrictToSchoolId: tenant.tenantSchoolId }
-          : {}),
+        ...(ctx.tenant.role === "MANAGER" ? { restrictToSchoolId: ctx.schoolId } : {}),
         allowedStatuses: ["NEGOTIATING"],
       }
     );

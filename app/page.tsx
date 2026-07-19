@@ -455,7 +455,7 @@ export default function HomePage() {
 
                 <div className="text-center mb-3 py-2 border-y border-gray-200 sm:mb-4 sm:py-3">
                   <div className="text-4xl font-bold text-[#175244] sm:text-5xl">41 zł</div>
-                  <div className="text-xs text-[#4b5563] mt-0.5 sm:text-sm sm:mt-1">za zajęcia</div>
+                  <div className="text-xs text-[#4b5563] mt-0.5 sm:text-sm sm:mt-1">za pojedyncze zajęcia</div>
                 </div>
 
                 <div className="space-y-1 mb-3 sm:space-y-1.5 sm:mb-4">
@@ -497,7 +497,7 @@ export default function HomePage() {
 
                 <div className="text-center mb-3 py-2 border-y border-gray-200 sm:mb-4 sm:py-3">
                   <div className="text-4xl font-bold text-[#175244] sm:text-5xl">47 zł</div>
-                  <div className="text-xs text-[#4b5563] mt-0.5 sm:text-sm sm:mt-1">za zajęcia</div>
+                  <div className="text-xs text-[#4b5563] mt-0.5 sm:text-sm sm:mt-1">za pojedyncze zajęcia</div>
                 </div>
 
                 <div className="space-y-1 mb-3 sm:space-y-1.5 sm:mb-4">
@@ -539,7 +539,7 @@ export default function HomePage() {
 
                 <div className="text-center mb-3 py-2 border-y border-gray-200 sm:mb-4 sm:py-3">
                   <div className="text-4xl font-bold text-[#175244] sm:text-5xl">56 zł</div>
-                  <div className="text-xs text-[#4b5563] mt-0.5 sm:text-sm sm:mt-1">za zajęcia</div>
+                  <div className="text-xs text-[#4b5563] mt-0.5 sm:text-sm sm:mt-1">za pojedyncze zajęcia</div>
                 </div>
 
                 <div className="space-y-1 mb-3 sm:space-y-1.5 sm:mb-4">
@@ -581,7 +581,7 @@ export default function HomePage() {
 
                 <div className="text-center mb-3 py-2 border-y border-gray-200 sm:mb-4 sm:py-3">
                   <div className="text-4xl font-bold text-[#175244] sm:text-5xl">199 zł</div>
-                  <div className="text-xs text-[#4b5563] mt-0.5 sm:text-sm sm:mt-1">za zajęcia</div>
+                  <div className="text-xs text-[#4b5563] mt-0.5 sm:text-sm sm:mt-1">za pojedyncze zajęcia</div>
                 </div>
 
                 <div className="space-y-1 mb-3 sm:space-y-1.5 sm:mb-4">
@@ -1058,7 +1058,7 @@ export default function HomePage() {
                   ) : (
                     <>
                       <strong>Częstotliwość zajęć:</strong> Poniższe ceny dotyczą zajęć <strong>1x w tygodniu</strong>.{" "}
-                      W wersji intensywnej (<strong>2x w tygodniu</strong>) koszt miesięczny i roczny należy pomnożyć <strong>x2</strong>.
+                      W wersji intensywnej (<strong>2x w tygodniu</strong>) koszt ratalny i jednorazowy należy pomnożyć <strong>x2</strong>.
                     </>
                   )}
                 </p>
@@ -1090,7 +1090,7 @@ export default function HomePage() {
                     <div className="text-sm font-semibold text-[#1f2933] mb-2">{row.label}</div>
                     <div className="grid grid-cols-3 gap-2 text-center text-xs">
                       <div>
-                        <div className="text-[#1f2933]">rok z góry</div>
+                        <div className="text-[#1f2933]">jednorazowa</div>
                         <div className={`font-bold text-[#1f2933] ${row.label === "koszt roku" ? "inline-block bg-gray-100 rounded px-2 py-0.5" : ""}`}>{row.rok[selectedPlan!]}</div>
                       </div>
                       <div>
@@ -1098,7 +1098,7 @@ export default function HomePage() {
                         <div className={`font-bold text-[#1f2933] ${row.label === "koszt miesiąca" ? "inline-block bg-gray-100 rounded px-2 py-0.5" : ""}`}>{row.ratalna[selectedPlan!]}</div>
                       </div>
                       <div>
-                        <div className="text-[#1f2933]">pojedyncze</div>
+                        <div className="text-[#1f2933]">za pojedyncze zajęcia</div>
                         <div className={`font-bold text-[#1f2933] ${row.label === "koszt 1 zajęć" ? "inline-block bg-gray-100 rounded px-2 py-0.5" : ""}`}>{row.pojedyncze[selectedPlan!]}</div>
                       </div>
                     </div>
@@ -1113,7 +1113,7 @@ export default function HomePage() {
                     <thead>
                       <tr className="bg-gray-50 border-b border-gray-200">
                         <th className="px-4 py-3 text-center text-sm font-semibold text-[#1f2933]"></th>
-                        <th className="px-4 py-3 text-center text-sm font-semibold text-[#1f2933]">opłata za rok z góry</th>
+                        <th className="px-4 py-3 text-center text-sm font-semibold text-[#1f2933]">opłata jednorazowa</th>
                         <th className="px-4 py-3 text-center text-sm font-semibold text-[#1f2933]">opłata ratalna (x10)</th>
                         <th className="px-4 py-3 text-center text-sm font-semibold text-[#1f2933]">opłata za pojedyncze zajęcia</th>
                       </tr>

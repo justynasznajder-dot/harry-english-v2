@@ -295,6 +295,10 @@ export interface ComposeMessageModalProps {
   onExternalEmailBulkPasteChange?: (value: string) => void;
   onParseExternalEmailBulk?: () => void;
   onRemoveExternalEmail?: (email: string) => void;
+  messageTemplates?: Array<{ key: string; label: string; subject: string; content: string }>;
+  onApplyTemplate?: (subject: string, content: string) => void;
+  filterRenewalNoResponse?: boolean;
+  onFilterRenewalNoResponseChange?: (value: boolean) => void;
 }
 
 export default function ComposeMessageModal(props: ComposeMessageModalProps) {
@@ -454,6 +458,22 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
                           onFilterChange={props.onGroupFilterChange}
                           onConfirm={props.onConfirmGroupFilter}
                         />
+                        {props.mode === 'manager' && props.onFilterRenewalNoResponseChange && (
+                          <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={props.filterRenewalNoResponse ?? false}
+                              onChange={(e) => {
+                                props.onFilterRenewalNoResponseChange?.(e.target.checked);
+                                props.onGroupFilterChange(props.filterGroupIds);
+                              }}
+                              className="rounded border-zinc-300 text-[#0f6e56]"
+                            />
+                            <span className="text-zinc-800">
+                              Tylko rodzice bez odpowiedzi na odnowienie
+                            </span>
+                          </label>
+                        )}
                       </>
                     )}
                   </div>
@@ -564,6 +584,32 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
 
           {/* Prawa kolumna — treść wiadomości */}
           <div className="flex min-h-0 flex-col overflow-hidden p-3 md:p-4">
+            {props.messageTemplates && props.messageTemplates.length > 0 && props.onApplyTemplate && (
+              <div className="mb-2 shrink-0">
+                <label htmlFor="compose-template" className="mb-1 block text-xs font-semibold text-zinc-600">
+                  Szablon wiadomości
+                </label>
+                <select
+                  id="compose-template"
+                  defaultValue=""
+                  onChange={(e) => {
+                    const key = e.target.value;
+                    if (!key) return;
+                    const tpl = props.messageTemplates!.find((t) => t.key === key);
+                    if (tpl) props.onApplyTemplate!(tpl.subject, tpl.content);
+                    e.target.value = '';
+                  }}
+                  className={`w-full ${COMPOSE_INPUT}`}
+                >
+                  <option value="">Wybierz szablon…</option>
+                  {props.messageTemplates.map((t) => (
+                    <option key={t.key} value={t.key}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden md:gap-3">
               {!isEmailSection && (
               <div className="shrink-0">

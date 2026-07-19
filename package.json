@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "db:migrate:attachments": "npx tsx scripts/prisma-migrate-guard.ts attachments",
     "db:migrate:unify-ids": "npx tsx scripts/prisma-migrate-guard.ts unify-ids",
     "db:verify-ids": "npx tsx scripts/verify-text-ids.ts",
@@ -17,7 +18,8 @@
     "db:migrate:create-only": "npx tsx scripts/prisma-migrate-guard.ts create-only",
     "db:migrate:resolve-init": "npx tsx scripts/prisma-migrate-guard.ts resolve-init",
     "db:migrate:deploy": "npx tsx scripts/prisma-migrate-guard.ts deploy",
-    "db:migrate:dev": "npx tsx scripts/prisma-migrate-guard.ts dev"
+    "db:migrate:dev": "npx tsx scripts/prisma-migrate-guard.ts dev",
+    "db:backfill:school-year-history": "npx tsx scripts/backfill-school-year-history.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1063.0",
@@ -53,6 +55,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.1",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^3.2.4"
   }
 }

@@ -149,6 +149,11 @@ export default function MessagesPanel({
   const [filterMeta, setFilterMeta] = useState<FilterMeta | null>(null);
   const [filterGroupIds, setFilterGroupIds] = useState<string[]>([]);
   const [filterLocationIds, setFilterLocationIds] = useState<string[]>([]);
+  const [filterRenewalNoResponse, setFilterRenewalNoResponse] = useState(false);
+  const [sendPreviewOpen, setSendPreviewOpen] = useState(false);
+  const [messageTemplates, setMessageTemplates] = useState<
+    Array<{ key: string; label: string; subject: string; content: string }>
+  >([]);
   const [recipientsReloadToken, setRecipientsReloadToken] = useState(0);
   const [recipientsLoading, setRecipientsLoading] = useState(false);
   const [composeSection, setComposeSection] = useState<ComposeSection>('parents');
@@ -167,6 +172,8 @@ export default function MessagesPanel({
     setRecipientSearchDebounced('');
     setFilterGroupIds([]);
     setFilterLocationIds([]);
+    setFilterRenewalNoResponse(false);
+    setSendPreviewOpen(false);
     setShowGroupFilters(false);
     setComposeSection('parents');
     setBulkAddLoading(null);
@@ -261,11 +268,13 @@ export default function MessagesPanel({
       }
 
       if (mode === 'manager') {
-        const hasBulk = groupIds.length > 0 || locationIds.length > 0;
+        const hasBulk =
+          groupIds.length > 0 || locationIds.length > 0 || filterRenewalNoResponse;
         if (!hasBulk) q.set('all', 'true');
         else {
           if (groupIds.length > 0) q.set('groupIds', groupIds.join(','));
           if (locationIds.length > 0) q.set('locationIds', locationIds.join(','));
+          if (filterRenewalNoResponse) q.set('renewalNoResponse', 'true');
         }
       } else if (mode === 'teacher') {
         if (groupIds.length > 0) q.set('groupIds', groupIds.join(','));
@@ -273,7 +282,7 @@ export default function MessagesPanel({
       }
       return q;
     },
-    [mode, composeSection, recipientSearchDebounced, filterGroupIds, filterLocationIds]
+    [mode, composeSection, recipientSearchDebounced, filterGroupIds, filterLocationIds, filterRenewalNoResponse]
   );
 
   const fetchRecipientsList = useCallback(
@@ -340,6 +349,7 @@ export default function MessagesPanel({
     recipientsReloadToken,
     filterGroupIds,
     filterLocationIds,
+    filterRenewalNoResponse,
   ]);
 
   const handleComposeSectionChange = useCallback((section: ComposeSection) => {
@@ -350,6 +360,7 @@ export default function MessagesPanel({
       setSingleRecipientId('');
       setFilterGroupIds([]);
       setFilterLocationIds([]);
+      setFilterRenewalNoResponse(false);
       setShowGroupFilters(false);
     } else {
       setExternalEmails([]);
@@ -358,10 +369,20 @@ export default function MessagesPanel({
       setSelectedRecipientLabels({});
       setFilterGroupIds([]);
       setFilterLocationIds([]);
+      setFilterRenewalNoResponse(false);
       setShowGroupFilters(false);
       setRecipientsReloadToken((t) => t + 1);
     }
   }, []);
+
+  useEffect(() => {
+    if (composeOpen && mode === 'manager') {
+      fetch('/api/admin/message-templates', { cache: 'no-store' })
+        .then((r) => r.json())
+        .then((data) => setMessageTemplates(data.templates ?? []))
+        .catch(() => setMessageTemplates([]));
+    }
+  }, [composeOpen, mode]);
 
   useEffect(() => {
     if (composeOpen && (mode === 'manager' || mode === 'teacher')) {
@@ -445,6 +466,11 @@ export default function MessagesPanel({
           ? 'Uzupełnij adresy e-mail, temat i treść'
           : 'Uzupełnij odbiorców, temat i treść'
       );
+      return;
+    }
+    const totalRecipients = isEmailSection ? emailsToSend.length : recipientIds.length;
+    if (totalRecipients > 1 && !sendPreviewOpen) {
+      setSendPreviewOpen(true);
       return;
     }
     setSendingCompose(true);
@@ -886,7 +912,63 @@ export default function MessagesPanel({
         onRemoveExternalEmail={(email) =>
           setExternalEmails((prev) => prev.filter((e) => e !== email))
         }
+        messageTemplates={messageTemplates}
+        onApplyTemplate={(subject, content) => {
+          setComposeSubject(subject);
+          setComposeContent(content);
+        }}
+        filterRenewalNoResponse={filterRenewalNoResponse}
+        onFilterRenewalNoResponseChange={setFilterRenewalNoResponse}
       />
+
+      {sendPreviewOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="max-h-[80vh] w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-xl">
+            <div className="border-b border-zinc-200 px-5 py-4">
+              <h3 className="text-lg font-bold text-zinc-900">Podgląd wysyłki</h3>
+              <p className="mt-1 text-sm text-zinc-600">
+                {composeSection === 'email'
+                  ? `Wyślesz e-mail do ${externalEmails.length} adresów`
+                  : `Wyślesz wiadomość do ${selectedRecipientIds.length} odbiorców`}
+              </p>
+            </div>
+            <ul className="max-h-64 overflow-y-auto px-5 py-3 text-sm">
+              {composeSection === 'email'
+                ? externalEmails.map((email) => (
+                    <li key={email} className="border-b border-zinc-100 py-2">
+                      {email}
+                    </li>
+                  ))
+                : selectedRecipientIds.map((id) => (
+                    <li key={id} className="border-b border-zinc-100 py-2">
+                      {selectedRecipientLabels[id] ?? id}
+                    </li>
+                  ))}
+            </ul>
+            <div className="flex gap-2 border-t border-zinc-200 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setSendPreviewOpen(false)}
+                className="flex-1 rounded-full border border-zinc-300 py-2 text-sm font-semibold text-zinc-700"
+              >
+                Wróć
+              </button>
+              <button
+                type="button"
+                disabled={sendingCompose}
+                onClick={() => void handleSendCompose()}
+                className="flex-1 rounded-full bg-[#0f6e56] py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {sendingCompose ? 'Wysyłanie…' : 'Potwierdź i wyślij'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </section>
   );

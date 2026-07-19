@@ -1,48 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  DuplicateEnrollmentError,
-  getUserById,
-  canAccessSchoolAdminApis,
-  insertEnrollmentRequestsForParent,
-  queryDb,
-  getRegistrationSchoolId,
-} from "@/lib/db";
-import { getTokenFromRequest } from "@/lib/auth";
+import { DuplicateEnrollmentError, getUserById, insertEnrollmentRequestsForParent, queryDb } from "@/lib/db";
+import { requireAdminSchoolContext } from "@/lib/admin-school-context";
 
 const LOCATION_ID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function GET(request: NextRequest) {
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
+
   try {
-    const payload = await getTokenFromRequest(request);
-    const userId = payload?.userId;
-    if (!userId) return NextResponse.json({ message: "Nieprawidłowy token" }, { status: 401 });
-    if (!(await canAccessSchoolAdminApis(userId))) return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
-
-    const actor = await getUserById(userId);
-    if (!actor) return NextResponse.json({ message: "Nie znaleziono użytkownika" }, { status: 401 });
-
-    const scopeSchoolId =
-      actor.role === "MANAGER"
-        ? actor.school_id
-        : actor.role === "ADMIN"
-          ? getRegistrationSchoolId()
-          : null;
-    if (actor.role === "MANAGER" && !scopeSchoolId) {
-      return NextResponse.json(
-        { message: "Konto zarządcy nie ma przypisanej szkoły." },
-        { status: 400 }
-      );
-    }
-    if (!scopeSchoolId) {
-      return NextResponse.json({ message: "Brak zakresu szkoły" }, { status: 400 });
-    }
-
     const { searchParams } = new URL(request.url);
     const parentId = searchParams.get("parentId");
     const active = searchParams.get("active");
 
-    const values: unknown[] = [scopeSchoolId];
+    const values: unknown[] = [ctx.schoolId];
     const where: string[] = ["c.school_id = $1"];
     if (parentId) {
       values.push(parentId);
@@ -103,15 +75,10 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
+
   try {
-    const payload = await getTokenFromRequest(request);
-    const userId = payload?.userId;
-    if (!userId) return NextResponse.json({ message: "Nieprawidłowy token" }, { status: 401 });
-    if (!(await canAccessSchoolAdminApis(userId))) return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
-
-    const actor = await getUserById(userId);
-    if (!actor) return NextResponse.json({ message: "Nie znaleziono użytkownika" }, { status: 401 });
-
     const body = await request.json();
     const {
       parentId,
@@ -139,13 +106,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (actor.role === "MANAGER") {
-      if (!actor.school_id || parent.school_id !== actor.school_id) {
-        return NextResponse.json(
-          { message: "Możesz dodawać zgłoszenia tylko dla rodziców ze swojej szkoły" },
-          { status: 403 }
-        );
-      }
+    if (ctx.tenant.role === "MANAGER" && parent.school_id !== ctx.schoolId) {
+      return NextResponse.json(
+        { message: "Możesz dodawać zgłoszenia tylko dla rodziców ze swojej szkoły" },
+        { status: 403 }
+      );
     }
 
     const preferredLocationId = String(preferredLocationIdRaw ?? "").trim() || null;

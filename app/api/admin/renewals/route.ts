@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { POLISH_DAY_FROM_ST_SQL, queryDb } from "@/lib/db";
 import { requireAdminRenewalsContext } from "@/lib/admin-renewals-auth";
 import type { RenewalStatus } from "@/lib/renewal-status";
+import {
+  getActiveSchoolYearPlanning,
+  getPlannedNextSchoolYear,
+  requireRenewalTargetSchoolYear,
+} from "@/lib/school-year-planning";
 
 export async function GET(request: NextRequest) {
   try {
@@ -12,14 +17,22 @@ export async function GET(request: NextRequest) {
     const statusFilter = request.nextUrl.searchParams.get("status")?.trim().toUpperCase() ?? "";
     const seasonFilter = request.nextUrl.searchParams.get("season")?.trim() ?? "";
 
-    const schoolRes = await queryDb<{ renewals_open: boolean; renewals_season: string | null }>(
-      `SELECT renewals_open, renewals_season FROM schools WHERE id = $1 LIMIT 1`,
-      [schoolId]
-    );
-    const schoolRow = schoolRes.rows[0];
+    const [schoolRow, plannedNextYear, activeSchoolYear] = await Promise.all([
+      queryDb<{ renewals_open: boolean; renewals_season: string | null }>(
+        `SELECT renewals_open, renewals_season FROM schools WHERE id = $1 LIMIT 1`,
+        [schoolId]
+      ).then((r) => r.rows[0]),
+      getPlannedNextSchoolYear(schoolId),
+      getActiveSchoolYearPlanning(schoolId),
+    ]);
 
+    const targetSeason = plannedNextYear?.name ?? "";
     const params: unknown[] = [schoolId];
     let extraWhere = "";
+    if (targetSeason && !seasonFilter) {
+      params.push(targetSeason);
+      extraWhere += ` AND r.season = $${params.length}`;
+    }
     if (statusFilter) {
       params.push(statusFilter);
       extraWhere += ` AND UPPER(BTRIM(COALESCE(r.status::text, ''))) = $${params.length}`;
@@ -92,19 +105,27 @@ export async function GET(request: NextRequest) {
          u.id, u.first_name, u.last_name, u.email, g.name
        ORDER BY
          CASE UPPER(BTRIM(COALESCE(r.status::text, '')))
-           WHEN 'CONFIRMED' THEN 0
-           WHEN 'PROPOSED' THEN 1
-           WHEN 'PENDING_CONFIRMATION' THEN 2
-           WHEN 'NEGOTIATING' THEN 3
-           WHEN 'ACCEPTED' THEN 4
-           WHEN 'SIGNED' THEN 5
-           WHEN 'RESIGNED' THEN 6
-           ELSE 7
+           WHEN 'DRAFT' THEN 0
+           WHEN 'CONFIRMED' THEN 1
+           WHEN 'PROPOSED' THEN 2
+           WHEN 'PENDING_CONFIRMATION' THEN 3
+           WHEN 'NEGOTIATING' THEN 4
+           WHEN 'ACCEPTED' THEN 5
+           WHEN 'SIGNED' THEN 6
+           WHEN 'RESIGNED' THEN 7
+           ELSE 8
          END,
          r.confirmed_at DESC NULLS LAST,
          r.initiated_at DESC`,
       params
     );
+
+    const groupsParams: unknown[] = [schoolId];
+    let groupsYearFilter = "";
+    if (plannedNextYear?.id) {
+      groupsParams.push(plannedNextYear.id);
+      groupsYearFilter = ` AND g.school_year_id = $${groupsParams.length}`;
+    }
 
     const groupsRes = await queryDb<{
       id: string;
@@ -125,15 +146,17 @@ export async function GET(request: NextRequest) {
        FROM groups g
        LEFT JOIN schedule_templates st ON st.group_id = g.id
        LEFT JOIN locations l ON l.id = st.location_id
-       WHERE g.active = TRUE AND g.school_id = $1
+       WHERE g.active = TRUE AND g.school_id = $1${groupsYearFilter}
        GROUP BY g.id, g.name
        ORDER BY g.name`,
-      [schoolId]
+      groupsParams
     );
 
     return NextResponse.json({
       renewalsOpen: schoolRow?.renewals_open ?? false,
-      renewalsSeason: schoolRow?.renewals_season ?? null,
+      renewalsSeason: targetSeason || (schoolRow?.renewals_season ?? null),
+      plannedNextYear,
+      activeSchoolYear,
       renewals: rows.rows.map((row) => ({
         id: row.id,
         season: row.season,
@@ -164,5 +187,76 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error("Admin renewals GET error:", error);
     return NextResponse.json({ message: "Błąd pobierania odnowień" }, { status: 500 });
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const ctx = await requireAdminRenewalsContext(request);
+    if (!ctx.ok) return ctx.response;
+    const { schoolId } = ctx;
+
+    const body = (await request.json().catch(() => ({}))) as { childId?: unknown };
+    const childId = typeof body.childId === "string" ? body.childId.trim() : "";
+    if (!childId) {
+      return NextResponse.json({ message: "Brak childId" }, { status: 400 });
+    }
+
+    const target = await requireRenewalTargetSchoolYear(schoolId);
+    if (!target.ok) {
+      return NextResponse.json({ message: target.message }, { status: 409 });
+    }
+    const season = target.year.name;
+
+    const childRes = await queryDb<{ parent_id: string; access_level: string }>(
+      `SELECT parent_id, UPPER(BTRIM(COALESCE(access_level::text, ''))) AS access_level
+       FROM children
+       WHERE id = $1 AND school_id = $2 AND active = TRUE
+       LIMIT 1`,
+      [childId, schoolId]
+    );
+    const child = childRes.rows[0];
+    if (!child) {
+      return NextResponse.json({ message: "Nie znaleziono aktywnego dziecka" }, { status: 404 });
+    }
+    if (child.access_level !== "SIGNED") {
+      return NextResponse.json(
+        { message: "Odnowienie można utworzyć tylko dla dziecka ze statusem SIGNED" },
+        { status: 409 }
+      );
+    }
+
+    const existing = await queryDb<{ id: string; status: string }>(
+      `SELECT id, status FROM renewals WHERE child_id = $1 AND season = $2 LIMIT 1`,
+      [childId, season]
+    );
+    if (existing.rows[0]) {
+      return NextResponse.json(
+        {
+          message: "Odnowienie dla tego dziecka w tym sezonie już istnieje",
+          renewalId: existing.rows[0].id,
+          status: existing.rows[0].status,
+        },
+        { status: 409 }
+      );
+    }
+
+    const insertRes = await queryDb<{ id: string }>(
+      `INSERT INTO renewals (
+         id, school_id, child_id, parent_id, season, status, initiated_at, created_at
+       ) VALUES (
+         gen_random_uuid()::text, $1, $2, $3, $4, 'DRAFT', NOW(), NOW()
+       )
+       RETURNING id`,
+      [schoolId, childId, child.parent_id, season]
+    );
+
+    return NextResponse.json({
+      renewalId: insertRes.rows[0]?.id,
+      message: "Utworzono szkic odnowienia — wyślij zapytanie do rodzica, gdy będziesz gotowy",
+    });
+  } catch (error) {
+    console.error("Admin renewals POST error:", error);
+    return NextResponse.json({ message: "Błąd tworzenia odnowienia" }, { status: 500 });
   }
 }

@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useMemo, useState } from 'react';
+import StudentPipelinePanel from '@/src/components/admin/StudentPipelinePanel';
 import {
   ENROLLMENT_LIST_FILTERS,
   ENROLLMENT_STATUS_BADGE_BASE,
@@ -11,6 +12,7 @@ import {
 } from '@/lib/enrollment-status';
 import { applyDiscountsToAmount, DISCOUNT_KEYS } from '@/lib/discount-math';
 import { isParentInComplimentaryList } from '@/lib/complimentary-parent-list';
+import { paymentPlanLabel, paymentRateLabel } from '@/lib/payment-labels';
 import type {
   ComplimentaryParentRow,
   EnrollmentGroupRow,
@@ -19,10 +21,13 @@ import type {
 
 type ProposalDraft = {
   groupId: string;
+  lessonUnitPrice: string;
+  monthlyUnitPrice: string;
+  yearlyUnitPrice: string;
 };
 
 function emptyProposalDraft(groupId = ''): ProposalDraft {
-  return { groupId };
+  return { groupId, lessonUnitPrice: '', monthlyUnitPrice: '', yearlyUnitPrice: '' };
 }
 
 function formatPlnFromDb(value: unknown): string {
@@ -160,42 +165,61 @@ export default function EnrollmentAdminPanel({
   );
 
   const renderList = () => {
-const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
-      if (enrollmentRows.length === 0) {
-        return <EmptyDataPanel title="Zgłoszenia" />;
-      }
-      const filteredEnrollmentRows = enrollmentRows
-        .map((parent) => ({
-          ...parent,
-          children: filterEnrollmentChildrenByStatus(parent.children, enrollmentStatusFilter),
-        }))
-        .filter((parent) => parent.children.length > 0);
-      return (
-        <section className="space-y-4 rounded-2xl border border-emerald-100 bg-white p-4">
-          <h2 className="text-lg font-semibold text-zinc-900">Zgłoszenia</h2>
+    const isPipeline = enrollmentStatusFilter === 'pipeline';
+    const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
+    const filteredEnrollmentRows = enrollmentRows
+      .map((parent) => ({
+        ...parent,
+        children: filterEnrollmentChildrenByStatus(parent.children, enrollmentStatusFilter),
+      }))
+      .filter((parent) => parent.children.length > 0);
 
-          <div className="flex flex-wrap gap-2">
-            {ENROLLMENT_LIST_FILTERS.map((filter) => (
-              <button
-                key={filter.value || 'all'}
-                type="button"
-                onClick={() => setEnrollmentStatusFilter(filter.value)}
-                className={`rounded-full border px-3 py-1 text-xs font-semibold ${
-                  enrollmentStatusFilter === filter.value
-                    ? 'border-[#0f6e56] bg-[#0f6e56] text-white'
-                    : 'border-emerald-200 bg-white text-zinc-700'
-                }`}
-              >
-                {filter.label}
-              </button>
-            ))}
-          </div>
+    return (
+      <section className="space-y-4 rounded-2xl border border-emerald-100 bg-white p-4">
+        <h2 className="text-lg font-semibold text-zinc-900">Zgłoszenia</h2>
 
-          {filteredEnrollmentRows.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-8 text-center text-sm text-zinc-600">
-              Brak zgłoszeń
+        <div className="flex flex-wrap gap-2">
+          {ENROLLMENT_LIST_FILTERS.map((filter) => (
+            <button
+              key={filter.value || 'all'}
+              type="button"
+              onClick={() => setEnrollmentStatusFilter(filter.value)}
+              className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                enrollmentStatusFilter === filter.value
+                  ? 'border-[#0f6e56] bg-[#0f6e56] text-white'
+                  : 'border-emerald-200 bg-white text-zinc-700'
+              }`}
+            >
+              {filter.label}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => setEnrollmentStatusFilter('pipeline')}
+            className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+              isPipeline
+                ? 'border-[#0f6e56] bg-[#0f6e56] text-white'
+                : 'border-emerald-200 bg-white text-zinc-700'
+            }`}
+          >
+            Pipeline ucznia
+          </button>
+        </div>
+
+        {isPipeline ? (
+          <div className="space-y-3">
+            <p className="text-sm text-zinc-600">
+              Zgłoszenie → propozycja → umowa → grupa → płatności → odnowienie
             </p>
-          ) : (
+            <StudentPipelinePanel embedded />
+          </div>
+        ) : enrollmentRows.length === 0 ? (
+          <EmptyDataPanel title="Zgłoszenia" />
+        ) : filteredEnrollmentRows.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-8 text-center text-sm text-zinc-600">
+            Brak zgłoszeń
+          </p>
+        ) : (
           <div className="space-y-3">
           {filteredEnrollmentRows.map((parent) => {
             const isNegotiating =
@@ -254,7 +278,17 @@ const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
                     setProposalDrafts(() => {
                       const next: Record<string, ProposalDraft> = {};
                       for (const child of parent.children) {
-                        next[child.requestId] = emptyProposalDraft(child.proposedGroupId ?? '');
+                        const draft = emptyProposalDraft(child.proposedGroupId ?? '');
+                        if (child.lessonUnitPrice != null && child.lessonUnitPrice !== '') {
+                          draft.lessonUnitPrice = String(child.lessonUnitPrice);
+                        }
+                        if (child.monthlyUnitPrice != null && child.monthlyUnitPrice !== '') {
+                          draft.monthlyUnitPrice = String(child.monthlyUnitPrice);
+                        }
+                        if (child.yearlyUnitPrice != null && child.yearlyUnitPrice !== '') {
+                          draft.yearlyUnitPrice = String(child.yearlyUnitPrice);
+                        }
+                        next[child.requestId] = draft;
                       }
                       return next;
                     });
@@ -542,14 +576,93 @@ const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
                                       </p>
                                       <div className="mt-2 space-y-1">
                                         <p className="text-zinc-800">
-                                          <span className="font-medium">Płatność miesięczna:</span>{' '}
+                                          <span className="font-medium">{paymentPlanLabel('monthly')}:</span>{' '}
                                           {formatPlnFromDb(selectedGroup.price_monthly)}
                                         </p>
                                         <p className="text-zinc-800">
-                                          <span className="font-medium">Płatność roczna:</span>{' '}
+                                          <span className="font-medium">{paymentPlanLabel('yearly')}:</span>{' '}
                                           {formatPlnFromDb(selectedGroup.price_yearly)}
                                         </p>
+                                        <p className="text-zinc-800">
+                                          <span className="font-medium">{paymentPlanLabel('per_lesson')}:</span>{' '}
+                                          {formatPlnFromDb(selectedGroup.price_per_lesson)}
+                                        </p>
                                       </div>
+                                      <label className="mt-3 block text-xs font-medium text-zinc-600">
+                                        {paymentRateLabel('monthly', { individualOptional: true })}
+                                        <input
+                                          type="text"
+                                          inputMode="decimal"
+                                          placeholder={
+                                            selectedGroup.price_monthly != null
+                                              ? `Domyślnie ${formatPlnFromDb(selectedGroup.price_monthly)}`
+                                              : 'np. 140,00'
+                                          }
+                                          className="mt-1 w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
+                                          disabled={!proposalAllowed}
+                                          value={proposalDrafts[child.requestId]?.monthlyUnitPrice ?? ''}
+                                          onChange={(e) =>
+                                            setProposalDrafts((prev) => ({
+                                              ...prev,
+                                              [child.requestId]: {
+                                                ...emptyProposalDraft(),
+                                                ...prev[child.requestId],
+                                                monthlyUnitPrice: e.target.value,
+                                              },
+                                            }))
+                                          }
+                                        />
+                                      </label>
+                                      <label className="mt-2 block text-xs font-medium text-zinc-600">
+                                        {paymentRateLabel('yearly', { individualOptional: true })}
+                                        <input
+                                          type="text"
+                                          inputMode="decimal"
+                                          placeholder={
+                                            selectedGroup.price_yearly != null
+                                              ? `Domyślnie ${formatPlnFromDb(selectedGroup.price_yearly)}`
+                                              : 'np. 1400,00'
+                                          }
+                                          className="mt-1 w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
+                                          disabled={!proposalAllowed}
+                                          value={proposalDrafts[child.requestId]?.yearlyUnitPrice ?? ''}
+                                          onChange={(e) =>
+                                            setProposalDrafts((prev) => ({
+                                              ...prev,
+                                              [child.requestId]: {
+                                                ...emptyProposalDraft(),
+                                                ...prev[child.requestId],
+                                                yearlyUnitPrice: e.target.value,
+                                              },
+                                            }))
+                                          }
+                                        />
+                                      </label>
+                                      <label className="mt-2 block text-xs font-medium text-zinc-600">
+                                        {paymentRateLabel('per_lesson', { individualOptional: true })}
+                                        <input
+                                          type="text"
+                                          inputMode="decimal"
+                                          placeholder={
+                                            selectedGroup.price_per_lesson != null
+                                              ? `Domyślnie ${formatPlnFromDb(selectedGroup.price_per_lesson)}`
+                                              : 'np. 45,00'
+                                          }
+                                          className="mt-1 w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
+                                          disabled={!proposalAllowed}
+                                          value={proposalDrafts[child.requestId]?.lessonUnitPrice ?? ''}
+                                          onChange={(e) =>
+                                            setProposalDrafts((prev) => ({
+                                              ...prev,
+                                              [child.requestId]: {
+                                                ...emptyProposalDraft(),
+                                                ...prev[child.requestId],
+                                                lessonUnitPrice: e.target.value,
+                                              },
+                                            }))
+                                          }
+                                        />
+                                      </label>
                                     </div>
                                   </>
                                 );
@@ -561,14 +674,20 @@ const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
                                   ? groups.find((g) => g.id === selectedGroupId)
                                   : null;
                                 if (!selectedGroup || proposalParentIsComplimentary) return null;
+                                const monthlyBaseRaw = draft?.monthlyUnitPrice?.trim();
+                                const yearlyBaseRaw = draft?.yearlyUnitPrice?.trim();
                                 const monthlyBase =
-                                  selectedGroup.price_monthly != null
-                                    ? Number(selectedGroup.price_monthly)
-                                    : null;
+                                  monthlyBaseRaw && Number.isFinite(Number(monthlyBaseRaw.replace(',', '.')))
+                                    ? Number(monthlyBaseRaw.replace(',', '.'))
+                                    : selectedGroup.price_monthly != null
+                                      ? Number(selectedGroup.price_monthly)
+                                      : null;
                                 const yearlyBase =
-                                  selectedGroup.price_yearly != null
-                                    ? Number(selectedGroup.price_yearly)
-                                    : null;
+                                  yearlyBaseRaw && Number.isFinite(Number(yearlyBaseRaw.replace(',', '.')))
+                                    ? Number(yearlyBaseRaw.replace(',', '.'))
+                                    : selectedGroup.price_yearly != null
+                                      ? Number(selectedGroup.price_yearly)
+                                      : null;
                                 const monthlyAfter = applyDiscountPreview(
                                   monthlyBase,
                                   Boolean(proposalParent?.discountLargeFamily),
@@ -587,11 +706,11 @@ const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
                                     <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
                                       Kwota po zniżkach:{' '}
                                       {monthlyAfter != null
-                                        ? `mies. ${formatPlnFromDb(monthlyAfter)}`
+                                        ? `ratalnie ${formatPlnFromDb(monthlyAfter)}`
                                         : ''}
                                       {monthlyAfter != null && yearlyAfter != null ? ' · ' : ''}
                                       {yearlyAfter != null
-                                        ? `rocznie ${formatPlnFromDb(yearlyAfter)}`
+                                        ? `jednorazowo ${formatPlnFromDb(yearlyAfter)}`
                                         : ''}
                                     </p>
                                   );
@@ -623,6 +742,15 @@ const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
                                           body: JSON.stringify({
                                             requestId: child.requestId,
                                             groupId,
+                                            lessonUnitPrice:
+                                              proposalDrafts[child.requestId]?.lessonUnitPrice?.trim() ||
+                                              null,
+                                            monthlyUnitPrice:
+                                              proposalDrafts[child.requestId]?.monthlyUnitPrice?.trim() ||
+                                              null,
+                                            yearlyUnitPrice:
+                                              proposalDrafts[child.requestId]?.yearlyUnitPrice?.trim() ||
+                                              null,
                                           }),
                                         });
                                         const data = (await res.json().catch(() => ({}))) as {
@@ -770,6 +898,9 @@ const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
                         return {
                           requestId: child.requestId,
                           groupId,
+                          lessonUnitPrice: draft?.lessonUnitPrice?.trim() || null,
+                          monthlyUnitPrice: draft?.monthlyUnitPrice?.trim() || null,
+                          yearlyUnitPrice: draft?.yearlyUnitPrice?.trim() || null,
                         };
                       });
                       const res = await fetch('/api/admin/enrollment/batch', {

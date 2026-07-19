@@ -16,14 +16,6 @@ export async function PUT(
   const { id: renewalId } = await params;
 
   try {
-    const schoolRes = await queryDb<{ renewals_open: boolean }>(
-      `SELECT renewals_open FROM schools WHERE id = $1 LIMIT 1`,
-      [schoolId]
-    );
-    if (!schoolRes.rows[0]?.renewals_open) {
-      return NextResponse.json({ message: "Zapisy na nowy rok są zamknięte" }, { status: 409 });
-    }
-
     const upd = await queryDb(
       `UPDATE renewals
        SET status = 'CONFIRMED', confirmed_at = NOW()

@@ -22,12 +22,10 @@ export function generateContractHtml(
   return html;
 }
 
+import { paymentTypePeriodLabel } from "@/lib/payment-labels";
+
 export function formatPaymentTypeLabel(paymentType: string | null | undefined): string {
-  const t = String(paymentType ?? "").trim().toUpperCase();
-  if (t === "YEARLY") return "rocznie";
-  if (t === "MONTHLY") return "miesięcznie";
-  if (t === "PER_LESSON") return "za lekcję";
-  return t.toLowerCase();
+  return paymentTypePeriodLabel(String(paymentType ?? ""));
 }
 
 export function formatContractAmount(amount: number | string | null | undefined): string {
@@ -111,12 +109,28 @@ export function buildAmountClause(
   if (normalized === "per_lesson") return "";
   const formatted = formatContractAmount(amount);
   if (normalized === "monthly") {
-    return `<p class="note"><span class="ph">Wysokość miesięcznej opłaty wynosi: ${formatted} zł brutto.</span></p>`;
+    return `<p class="note"><span class="ph">Wysokość opłaty ratalnej wynosi: ${formatted} zł brutto.</span></p>`;
   }
   if (normalized === "yearly") {
-    return `<p class="note"><span class="ph">Łączna opłata roczna wynosi: ${formatted} zł brutto.</span></p>`;
+    return `<p class="note"><span class="ph">Łączna opłata jednorazowa wynosi: ${formatted} zł brutto.</span></p>`;
   }
   return "";
+}
+
+export function buildPerLessonClause(
+  children: Array<{ name: string; unitPrice: number }>
+): string {
+  const lines = children
+    .filter((c) => Number.isFinite(c.unitPrice) && c.unitPrice > 0)
+    .map((c) => {
+      const formatted = formatContractAmount(c.unitPrice);
+      const label = c.name.trim();
+      if (label) {
+        return `<p class="note"><span class="ph">Stawka za pojedyncze zajęcia dla ${escapeHtmlText(label)} wynosi: ${formatted} zł brutto.</span></p>`;
+      }
+      return `<p class="note"><span class="ph">Stawka za pojedyncze zajęcia wynosi: ${formatted} zł brutto.</span></p>`;
+    });
+  return lines.join("\n");
 }
 
 export function buildParentPeselOrId(

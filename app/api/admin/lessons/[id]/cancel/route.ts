@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTokenFromRequest } from "@/lib/auth";
-import {
-  canAccessSchoolAdminApis,
-  queryDb,
-  resolveAdminPanelTenant,
-} from "@/lib/db";
+import { queryDb } from "@/lib/db";
+import { requireAdminSchoolContext } from "@/lib/admin-school-context";
 import { requireMessageActor } from "@/lib/messages";
 import { notifyParents } from "@/lib/parent-notifications";
 
@@ -13,19 +9,10 @@ const TZ = "Europe/Warsaw";
 type RouteCtx = { params: Promise<{ id: string }> };
 
 export async function POST(request: NextRequest, context: RouteCtx) {
-  const payload = await getTokenFromRequest(request);
-  const userId = payload?.userId;
-  if (!userId || !(await canAccessSchoolAdminApis(userId))) {
-    return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
-  }
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
 
-  const resolved = await resolveAdminPanelTenant(userId);
-  if (!resolved.ok) {
-    return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-  }
-  const { tenant } = resolved;
-
-  const actor = await requireMessageActor(userId);
+  const actor = await requireMessageActor(ctx.userId);
   if (!actor.ok) {
     return NextResponse.json({ message: actor.message }, { status: actor.status });
   }
@@ -66,9 +53,9 @@ export async function POST(request: NextRequest, context: RouteCtx) {
        INNER JOIN groups g ON g.id = l.group_id
        LEFT JOIN locations loc ON loc.id = l.location_id
        WHERE l.id = $1
-         ${tenant.role === "MANAGER" ? "AND g.school_id = $2" : ""}
+         ${ctx.tenant.role === "MANAGER" ? "AND g.school_id = $2" : ""}
        LIMIT 1`,
-      tenant.role === "MANAGER" ? [lessonId, tenant.tenantSchoolId] : [lessonId],
+      ctx.tenant.role === "MANAGER" ? [lessonId, ctx.schoolId] : [lessonId],
     );
 
     const lesson = lessonRes.rows[0];

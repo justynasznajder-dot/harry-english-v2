@@ -1,27 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { canAccessSchoolAdminApis, queryDb, resolveAdminPanelTenant } from "@/lib/db";
-import { getTokenFromRequest } from "@/lib/auth";
-
-async function ensureAdmin(request: NextRequest): Promise<string | null> {
-  const payload = await getTokenFromRequest(request);
-  const userId = payload?.userId;
-  if (!userId) return null;
-  return (await canAccessSchoolAdminApis(userId)) ? userId : null;
-}
+import { queryDb } from "@/lib/db";
+import { requireAdminSchoolContext } from "@/lib/admin-school-context";
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const userId = await ensureAdmin(request);
-  if (!userId) {
-    return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
-  }
-  const resolved = await resolveAdminPanelTenant(userId);
-  if (!resolved.ok) {
-    return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-  }
-  const { tenant } = resolved;
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
+
+  const { tenant } = ctx;
   const { id } = await params;
   try {
     const group = await queryDb(
@@ -31,7 +19,7 @@ export async function GET(
        LEFT JOIN locations gl ON gl.id = g.location_id
        WHERE g.id = $1 ${tenant.role === "MANAGER" ? "AND g.school_id = $2" : ""}
        LIMIT 1`,
-      tenant.role === "MANAGER" ? [id, tenant.tenantSchoolId] : [id]
+      tenant.role === "MANAGER" ? [id, ctx.schoolId] : [id]
     );
     if (!group.rows[0]) return NextResponse.json({ message: "Nie znaleziono grupy" }, { status: 404 });
 
@@ -93,6 +81,9 @@ export async function GET(
          gs.id,
          gs.enrolled_at,
          gs.left_at,
+         gs.lesson_unit_price::text AS lesson_unit_price,
+         gs.monthly_unit_price::text AS monthly_unit_price,
+         gs.yearly_unit_price::text AS yearly_unit_price,
          c.id AS child_id,
          c.first_name,
          c.last_name,
@@ -117,7 +108,7 @@ export async function GET(
       tenant.role === "MANAGER"
         ? `SELECT id, name FROM locations WHERE school_id = $1 AND active = TRUE ORDER BY name`
         : `SELECT id, name FROM locations WHERE active = TRUE ORDER BY name`,
-      tenant.role === "MANAGER" ? [tenant.tenantSchoolId] : []
+      tenant.role === "MANAGER" ? [ctx.schoolId] : []
     );
 
     return NextResponse.json({
@@ -141,15 +132,10 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const userId = await ensureAdmin(request);
-  if (!userId) {
-    return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
-  }
-  const resolved = await resolveAdminPanelTenant(userId);
-  if (!resolved.ok) {
-    return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-  }
-  const { tenant } = resolved;
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
+
+  const { tenant } = ctx;
   const { id } = await params;
   try {
     const body = await request.json();
@@ -163,6 +149,7 @@ export async function PUT(
       locationId,
       priceMonthly,
       priceYearly,
+      pricePerLesson,
       teacherPickupConsent,
     } = body;
     await queryDb(
@@ -176,8 +163,9 @@ export async function PUT(
            location_id = $8,
            price_monthly = $9,
            price_yearly = $10,
-           teacher_pickup_consent = COALESCE($11, teacher_pickup_consent)
-       WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $12" : ""}`,
+           price_per_lesson = $11,
+           teacher_pickup_consent = COALESCE($12, teacher_pickup_consent)
+       WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $13" : ""}`,
       tenant.role === "MANAGER"
         ? [
             id,
@@ -190,8 +178,9 @@ export async function PUT(
             locationId ?? null,
             priceMonthly != null && priceMonthly !== "" ? Number(priceMonthly) : null,
             priceYearly != null && priceYearly !== "" ? Number(priceYearly) : null,
+            pricePerLesson != null && pricePerLesson !== "" ? Number(pricePerLesson) : null,
             teacherPickupConsent ?? null,
-            tenant.tenantSchoolId,
+            ctx.schoolId,
           ]
         : [
             id,
@@ -204,6 +193,7 @@ export async function PUT(
             locationId ?? null,
             priceMonthly != null && priceMonthly !== "" ? Number(priceMonthly) : null,
             priceYearly != null && priceYearly !== "" ? Number(priceYearly) : null,
+            pricePerLesson != null && pricePerLesson !== "" ? Number(pricePerLesson) : null,
             teacherPickupConsent ?? null,
           ]
     );
@@ -218,22 +208,17 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const userId = await ensureAdmin(request);
-  if (!userId) {
-    return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
-  }
-  const resolved = await resolveAdminPanelTenant(userId);
-  if (!resolved.ok) {
-    return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-  }
-  const { tenant } = resolved;
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
+
+  const { tenant } = ctx;
   const { id } = await params;
   try {
     await queryDb(
       tenant.role === "MANAGER"
         ? `UPDATE groups SET active = FALSE WHERE id = $1 AND school_id = $2`
         : `UPDATE groups SET active = FALSE WHERE id = $1`,
-      tenant.role === "MANAGER" ? [id, tenant.tenantSchoolId] : [id]
+      tenant.role === "MANAGER" ? [id, ctx.schoolId] : [id]
     );
     return NextResponse.json({ message: "Grupa została oznaczona jako nieaktywna" });
   } catch (error) {

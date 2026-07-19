@@ -14,6 +14,9 @@ export type EnrollmentChildRow = {
   notes: string | null;
   proposedGroupId: string | null;
   proposedAt: string | null;
+  lessonUnitPrice?: string | number | null;
+  monthlyUnitPrice?: string | number | null;
+  yearlyUnitPrice?: string | number | null;
 };
 
 export type EnrollmentParentRow = {
@@ -35,6 +38,7 @@ export type EnrollmentGroupRow = {
   location_ids?: string[];
   price_monthly?: string | number | null;
   price_yearly?: string | number | null;
+  price_per_lesson?: string | number | null;
 };
 
 export type ComplimentaryParentRow = {

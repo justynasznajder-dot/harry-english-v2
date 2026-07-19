@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getRegistrationSchoolId, POLISH_DAY_FROM_ST_SQL, queryDb } from "@/lib/db";
 import { getTokenFromRequest } from "@/lib/auth";
 import type { RenewalStatus } from "@/lib/renewal-status";
+import { isRenewalVisibleToParent } from "@/lib/renewal-status";
 
 export async function GET(request: NextRequest) {
   const payload = await getTokenFromRequest(request);
@@ -63,7 +64,7 @@ export async function GET(request: NextRequest) {
        LEFT JOIN locations l ON l.id = st.location_id
        WHERE r.parent_id = $1
          AND r.school_id = $2
-         AND UPPER(BTRIM(COALESCE(r.status::text, ''))) NOT IN ('RESIGNED')
+         AND UPPER(BTRIM(COALESCE(r.status::text, ''))) NOT IN ('RESIGNED', 'DRAFT')
        GROUP BY
          r.id, r.child_id, r.season, r.status, r.confirmed_at,
          c.first_name, c.last_name,
@@ -97,17 +98,7 @@ export async function GET(request: NextRequest) {
       hasPendingProposal: row.has_pending_proposal,
     }));
 
-    const bannerStatuses = new Set([
-      "PENDING_CONFIRMATION",
-      "CONFIRMED",
-      "PROPOSED",
-      "NEGOTIATING",
-      "ACCEPTED",
-    ]);
-
-    const showBanner =
-      (school?.renewals_open ?? false) &&
-      renewals.some((r) => bannerStatuses.has(r.status));
+    const showBanner = renewals.some((r) => isRenewalVisibleToParent(r.status));
 
     return NextResponse.json({
       renewalsOpen: school?.renewals_open ?? false,

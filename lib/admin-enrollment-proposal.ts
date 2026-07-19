@@ -48,6 +48,9 @@ export type SharedParentState = {
 export type ProposalInput = {
   requestId: string;
   groupId: string;
+  lessonUnitPrice?: number | string | null;
+  monthlyUnitPrice?: number | string | null;
+  yearlyUnitPrice?: number | string | null;
 };
 
 export type EnrollmentProposalStatus = "NEW" | "NEGOTIATING";
@@ -131,7 +134,7 @@ export async function submitEnrollmentProposal(
     }
   | { ok: false; status: number; message: string }
 > {
-  const { requestId, groupId } = input;
+  const { requestId, groupId, lessonUnitPrice, monthlyUnitPrice, yearlyUnitPrice } = input;
   const allowedStatuses = options?.allowedStatuses ?? ["NEW", "NEGOTIATING"];
 
   const enrollmentRes = await queryDb<EnrollmentRow>(
@@ -285,9 +288,25 @@ export async function submitEnrollmentProposal(
      SET status = 'PROPOSED',
          proposed_group_id = $2,
          proposed_at = NOW(),
-         user_id = COALESCE(user_id, $3)
+         user_id = COALESCE(user_id, $3),
+         lesson_unit_price = $4,
+         monthly_unit_price = $5,
+         yearly_unit_price = $6
      WHERE id = $1`,
-    [requestId, groupId, parentUserId]
+    [
+      requestId,
+      groupId,
+      parentUserId,
+      lessonUnitPrice != null && lessonUnitPrice !== ""
+        ? Number(lessonUnitPrice)
+        : null,
+      monthlyUnitPrice != null && monthlyUnitPrice !== ""
+        ? Number(monthlyUnitPrice)
+        : null,
+      yearlyUnitPrice != null && yearlyUnitPrice !== ""
+        ? Number(yearlyUnitPrice)
+        : null,
+    ]
   );
 
   let resolvedChildId: string | null = null;

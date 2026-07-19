@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryDb } from "@/lib/db";
 import { requireAdminRenewalsContext } from "@/lib/admin-renewals-auth";
-import { validateRenewalSeason } from "@/lib/renewals";
+import { requireRenewalTargetSchoolYear } from "@/lib/school-year-planning";
 
 export async function POST(request: NextRequest) {
   try {
@@ -9,19 +9,13 @@ export async function POST(request: NextRequest) {
     if (!ctx.ok) return ctx.response;
     const { schoolId } = ctx;
 
-    const body = (await request.json().catch(() => ({}))) as { season?: unknown };
-    const season = typeof body.season === "string" ? body.season.trim() : "";
-    if (!validateRenewalSeason(season)) {
-      return NextResponse.json(
-        { message: 'Niepoprawny format sezonu (oczekiwany np. "2025/2026")' },
-        { status: 400 }
-      );
+    const target = await requireRenewalTargetSchoolYear(schoolId);
+    if (!target.ok) {
+      return NextResponse.json({ message: target.message }, { status: 409 });
     }
+    const season = target.year.name;
 
-    await queryDb(
-      `UPDATE schools SET renewals_open = TRUE, renewals_season = $2 WHERE id = $1`,
-      [schoolId, season]
-    );
+    await queryDb(`UPDATE schools SET renewals_season = $2 WHERE id = $1`, [schoolId, season]);
 
     const insertRes = await queryDb<{ id: string }>(
       `INSERT INTO renewals (
@@ -33,7 +27,7 @@ export async function POST(request: NextRequest) {
          c.id,
          c.parent_id,
          $2,
-         'PENDING_CONFIRMATION',
+         'DRAFT',
          NOW(),
          NOW()
        FROM children c

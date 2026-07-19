@@ -1244,3 +1244,45 @@ export async function sendSignedContractConfirmationEmails(params: {
     attachments: attachmentList,
   });
 }
+
+export async function sendInvoiceNotificationEmail(params: {
+  parentEmail: string;
+  parentFirstName: string;
+  amountLabel: string;
+  description: string;
+  periodLabel?: string | null;
+  dueDateLabel: string;
+  schoolEmail?: string;
+}) {
+  const p = getEmailPalette();
+  const from = {
+    name: "Harry English",
+    address: process.env.EMAIL_USER || "kontakt@harry-english.pl",
+  };
+  const schoolEmail = params.schoolEmail?.trim() || "kontakt@harry-english.pl";
+  const periodPart = params.periodLabel?.trim()
+    ? `<p><strong>Okres:</strong> ${escapeHtmlForEmail(params.periodLabel.trim())}</p>`
+    : "";
+  const contentHtml = `
+    <p>Wygenerowano fakturę za zajęcia w Harry English.</p>
+    <p><strong>Opis:</strong> ${escapeHtmlForEmail(params.description)}</p>
+    ${periodPart}
+    <p><strong>Kwota:</strong> ${escapeHtmlForEmail(params.amountLabel)}</p>
+    <p><strong>Termin płatności:</strong> ${escapeHtmlForEmail(params.dueDateLabel)}</p>
+    <p>W razie pytań prosimy o kontakt: <a href="mailto:${escapeHtmlForEmail(schoolEmail)}" style="color:${p.link};">${escapeHtmlForEmail(schoolEmail)}</a>.</p>
+  `;
+  const textPeriod = params.periodLabel?.trim() ? ` Okres: ${params.periodLabel.trim()}.` : "";
+  const textBody = `Wygenerowano fakturę: ${params.description}.${textPeriod} Kwota: ${params.amountLabel}. Termin płatności: ${params.dueDateLabel}. Kontakt: ${schoolEmail}.`;
+
+  await sendHarryMail({
+    from,
+    to: params.parentEmail,
+    subject: "Faktura — Harry English",
+    html: buildEmailShell({
+      title: `Dzień dobry ${escapeHtmlForEmail(params.parentFirstName)},`,
+      intro: "Informujemy o nowej fakturze do opłacenia.",
+      contentHtml,
+    }),
+    text: `Dzień dobry ${params.parentFirstName}, ${textBody}`,
+  });
+}

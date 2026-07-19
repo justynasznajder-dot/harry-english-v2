@@ -431,6 +431,8 @@ export type RecipientFilters = {
   audience?: "parents" | "teachers";
   /** Tylko dla zarządcy: wszyscy rodzice ze szkoły (poza filtrami grup). */
   bulkParents?: "active" | "all";
+  /** Rodzice z odnowieniem bez odpowiedzi (PROPOSED / PENDING_CONFIRMATION). */
+  renewalNoResponse?: boolean;
 };
 
 function hasGroupFilters(filters: RecipientFilters): boolean {
@@ -440,7 +442,8 @@ function hasGroupFilters(filters: RecipientFilters): boolean {
     (filters.locationIds && filters.locationIds.length > 0) ||
     filters.schoolYearId ||
     filters.teacherId ||
-    filters.enrollmentStatus
+    filters.enrollmentStatus ||
+    filters.renewalNoResponse
   );
 }
 
@@ -635,6 +638,14 @@ async function queryFilteredParents(
       );
       values.push(filters.enrollmentStatus);
     }
+  }
+  if (filters.renewalNoResponse) {
+    conditions.push(`EXISTS (
+      SELECT 1 FROM renewals rn
+      WHERE rn.child_id = c.id
+        AND rn.school_id = $1
+        AND UPPER(BTRIM(COALESCE(rn.status::text, ''))) IN ('PROPOSED', 'PENDING_CONFIRMATION')
+    )`);
   }
   if (filters.search?.trim()) {
     values.push(`%${filters.search.trim()}%`);

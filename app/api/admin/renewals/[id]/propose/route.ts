@@ -44,12 +44,26 @@ export async function POST(
       );
     }
 
-    const groupRes = await queryDb<{ id: string }>(
-      `SELECT id FROM groups WHERE id = $1 AND school_id = $2 AND active = TRUE LIMIT 1`,
-      [groupId, schoolId]
+    const groupRes = await queryDb<{ id: string; school_year_id: string | null }>(
+      `SELECT g.id, g.school_year_id
+       FROM groups g
+       JOIN renewals r ON r.id = $3
+       JOIN school_years sy ON sy.school_id = g.school_id
+         AND sy.name = r.season
+         AND sy.active = FALSE
+         AND sy.closed_at IS NULL
+       WHERE g.id = $1
+         AND g.school_id = $2
+         AND g.active = TRUE
+         AND g.school_year_id = sy.id
+       LIMIT 1`,
+      [groupId, schoolId, renewalId]
     );
     if (!groupRes.rows[0]) {
-      return NextResponse.json({ message: "Nie znaleziono grupy" }, { status: 404 });
+      return NextResponse.json(
+        { message: "Grupa musi należeć do planowanego roku szkolnego odnowienia" },
+        { status: 404 }
+      );
     }
 
     let proposalCount = 0;

@@ -1208,6 +1208,17 @@ export async function getChildById(childId: string): Promise<Child | null> {
   return r.rows[0] ? mapChildRow(r.rows[0]) : null;
 }
 
+export async function getChildByIdForSchool(
+  childId: string,
+  schoolId: string
+): Promise<Child | null> {
+  const r = await pool.query<ChildRow>(
+    `SELECT * FROM children WHERE id = $1 AND school_id = $2 LIMIT 1`,
+    [childId, schoolId]
+  );
+  return r.rows[0] ? mapChildRow(r.rows[0]) : null;
+}
+
 export async function getAllChildren(): Promise<Child[]> {
   const r = await pool.query<ChildRow>(
     `SELECT * FROM children WHERE school_id = $1 ORDER BY created_at DESC`,
@@ -1218,6 +1229,7 @@ export async function getAllChildren(): Promise<Child[]> {
 
 export async function updateChild(
   childId: string,
+  schoolId: string,
   data: Partial<{
     first_name: string;
     last_name: string;
@@ -1289,20 +1301,20 @@ export async function updateChild(
 
   if (sets.length === 0) return false;
 
-  vals.push(childId);
-  const q = `UPDATE children SET ${sets.join(", ")} WHERE id = $${i} RETURNING id`;
+  vals.push(childId, schoolId);
+  const q = `UPDATE children SET ${sets.join(", ")} WHERE id = $${i} AND school_id = $${i + 1} RETURNING id`;
   const r = await pool.query(q, vals);
   return (r.rowCount ?? 0) > 0;
 }
 
-export async function deleteChild(childId: string): Promise<boolean> {
+export async function deleteChild(childId: string, schoolId: string): Promise<boolean> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
     const q = await client.query<{ parent_id: string }>(
       `SELECT parent_id FROM children WHERE id = $1 AND school_id = $2`,
-      [childId, DEFAULT_SCHOOL_ID]
+      [childId, schoolId]
     );
     if (q.rows.length === 0) {
       await client.query("ROLLBACK");
@@ -1315,7 +1327,7 @@ export async function deleteChild(childId: string): Promise<boolean> {
        SET active = FALSE, resignation_date = COALESCE(resignation_date, NOW())
        WHERE id = $1 AND school_id = $2
        RETURNING id`,
-      [childId, DEFAULT_SCHOOL_ID]
+      [childId, schoolId]
     );
     if ((u.rowCount ?? 0) === 0) {
       await client.query("ROLLBACK");
@@ -1325,7 +1337,7 @@ export async function deleteChild(childId: string): Promise<boolean> {
     const cnt = await client.query<{ c: string }>(
       `SELECT COUNT(*)::text AS c FROM children
        WHERE parent_id = $1 AND school_id = $2 AND active = TRUE`,
-      [parentId, DEFAULT_SCHOOL_ID]
+      [parentId, schoolId]
     );
     const activeChildren = parseInt(cnt.rows[0]?.c ?? "0", 10);
     if (activeChildren === 0) {
@@ -1333,7 +1345,7 @@ export async function deleteChild(childId: string): Promise<boolean> {
         `UPDATE users
          SET active = FALSE, resignation_date = NOW()
          WHERE id = $1 AND school_id = $2`,
-        [parentId, DEFAULT_SCHOOL_ID]
+        [parentId, schoolId]
       );
     }
 
@@ -1347,14 +1359,14 @@ export async function deleteChild(childId: string): Promise<boolean> {
   }
 }
 
-export async function restoreChild(childId: string): Promise<boolean> {
+export async function restoreChild(childId: string, schoolId: string): Promise<boolean> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
     const q = await client.query<{ parent_id: string }>(
-      `SELECT parent_id FROM children WHERE id = $1`,
-      [childId]
+      `SELECT parent_id FROM children WHERE id = $1 AND school_id = $2`,
+      [childId, schoolId]
     );
     if (q.rows.length === 0) {
       await client.query("ROLLBACK");
@@ -1365,9 +1377,9 @@ export async function restoreChild(childId: string): Promise<boolean> {
     const u = await client.query(
       `UPDATE children
        SET active = TRUE, resignation_date = NULL
-       WHERE id = $1
+       WHERE id = $1 AND school_id = $2
        RETURNING id`,
-      [childId]
+      [childId, schoolId]
     );
     if ((u.rowCount ?? 0) === 0) {
       await client.query("ROLLBACK");
@@ -1375,13 +1387,13 @@ export async function restoreChild(childId: string): Promise<boolean> {
     }
 
     const p = await client.query<{ active: boolean }>(
-      `SELECT active FROM users WHERE id = $1 LIMIT 1`,
-      [parentId]
+      `SELECT active FROM users WHERE id = $1 AND school_id = $2 LIMIT 1`,
+      [parentId, schoolId]
     );
     if (p.rows[0] && p.rows[0].active === false) {
       await client.query(
-        `UPDATE users SET active = TRUE, resignation_date = NULL WHERE id = $1`,
-        [parentId]
+        `UPDATE users SET active = TRUE, resignation_date = NULL WHERE id = $1 AND school_id = $2`,
+        [parentId, schoolId]
       );
     }
 

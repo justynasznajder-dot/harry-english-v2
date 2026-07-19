@@ -1,16 +1,29 @@
+import {
+  resolveMonthlyUnitPrice,
+  resolveYearlyUnitPrice,
+} from "@/lib/lesson-pricing";
+
 export type PricedEnrollmentRow = {
   price_monthly?: string | number | null;
   price_yearly?: string | number | null;
+  monthly_unit_price?: string | number | null;
+  yearly_unit_price?: string | number | null;
 };
 
 export function resolveChildBaseAmount(
   row: PricedEnrollmentRow,
   paymentType: "MONTHLY" | "YEARLY"
 ): number | null {
-  const raw = paymentType === "YEARLY" ? row.price_yearly : row.price_monthly;
-  if (raw == null || raw === "") return null;
-  const amount = Number(raw);
-  return Number.isFinite(amount) ? amount : null;
+  if (paymentType === "YEARLY") {
+    return resolveYearlyUnitPrice({
+      groupPriceYearly: row.price_yearly,
+      enrollmentOverride: row.yearly_unit_price,
+    });
+  }
+  return resolveMonthlyUnitPrice({
+    groupPriceMonthly: row.price_monthly,
+    enrollmentOverride: row.monthly_unit_price,
+  });
 }
 
 export function sumChildrenBaseAmounts(

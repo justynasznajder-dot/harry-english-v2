@@ -1,32 +1,22 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { POLISH_DAY_FROM_ST_SQL, queryDb } from "@/lib/db";
 import {
-  canAccessSchoolAdminApis,
-  getRegistrationSchoolId,
-  POLISH_DAY_FROM_ST_SQL,
-  queryDb,
-  resolveAdminPanelTenant,
-} from "@/lib/db";
-import { getTokenFromRequest } from "@/lib/auth";
-
-async function ensureAdmin(request: NextRequest): Promise<string | null> {
-  const payload = await getTokenFromRequest(request);
-  const userId = payload?.userId;
-  if (!userId) return null;
-  return (await canAccessSchoolAdminApis(userId)) ? userId : null;
-}
+  managerSchoolAndClause,
+  requireAdminSchoolContext,
+  resolveInsertSchoolId,
+} from "@/lib/admin-school-context";
 
 export async function GET(request: NextRequest) {
-  const adminId = await ensureAdmin(request);
-  if (!adminId) return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
 
-  const resolved = await resolveAdminPanelTenant(adminId);
-  if (!resolved.ok) {
-    return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-  }
-  const { tenant } = resolved;
-  const schoolClause = tenant.role === "MANAGER" ? `AND g.school_id = $1` : "";
-  const listParams = tenant.role === "MANAGER" ? [tenant.tenantSchoolId] : [];
+  const { clause: schoolClause, schoolId: managerSchoolId } = managerSchoolAndClause(
+    ctx.tenant,
+    "g.school_id",
+    1
+  );
+  const listParams = managerSchoolId ? [managerSchoolId] : [];
 
   try {
     const groups = await queryDb<{
@@ -44,6 +34,7 @@ export async function GET(request: NextRequest) {
       students_count: string;
       price_monthly: string | null;
       price_yearly: string | null;
+      price_per_lesson: string | null;
     }>(
       `SELECT
          g.id,
@@ -56,6 +47,7 @@ export async function GET(request: NextRequest) {
          g.teacher_id,
          g.price_monthly::text AS price_monthly,
          g.price_yearly::text AS price_yearly,
+         g.price_per_lesson::text AS price_per_lesson,
          CASE WHEN t.id IS NULL THEN NULL ELSE CONCAT(t.first_name, ' ', t.last_name) END AS teacher_name,
          COALESCE(gl.name, MAX(l.name)) AS location_name,
          COALESCE(
@@ -89,14 +81,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const adminId = await ensureAdmin(request);
-  if (!adminId) return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
-
-  const resolved = await resolveAdminPanelTenant(adminId);
-  if (!resolved.ok) {
-    return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-  }
-  const { tenant } = resolved;
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
 
   try {
     const body = await request.json();
@@ -112,6 +98,7 @@ export async function POST(request: NextRequest) {
       schoolId: bodySchoolIdCamel,
       priceMonthly,
       priceYearly,
+      pricePerLesson,
       teacherPickupConsent,
     }: {
       name?: string;
@@ -125,6 +112,7 @@ export async function POST(request: NextRequest) {
       schoolId?: string;
       priceMonthly?: number | string | null;
       priceYearly?: number | string | null;
+      pricePerLesson?: number | string | null;
       teacherPickupConsent?: boolean;
     } = body;
 
@@ -133,18 +121,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: "Wybierz nauczyciela dla grupy" }, { status: 400 });
     }
 
-    let insertSchoolId: string | null =
-      tenant.role === "MANAGER" ? tenant.tenantSchoolId : null;
-    if (tenant.role === "ADMIN") {
-      const fromBody =
-        (typeof bodySchoolId === "string" && bodySchoolId.trim()) ||
-        (typeof bodySchoolIdCamel === "string" && bodySchoolIdCamel.trim()) ||
-        "";
-      insertSchoolId = fromBody || getRegistrationSchoolId() || null;
-    }
+    const insertSchoolId = resolveInsertSchoolId(ctx.tenant, {
+      bodySchoolId,
+      bodySchoolIdCamel,
+    });
     if (!insertSchoolId) {
       return NextResponse.json(
-        { message: "Brak identyfikatora szkoły (school_id / schoolId lub SCHOOL_ID w środowisku)" },
+        {
+          message:
+            ctx.tenant.role === "MANAGER"
+              ? "Brak dostępu do wskazanej szkoły"
+              : "Brak identyfikatora szkoły (school_id / schoolId lub SCHOOL_ID w środowisku)",
+        },
         { status: 400 }
       );
     }
@@ -153,9 +141,9 @@ export async function POST(request: NextRequest) {
       `INSERT INTO groups (
          id, school_id, teacher_id, name, level, max_students, active,
          created_at, school_year_id, location_id, price_monthly, price_yearly,
-         teacher_pickup_consent
+         price_per_lesson, teacher_pickup_consent
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, $9, $10, $11, $12)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, $9, $10, $11, $12, $13)
        RETURNING id`,
       [
         randomUUID(),
@@ -169,6 +157,7 @@ export async function POST(request: NextRequest) {
         locationId ?? null,
         priceMonthly != null && priceMonthly !== "" ? Number(priceMonthly) : null,
         priceYearly != null && priceYearly !== "" ? Number(priceYearly) : null,
+        pricePerLesson != null && pricePerLesson !== "" ? Number(pricePerLesson) : null,
         Boolean(teacherPickupConsent),
       ]
     );

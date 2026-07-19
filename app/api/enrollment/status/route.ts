@@ -58,6 +58,14 @@ export async function GET(request: NextRequest) {
 
       price_yearly: number | null;
 
+      price_per_lesson: number | null;
+
+      lesson_unit_price: number | null;
+
+      monthly_unit_price: number | null;
+
+      yearly_unit_price: number | null;
+
     }>(
 
       `SELECT
@@ -88,7 +96,15 @@ export async function GET(request: NextRequest) {
 
          g.price_monthly,
 
-         g.price_yearly
+         g.price_yearly,
+
+         g.price_per_lesson,
+
+         er.lesson_unit_price,
+
+         er.monthly_unit_price,
+
+         er.yearly_unit_price
 
        FROM children c
 
@@ -115,7 +131,9 @@ export async function GET(request: NextRequest) {
 
        GROUP BY c.id, c.enrollment_request_id, ${accessLevelExpr}, c.first_name, c.last_name,
 
-                g.name, er.proposed_at, er.created_at, c.created_at, g.price_monthly, g.price_yearly
+                g.name, er.proposed_at, er.created_at, c.created_at, g.price_monthly, g.price_yearly,
+                g.price_per_lesson, er.lesson_unit_price,
+                er.monthly_unit_price, er.yearly_unit_price
 
        ORDER BY er.created_at ASC, c.created_at ASC, c.id ASC`,
 
@@ -238,6 +256,14 @@ export async function GET(request: NextRequest) {
       price_monthly: row.price_monthly,
 
       price_yearly: row.price_yearly,
+
+      price_per_lesson: row.price_per_lesson,
+
+      lesson_unit_price: row.lesson_unit_price,
+
+      monthly_unit_price: row.monthly_unit_price,
+
+      yearly_unit_price: row.yearly_unit_price,
 
     }));
 

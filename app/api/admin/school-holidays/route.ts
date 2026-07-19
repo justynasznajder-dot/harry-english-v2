@@ -1,13 +1,13 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import {
-  canAccessSchoolAdminApis,
   getActiveSchoolYear,
-  getRegistrationSchoolId,
   queryDb,
-  resolveAdminPanelTenant,
 } from "@/lib/db";
-import { getTokenFromRequest } from "@/lib/auth";
+import {
+  requireAdminSchoolContext,
+  resolveInsertSchoolId,
+} from "@/lib/admin-school-context";
 import { notifyParents, type ParentNotifyRow } from "@/lib/parent-notifications";
 import { requireMessageActor } from "@/lib/messages";
 
@@ -65,13 +65,6 @@ async function getParentsWithScheduledLessonsInRange(
   return res.rows;
 }
 
-async function ensureSchoolAdmin(request: NextRequest): Promise<string | null> {
-  const payload = await getTokenFromRequest(request);
-  const userId = payload?.userId;
-  if (!userId) return null;
-  return (await canAccessSchoolAdminApis(userId)) ? userId : null;
-}
-
 /** Z pola formularza / JSON: YYYY-MM-DD lub DD.MM.RRRR → YYYY-MM-DD */
 function normalizeRequestYmd(raw: string): string {
   const t = raw.trim();
@@ -104,15 +97,9 @@ function ymdFromDbValue(v: unknown): string {
 }
 
 export async function GET(request: NextRequest) {
-  const userId = await ensureSchoolAdmin(request);
-  if (!userId) {
-    return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
-  }
-  const resolved = await resolveAdminPanelTenant(userId);
-  if (!resolved.ok) {
-    return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-  }
-  const { tenant } = resolved;
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
+
   try {
     const { searchParams } = new URL(request.url);
     const schoolYearId = searchParams.get("school_year_id");
@@ -150,10 +137,10 @@ export async function GET(request: NextRequest) {
       created_at: Date;
     }>(
       schoolYearId
-        ? tenant.role === "MANAGER"
+        ? ctx.tenant.role === "MANAGER"
           ? withYearManager
           : withYearAdmin
-        : tenant.role === "MANAGER"
+        : ctx.tenant.role === "MANAGER"
           ? `SELECT id, school_id, school_year_id, name, date_from::text, date_to::text, type, created_at
            FROM school_holidays
            WHERE school_id = $1
@@ -162,11 +149,11 @@ export async function GET(request: NextRequest) {
            FROM school_holidays
            ORDER BY date_from DESC`,
       schoolYearId
-        ? tenant.role === "MANAGER"
-          ? [tenant.tenantSchoolId, schoolYearId]
+        ? ctx.tenant.role === "MANAGER"
+          ? [ctx.schoolId, schoolYearId]
           : [schoolYearId]
-        : tenant.role === "MANAGER"
-          ? [tenant.tenantSchoolId]
+        : ctx.tenant.role === "MANAGER"
+          ? [ctx.schoolId]
           : []
     );
 
@@ -184,15 +171,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const userId = await ensureSchoolAdmin(request);
-  if (!userId) {
-    return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
-  }
-  const resolved = await resolveAdminPanelTenant(userId);
-  if (!resolved.ok) {
-    return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-  }
-  const { tenant } = resolved;
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
+
   try {
     const body = await request.json();
     const {
@@ -228,15 +209,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: "Data „od” nie może być późniejsza niż „do”" }, { status: 400 });
     }
 
-    let insertSchoolId: string | null =
-      tenant.role === "MANAGER" ? tenant.tenantSchoolId : null;
-    if (tenant.role === "ADMIN") {
-      const fromBody =
-        (typeof bodySchoolId === "string" && bodySchoolId.trim()) ||
-        (typeof bodySchoolIdCamel === "string" && bodySchoolIdCamel.trim()) ||
-        "";
-      insertSchoolId = fromBody || getRegistrationSchoolId() || null;
-    }
+    const insertSchoolId = resolveInsertSchoolId(ctx.tenant, { bodySchoolId, bodySchoolIdCamel });
     if (!insertSchoolId) {
       return NextResponse.json(
         { message: "Brak identyfikatora szkoły (school_id / schoolId lub SCHOOL_ID w środowisku)" },
@@ -265,7 +238,7 @@ export async function POST(request: NextRequest) {
 
     let messageActor: Awaited<ReturnType<typeof requireMessageActor>> | null = null;
     if (parentsToNotify.length > 0) {
-      messageActor = await requireMessageActor(userId);
+      messageActor = await requireMessageActor(ctx.userId);
       if (!messageActor.ok) {
         return NextResponse.json({ message: messageActor.message }, { status: messageActor.status });
       }

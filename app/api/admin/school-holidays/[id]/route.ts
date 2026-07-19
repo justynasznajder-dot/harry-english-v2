@@ -1,33 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
-import { canAccessSchoolAdminApis, queryDb, resolveAdminPanelTenant } from "@/lib/db";
-import { getTokenFromRequest } from "@/lib/auth";
-
-async function ensureSchoolAdmin(request: NextRequest): Promise<string | null> {
-  const payload = await getTokenFromRequest(request);
-  const userId = payload?.userId;
-  if (!userId) return null;
-  return (await canAccessSchoolAdminApis(userId)) ? userId : null;
-}
+import { queryDb } from "@/lib/db";
+import { requireAdminSchoolContext } from "@/lib/admin-school-context";
 
 type RouteCtx = { params: Promise<{ id: string }> };
 
 export async function DELETE(request: NextRequest, context: RouteCtx) {
-  const userId = await ensureSchoolAdmin(request);
-  if (!userId) {
-    return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
-  }
-  const resolved = await resolveAdminPanelTenant(userId);
-  if (!resolved.ok) {
-    return NextResponse.json({ message: resolved.message }, { status: resolved.status });
-  }
-  const { tenant } = resolved;
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
+
   const { id } = await context.params;
   try {
     const del = await queryDb(
-      tenant.role === "MANAGER"
+      ctx.tenant.role === "MANAGER"
         ? `DELETE FROM school_holidays WHERE id = $1 AND school_id = $2 RETURNING id`
         : `DELETE FROM school_holidays WHERE id = $1 RETURNING id`,
-      tenant.role === "MANAGER" ? [id, tenant.tenantSchoolId] : [id]
+      ctx.tenant.role === "MANAGER" ? [id, ctx.schoolId] : [id]
     );
     if (!del.rowCount) {
       return NextResponse.json({ message: "Nie znaleziono dnia wolnego" }, { status: 404 });

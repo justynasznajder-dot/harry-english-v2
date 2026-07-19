@@ -1,42 +1,49 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { canAccessSchoolAdminApis, queryDb } from "@/lib/db";
-import { getTokenFromRequest } from "@/lib/auth";
-
-async function ensureAdmin(request: NextRequest): Promise<boolean> {
-  const payload = await getTokenFromRequest(request);
-  const userId = payload?.userId;
-  if (!userId) return false;
-  return canAccessSchoolAdminApis(userId);
-}
+import { queryDb } from "@/lib/db";
+import {
+  assertChildInSchool,
+  assertGroupInSchool,
+  requireAdminSchoolContext,
+  tenantNotFoundResponse,
+} from "@/lib/admin-school-context";
 
 export async function POST(request: NextRequest) {
-  if (!(await ensureAdmin(request))) {
-    return NextResponse.json({ message: "Brak autoryzacji" }, { status: 401 });
-  }
+  const ctx = await requireAdminSchoolContext(request);
+  if (!ctx.ok) return ctx.response;
+
   try {
     const body = await request.json();
     const { groupId, childId } = body as { groupId?: string; childId?: string };
-    if (!groupId || !childId) return NextResponse.json({ message: "Brak wymaganych pól" }, { status: 400 });
-
-    const exists = await queryDb<{ id: string }>(
-      `SELECT id FROM group_students WHERE group_id = $1 AND child_id = $2 AND left_at IS NULL LIMIT 1`,
-      [groupId, childId]
-    );
-    if (exists.rows[0]) {
-      return NextResponse.json({ message: "Uczeń jest już aktywnie przypisany do grupy" }, { status: 409 });
+    if (!groupId || !childId) {
+      return NextResponse.json({ message: "Brak wymaganych pól" }, { status: 400 });
     }
 
-    const groupRow = await queryDb<{ school_year_id: string | null }>(
-      `SELECT school_year_id FROM groups WHERE id = $1 LIMIT 1`,
-      [groupId]
+    const group = await assertGroupInSchool(groupId, ctx.schoolId);
+    if (!group.ok) return tenantNotFoundResponse("Nie znaleziono grupy");
+
+    const child = await assertChildInSchool(childId, ctx.schoolId);
+    if (!child.ok) return tenantNotFoundResponse("Nie znaleziono ucznia");
+
+    const exists = await queryDb<{ id: string }>(
+      `SELECT gs.id
+       FROM group_students gs
+       INNER JOIN groups g ON g.id = gs.group_id AND g.school_id = $3
+       WHERE gs.group_id = $1 AND gs.child_id = $2 AND gs.left_at IS NULL
+       LIMIT 1`,
+      [groupId, childId, ctx.schoolId]
     );
-    const schoolYearId = groupRow.rows[0]?.school_year_id ?? null;
+    if (exists.rows[0]) {
+      return NextResponse.json(
+        { message: "Uczeń jest już aktywnie przypisany do grupy" },
+        { status: 409 }
+      );
+    }
 
     await queryDb(
-      `INSERT INTO group_students (id, group_id, child_id, enrolled_at, school_year_id)
-       VALUES ($1, $2, $3, NOW(), $4)`,
-      [randomUUID(), groupId, childId, schoolYearId]
+      `INSERT INTO group_students (id, school_id, group_id, child_id, enrolled_at, school_year_id)
+       VALUES ($1, $2, $3, $4, NOW(), $5)`,
+      [randomUUID(), ctx.schoolId, groupId, childId, group.schoolYearId]
     );
     return NextResponse.json({ message: "Uczeń został dodany do grupy" });
   } catch (error) {

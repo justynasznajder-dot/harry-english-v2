@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { User } from "@/lib/db";
 import {
-  canAccessSchoolAdminApis,
   getUserById,
   updateUser,
   deleteUser,
@@ -9,31 +8,10 @@ import {
   isAdmin,
   parseUserRole,
 } from "@/lib/db";
-import { getTokenFromRequest } from "@/lib/auth";
-
-/** Manager może działać wyłącznie na użytkownikach swojej szkoły (nie na ADMIN / bez school_id). */
-function managerSchoolScopeError(actor: User, target: User | null): NextResponse | null {
-  if (actor.role !== "MANAGER") return null;
-  if (!actor.school_id) {
-    return NextResponse.json(
-      { message: "Konto zarządcy nie ma przypisanej szkoły." },
-      { status: 400 }
-    );
-  }
-  if (!target) {
-    return NextResponse.json({ message: "Użytkownik nie został znaleziony" }, { status: 404 });
-  }
-  if (target.role === "ADMIN" || target.school_id == null) {
-    return NextResponse.json({ message: "Brak uprawnień do tego użytkownika" }, { status: 403 });
-  }
-  if (target.school_id !== actor.school_id) {
-    return NextResponse.json(
-      { message: "Możesz zarządzać tylko użytkownikami ze swojej szkoły" },
-      { status: 403 }
-    );
-  }
-  return null;
-}
+import {
+  managerSchoolScopeError,
+  requireAdminSchoolContext,
+} from "@/lib/admin-school-context";
 
 function managerForbiddenSchoolFields(actor: User, body: Record<string, unknown>): NextResponse | null {
   if (actor.role !== "MANAGER") return null;
@@ -56,18 +34,10 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const payload = await getTokenFromRequest(_request);
-    const actorId = payload?.userId;
-    if (!actorId) {
-      return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-    }
+    const ctx = await requireAdminSchoolContext(_request);
+    if (!ctx.ok) return ctx.response;
 
-    const userCanStaff = await canAccessSchoolAdminApis(actorId);
-    if (!userCanStaff) {
-      return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
-    }
-
-    const actor = await getUserById(actorId);
+    const actor = await getUserById(ctx.userId);
     if (!actor) {
       return NextResponse.json({ message: "Nie znaleziono użytkownika" }, { status: 401 });
     }
@@ -113,18 +83,10 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const payload = await getTokenFromRequest(request);
-    const userId = payload?.userId;
-    if (!userId) {
-      return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-    }
+    const ctx = await requireAdminSchoolContext(request);
+    if (!ctx.ok) return ctx.response;
 
-    const userCanStaff = await canAccessSchoolAdminApis(userId);
-    if (!userCanStaff) {
-      return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
-    }
-
-    const actor = await getUserById(userId);
+    const actor = await getUserById(ctx.userId);
     if (!actor) {
       return NextResponse.json({ message: "Nie znaleziono użytkownika" }, { status: 401 });
     }
@@ -185,7 +147,7 @@ export async function PUT(
       if (!pr) {
         return NextResponse.json({ message: "Nieprawidłowa rola" }, { status: 400 });
       }
-      if (pr === "ADMIN" && !(await isAdmin(userId))) {
+      if (pr === "ADMIN" && !(await isAdmin(ctx.userId))) {
         return NextResponse.json(
           { message: "Tylko super administrator (ADMIN) może nadać rolę ADMIN" },
           { status: 403 }
@@ -263,18 +225,10 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const payload = await getTokenFromRequest(request);
-    const userId = payload?.userId;
-    if (!userId) {
-      return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-    }
+    const ctx = await requireAdminSchoolContext(request);
+    if (!ctx.ok) return ctx.response;
 
-    const userCanStaff = await canAccessSchoolAdminApis(userId);
-    if (!userCanStaff) {
-      return NextResponse.json({ message: "Brak uprawnień administratora" }, { status: 403 });
-    }
-
-    const actor = await getUserById(userId);
+    const actor = await getUserById(ctx.userId);
     if (!actor) {
       return NextResponse.json({ message: "Nie znaleziono użytkownika" }, { status: 401 });
     }
@@ -283,7 +237,7 @@ export async function DELETE(
     const targetUserId = id;
 
     // Nie pozwól usunąć samego siebie
-    if (targetUserId === userId) {
+    if (targetUserId === ctx.userId) {
       return NextResponse.json(
         { message: "Nie można usunąć własnego konta" },
         { status: 400 }

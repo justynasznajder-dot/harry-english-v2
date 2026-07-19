@@ -1,6 +1,13 @@
 import { randomUUID } from "crypto";
 import type { EnrollmentStatus } from "@/lib/enrollment-status";
 import { queryDb } from "@/lib/db";
+import { parsePriceDecimal } from "@/lib/lesson-pricing";
+
+export type GroupStudentPriceOverrides = {
+  lessonUnitPrice?: string | number | null;
+  monthlyUnitPrice?: string | number | null;
+  yearlyUnitPrice?: string | number | null;
+};
 
 /** Ustawia `users.access_level` rodzica: ACTIVE gdy ma aktywne dziecko SIGNED/COMPLETED, inaczej PENDING. */
 export async function syncParentUserAccessLevel(parentId: string): Promise<void> {
@@ -37,7 +44,8 @@ export async function syncChildrenAccessLevelForEnrollment(
 /** Dodaje dziecko do grupy (`group_students`), jeśli nie jest już aktywnie przypisane. */
 export async function enrollChildInGroup(
   childId: string,
-  groupId: string
+  groupId: string,
+  options?: GroupStudentPriceOverrides
 ): Promise<boolean> {
   if (!groupId) return false;
 
@@ -49,31 +57,57 @@ export async function enrollChildInGroup(
   );
   if (active.rows[0]) return false;
 
-  const groupRow = await queryDb<{ school_year_id: string | null }>(
-    `SELECT school_year_id FROM groups WHERE id = $1 LIMIT 1`,
+  const groupRow = await queryDb<{ school_id: string; school_year_id: string | null }>(
+    `SELECT school_id, school_year_id FROM groups WHERE id = $1 LIMIT 1`,
     [groupId]
   );
   if (!groupRow.rows[0]) return false;
-  const schoolYearId = groupRow.rows[0].school_year_id;
+  const { school_id: schoolId, school_year_id: schoolYearId } = groupRow.rows[0];
+  const lessonUnitPrice = parsePriceDecimal(options?.lessonUnitPrice);
+  const monthlyUnitPrice = parsePriceDecimal(options?.monthlyUnitPrice);
+  const yearlyUnitPrice = parsePriceDecimal(options?.yearlyUnitPrice);
 
-  const prior = await queryDb<{ id: string }>(
-    `SELECT id FROM group_students
-     WHERE group_id = $1 AND child_id = $2
+  const prior = await queryDb<{ id: string; school_year_id: string | null; left_at: string | null }>(
+    `SELECT id, school_year_id, left_at::text FROM group_students
+     WHERE group_id = $1 AND child_id = $2 AND school_year_id IS NOT DISTINCT FROM $3
      LIMIT 1`,
-    [groupId, childId]
+    [groupId, childId, schoolYearId]
   );
   if (prior.rows[0]) {
+    if (prior.rows[0].left_at == null) return false;
     await queryDb(
       `UPDATE group_students
-       SET left_at = NULL, enrolled_at = NOW(), school_year_id = $2
+       SET left_at = NULL,
+           enrolled_at = NOW(),
+           school_id = $2,
+           lesson_unit_price = $3,
+           monthly_unit_price = $4,
+           yearly_unit_price = $5
        WHERE id = $1`,
-      [prior.rows[0].id, schoolYearId]
+      [
+        prior.rows[0].id,
+        schoolId,
+        lessonUnitPrice,
+        monthlyUnitPrice,
+        yearlyUnitPrice,
+      ]
     );
   } else {
     await queryDb(
-      `INSERT INTO group_students (id, group_id, child_id, enrolled_at, school_year_id)
-       VALUES ($1, $2, $3, NOW(), $4)`,
-      [randomUUID(), groupId, childId, schoolYearId]
+      `INSERT INTO group_students (
+         id, school_id, group_id, child_id, enrolled_at, school_year_id,
+         lesson_unit_price, monthly_unit_price, yearly_unit_price
+       ) VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8)`,
+      [
+        randomUUID(),
+        schoolId,
+        groupId,
+        childId,
+        schoolYearId,
+        lessonUnitPrice,
+        monthlyUnitPrice,
+        yearlyUnitPrice,
+      ]
     );
   }
   return true;

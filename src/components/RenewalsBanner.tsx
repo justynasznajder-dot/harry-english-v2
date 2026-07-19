@@ -25,13 +25,12 @@ export default function RenewalsBanner({
   onFlash: (flash: Flash) => void;
   onUpdated?: () => void | Promise<void>;
 }) {
-  const [renewalsOpen, setRenewalsOpen] = useState(false);
-  const [season, setSeason] = useState<string | null>(null);
   const [items, setItems] = useState<RenewalItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rejectOpen, setRejectOpen] = useState<Record<string, boolean>>({});
   const [rejectComments, setRejectComments] = useState<Record<string, string>>({});
+  const [declineOpen, setDeclineOpen] = useState<Record<string, boolean>>({});
   const busyRef = useRef(false);
 
   const load = useCallback(async () => {
@@ -43,13 +42,9 @@ export default function RenewalsBanner({
         return;
       }
       const data = (await r.json()) as {
-        renewalsOpen?: boolean;
-        renewalsSeason?: string | null;
         showBanner?: boolean;
         renewals?: RenewalItem[];
       };
-      setRenewalsOpen(data.renewalsOpen ?? false);
-      setSeason(data.renewalsSeason ?? null);
       setItems(data.renewals ?? []);
     } finally {
       setLoading(false);
@@ -60,22 +55,8 @@ export default function RenewalsBanner({
     void load();
   }, [load]);
 
-  const visible = items.filter((r) =>
-    ['PENDING_CONFIRMATION', 'CONFIRMED', 'PROPOSED', 'NEGOTIATING', 'ACCEPTED', 'SIGNED'].includes(
-      r.status,
-    ),
-  );
-
   if (loading) return null;
-
-  const showSection =
-    visible.length > 0 &&
-    (renewalsOpen ||
-      visible.some((r) =>
-        ['PROPOSED', 'NEGOTIATING', 'ACCEPTED', 'SIGNED'].includes(r.status),
-      ));
-
-  if (!showSection) return null;
+  if (items.length === 0) return null;
 
   async function runAction(id: string, fn: () => Promise<boolean>) {
     if (busyRef.current) {
@@ -99,11 +80,14 @@ export default function RenewalsBanner({
   return (
     <section className="space-y-3 rounded-3xl border border-amber-200 bg-amber-50/80 p-4 md:p-5">
       <header>
-        <h2 className="text-lg font-bold text-amber-950">Nowy rok szkolny</h2>
-        {season && <p className="text-sm text-amber-900">Sezon {season}</p>}
+        <h2 className="text-lg font-bold text-amber-950">Odnowienie na kolejny rok szkolny</h2>
+        <p className="text-sm text-amber-900">
+          Szkoła pyta o kontynuację zajęć — potwierdź, czy {items.length === 1 ? 'Twoje dziecko' : 'Twoje dzieci'}{' '}
+          będzie uczyć się w kolejnym roku.
+        </p>
       </header>
       <div className="space-y-3">
-        {visible.map((r) => (
+        {items.map((r) => (
           <article
             key={r.id}
             className="rounded-2xl border border-emerald-200 bg-white p-4 shadow-sm"
@@ -111,47 +95,116 @@ export default function RenewalsBanner({
             <p className="font-semibold text-zinc-900">
               {r.childFirstName} {r.childLastName}
             </p>
-            {r.status === 'PENDING_CONFIRMATION' && renewalsOpen && (
-              <>
-                <p className="mt-1 text-sm text-zinc-700">
-                  Zapisz {r.childFirstName} na nowy rok {season ?? ''}
+
+            {r.status === 'PENDING_CONFIRMATION' && (
+              <div className="mt-3 space-y-3">
+                <p className="text-sm text-zinc-700">
+                  Szkoła pyta, czy {r.childFirstName} będzie kontynuować zajęcia w roku szkolnym{' '}
+                  {r.season}. Po potwierdzeniu otrzymasz propozycję grupy i terminu.
                 </p>
-                <button
-                  type="button"
-                  disabled={busyId === r.id}
-                  className="mt-3 rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                  onClick={() =>
-                    void runAction(r.id, async () => {
-                      const res = await fetch(`/api/renewals/${encodeURIComponent(r.id)}/confirm`, {
-                        method: 'PUT',
-                        credentials: 'include',
-                      });
-                      const data = (await res.json().catch(() => ({}))) as { message?: string };
-                      if (!res.ok) {
-                        onFlash({ kind: 'error', message: data.message ?? 'Nie udało się potwierdzić' });
-                        return false;
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={busyId === r.id}
+                    className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                    onClick={() =>
+                      void runAction(r.id, async () => {
+                        const res = await fetch(
+                          `/api/renewals/${encodeURIComponent(r.id)}/confirm`,
+                          { method: 'PUT', credentials: 'include' },
+                        );
+                        const data = (await res.json().catch(() => ({}))) as { message?: string };
+                        if (!res.ok) {
+                          onFlash({
+                            kind: 'error',
+                            message: data.message ?? 'Nie udało się potwierdzić',
+                          });
+                          return false;
+                        }
+                        onFlash({
+                          kind: 'success',
+                          message: 'Dziękujemy! Szkoła przygotuje propozycję grupy na nowy rok.',
+                        });
+                        return true;
+                      })
+                    }
+                  >
+                    Tak, chcę kontynuować
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busyId === r.id}
+                    className="rounded-xl border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-800"
+                    onClick={() => setDeclineOpen((p) => ({ ...p, [r.id]: !p[r.id] }))}
+                  >
+                    Nie kontynuujemy
+                  </button>
+                </div>
+                {declineOpen[r.id] && (
+                  <div className="space-y-2 rounded-xl border border-zinc-200 bg-zinc-50 p-3">
+                    <textarea
+                      className="w-full rounded-xl border border-zinc-200 px-3 py-2 text-sm"
+                      rows={2}
+                      placeholder="Powód rezygnacji (opcjonalnie)"
+                      value={rejectComments[r.id] ?? ''}
+                      onChange={(e) =>
+                        setRejectComments((p) => ({ ...p, [r.id]: e.target.value }))
                       }
-                      onFlash({ kind: 'success', message: 'Dziękujemy! Czekamy na propozycję terminu zajęć.' });
-                      return true;
-                    })
-                  }
-                >
-                  Chcę kontynuować
-                </button>
-              </>
+                    />
+                    <button
+                      type="button"
+                      disabled={busyId === r.id}
+                      className="rounded-xl bg-rose-600 px-3 py-2 text-sm font-semibold text-white"
+                      onClick={() =>
+                        void runAction(r.id, async () => {
+                          const res = await fetch(
+                            `/api/renewals/${encodeURIComponent(r.id)}/decline`,
+                            {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                reason: (rejectComments[r.id] ?? '').trim() || undefined,
+                              }),
+                              credentials: 'include',
+                            },
+                          );
+                          const data = (await res.json().catch(() => ({}))) as { message?: string };
+                          if (!res.ok) {
+                            onFlash({
+                              kind: 'error',
+                              message: data.message ?? 'Nie udało się zgłosić rezygnacji',
+                            });
+                            return false;
+                          }
+                          onFlash({
+                            kind: 'success',
+                            message: 'Zgłosiliśmy rezygnację z odnowienia. Szkoła się z Tobą skontaktuje.',
+                          });
+                          setDeclineOpen((p) => ({ ...p, [r.id]: false }));
+                          return true;
+                        })
+                      }
+                    >
+                      Potwierdź rezygnację
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
+
             {r.status === 'CONFIRMED' && (
               <p className="mt-2 text-sm text-sky-900">
-                Dziękujemy! Czekamy na propozycję terminu zajęć.
+                Dziękujemy za potwierdzenie! Szkoła przygotuje propozycję grupy na nowy rok.
               </p>
             )}
+
             {r.status === 'PROPOSED' && r.hasPendingProposal && (
               <div className="mt-2 space-y-2">
-                <p className="text-sm font-medium text-emerald-900">Propozycja grupy</p>
+                <p className="text-sm font-medium text-emerald-900">Propozycja grupy na nowy rok</p>
                 <p className="text-sm text-zinc-700">
                   {r.groupName ?? 'Grupa'} · {r.locationName} · {r.schedule}
                 </p>
-                                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
                     disabled={busyId === r.id}
@@ -164,7 +217,10 @@ export default function RenewalsBanner({
                         });
                         const data = (await res.json().catch(() => ({}))) as { message?: string };
                         if (!res.ok) {
-                          onFlash({ kind: 'error', message: data.message ?? 'Nie udało się zaakceptować' });
+                          onFlash({
+                            kind: 'error',
+                            message: data.message ?? 'Nie udało się zaakceptować',
+                          });
                           return false;
                         }
                         onFlash({ kind: 'success', message: 'Propozycja zaakceptowana.' });
@@ -172,7 +228,7 @@ export default function RenewalsBanner({
                       })
                     }
                   >
-                    Akceptuję
+                    Akceptuję propozycję
                   </button>
                   <button
                     type="button"
@@ -180,7 +236,7 @@ export default function RenewalsBanner({
                     className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-800"
                     onClick={() => setRejectOpen((p) => ({ ...p, [r.id]: !p[r.id] }))}
                   >
-                    Odrzucam
+                    Proponuję inny termin
                   </button>
                 </div>
                 {rejectOpen[r.id] && (
@@ -188,7 +244,7 @@ export default function RenewalsBanner({
                     <textarea
                       className="w-full rounded-xl border border-zinc-200 px-3 py-2 text-sm"
                       rows={3}
-                      placeholder="Komentarz (opcjonalnie)"
+                      placeholder="Napisz, jaki termin Ci odpowiada (opcjonalnie)"
                       value={rejectComments[r.id] ?? ''}
                       onChange={(e) =>
                         setRejectComments((p) => ({ ...p, [r.id]: e.target.value }))
@@ -197,7 +253,7 @@ export default function RenewalsBanner({
                     <button
                       type="button"
                       disabled={busyId === r.id}
-                      className="rounded-xl bg-rose-600 px-3 py-2 text-sm font-semibold text-white"
+                      className="rounded-xl bg-amber-600 px-3 py-2 text-sm font-semibold text-white"
                       onClick={() =>
                         void runAction(r.id, async () => {
                           const res = await fetch(`/api/renewals/${encodeURIComponent(r.id)}/reject`, {
@@ -210,30 +266,109 @@ export default function RenewalsBanner({
                           });
                           const data = (await res.json().catch(() => ({}))) as { message?: string };
                           if (!res.ok) {
-                            onFlash({ kind: 'error', message: data.message ?? 'Nie udało się odrzucić' });
+                            onFlash({
+                              kind: 'error',
+                              message: data.message ?? 'Nie udało się wysłać uwag',
+                            });
                             return false;
                           }
-                          onFlash({ kind: 'success', message: 'Propozycja odrzucona.' });
+                          onFlash({
+                            kind: 'success',
+                            message: 'Przekazaliśmy szkole Twoją prośbę o inny termin.',
+                          });
                           setRejectOpen((p) => ({ ...p, [r.id]: false }));
                           return true;
                         })
                       }
                     >
-                      Potwierdź odrzucenie
+                      Wyślij uwagi
                     </button>
                   </div>
                 )}
               </div>
             )}
+
             {r.status === 'NEGOTIATING' && (
-              <p className="mt-2 text-sm text-amber-900">Szkoła przygotuje nową propozycję.</p>
+              <p className="mt-2 text-sm text-amber-900">
+                Szkoła przygotuje nową propozycję grupy lub terminu.
+              </p>
             )}
+
             {r.status === 'ACCEPTED' && (
-              <p className="mt-2 text-sm text-emerald-800">Zaakceptowano. Czeka na podpisanie umowy.</p>
+              <div className="mt-2 space-y-2">
+                <p className="text-sm text-emerald-800">
+                  Propozycja zaakceptowana. Przygotuj i podpisz umowę na rok {r.season} — tak jak
+                  przy zapisie.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={busyId === r.id}
+                    className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                    onClick={() =>
+                      void runAction(r.id, async () => {
+                        const res = await fetch('/api/renewals/contract/generate', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            includedRenewalIds: [r.id],
+                            paymentType: 'MONTHLY',
+                          }),
+                          credentials: 'include',
+                        });
+                        const data = (await res.json().catch(() => ({}))) as { message?: string };
+                        if (!res.ok) {
+                          onFlash({
+                            kind: 'error',
+                            message: data.message ?? 'Nie udało się przygotować umowy',
+                          });
+                          return false;
+                        }
+                        onFlash({
+                          kind: 'success',
+                          message: 'Umowa gotowa — podpisz ją poniżej.',
+                        });
+                        return true;
+                      })
+                    }
+                  >
+                    Przygotuj umowę
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busyId === r.id}
+                    className="rounded-xl border border-emerald-600 bg-white px-3 py-2 text-sm font-semibold text-emerald-800"
+                    onClick={() =>
+                      void runAction(r.id, async () => {
+                        const res = await fetch('/api/enrollment/sign', {
+                          method: 'POST',
+                          credentials: 'include',
+                        });
+                        const data = (await res.json().catch(() => ({}))) as { message?: string };
+                        if (!res.ok) {
+                          onFlash({
+                            kind: 'error',
+                            message: data.message ?? 'Nie udało się podpisać umowy',
+                          });
+                          return false;
+                        }
+                        onFlash({
+                          kind: 'success',
+                          message: 'Umowa podpisana — dziecko zapisane na kolejny rok!',
+                        });
+                        return true;
+                      })
+                    }
+                  >
+                    Podpisz umowę
+                  </button>
+                </div>
+              </div>
             )}
+
             {r.status === 'SIGNED' && (
               <p className="mt-2 text-sm text-emerald-800">
-                Umowa podpisana. Do zobaczenia w nowym roku!
+                Umowa podpisana — do zobaczenia w nowym roku szkolnym!
               </p>
             )}
           </article>

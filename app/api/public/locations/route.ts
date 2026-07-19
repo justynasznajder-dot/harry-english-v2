@@ -5,11 +5,11 @@ import { getRegistrationSchoolId, queryDb } from "@/lib/db";
 export async function GET() {
   try {
     const schoolId = getRegistrationSchoolId();
-    const r = await queryDb<{ id: string; name: string }>(
-      `SELECT id, name
+    const r = await queryDb<{ id: string; name: string; is_featured: boolean }>(
+      `SELECT id, name, is_featured
        FROM locations
        WHERE school_id = $1 AND active = TRUE
-       ORDER BY name ASC`,
+       ORDER BY sort_order ASC, is_featured DESC, name ASC`,
       [schoolId]
     );
     return NextResponse.json({ locations: r.rows });

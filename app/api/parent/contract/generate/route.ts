@@ -30,6 +30,7 @@ import {
   computeEnrollmentContractReadiness,
   fetchParentEnrollmentPipelineStatuses,
 } from "@/lib/enrollment-contract-readiness";
+import { normalizePaymentType } from "@/lib/lesson-pricing";
 import { isComplimentaryForParent } from "@/lib/school-discounts";
 
 
@@ -91,22 +92,15 @@ export async function POST(request: NextRequest) {
 
         : [];
 
-    const paymentType = String(body.paymentType ?? body.payment_type ?? "")
-
+    const paymentTypeRaw = String(body.paymentType ?? body.payment_type ?? "")
       .trim()
-
       .toUpperCase();
-
-    if (paymentType !== "MONTHLY" && paymentType !== "YEARLY") {
-
+    const paymentType = normalizePaymentType(paymentTypeRaw);
+    if (!paymentType) {
       return NextResponse.json(
-
-        { message: "Wybierz sposób rozliczeń: miesięczny lub roczny" },
-
+        { message: "Wybierz sposób rozliczeń: ratalny, jednorazowy lub za pojedyncze zajęcia" },
         { status: 400 }
-
       );
-
     }
 
 
@@ -194,7 +188,7 @@ export async function POST(request: NextRequest) {
 
         excludedRequestIds,
 
-        paymentType: paymentType as "MONTHLY" | "YEARLY",
+        paymentType,
 
         includeAttachment2,
 

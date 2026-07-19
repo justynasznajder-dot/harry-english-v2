@@ -31,7 +31,9 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
     ],
     rodoConsent: false,
   });
-  const [locations, setLocations] = useState<Array<{ id: string; name: string }>>([]);
+  const [locations, setLocations] = useState<
+    Array<{ id: string; name: string; is_featured?: boolean }>
+  >([]);
   const [locationsLoading, setLocationsLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [showPassword, setShowPassword] = useState(false);
@@ -61,7 +63,7 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
     setLocationsLoading(true);
     fetch("/api/public/locations")
       .then((res) => (res.ok ? res.json() : Promise.reject()))
-      .then((data: { locations?: Array<{ id: string; name: string }> }) => {
+      .then((data: { locations?: Array<{ id: string; name: string; is_featured?: boolean }> }) => {
         if (!cancelled) setLocations(Array.isArray(data.locations) ? data.locations : []);
       })
       .catch(() => {
@@ -683,8 +685,16 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
                               : "— Wybierz —"}
                         </option>
                         {locations.map((loc) => (
-                          <option key={loc.id} value={loc.id}>
-                            {loc.name}
+                          <option
+                            key={loc.id}
+                            value={loc.id}
+                            style={
+                              loc.is_featured
+                                ? { fontWeight: 700, color: "#0f6e56" }
+                                : undefined
+                            }
+                          >
+                            {loc.is_featured ? `★ ${loc.name}` : loc.name}
                           </option>
                         ))}
                       </select>
