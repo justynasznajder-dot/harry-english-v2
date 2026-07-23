@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { sendCombinedProposalEmail } from "@/lib/email";
 import { requireAdminSchoolContext } from "@/lib/admin-school-context";
 import {
-  ensureInitialProposalEmailCredentials,
+  resolveProposalEmailCredentials,
   submitEnrollmentProposal,
   type ProposalEmailItem,
   type SharedParentState,
@@ -36,7 +36,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const requestIds = proposals.map((p) => p.requestId!);
     const schoolRestrict =
       ctx.tenant.role === "MANAGER" ? { restrictToSchoolId: ctx.schoolId } : undefined;
 
@@ -70,19 +69,28 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: "Nie udało się przetworzyć propozycji" }, { status: 500 });
     }
 
-    const credentials = await ensureInitialProposalEmailCredentials({
-      parentUserId: sharedParent.parentUserId,
+    const login = resolveProposalEmailCredentials({
       parentEmail: sharedParent.parentEmail,
       parentCreated: sharedParent.parentCreated,
       tempPasswordFromCreate: sharedParent.tempPassword,
-      excludeRequestIds: requestIds,
     });
+
+    if (sharedParent.parentCreated && !login.tempPassword) {
+      console.error(
+        "Admin enrollment batch: parentCreated without temp password",
+        sharedParent.parentUserId
+      );
+      return NextResponse.json(
+        { message: "Nie udało się przygotować danych logowania dla nowego konta" },
+        { status: 500 }
+      );
+    }
 
     await sendCombinedProposalEmail(
       sharedParent.parentEmail,
       `${sharedParent.parentFirstName} ${sharedParent.parentLastName}`.trim(),
       emailItems,
-      credentials
+      login
     );
 
     return NextResponse.json({

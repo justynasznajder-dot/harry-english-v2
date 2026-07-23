@@ -7,7 +7,6 @@ import {
   queryDb,
   runPgTransaction,
   updateUser,
-  updateUserPasswordHash,
 } from "@/lib/db";
 import { generateTempPassword } from "@/lib/password";
 import { formatPersonName } from "@/lib/format-person-name";
@@ -61,68 +60,30 @@ export type ProposalInput = {
 
 export type EnrollmentProposalStatus = "NEW" | "NEGOTIATING";
 
-/** Dane logowania do pierwszego maila z propozycją (zbiorczego) — zawsze zwraca login i hasło tymczasowe. */
-export async function ensureInitialProposalEmailCredentials(params: {
-  parentUserId: string;
+/**
+ * Dane logowania do maila z propozycją.
+ * Mail zawsze zawiera login; hasło tymczasowe tylko gdy konto właśnie utworzono.
+ * Istniejący rodzic → bez resetu hasła (`tempPassword: null` → „użyj obecnego hasła”).
+ */
+export type ProposalEmailLogin = {
+  loginEmail: string;
+  tempPassword: string | null;
+};
+
+export function resolveProposalEmailCredentials(params: {
   parentEmail: string;
   parentCreated: boolean;
   tempPasswordFromCreate: string | null;
-  excludeRequestIds: string[];
-}): Promise<{ loginEmail: string; tempPassword: string }> {
-  const resolved = await resolveProposalEmailCredentials(params);
-  if (resolved) return resolved;
+}): ProposalEmailLogin {
+  const tempPassword =
+    params.parentCreated && params.tempPasswordFromCreate
+      ? params.tempPasswordFromCreate
+      : null;
 
-  if (params.parentCreated && params.tempPasswordFromCreate) {
-    return {
-      loginEmail: params.parentEmail,
-      tempPassword: params.tempPasswordFromCreate,
-    };
-  }
-
-  const tempPassword = generateTempPassword();
-  const passwordHash = await bcrypt.hash(tempPassword, 10);
-  await updateUserPasswordHash(params.parentUserId, passwordHash);
-  return { loginEmail: params.parentEmail, tempPassword };
-}
-
-/** Czy dołączyć login/hasło do maila — nie resetuj hasła, jeśli rodzic dostał je przy wcześniejszej propozycji. */
-export async function resolveProposalEmailCredentials(params: {
-  parentUserId: string;
-  parentEmail: string;
-  parentCreated: boolean;
-  tempPasswordFromCreate: string | null;
-  /** Zgłoszenia z bieżącej operacji (pomijane przy sprawdzaniu „czy rodzic już dostał hasło”). */
-  excludeRequestIds: string[];
-}): Promise<{ loginEmail: string; tempPassword: string } | undefined> {
-  if (params.parentCreated && params.tempPasswordFromCreate) {
-    return {
-      loginEmail: params.parentEmail,
-      tempPassword: params.tempPasswordFromCreate,
-    };
-  }
-
-  const flagsRes = await queryDb<{ must_change_password: boolean }>(
-    `SELECT must_change_password FROM users WHERE id = $1 LIMIT 1`,
-    [params.parentUserId]
-  );
-  if (flagsRes.rows[0]?.must_change_password !== true) return undefined;
-
-  const excludeIds =
-    params.excludeRequestIds.length > 0 ? params.excludeRequestIds : ["__none__"];
-  const otherProposed = await queryDb<{ id: string }>(
-    `SELECT id FROM enrollment_requests
-     WHERE user_id = $1
-       AND NOT (id = ANY($2::text[]))
-       AND UPPER(BTRIM(COALESCE(status::text, ''))) IN ('PROPOSED', 'NEGOTIATING', 'ACCEPTED', 'SIGNED')
-     LIMIT 1`,
-    [params.parentUserId, excludeIds]
-  );
-  if (otherProposed.rows[0]) return undefined;
-
-  const tempPassword = generateTempPassword();
-  const passwordHash = await bcrypt.hash(tempPassword, 10);
-  await updateUserPasswordHash(params.parentUserId, passwordHash);
-  return { loginEmail: params.parentEmail, tempPassword };
+  return {
+    loginEmail: params.parentEmail,
+    tempPassword,
+  };
 }
 
 export async function submitEnrollmentProposal(

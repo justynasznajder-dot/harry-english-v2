@@ -938,9 +938,10 @@ export async function sendCombinedProposalEmail(
     childFirstName: string;
     childLastName: string;
   }>,
-  credentials: {
+  login: {
     loginEmail: string;
-    tempPassword: string;
+    /** null = istniejące konto — nie podajemy nowego hasła */
+    tempPassword: string | null;
   }
 ) {
   const portalUrl = `${getAppBaseUrl()}/portal/login`;
@@ -972,34 +973,58 @@ export async function sendCombinedProposalEmail(
     })
     .join("\n\n");
 
+  const isNewAccount = Boolean(login.tempPassword);
+  const passwordHtml = isNewAccount
+    ? `<strong>${escapeHtmlForEmail(login.tempPassword!)}</strong>`
+    : `<strong>użyj obecnego hasła</strong>`;
+  const passwordText = isNewAccount
+    ? login.tempPassword!
+    : "użyj obecnego hasła";
+
   const credentialsHtml = `
       <p style="margin:16px 0 8px 0;font-size:15px;line-height:1.6;color:${p.text};">
-        Założyliśmy dla Ciebie konto w portalu. Zaloguj się poniższymi danymi.
+        ${
+          isNewAccount
+            ? "Założyliśmy dla Ciebie konto w portalu. Zaloguj się poniższymi danymi."
+            : "Zaloguj się do portalu poniższymi danymi (konto już masz w systemie)."
+        }
       </p>
       ${emailInsetCellOpen(p)}
       <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;">
         <tr>
           <td style="padding:4px 12px 4px 0;font-size:15px;color:${p.insetText};"><strong>Login (email):</strong></td>
           <td style="padding:4px 0;font-size:15px;color:${p.insetText};font-family:Consolas,Menlo,monospace;">
-            ${buildEmailMailtoLink(credentials.loginEmail, p.insetText)}
+            ${buildEmailMailtoLink(login.loginEmail, p.insetText)}
           </td>
         </tr>
         <tr>
-          <td style="padding:4px 12px 4px 0;font-size:15px;color:${p.insetText};"><strong>Hasło tymczasowe:</strong></td>
-          <td style="padding:4px 0;font-size:16px;color:${p.insetText};font-family:Consolas,Menlo,monospace;letter-spacing:1px;"><strong>${escapeHtmlForEmail(credentials.tempPassword)}</strong></td>
+          <td style="padding:4px 12px 4px 0;font-size:15px;color:${p.insetText};"><strong>${isNewAccount ? "Hasło tymczasowe:" : "Hasło:"}</strong></td>
+          <td style="padding:4px 0;font-size:16px;color:${p.insetText};font-family:Consolas,Menlo,monospace;letter-spacing:1px;">${passwordHtml}</td>
         </tr>
       </table>
       ${emailInsetCellClose()}
       <p style="margin:12px 0;font-size:14px;line-height:1.6;color:${p.text};opacity:0.85;">
-        Po pierwszym zalogowaniu poprosimy Cię o ustawienie własnego hasła.
+        ${
+          isNewAccount
+            ? "Po pierwszym zalogowaniu poprosimy Cię o ustawienie własnego hasła."
+            : "Nie pamiętasz hasła? Skorzystaj z opcji „Zapomniałem hasła” na stronie logowania."
+        }
       </p>
     `;
 
   const credentialsText = `
-Założyliśmy dla Ciebie konto w portalu. Zaloguj się poniższymi danymi.
-- Login (email): ${credentials.loginEmail}
-- Hasło tymczasowe: ${credentials.tempPassword}
-Po pierwszym zalogowaniu poprosimy Cię o ustawienie własnego hasła.
+${
+  isNewAccount
+    ? "Założyliśmy dla Ciebie konto w portalu. Zaloguj się poniższymi danymi."
+    : "Zaloguj się do portalu poniższymi danymi (konto już masz w systemie)."
+}
+- Login (email): ${login.loginEmail}
+- ${isNewAccount ? "Hasło tymczasowe" : "Hasło"}: ${passwordText}
+${
+  isNewAccount
+    ? "Po pierwszym zalogowaniu poprosimy Cię o ustawienie własnego hasła."
+    : "Nie pamiętasz hasła? Skorzystaj z opcji \"Zapomniałem hasła\" na stronie logowania."
+}
 `;
 
   const childCount = proposals.length;
