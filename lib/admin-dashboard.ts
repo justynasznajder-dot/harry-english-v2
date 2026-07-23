@@ -391,6 +391,24 @@ export async function countOpenResignations(schoolId: string): Promise<number> {
   return Number(res.rows[0]?.n ?? 0);
 }
 
+/** Oczekujące zgłoszenia (status NEW). `schoolId` null = wszystkie szkoły (ADMIN). */
+export async function countPendingEnrollments(schoolId: string | null): Promise<number> {
+  const res = schoolId
+    ? await queryDb<{ n: string }>(
+        `SELECT COUNT(*)::text AS n
+         FROM enrollment_requests er
+         WHERE er.school_id = $1
+           AND UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'NEW'`,
+        [schoolId]
+      )
+    : await queryDb<{ n: string }>(
+        `SELECT COUNT(*)::text AS n
+         FROM enrollment_requests er
+         WHERE UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'NEW'`
+      );
+  return Number(res.rows[0]?.n ?? 0);
+}
+
 export async function fetchStaleNegotiationAlerts(
   schoolId: string,
   daysThreshold: number

@@ -14,6 +14,7 @@ import MessagesPanel from '@/src/components/messages/MessagesPanel';
 import MessagesTabLabel from '@/src/components/messages/MessagesTabLabel';
 import { useUnreadMessagesCount } from '@/src/components/messages/useUnreadMessagesCount';
 import { useOpenResignationsCount } from '@/src/components/admin/useOpenResignationsCount';
+import { usePendingEnrollmentsCount } from '@/src/components/admin/usePendingEnrollmentsCount';
 
 type TabKey =
   | 'dashboard'
@@ -429,6 +430,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     useUnreadMessagesCount(messagesListResetToken);
   const { openCount: resignationsOpenCount, refresh: refreshResignationsOpenCount } =
     useOpenResignationsCount();
+  const { pendingCount: enrollmentsPendingCount, refresh: refreshEnrollmentsPendingCount } =
+    usePendingEnrollmentsCount();
   const [organizationSubTab, setOrganizationSubTab] = useState<OrganizationSubTab>(
     initialGroupId ? 'groups' : 'schoolYear',
   );
@@ -642,10 +645,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       const eJson = await eRes.json();
       setEnrollmentParents(eJson.parents ?? []);
       setEnrollmentGroups(eJson.groups ?? []);
+      void refreshEnrollmentsPendingCount();
     } catch {
       pushToast('error', 'Błąd wczytywania zgłoszeń');
     }
-  }, [pushToast]);
+  }, [pushToast, refreshEnrollmentsPendingCount]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -676,6 +680,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         const eJson = await eRes.json();
         setEnrollmentParents(eJson.parents ?? []);
         setEnrollmentGroups(eJson.groups ?? []);
+        void refreshEnrollmentsPendingCount();
       }
       if (gRes.ok) {
         const gJson = await gRes.json();
@@ -741,7 +746,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     } finally {
       setLoading(false);
     }
-  }, [pushToast]);
+  }, [pushToast, refreshEnrollmentsPendingCount]);
 
   useEffect(() => {
     loadData();
@@ -4875,6 +4880,15 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   label={tab.label}
                   unreadCount={messagesUnreadCount}
                   isActive={activeTab === 'announcements'}
+                />
+              ) : tab.key === 'enrollment' ? (
+                <MessagesTabLabel
+                  label={tab.label}
+                  unreadCount={enrollmentsPendingCount}
+                  isActive={activeTab === 'enrollment'}
+                  badgeAriaLabel={(n) =>
+                    n === 1 ? '1 nowe zgłoszenie' : `${n} nowych zgłoszeń`
+                  }
                 />
               ) : tab.key === 'resignations' ? (
                 <MessagesTabLabel

@@ -20,6 +20,9 @@ interface ContractDocument {
 
 export type ContractSignResult = {
   message?: string;
+  pdfGenerated?: boolean;
+  pdfStored?: boolean;
+  pdfEmailed?: boolean;
   nextChildToContract?: {
     child_id: string;
     request_id: string;

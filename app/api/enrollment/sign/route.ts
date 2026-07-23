@@ -34,6 +34,7 @@ import {
 
 /** PDF (Chromium) + R2 + mail — wymaga więcej czasu niż domyślne 10 s na Vercel. */
 export const maxDuration = 60;
+export const runtime = "nodejs";
 
 function extractIp(request: NextRequest): string {
 
@@ -354,11 +355,16 @@ export async function POST(request: NextRequest) {
 
 
 
+    let pdfGenerated = false;
+    let pdfStored = false;
+    let pdfEmailed = false;
+
     try {
       const pdfFiles = await buildSignedContractPdfFiles({
         contentHtml: signedContentHtml,
         childAttachments: signedChildAttachments,
       });
+      pdfGenerated = true;
 
       try {
         await storeSignedContractPdfsInR2({
@@ -367,6 +373,7 @@ export async function POST(request: NextRequest) {
           pdfFiles,
           source: "enrollment.sign",
         });
+        pdfStored = true;
       } catch (r2Err) {
         console.error("Signed contract R2 backup error:", r2Err);
       }
@@ -380,6 +387,7 @@ export async function POST(request: NextRequest) {
           childName,
           pdfFiles,
         });
+        pdfEmailed = true;
       } catch (mailErr) {
         console.error("Signed contract email error:", mailErr);
       }
@@ -405,6 +413,9 @@ export async function POST(request: NextRequest) {
         ? "Umowa podpisana. Możesz teraz wygenerować umowę dla kolejnego dziecka."
         : "Umowa podpisana",
       accessLevel: "ACTIVE",
+      pdfGenerated,
+      pdfStored,
+      pdfEmailed,
       nextChildToContract: nextChild
         ? {
             child_id: nextChild.child_id,

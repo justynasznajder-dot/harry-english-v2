@@ -1741,11 +1741,15 @@ export default function EnrollmentParentFlow({
                               contract={contractPreview}
                               onSigned={async (result) => {
                                 const next = result?.nextChildToContract;
+                                const pdfOk = result?.pdfGenerated !== false;
+                                const base = next
+                                  ? `Umowa podpisana. Wygeneruj teraz umowę dla: ${next.first_name} ${next.last_name}`.trim()
+                                  : 'Umowa podpisana. Dziękujemy!';
                                 setFlash({
-                                  kind: 'success',
-                                  message: next
-                                    ? `Umowa podpisana. Wygeneruj teraz umowę dla: ${next.first_name} ${next.last_name}`.trim()
-                                    : 'Umowa podpisana. Dziękujemy!',
+                                  kind: pdfOk ? 'success' : 'error',
+                                  message: pdfOk
+                                    ? base
+                                    : `${base} Uwaga: nie udało się wygenerować PDF — skontaktuj się ze szkołą.`,
                                 });
                                 await loadProposals();
                                 await refreshUserAccessLevel();

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { countPendingEnrollments } from "@/lib/admin-dashboard";
 import { POLISH_DAY_FROM_ST_SQL, queryDb } from "@/lib/db";
 import { sendProposalEmail } from "@/lib/email";
 import {
@@ -12,6 +13,12 @@ export async function GET(request: NextRequest) {
   try {
     const ctx = await requireAdminSchoolContext(request);
     if (!ctx.ok) return ctx.response;
+
+    if (request.nextUrl.searchParams.get("countOnly") === "1") {
+      const { schoolId } = managerSchoolAndClause(ctx.tenant, "er.school_id", 1);
+      const pendingCount = await countPendingEnrollments(schoolId);
+      return NextResponse.json({ pendingCount });
+    }
 
     const { clause: parentsSchoolClause, schoolId: parentsSchoolId } = managerSchoolAndClause(
       ctx.tenant,
