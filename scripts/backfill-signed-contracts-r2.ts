@@ -1,7 +1,6 @@
 import { Pool } from "pg";
 import { buildSignedContractPdfFiles } from "@/lib/contract-pdf";
 import { formatPersonName } from "@/lib/format-person-name";
-import { resolveBillingTypeFromProfile } from "@/lib/parent-contract-profile";
 import { storeSignedContractPdfsInR2 } from "@/lib/r2-storage";
 import { loadEnvFiles } from "./load-env";
 
@@ -13,9 +12,6 @@ type SignedContractRow = {
   signed_at: Date;
   first_name: string;
   last_name: string;
-  pesel: string | null;
-  nip: string | null;
-  company_name: string | null;
 };
 
 type ChildAttachmentRow = {
@@ -44,17 +40,13 @@ async function main(): Promise<void> {
          c.content_html,
          c.signed_at,
          u.first_name,
-         u.last_name,
-         pp.pesel,
-         pp.nip,
-         pp.company_name
+         u.last_name
        FROM contracts c
        JOIN users u ON u.id = c.parent_id
-       LEFT JOIN parent_profiles pp ON pp.user_id = c.parent_id
        WHERE c.status = 'SIGNED'
          AND c.signed_at IS NOT NULL
-         AND c.child_id IS NULL
-       ORDER BY c.signed_at DESC`
+         AND c.content_html IS NOT NULL
+       ORDER BY c.signed_at ASC`
     );
 
     if (res.rows.length === 0) {
@@ -67,15 +59,6 @@ async function main(): Promise<void> {
     for (const row of res.rows) {
       const parentFullName =
         `${formatPersonName(row.first_name ?? "")} ${formatPersonName(row.last_name ?? "")}`.trim();
-      const billingType = resolveBillingTypeFromProfile({
-        company_name: row.company_name,
-        nip: row.nip,
-        pesel: row.pesel,
-      });
-      const parentPesel =
-        billingType === "company"
-          ? String(row.nip ?? "").trim()
-          : String(row.pesel ?? "").trim();
 
       console.log(`\nUmowa ${row.id} — ${parentFullName} (${row.signed_at.toISOString()})`);
 
@@ -99,9 +82,7 @@ async function main(): Promise<void> {
       });
 
       const keys = await storeSignedContractPdfsInR2({
-        schoolId: row.school_id,
-        parentFullName,
-        parentPesel,
+        parentUserId: row.parent_id,
         signedAt: row.signed_at,
         pdfFiles,
       });

@@ -1,4 +1,10 @@
-import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 
 import type { ContractPdfFile } from "@/lib/contract-pdf";
 
@@ -9,17 +15,20 @@ type R2Config = {
   bucketName: string;
 };
 
+/** Domyślny bucket dokumentów (standard) — nadpisz przez `R2_BUCKET_NAME`. */
+export const DEFAULT_R2_BUCKET_NAME = "harryenglish-v2-files";
+
 function getR2Config(): R2Config {
   const accountId = process.env.R2_ACCOUNT_ID?.trim();
   const accessKeyId = process.env.R2_ACCESS_KEY_ID?.trim();
   const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY?.trim();
-  const bucketName = process.env.R2_BUCKET_NAME?.trim();
+  const bucketName =
+    process.env.R2_BUCKET_NAME?.trim() || DEFAULT_R2_BUCKET_NAME;
 
   const missing = [
     !accountId && "R2_ACCOUNT_ID",
     !accessKeyId && "R2_ACCESS_KEY_ID",
     !secretAccessKey && "R2_SECRET_ACCESS_KEY",
-    !bucketName && "R2_BUCKET_NAME",
   ].filter(Boolean);
 
   if (missing.length > 0) {
@@ -32,7 +41,7 @@ function getR2Config(): R2Config {
     accountId: accountId!,
     accessKeyId: accessKeyId!,
     secretAccessKey: secretAccessKey!,
-    bucketName: bucketName!,
+    bucketName,
   };
 }
 
@@ -47,7 +56,7 @@ function getR2Client(config: R2Config): S3Client {
         accessKeyId: config.accessKeyId,
         secretAccessKey: config.secretAccessKey,
       },
-      // AWS SDK 3.729+ wysyła checksumy domyślnie — R2 ich nie obsługuje.
+      maxAttempts: 1,
       requestChecksumCalculation: "WHEN_REQUIRED",
       responseChecksumValidation: "WHEN_REQUIRED",
     });
@@ -55,34 +64,97 @@ function getR2Client(config: R2Config): S3Client {
   return cachedClient;
 }
 
-function slugPathSegment(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\w.-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 120);
+export type DocumentKind = "umowy" | "faktury";
+
+/**
+ * `{parentUserId}/{year}/umowy` lub `{parentUserId}/{year}/faktury`
+ * — folder klienta = `users.id` rodzica.
+ */
+export function buildClientDocumentR2Prefix(params: {
+  parentUserId: string;
+  year: number;
+  kind: DocumentKind;
+}): string {
+  const parentUserId = params.parentUserId.trim();
+  if (!parentUserId) throw new Error("Brak parentUserId do ścieżki R2");
+  if (!Number.isInteger(params.year) || params.year < 2000 || params.year > 2100) {
+    throw new Error(`Nieprawidłowy rok folderu R2: ${params.year}`);
+  }
+  return `${parentUserId}/${params.year}/${params.kind}`;
 }
 
-/** `{school_id}/dokumenty/{Imie-Nazwisko-PESEL}/umowa/{rok}` */
+/** `{parentUserId}/{year}/umowy` */
 export function buildSignedContractR2Prefix(params: {
-  schoolId: string;
-  parentFullName: string;
-  parentPesel: string;
+  parentUserId: string;
   signedAt: Date;
 }): string {
-  const year = params.signedAt.getFullYear();
-  const nameSlug = slugPathSegment(params.parentFullName);
-  const peselSlug = slugPathSegment(params.parentPesel);
-  const parentFolder = peselSlug ? `${nameSlug}-${peselSlug}` : nameSlug;
-  return `${params.schoolId}/dokumenty/${parentFolder}/umowa/${year}`;
+  return buildClientDocumentR2Prefix({
+    parentUserId: params.parentUserId,
+    year: params.signedAt.getFullYear(),
+    kind: "umowy",
+  });
+}
+
+/** `{parentUserId}/{year}/faktury` */
+export function buildInvoiceR2Prefix(params: {
+  parentUserId: string;
+  issuedAt: Date;
+}): string {
+  return buildClientDocumentR2Prefix({
+    parentUserId: params.parentUserId,
+    year: params.issuedAt.getFullYear(),
+    kind: "faktury",
+  });
+}
+
+/** Czy klucz R2 należy do folderu danego rodzica (umowy lub faktury). */
+export function isParentDokumentyKeyAllowed(params: {
+  key: string;
+  parentUserId: string;
+  kind?: DocumentKind;
+}): boolean {
+  const parentUserId = params.parentUserId.trim();
+  if (!parentUserId || !params.key.endsWith(".pdf")) return false;
+  if (params.key.includes("..")) return false;
+
+  const prefix = `${parentUserId}/`;
+  if (!params.key.startsWith(prefix)) return false;
+
+  // {userId}/{year}/umowy|faktury/{file}.pdf
+  const rest = params.key.slice(prefix.length);
+  const m = rest.match(/^(\d{4})\/(umowy|faktury)\/[^/]+\.pdf$/i);
+  if (!m) return false;
+  if (params.kind && m[2].toLowerCase() !== params.kind) return false;
+  return true;
+}
+
+export async function storeInvoicePdfInR2(params: {
+  parentUserId: string;
+  issuedAt: Date;
+  filename: string;
+  content: Buffer;
+}): Promise<string> {
+  const config = getR2Config();
+  const client = getR2Client(config);
+  const prefix = buildInvoiceR2Prefix(params);
+  const key = `${prefix}/${params.filename}`;
+
+  console.info(`[R2] PUT bucket=${config.bucketName} key=${key}`);
+  await client.send(
+    new PutObjectCommand({
+      Bucket: config.bucketName,
+      Key: key,
+      Body: params.content,
+      ContentType: "application/pdf",
+      ContentLength: params.content.length,
+    })
+  );
+
+  return key;
 }
 
 export async function storeSignedContractPdfsInR2(params: {
-  schoolId: string;
-  parentFullName: string;
-  parentPesel: string;
+  parentUserId: string;
   signedAt: Date;
   pdfFiles: ContractPdfFile[];
 }): Promise<string[]> {
@@ -93,6 +165,7 @@ export async function storeSignedContractPdfsInR2(params: {
 
   for (const file of params.pdfFiles) {
     const key = `${prefix}/${file.filename}`;
+    console.info(`[R2] PUT bucket=${config.bucketName} key=${key}`);
     await client.send(
       new PutObjectCommand({
         Bucket: config.bucketName,
@@ -104,10 +177,6 @@ export async function storeSignedContractPdfsInR2(params: {
     );
     uploadedKeys.push(key);
   }
-
-  console.info(
-    `[R2] Zapisano ${uploadedKeys.length} PDF(ów) w ${config.bucketName}: ${uploadedKeys.join(", ")}`
-  );
 
   return uploadedKeys;
 }
@@ -124,6 +193,7 @@ export async function listR2ObjectsUnderPrefix(prefix: string): Promise<R2Stored
   const client = getR2Client(config);
   const normalizedPrefix = prefix.endsWith("/") ? prefix : `${prefix}/`;
 
+  console.info(`[R2] LIST bucket=${config.bucketName} prefix=${normalizedPrefix}`);
   const res = await client.send(
     new ListObjectsV2Command({
       Bucket: config.bucketName,
@@ -145,6 +215,7 @@ export async function getR2ObjectBuffer(key: string): Promise<{ buffer: Buffer; 
   const config = getR2Config();
   const client = getR2Client(config);
 
+  console.info(`[R2] GET bucket=${config.bucketName} key=${key}`);
   const res = await client.send(
     new GetObjectCommand({
       Bucket: config.bucketName,
@@ -164,33 +235,33 @@ export async function getR2ObjectBuffer(key: string): Promise<{ buffer: Buffer; 
   };
 }
 
-export async function listSignedContractPdfsForParent(params: {
-  schoolId: string;
-  parentFullName: string;
-  parentPesel: string;
-}): Promise<R2StoredFile[]> {
+/** Best-effort usunięcie obiektu (np. orphan po rollbacku faktury). */
+export async function deleteR2Object(key: string): Promise<void> {
   const config = getR2Config();
   const client = getR2Client(config);
-
-  const res = await client.send(
-    new ListObjectsV2Command({
+  console.info(`[R2] DELETE bucket=${config.bucketName} key=${key}`);
+  await client.send(
+    new DeleteObjectCommand({
       Bucket: config.bucketName,
-      Prefix: `${params.schoolId}/dokumenty/`,
+      Key: key,
     })
   );
+}
 
-  const nameSlug = slugPathSegment(params.parentFullName);
-  const peselSlug = slugPathSegment(params.parentPesel);
-  const parentFolder = peselSlug ? `${nameSlug}-${peselSlug}` : nameSlug;
-  const folderNeedle = `/dokumenty/${parentFolder}/umowa/`;
+export async function listSignedContractPdfsForParent(params: {
+  parentUserId: string;
+}): Promise<R2StoredFile[]> {
+  const parentUserId = params.parentUserId.trim();
+  if (!parentUserId) return [];
 
-  return (res.Contents ?? [])
-    .filter((obj) => obj.Key?.includes(folderNeedle) && obj.Key.endsWith(".pdf"))
-    .map((obj) => ({
-      key: obj.Key!,
-      filename: obj.Key!.split("/").pop() ?? obj.Key!,
-      size: obj.Size ?? null,
-      lastModified: obj.LastModified ? obj.LastModified.toISOString() : null,
-    }))
+  const files = await listR2ObjectsUnderPrefix(`${parentUserId}/`);
+  return files
+    .filter((file) =>
+      isParentDokumentyKeyAllowed({
+        key: file.key,
+        parentUserId,
+        kind: "umowy",
+      })
+    )
     .sort((a, b) => (b.lastModified ?? "").localeCompare(a.lastModified ?? ""));
 }

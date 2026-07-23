@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getParentProfileByUserId, getUserById } from "@/lib/db";
 import { requireParentContext } from "@/lib/parent-portal-auth";
-import { getR2ObjectBuffer } from "@/lib/r2-storage";
+import { getR2ObjectBuffer, isParentDokumentyKeyAllowed } from "@/lib/r2-storage";
 
 export async function GET(request: NextRequest) {
   const auth = await requireParentContext(request);
@@ -12,18 +11,15 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ message: "Brak lub nieprawidłowy klucz pliku" }, { status: 400 });
   }
 
-  const { parentId, schoolId } = auth.ctx;
+  const { parentId } = auth.ctx;
 
   try {
-    const [user, profile] = await Promise.all([
-      getUserById(parentId),
-      getParentProfileByUserId(parentId),
-    ]);
-    if (!user || !profile?.pesel) {
-      return NextResponse.json({ message: "Brak dostępu do dokumentów" }, { status: 403 });
-    }
-
-    if (!key.startsWith(`${schoolId}/dokumenty/`)) {
+    if (
+      !isParentDokumentyKeyAllowed({
+        key,
+        parentUserId: parentId,
+      })
+    ) {
       return NextResponse.json({ message: "Brak dostępu do pliku" }, { status: 403 });
     }
 

@@ -1,4 +1,4 @@
-import { randomUUID } from "crypto";
+﻿import { randomUUID } from "crypto";
 import {
   Pool,
   type PoolClient,
@@ -1473,6 +1473,31 @@ export async function runPgTransaction<T>(work: (client: PoolClient) => Promise<
   } catch (e) {
     await client.query("ROLLBACK");
     throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Sesyjny advisory lock (para hashtext) — blokuje równoległe wykonanie tej samej
+ * operacji na innych połączeniach puli (np. cron + ręczne generowanie faktury).
+ */
+export async function withPgAdvisoryLock<T>(
+  namespace: string,
+  key: string,
+  work: () => Promise<T>
+): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query(`SELECT pg_advisory_lock(hashtext($1), hashtext($2))`, [namespace, key]);
+    try {
+      return await work();
+    } finally {
+      await client.query(`SELECT pg_advisory_unlock(hashtext($1), hashtext($2))`, [
+        namespace,
+        key,
+      ]);
+    }
   } finally {
     client.release();
   }

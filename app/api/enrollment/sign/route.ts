@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { getParentProfileByUserId, getRegistrationSchoolId, queryDb } from "@/lib/db";
+import { getRegistrationSchoolId, queryDb } from "@/lib/db";
 
 import { sendSignedContractConfirmationEmails } from "@/lib/email";
 
@@ -21,9 +21,16 @@ import { buildSignedContractPdfFiles } from "@/lib/contract-pdf";
 import { formatPersonName } from "@/lib/format-person-name";
 
 import { enrollChildInGroup, syncParentUserAccessLevel } from "@/lib/enrollment-sync";
-import { resolveBillingTypeFromProfile } from "@/lib/parent-contract-profile";
+import {
+  fetchParentEnrollmentChildren,
+  finalizeContractPricingAtSign,
+  findNextQueuedChildWithoutContract,
+} from "@/lib/parent-contract";
 import { storeSignedContractPdfsInR2 } from "@/lib/r2-storage";
-import { createContractYearlyInvoice } from "@/lib/invoicing";
+import {
+  createContractMonthlyInvoice,
+  createContractYearlyInvoice,
+} from "@/lib/invoicing";
 
 /** PDF (Chromium) + R2 + mail — wymaga więcej czasu niż domyślne 10 s na Vercel. */
 export const maxDuration = 60;
@@ -95,14 +102,14 @@ export async function POST(request: NextRequest) {
       content_html: string;
       payment_type: string | null;
       school_year_id: string | null;
+      child_id: string | null;
     }>(
-      `SELECT c.id, c.content_html, c.payment_type, c.school_year_id
+      `SELECT c.id, c.content_html, c.payment_type, c.school_year_id, c.child_id
        FROM contracts c
        WHERE c.parent_id = $1
          AND c.school_id = $2
-         AND c.child_id IS NULL
          AND c.status = 'SENT'
-       ORDER BY c.created_at DESC
+       ORDER BY c.created_at ASC
        LIMIT 1`,
       [parentId, SCHOOL_ID]
     );
@@ -242,6 +249,8 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    await finalizeContractPricingAtSign(contract.id, signedAt);
+
     await queryDb(
 
       `UPDATE contracts
@@ -325,9 +334,21 @@ export async function POST(request: NextRequest) {
 
     if (contract.payment_type === "YEARLY") {
       try {
-        await createContractYearlyInvoice(contract.id);
+        const yearly = await createContractYearlyInvoice(contract.id);
+        if (!yearly.ok) {
+          console.error("Yearly invoice on sign failed:", yearly.message);
+        }
       } catch (invoiceErr) {
         console.error("Yearly invoice on sign error:", invoiceErr);
+      }
+    } else if (contract.payment_type === "MONTHLY") {
+      try {
+        const monthly = await createContractMonthlyInvoice(contract.id, signedAt);
+        if (!monthly.ok) {
+          console.error("Monthly invoice on sign failed:", monthly.message);
+        }
+      } catch (invoiceErr) {
+        console.error("Monthly invoice on sign error:", invoiceErr);
       }
     }
 
@@ -339,18 +360,9 @@ export async function POST(request: NextRequest) {
         childAttachments: signedChildAttachments,
       });
 
-      const profile = await getParentProfileByUserId(parentId);
-      const billingType = resolveBillingTypeFromProfile(profile);
-      const parentPesel =
-        billingType === "company"
-          ? String(profile?.nip ?? "").trim()
-          : String(profile?.pesel ?? "").trim();
-
       try {
         await storeSignedContractPdfsInR2({
-          schoolId: SCHOOL_ID,
-          parentFullName,
-          parentPesel,
+          parentUserId: parentId,
           signedAt,
           pdfFiles,
         });
@@ -376,12 +388,30 @@ export async function POST(request: NextRequest) {
 
 
 
+    const enrollmentChildren = await fetchParentEnrollmentChildren(parentId, SCHOOL_ID);
+    const acceptedQueue = enrollmentChildren
+      .filter((c) => String(c.access_level).toUpperCase() === "ACCEPTED")
+      .map((c) => c.request_id);
+    const nextChild = await findNextQueuedChildWithoutContract(
+      parentId,
+      SCHOOL_ID,
+      enrollmentChildren,
+      acceptedQueue
+    );
+
     return NextResponse.json({
-
-      message: "Umowa podpisana",
-
+      message: nextChild
+        ? "Umowa podpisana. Możesz teraz wygenerować umowę dla kolejnego dziecka."
+        : "Umowa podpisana",
       accessLevel: "ACTIVE",
-
+      nextChildToContract: nextChild
+        ? {
+            child_id: nextChild.child_id,
+            request_id: nextChild.request_id,
+            first_name: nextChild.first_name,
+            last_name: nextChild.last_name,
+          }
+        : null,
     });
 
   } catch (error) {
