@@ -87,7 +87,7 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
   return (
     <div className="space-y-4 pb-20 md:pb-4">
       <div className="rounded-3xl border border-emerald-100 bg-white">
-        <nav className="no-scrollbar overflow-x-auto border-b border-emerald-100">
+        <nav className="no-scrollbar overflow-x-auto">
           <div className="flex min-w-max gap-2 p-2">
             {topTabs.map((tab) => (
               <button
