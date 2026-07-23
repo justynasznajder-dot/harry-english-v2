@@ -229,7 +229,7 @@ export async function POST(request: NextRequest) {
             parentFirstName: parent.first_name,
             parentLastName: parent.last_name,
             parentEmail,
-            parentPhone: parent.phone ?? null,
+            parentPhone: parent.phone?.trim() || "—",
             rodoConsent: true,
             children: enrollmentChildren,
             dbSaveOk: true,
