@@ -1,6 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import {
+  formatSchoolDateShort,
+  formatSchoolTime,
+} from '@/lib/school-timezone';
+
 type DashboardData = {
   counters: {
     pendingEnrollments: number;
@@ -89,15 +94,11 @@ type ConflictRow = {
 };
 
 function formatDt(value: string): string {
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value;
-  return d.toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short', timeZone: 'Europe/Warsaw' });
+  return formatSchoolDateShort(value);
 }
 
 function formatTime(value: string): string {
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value;
-  return d.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Warsaw' });
+  return formatSchoolTime(value);
 }
 
 function LessonListItem({

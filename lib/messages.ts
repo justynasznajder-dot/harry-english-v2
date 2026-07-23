@@ -398,21 +398,8 @@ export async function canMessageRecipient(params: {
   }
 
   if (params.senderRole === "PARENT") {
-    if (recipient.role === "MANAGER") {
-      return recipient.school_id === params.schoolId;
-    }
-    if (recipient.role !== "TEACHER") return false;
-    const r = await queryDb<{ ok: number }>(
-      `SELECT 1 AS ok
-       FROM children c
-       JOIN group_students gs ON gs.child_id = c.id AND gs.left_at IS NULL
-       JOIN groups g ON g.id = gs.group_id AND g.school_id = $2
-       JOIN school_years sy ON sy.id = g.school_year_id AND sy.active = TRUE
-       WHERE c.parent_id = $1 AND c.school_id = $2 AND c.active = TRUE AND g.teacher_id = $3
-       LIMIT 1`,
-      [params.senderId, params.schoolId, params.recipientId]
-    );
-    return (r.rowCount ?? 0) > 0;
+    // Tymczasowo: rodzic tylko do zarządcy (nauczyciele wrócą później).
+    return recipient.role === "MANAGER" && recipient.school_id === params.schoolId;
   }
 
   return false;
@@ -477,15 +464,9 @@ export async function fetchRecipientsForRole(params: {
     return { parents, teachers: [] };
   }
   if (params.role === "PARENT") {
-    const [managers, teachers] = await Promise.all([
-      querySchoolManagers(params.schoolId, params.filters.search),
-      queryParentTeachers(params.userId, params.schoolId, params.filters.search),
-    ]);
-    const managerIds = new Set(managers.map((m) => m.id));
-    return {
-      parents: [],
-      teachers: [...managers, ...teachers.filter((t) => !managerIds.has(t.id))],
-    };
+    // Tymczasowo: rodzic widzi tylko zarządców (queryParentTeachers zostaje na później).
+    const managers = await querySchoolManagers(params.schoolId, params.filters.search);
+    return { parents: [], teachers: managers };
   }
   return queryManagerRecipients(params.schoolId, params.filters);
 }

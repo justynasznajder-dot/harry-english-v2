@@ -2,6 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react';
 import ComposeEmailRecipientsColumn from '@/src/components/messages/ComposeEmailRecipientsColumn';
+import {
+  applyTemplateValues,
+  extractTemplatePlaceholders,
+  getTemplateFieldMeta,
+} from '@/lib/message-templates';
 
 export type ComposePanelMode = 'manager' | 'teacher' | 'parent';
 export type ComposeSection = 'parents' | 'teachers' | 'email';
@@ -284,7 +289,10 @@ export interface ComposeMessageModalProps {
   composeContent: string;
   onComposeContentChange: (value: string) => void;
   sendingCompose: boolean;
-  onSend: () => void;
+  onSend: (meta?: {
+    templateKey?: string;
+    templateFieldValues?: Record<string, string>;
+  }) => void;
   onClearForm: () => void;
   composeSection?: ComposeSection;
   onComposeSectionChange?: (section: ComposeSection) => void;
@@ -297,12 +305,83 @@ export interface ComposeMessageModalProps {
   onRemoveExternalEmail?: (email: string) => void;
   messageTemplates?: Array<{ key: string; label: string; subject: string; content: string }>;
   onApplyTemplate?: (subject: string, content: string) => void;
+  /** Aktywne dzieci rodzica — pole szablonu `dziecko` jako select. */
+  parentChildren?: Array<{ id: string; firstName: string; lastName: string }>;
   filterRenewalNoResponse?: boolean;
   onFilterRenewalNoResponseChange?: (value: boolean) => void;
 }
 
 export default function ComposeMessageModal(props: ComposeMessageModalProps) {
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState('');
+  const [templateFieldValues, setTemplateFieldValues] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!props.open) {
+      setSelectedTemplateKey('');
+      setTemplateFieldValues({});
+    }
+  }, [props.open]);
+
   if (!props.open) return null;
+
+  const selectedTemplate =
+    props.messageTemplates?.find((t) => t.key === selectedTemplateKey) ?? null;
+  const templateFields = selectedTemplate
+    ? extractTemplatePlaceholders(selectedTemplate.subject, selectedTemplate.content)
+    : [];
+  const templateFieldsIncomplete =
+    selectedTemplate != null &&
+    templateFields.some((field) => !(templateFieldValues[field]?.trim()));
+
+  const pushTemplateIntoCompose = (
+    template: { subject: string; content: string },
+    values: Record<string, string>
+  ) => {
+    if (!props.onApplyTemplate) return;
+    const displayValues = { ...values };
+    if (displayValues.dziecko) {
+      const child = (props.parentChildren ?? []).find((c) => c.id === displayValues.dziecko);
+      if (child) {
+        displayValues.dziecko = `${child.firstName} ${child.lastName}`.trim();
+      }
+    }
+    const filled = applyTemplateValues(template, displayValues);
+    props.onApplyTemplate(filled.subject, filled.content);
+  };
+
+  const handleTemplateSelect = (key: string) => {
+    setSelectedTemplateKey(key);
+    if (!key) {
+      setTemplateFieldValues({});
+      return;
+    }
+    const tpl = props.messageTemplates?.find((t) => t.key === key);
+    if (!tpl || !props.onApplyTemplate) return;
+    const emptyValues: Record<string, string> = {};
+    const children = props.parentChildren ?? [];
+    for (const field of extractTemplatePlaceholders(tpl.subject, tpl.content)) {
+      if (field === 'dziecko' && children.length === 1) {
+        emptyValues[field] = children[0].id;
+      } else {
+        emptyValues[field] = '';
+      }
+    }
+    setTemplateFieldValues(emptyValues);
+    pushTemplateIntoCompose(tpl, emptyValues);
+  };
+
+  const handleTemplateFieldChange = (field: string, value: string) => {
+    if (!selectedTemplate) return;
+    const next = { ...templateFieldValues, [field]: value };
+    setTemplateFieldValues(next);
+    pushTemplateIntoCompose(selectedTemplate, next);
+  };
+
+  const handleClearForm = () => {
+    setSelectedTemplateKey('');
+    setTemplateFieldValues({});
+    props.onClearForm();
+  };
 
   const adresatIds = props.canPickIndividuals
     ? props.selectedRecipientIds
@@ -317,7 +396,7 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
 
   const searchPlaceholder =
     props.mode === 'parent'
-      ? 'Szukaj zarządcy lub nauczyciela po imieniu, nazwisku lub e-mailu…'
+      ? 'Szukaj zarządcy po imieniu, nazwisku lub e-mailu…'
       : props.mode === 'teacher'
         ? 'Szukaj rodzica po imieniu, nazwisku lub e-mailu…'
         : isTeachersAudience
@@ -481,23 +560,29 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
               </div>
             )}
 
-            <p className="mb-1.5 shrink-0 text-sm font-semibold text-zinc-800">Wyszukaj adresatów</p>
-            <input
-              type="search"
-              value={props.recipientSearch}
-              onChange={(e) => props.onRecipientSearchChange(e.target.value)}
-              placeholder={searchPlaceholder}
-              className={`mb-2 w-full shrink-0 ${COMPOSE_INPUT}`}
-            />
+            {props.mode === 'parent' ? (
+              <p className="mb-1.5 shrink-0 text-sm font-semibold text-zinc-800">Adresaci</p>
+            ) : (
+              <>
+                <p className="mb-1.5 shrink-0 text-sm font-semibold text-zinc-800">Wyszukaj adresatów</p>
+                <input
+                  type="search"
+                  value={props.recipientSearch}
+                  onChange={(e) => props.onRecipientSearchChange(e.target.value)}
+                  placeholder={searchPlaceholder}
+                  className={`mb-2 w-full shrink-0 ${COMPOSE_INPUT}`}
+                />
+              </>
+            )}
             <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-zinc-200 bg-white">
               {props.recipientsLoading ? (
                 <p className="px-3 py-4 text-xs text-zinc-500">Ładowanie listy…</p>
               ) : props.recipients.length === 0 ? (
                 <p className="px-3 py-4 text-xs text-zinc-500">
-                  {props.recipientSearchDebounced
-                    ? 'Brak wyników — zmień wyszukiwanie'
-                    : props.mode === 'parent'
-                      ? 'Brak dostępnych odbiorców.'
+                  {props.mode === 'parent'
+                    ? 'Brak dostępnych odbiorców.'
+                    : props.recipientSearchDebounced
+                      ? 'Brak wyników — zmień wyszukiwanie'
                       : props.mode === 'teacher'
                         ? 'Brak rodziców w Twoich grupach. Użyj filtrów lub poczekaj na przypisanie uczniów.'
                         : isTeachersAudience
@@ -584,115 +669,174 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
 
           {/* Prawa kolumna — treść wiadomości */}
           <div className="flex min-h-0 flex-col overflow-hidden p-3 md:p-4">
-            {props.messageTemplates && props.messageTemplates.length > 0 && props.onApplyTemplate && (
-              <div className="mb-2 shrink-0">
-                <label htmlFor="compose-template" className="mb-1 block text-xs font-semibold text-zinc-600">
-                  Szablon wiadomości
-                </label>
-                <select
-                  id="compose-template"
-                  defaultValue=""
-                  onChange={(e) => {
-                    const key = e.target.value;
-                    if (!key) return;
-                    const tpl = props.messageTemplates!.find((t) => t.key === key);
-                    if (tpl) props.onApplyTemplate!(tpl.subject, tpl.content);
-                    e.target.value = '';
-                  }}
-                  className={`w-full ${COMPOSE_INPUT}`}
-                >
-                  <option value="">Wybierz szablon…</option>
-                  {props.messageTemplates.map((t) => (
-                    <option key={t.key} value={t.key}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-            <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden md:gap-3">
-              {!isEmailSection && (
-              <div className="shrink-0">
-                <label className="mb-1 block text-sm font-medium text-zinc-800">
-                  Adresat / Adresaci
-                </label>
-                <div className="max-h-20 overflow-y-auto rounded-xl border border-zinc-300 bg-zinc-50/50 px-3 py-2 md:max-h-24">
-                  {adresatIds.length === 0 ? (
-                    <p className="text-sm text-zinc-400">
-                      Wybierz odbiorców z listy po lewej stronie
-                    </p>
-                  ) : (
-                    <div className="flex flex-wrap gap-1.5">
-                      {adresatIds.map((id) => (
-                        <span
-                          key={id}
-                          className="inline-flex max-w-full items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-900"
-                        >
-                          <span className="truncate">
-                            {props.selectedRecipientLabels[id] ?? id}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (props.canPickIndividuals) {
-                                props.onRemoveRecipient(id);
-                              } else {
-                                props.onClearSingleRecipient();
-                              }
-                            }}
-                            className="shrink-0 font-bold leading-none hover:text-emerald-700"
-                            aria-label="Usuń odbiorcę"
-                          >
-                            ×
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                  )}
+            <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto md:gap-3">
+              {props.messageTemplates && props.messageTemplates.length > 0 && props.onApplyTemplate && (
+                <div className="shrink-0">
+                  <label htmlFor="compose-template" className="mb-1 block text-sm font-medium text-zinc-800">
+                    Szablon wiadomości
+                  </label>
+                  <select
+                    id="compose-template"
+                    value={selectedTemplateKey}
+                    onChange={(e) => handleTemplateSelect(e.target.value)}
+                    className={`w-full ${COMPOSE_INPUT}`}
+                  >
+                    <option value="">Bez szablonu — napisz własną wiadomość</option>
+                    {props.messageTemplates.map((t) => (
+                      <option key={t.key} value={t.key}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              </div>
               )}
 
-              <div className="shrink-0">
-                <label htmlFor="compose-subject" className="mb-1 block text-sm font-medium text-zinc-800">
-                  Temat
-                </label>
-                <input
-                  id="compose-subject"
-                  type="text"
-                  value={props.composeSubject}
-                  onChange={(e) => props.onComposeSubjectChange(e.target.value)}
-                  className={`w-full ${COMPOSE_INPUT}`}
-                />
-              </div>
+              {!isEmailSection && (
+                <div className="shrink-0">
+                  <label className="mb-1 block text-sm font-medium text-zinc-800">
+                    Adresat / Adresaci
+                  </label>
+                  <div className="max-h-20 overflow-y-auto rounded-xl border border-zinc-300 bg-zinc-50/50 px-3 py-2 md:max-h-24">
+                    {adresatIds.length === 0 ? (
+                      <p className="text-sm text-zinc-400">
+                        Wybierz odbiorców z listy po lewej stronie
+                      </p>
+                    ) : (
+                      <div className="flex flex-wrap gap-1.5">
+                        {adresatIds.map((id) => (
+                          <span
+                            key={id}
+                            className="inline-flex max-w-full items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-900"
+                          >
+                            <span className="truncate">
+                              {props.selectedRecipientLabels[id] ?? id}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (props.canPickIndividuals) {
+                                  props.onRemoveRecipient(id);
+                                } else {
+                                  props.onClearSingleRecipient();
+                                }
+                              }}
+                              className="shrink-0 font-bold leading-none hover:text-emerald-700"
+                              aria-label="Usuń odbiorcę"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
-              <div className="flex min-h-0 flex-1 flex-col">
-                <label htmlFor="compose-body" className="mb-1 block shrink-0 text-sm font-medium text-zinc-800">
-                  Treść wiadomości
-                </label>
-                <textarea
-                  id="compose-body"
-                  value={props.composeContent}
-                  onChange={(e) => props.onComposeContentChange(e.target.value)}
-                  className={`min-h-0 w-full flex-1 resize-none ${COMPOSE_INPUT}`}
-                  placeholder="Napisz wiadomość…"
-                />
-              </div>
+              {selectedTemplate && templateFields.length > 0 ? (
+                <div className="flex min-h-0 flex-1 flex-col gap-3">
+                  {templateFields.map((field) => {
+                    const meta = getTemplateFieldMeta(field);
+                    const fieldId = `compose-tpl-${field}`;
+                    const childOptions = props.parentChildren ?? [];
+                    const useChildSelect = field === 'dziecko' && childOptions.length > 0;
+
+                    return (
+                      <label key={field} htmlFor={fieldId} className="block shrink-0 text-sm">
+                        <span className="mb-1 block font-medium text-zinc-800">{meta.label}</span>
+                        {useChildSelect ? (
+                          <select
+                            id={fieldId}
+                            value={templateFieldValues[field] ?? ''}
+                            onChange={(e) => handleTemplateFieldChange(field, e.target.value)}
+                            className={`w-full ${COMPOSE_INPUT}`}
+                          >
+                            <option value="">Wybierz dziecko…</option>
+                            {childOptions.map((child) => {
+                              const name = `${child.firstName} ${child.lastName}`.trim();
+                              return (
+                                <option key={child.id} value={child.id}>
+                                  {name}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        ) : meta.multiline ? (
+                          <textarea
+                            id={fieldId}
+                            rows={4}
+                            value={templateFieldValues[field] ?? ''}
+                            onChange={(e) => handleTemplateFieldChange(field, e.target.value)}
+                            placeholder={meta.placeholder}
+                            className={`w-full ${COMPOSE_INPUT}`}
+                          />
+                        ) : (
+                          <input
+                            id={fieldId}
+                            type="text"
+                            value={templateFieldValues[field] ?? ''}
+                            onChange={(e) => handleTemplateFieldChange(field, e.target.value)}
+                            placeholder={meta.placeholder}
+                            className={`w-full ${COMPOSE_INPUT}`}
+                          />
+                        )}
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : (
+                <>
+                  <div className="shrink-0">
+                    <label htmlFor="compose-subject" className="mb-1 block text-sm font-medium text-zinc-800">
+                      Temat
+                    </label>
+                    <input
+                      id="compose-subject"
+                      type="text"
+                      value={props.composeSubject}
+                      onChange={(e) => props.onComposeSubjectChange(e.target.value)}
+                      className={`w-full ${COMPOSE_INPUT}`}
+                    />
+                  </div>
+
+                  <div className="flex min-h-0 flex-1 flex-col">
+                    <label htmlFor="compose-body" className="mb-1 block shrink-0 text-sm font-medium text-zinc-800">
+                      Treść wiadomości
+                    </label>
+                    <textarea
+                      id="compose-body"
+                      value={props.composeContent}
+                      onChange={(e) => props.onComposeContentChange(e.target.value)}
+                      className={`min-h-0 w-full flex-1 resize-none ${COMPOSE_INPUT}`}
+                      placeholder="Napisz wiadomość…"
+                    />
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="mt-2 flex shrink-0 flex-col gap-2 border-t border-zinc-200 pt-2 sm:flex-row md:mt-3">
               <button
                 type="button"
                 disabled={props.sendingCompose}
-                onClick={props.onClearForm}
+                onClick={handleClearForm}
                 className="w-full rounded-full border border-zinc-300 bg-white py-2 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-50 disabled:opacity-50 sm:w-auto sm:px-5"
               >
                 Wyczyść formularz
               </button>
               <button
                 type="button"
-                disabled={props.sendingCompose}
-                onClick={props.onSend}
+                disabled={props.sendingCompose || templateFieldsIncomplete}
+                onClick={() =>
+                  props.onSend(
+                    selectedTemplateKey
+                      ? {
+                          templateKey: selectedTemplateKey,
+                          templateFieldValues,
+                        }
+                      : undefined
+                  )
+                }
                 className="w-full flex-1 rounded-full bg-[#0f6e56] py-2 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:opacity-50"
               >
                 {props.sendingCompose

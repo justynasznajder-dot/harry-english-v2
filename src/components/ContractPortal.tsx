@@ -18,9 +18,19 @@ interface ContractDocument {
   signed_at?: string | null;
 }
 
+export type ContractSignResult = {
+  message?: string;
+  nextChildToContract?: {
+    child_id: string;
+    request_id: string;
+    first_name: string;
+    last_name: string;
+  } | null;
+};
+
 interface ContractPortalProps {
   contract: ContractDocument | null;
-  onSigned?: () => void;
+  onSigned?: (result?: ContractSignResult) => void;
   readOnly?: boolean;
 }
 
@@ -147,8 +157,9 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
     setBusy(true);
     try {
       const res = await fetch('/api/enrollment/sign', { method: 'POST' });
+      const data = (await res.json().catch(() => ({}))) as ContractSignResult;
       if (!res.ok) throw new Error('Podpis nie powiódł się');
-      onSigned?.();
+      onSigned?.(data);
     } catch {
       alert('Nie udało się podpisać umowy.');
     } finally {

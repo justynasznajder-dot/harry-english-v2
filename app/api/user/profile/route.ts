@@ -4,8 +4,11 @@ import {
   getParentProfileByUserId,
   getUserById,
   parentHasGeneratedContract,
+  updateUser,
   upsertParentProfileForUser,
 } from "@/lib/db";
+import { formatPersonName } from "@/lib/format-person-name";
+import { normalizePolishPhone } from "@/lib/phone";
 import {
   isParentContractProfileComplete,
   resolveBillingTypeFromProfile,
@@ -73,6 +76,8 @@ export async function GET(_request: NextRequest) {
       user: {
         firstName: user.first_name,
         lastName: user.last_name,
+        phone: user.phone,
+        clientNumber: user.client_number,
       },
     });
   } catch (error) {
@@ -106,16 +111,7 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    if (await parentHasGeneratedContract(userId)) {
-      return NextResponse.json(
-        {
-          message:
-            "Nie można zmienić danych do umowy — umowa została już wygenerowana dla co najmniej jednego dziecka.",
-        },
-        { status: 409 }
-      );
-    }
-
+    // Podpisane umowy mają zamrożoną treść — zmiana profilu dotyczy przyszłych dokumentów/faktur.
     const body = await request.json();
     const billingType = String(body.billingType ?? body.billing_type ?? "private")
       .trim()
@@ -123,6 +119,19 @@ export async function PUT(request: NextRequest) {
     if (billingType !== "private" && billingType !== "company") {
       return NextResponse.json({ message: "Nieprawidłowy typ rozliczenia" }, { status: 400 });
     }
+
+    const firstName = String(body.firstName ?? body.first_name ?? user.first_name).trim();
+    const lastName = String(body.lastName ?? body.last_name ?? user.last_name).trim();
+    if (!firstName || !lastName) {
+      return NextResponse.json(
+        { message: "Imię i nazwisko rodzica są wymagane" },
+        { status: 400 }
+      );
+    }
+
+    const phoneRaw = body.phone !== undefined ? String(body.phone ?? "").trim() : user.phone;
+    const phone =
+      phoneRaw && phoneRaw.length > 0 ? normalizePolishPhone(phoneRaw) : null;
 
     const address = String(body.address ?? "").trim();
     const city = String(body.city ?? "").trim();
@@ -144,6 +153,12 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ message: validationError }, { status: 400 });
     }
 
+    await updateUser(userId, {
+      first_name: formatPersonName(firstName),
+      last_name: formatPersonName(lastName),
+      phone,
+    });
+
     const profile = await upsertParentProfileForUser({
       userId,
       schoolId: user.school_id,
@@ -159,7 +174,15 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ message: "Nie udało się zapisać profilu" }, { status: 500 });
     }
 
-    return NextResponse.json({ profile: profileToJson(profile), profileLocked: false });
+    return NextResponse.json({
+      profile: profileToJson(profile),
+      profileLocked: await parentHasGeneratedContract(userId),
+      user: {
+        firstName: formatPersonName(firstName),
+        lastName: formatPersonName(lastName),
+        phone,
+      },
+    });
   } catch (error) {
     console.error("PUT /api/user/profile:", error);
     return NextResponse.json({ message: "Błąd zapisu profilu" }, { status: 500 });

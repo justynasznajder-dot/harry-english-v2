@@ -23,6 +23,13 @@ export function generateContractHtml(
 }
 
 import { paymentTypePeriodLabel } from "@/lib/payment-labels";
+import {
+  buildAnnexContractNumber,
+  buildBaseContractNumber,
+  isAnnexContractNumber,
+} from "@/lib/client-numbers";
+
+export { buildAnnexContractNumber, buildBaseContractNumber };
 
 export function formatPaymentTypeLabel(paymentType: string | null | undefined): string {
   return paymentTypePeriodLabel(String(paymentType ?? ""));
@@ -152,17 +159,31 @@ export function buildParentAddress(
   return `${address}, ${zipCode} ${city}`;
 }
 
-/** Numer umowy: kolejny numer w roku zawarcia, np. 1/2026. */
-export function buildContractNumber(year: number, sequence: number): string {
-  return `${sequence}/${year}`;
+/** Numer umowy bazowej: ChildID/rok lub ChildID/rok/n. */
+export function buildContractNumber(params: {
+  childClientNumber: string;
+  year: number;
+  baseIndex: number;
+}): string {
+  return buildBaseContractNumber(params);
 }
 
-/** Wyciąga numer umowy z wygenerowanego HTML (np. 1/2026; legacy HE/2025/2026/001). */
+/** Wyciąga numer umowy z wygenerowanego HTML (nowy + legacy). */
 export function extractContractNumber(contentHtml: string): string | null {
+  const modernChild = contentHtml.match(
+    /Nr umowy:\s*(?:<[^>]*>\s*)*(\d{5}\/\d+\/\d{4}(?:\/\d+)?(?:\/A\d+)?)/i
+  );
+  if (modernChild?.[1]) return modernChild[1];
+
   const modern = contentHtml.match(
     /Nr umowy:\s*(?:<[^>]*>\s*)*(\d{1,6}\/\d{4})/i
   );
   if (modern?.[1]) return modern[1];
+
+  const attachmentChild = contentHtml.match(
+    /do umowy nr\s*(?:<[^>]*>\s*)*(\d{5}\/\d+\/\d{4}(?:\/\d+)?(?:\/A\d+)?)/i
+  );
+  if (attachmentChild?.[1]) return attachmentChild[1];
 
   const attachment = contentHtml.match(
     /do umowy nr\s*(?:<[^>]*>\s*)*(\d{1,6}\/\d{4})/i
@@ -171,6 +192,19 @@ export function extractContractNumber(contentHtml: string): string | null {
 
   const legacy = contentHtml.match(/HE\/[\d/]+\/\d{3}/);
   return legacy?.[0] ?? null;
+}
+
+/** Kolejny indeks umowy bazowej w danym roku (aneksów nie liczy). */
+export function nextBaseContractIndex(existingBaseNumbers: string[]): number {
+  let max = 0;
+  for (const n of existingBaseNumbers) {
+    if (isAnnexContractNumber(n)) continue;
+    const m = n.match(/\/(\d{4})(?:\/(\d+))?$/);
+    if (!m) continue;
+    const idx = m[2] ? Number(m[2]) : 1;
+    if (Number.isInteger(idx) && idx > max) max = idx;
+  }
+  return max + 1;
 }
 
 export function buildSignedAtLine(signedAt: Date = new Date()): string {

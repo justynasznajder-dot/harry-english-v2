@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { getRegistrationSchoolId, POLISH_DAY_FROM_ST_SQL, queryDb } from "@/lib/db";
+import {
+  getActiveSchoolYear,
+  getRegistrationSchoolId,
+  POLISH_DAY_FROM_ST_SQL,
+  queryDb,
+  syncParentIdentityFromEnrollments,
+} from "@/lib/db";
 
 import { getTokenFromRequest } from "@/lib/auth";
 
@@ -29,6 +35,7 @@ export async function GET(request: NextRequest) {
 
 
   try {
+    const syncedIdentity = await syncParentIdentityFromEnrollments(parentId);
 
     const accessLevelExpr = `UPPER(BTRIM(COALESCE(c.access_level::text, 'NEW')))`;
 
@@ -230,6 +237,11 @@ export async function GET(request: NextRequest) {
 
 
     const parentContract = await fetchParentContractForPortal(parentId, SCHOOL_ID);
+    const activeSchoolYear = await getActiveSchoolYear(SCHOOL_ID);
+    const schoolYearName =
+      activeSchoolYear && typeof activeSchoolYear.name === "string"
+        ? String(activeSchoolYear.name)
+        : null;
 
 
 
@@ -372,6 +384,10 @@ export async function GET(request: NextRequest) {
             }
 
           : null,
+
+      parentIdentity: syncedIdentity,
+
+      schoolYearName,
 
     });
 

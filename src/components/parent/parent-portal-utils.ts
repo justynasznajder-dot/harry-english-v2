@@ -1,15 +1,13 @@
+import {
+  formatSchoolDateTime,
+  SCHOOL_TIMEZONE,
+} from '@/lib/school-timezone';
+
 export function formatLessonDateTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString('pl-PL', {
-    weekday: 'short',
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatSchoolDateTime(iso);
 }
+
+export { SCHOOL_TIMEZONE };
 
 export function formatMonthLabel(ym: string): string {
   const [year, month] = ym.split('-');

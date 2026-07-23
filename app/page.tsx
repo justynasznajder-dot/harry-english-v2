@@ -901,22 +901,44 @@ export default function HomePage() {
           {/* FOOTER */}
           <footer
             id="contact"
-            className="mt-10 flex flex-col items-center justify-center gap-4 border-t border-white/10 py-6 text-xs text-[#e5e7eb]/80 scroll-mt-32"
+            className="mt-10 flex flex-col items-center justify-center border-t border-white/10 py-6 scroll-mt-32"
           >
-            <div className="text-center">
-              <p className="font-semibold">Harry English</p>
-              <p>kontakt@harry-english.pl</p>
-            </div>
-
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center justify-center gap-3">
               <a
-                href="https://www.facebook.com/Zyrafa.Harry"
+                href="https://g.page/r/CXQ-JVaomYm6EBM/review"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="rounded-full border border-white/20 px-3 py-1 transition-colors hover:border-[#ffc94a] hover:text-[#ffc94a]"
+                className="transition-opacity hover:opacity-90"
               >
-                Facebook
+                <img
+                  src="/images/ocen_google1.png"
+                  alt="Oceń nas w Google"
+                  width={116}
+                  height={52}
+                  className="h-[52px] w-auto"
+                />
               </a>
+              <a
+                href="https://www.facebook.com/Zyrafa.Harry/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="transition-opacity hover:opacity-90"
+              >
+                <img
+                  src="/images/facebook_like1.png"
+                  alt="Polub nas na Facebooku"
+                  width={156}
+                  height={52}
+                  className="h-[52px] w-auto"
+                />
+              </a>
+              <img
+                src="/images/KDR.png"
+                alt="Karta Dużej Rodziny"
+                width={56}
+                height={52}
+                className="h-[52px] w-auto"
+              />
             </div>
           </footer>
 

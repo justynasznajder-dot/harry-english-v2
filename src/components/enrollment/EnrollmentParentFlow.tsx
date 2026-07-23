@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ContractPortal from '@/src/components/ContractPortal';
+import ParentAddChildSection from '@/src/components/parent/ParentAddChildSection';
 import RenewalParentFlowSection from '@/src/components/parent/RenewalParentFlowSection';
 import { computeContractPreviewAmount, type ContractPricingContext } from '@/lib/contract-pricing-preview';
 import { resolveChildBaseAmount, sumChildrenBaseAmounts } from '@/lib/enrollment-pricing';
@@ -84,6 +85,9 @@ interface ContractReadiness {
 type ContractPricing = ContractPricingContext;
 
 interface ParentProfileForm {
+  firstName: string;
+  lastName: string;
+  phone: string;
   address: string;
   city: string;
   zipCode: string;
@@ -298,8 +302,13 @@ export default function EnrollmentParentFlow({
   const [cancellingContactId, setCancellingContactId] = useState<string | null>(null);
   const enrollmentActionBusyRef = useRef(false);
   const proposalOrderRef = useRef<string[]>([]);
+  const userInfoRef = useRef(userInfo);
+  userInfoRef.current = userInfo;
   const [flash, setFlash] = useState<Flash | null>(null);
   const [contractProfile, setContractProfile] = useState<ParentProfileForm>({
+    firstName: userInfo.firstName ?? '',
+    lastName: userInfo.lastName ?? '',
+    phone: userInfo.phone?.trim() ?? '',
     address: '',
     city: '',
     zipCode: '',
@@ -324,6 +333,9 @@ export default function EnrollmentParentFlow({
   const [profileComplete, setProfileComplete] = useState(false);
   const [profileLocked, setProfileLocked] = useState(false);
   const [savingContractProfile, setSavingContractProfile] = useState(false);
+  /** Rodzic musi zapisać dane i potwierdzić ich aktualność przed generowaniem umowy. */
+  const [dataConfirmed, setDataConfirmed] = useState(false);
+  const [schoolYearName, setSchoolYearName] = useState<string | null>(null);
   const enrollmentStepsForUser = getEnrollmentStepsForUser(userInfo.complimentaryAccess);
   const currentStepIndex = deriveEnrollmentStepIndex(
     proposals,
@@ -360,6 +372,7 @@ export default function EnrollmentParentFlow({
       const r = await fetch('/api/enrollment/status', { cache: 'no-store', credentials: 'include' });
       if (!r.ok) {
         setProposals([]);
+        setSchoolYearName(null);
         return;
       }
       const data = (await r.json()) as {
@@ -368,8 +381,15 @@ export default function EnrollmentParentFlow({
         contractReadiness?: ContractReadiness;
         contractPricing?: ContractPricing | null;
         enrollmentRequestSummary?: EnrollmentRequestSummary | null;
+        parentIdentity?: {
+          firstName: string;
+          lastName: string;
+          phone: string | null;
+        } | null;
+        schoolYearName?: string | null;
       };
       const incoming = Array.isArray(data.proposals) ? data.proposals : [];
+      setSchoolYearName(data.schoolYearName?.trim() ? data.schoolYearName.trim() : null);
       if (proposalOrderRef.current.length === 0) {
         proposalOrderRef.current = incoming.map((p) => p.request_id);
       } else {
@@ -418,6 +438,30 @@ export default function EnrollmentParentFlow({
         return next;
       });
       setEnrollmentRequestSummary(data.enrollmentRequestSummary ?? null);
+      if (data.parentIdentity) {
+        onUserInfoUpdate({
+          ...userInfoRef.current,
+          firstName: data.parentIdentity.firstName,
+          lastName: data.parentIdentity.lastName,
+          phone: data.parentIdentity.phone,
+        });
+        setContractProfile((prev) => ({
+          ...prev,
+          firstName: data.parentIdentity!.firstName,
+          lastName: data.parentIdentity!.lastName,
+          phone: data.parentIdentity!.phone?.trim() ?? prev.phone,
+        }));
+      } else if (data.enrollmentRequestSummary) {
+        setContractProfile((prev) => ({
+          ...prev,
+          firstName: prev.firstName || data.enrollmentRequestSummary!.parentFirstName,
+          lastName: prev.lastName || data.enrollmentRequestSummary!.parentLastName,
+          phone:
+            prev.phone ||
+            data.enrollmentRequestSummary!.parentPhone?.trim() ||
+            '',
+        }));
+      }
     } catch (err) {
       console.error('Nie udało się pobrać statusu propozycji', err);
       setProposals([]);
@@ -425,7 +469,7 @@ export default function EnrollmentParentFlow({
     } finally {
       setProposalsLoading(false);
     }
-  }, []);
+  }, [onUserInfoUpdate]);
 
   useEffect(() => {
     loadProposals();
@@ -447,6 +491,7 @@ export default function EnrollmentParentFlow({
           complete?: boolean;
         } | null;
         profileLocked?: boolean;
+        user?: { firstName?: string; lastName?: string };
       };
       const p = data.profile;
       setProfileLocked(Boolean(data.profileLocked));
@@ -456,6 +501,9 @@ export default function EnrollmentParentFlow({
         return;
       }
       setContractProfile((prev) => ({
+        firstName: data.user?.firstName ?? prev.firstName,
+        lastName: data.user?.lastName ?? prev.lastName,
+        phone: prev.phone,
         address: p.address ?? prev.address,
         city: p.city ?? prev.city,
         zipCode: p.zipCode ?? prev.zipCode,
@@ -476,19 +524,27 @@ export default function EnrollmentParentFlow({
     void loadParentProfile();
   }, [loadParentProfile]);
 
-  const handleSaveContractProfile = useCallback(async () => {
+  const patchContractProfile = useCallback((patch: Partial<ParentProfileForm>) => {
+    setDataConfirmed(false);
+    setContractProfile((prev) => ({ ...prev, ...patch }));
+  }, []);
+
+  const handleSaveContractProfile = useCallback(async (opts?: { silent?: boolean }) => {
     if (profileLocked) {
       setFlash({
         kind: 'error',
-        message:
-          'Nie można zmienić danych — umowa została już wygenerowana.',
+        message: 'Nie można zmienić danych — w tym roku szkolnym umowa została już podpisana.',
       });
-      return;
+      return false;
     }
     const validationError = validateContractProfile(contractProfile);
     if (validationError) {
       setFlash({ kind: 'error', message: validationError });
-      return;
+      return false;
+    }
+    if (!contractProfile.firstName.trim() || !contractProfile.lastName.trim()) {
+      setFlash({ kind: 'error', message: 'Podaj imię i nazwisko rodzica.' });
+      return false;
     }
     setSavingContractProfile(true);
     try {
@@ -497,6 +553,9 @@ export default function EnrollmentParentFlow({
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
+          firstName: contractProfile.firstName,
+          lastName: contractProfile.lastName,
+          phone: contractProfile.phone,
           billingType: contractProfile.billingType,
           address: contractProfile.address,
           city: contractProfile.city,
@@ -510,29 +569,52 @@ export default function EnrollmentParentFlow({
       const data = (await r.json().catch(() => ({}))) as {
         message?: string;
         profile?: { complete?: boolean };
+        profileLocked?: boolean;
+        user?: { firstName?: string; lastName?: string; phone?: string | null };
       };
       if (!r.ok) {
         setFlash({ kind: 'error', message: data.message ?? 'Nie udało się zapisać danych do umowy' });
-        return;
+        return false;
       }
       setProfileComplete(Boolean(data.profile?.complete));
-      setFlash({
-        kind: 'success',
-        message:
-          'Wspólne dane do umowy zostały zapisane. Teraz wybierz dzieci i wygeneruj umowę.',
-      });
+      setProfileLocked(Boolean(data.profileLocked));
+      if (data.user) {
+        onUserInfoUpdate({
+          ...userInfoRef.current,
+          firstName: data.user.firstName ?? contractProfile.firstName,
+          lastName: data.user.lastName ?? contractProfile.lastName,
+          phone: data.user.phone ?? contractProfile.phone,
+        });
+      }
+      if (!opts?.silent) {
+        setFlash({
+          kind: 'success',
+          message: dataConfirmed
+            ? 'Dane zapisane. Możesz wygenerować umowę poniżej.'
+            : 'Dane zapisane. Zaznacz potwierdzenie aktualności danych, aby wygenerować umowę.',
+        });
+      }
+      return true;
     } catch {
       setFlash({ kind: 'error', message: 'Nie udało się zapisać danych do umowy' });
+      return false;
     } finally {
       setSavingContractProfile(false);
     }
-  }, [contractProfile, profileLocked]);
+  }, [contractProfile, profileLocked, onUserInfoUpdate, dataConfirmed]);
 
   const handleGenerateParentContract = useCallback(async () => {
     if (!profileComplete) {
       setFlash({
         kind: 'error',
-        message: 'Najpierw zapisz wspólne dane do umowy powyżej.',
+        message: 'Najpierw zapisz dane do umowy.',
+      });
+      return;
+    }
+    if (!dataConfirmed) {
+      setFlash({
+        kind: 'error',
+        message: 'Potwierdź, że dane do umowy i faktury są aktualne.',
       });
       return;
     }
@@ -592,12 +674,14 @@ export default function EnrollmentParentFlow({
         setFlash({ kind: 'error', message: data.message ?? 'Nie udało się wygenerować umowy' });
         return;
       }
+      const next = (data as { nextChildToContract?: { first_name?: string; last_name?: string } | null })
+        .nextChildToContract;
       setFlash({
         kind: 'success',
-        message:
-          'Umowa wygenerowana. Zapoznaj się z umową, następnie z załącznikami dla każdego dziecka, a na końcu podpisz wszystkie dokumenty.',
+        message: next
+          ? `Umowa wygenerowana dla jednego dziecka. Podpisz ją, a potem wygenerujesz umowę dla: ${next.first_name ?? ''} ${next.last_name ?? ''}`.trim()
+          : 'Umowa wygenerowana. Zapoznaj się z dokumentami i podpisz. Do momentu podpisu możesz poprawić dane i wygenerować umowę jeszcze raz.',
       });
-      setProfileLocked(true);
       await Promise.all([loadProposals(), loadParentProfile()]);
     } catch {
       setFlash({ kind: 'error', message: 'Nie udało się wygenerować umowy' });
@@ -606,6 +690,7 @@ export default function EnrollmentParentFlow({
     }
   }, [
     contractReadiness.canPrepareContract,
+    dataConfirmed,
     includedInContract,
     loadParentProfile,
     loadProposals,
@@ -1012,12 +1097,7 @@ export default function EnrollmentParentFlow({
                     </div>
 
                     {isActionable && (
-                      <div className="mt-4 space-y-3">
-                        <p className="text-sm text-zinc-600">
-                          W niektórych sytuacjach możliwa jest zmiana terminu zajęć — wymaga to
-                          kontaktu ze szkołą.
-                        </p>
-                        <div className="flex flex-wrap gap-3">
+                      <div className="mt-4 flex flex-wrap gap-3">
                           <button
                             type="button"
                             onClick={() => handleAcceptProposal(p.request_id)}
@@ -1034,7 +1114,6 @@ export default function EnrollmentParentFlow({
                           >
                             {isContactStarting ? 'Przygotowanie…' : 'Kontakt ze szkołą'}
                           </button>
-                        </div>
                       </div>
                     )}
 
@@ -1152,26 +1231,46 @@ export default function EnrollmentParentFlow({
           )
           .map((p) => p.request_id),
       );
-      const includedCount = includedRequestIds.size;
       const includedProposals = proposals.filter((p) => includedRequestIds.has(p.request_id));
-      const childAmountBreakdown = includedProposals.map((p) => ({
-        requestId: p.request_id,
-        name: `${p.child_first_name} ${p.child_last_name}`.trim(),
-        groupName: p.group_name,
-        amount:
+      const siblingEligible =
+        proposals.filter((p) => {
+          const level = childAccessLevel(p);
+          return level === 'ACCEPTED' || level === 'SIGNED';
+        }).length >= 2;
+      const childAmountBreakdown = includedProposals.map((p) => {
+        const base =
           paymentType === 'PER_LESSON'
             ? resolveProposalLessonUnitPrice(p)
-            : resolveChildBaseAmount(p, paymentType),
-      }));
+            : resolveChildBaseAmount(p, paymentType);
+        const preview = computeContractPreviewAmount(
+          paymentType === 'PER_LESSON' ? null : base,
+          siblingEligible,
+          contractPricing,
+        );
+        return {
+          requestId: p.request_id,
+          name: `${p.child_first_name} ${p.child_last_name}`.trim(),
+          groupName: p.group_name,
+          amount: paymentType === 'PER_LESSON' ? base : preview.finalTotal,
+          baseAmount: base,
+          discountLabels: preview.discountLabels,
+        };
+      });
       const baseTotal = sumIncludedProposalAmounts(proposals, includedRequestIds, paymentType);
       const pricingPreview = computeContractPreviewAmount(
         paymentType === 'PER_LESSON' ? null : baseTotal,
-        includedCount,
+        siblingEligible,
         contractPricing,
       );
       const paymentTypeLabel = paymentTypePeriodLabel(paymentType);
       const canGenerateContract =
         paymentType === 'PER_LESSON' ? baseTotal != null : baseTotal != null;
+      const hasSentContract = parentContract?.status === 'SENT';
+      const nextGenerateHint = hasSentContract
+        ? 'Najpierw podpisz wygenerowaną umowę — dopiero potem pojawi się generowanie dla kolejnego dziecka.'
+        : includedProposals.length > 1
+          ? 'Umowy generują się po kolei: jedno dziecko = jedna umowa. Po podpisaniu pierwszej wygenerujesz kolejną.'
+          : null;
       const contractPreview =
         parentContract?.content_html &&
         (parentContract.status === 'SENT' || parentContract.status === 'SIGNED')
@@ -1190,14 +1289,28 @@ export default function EnrollmentParentFlow({
       return (
         <section className="space-y-4">
           <h3 className="text-lg font-semibold text-zinc-900">Umowa</h3>
+          {flash && (
+            <div
+              className={`rounded-xl border px-4 py-3 text-sm ${
+                flash.kind === 'success'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                  : flash.kind === 'error'
+                    ? 'border-rose-200 bg-rose-50 text-rose-900'
+                    : 'border-sky-200 bg-sky-50 text-sky-900'
+              }`}
+            >
+              {flash.message}
+            </div>
+          )}
           {isReadOnlyPreview && (
             <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-700">
               Podgląd wcześniejszego etapu. Zmiany są zablokowane.
             </div>
           )}
           <p className="text-sm text-zinc-600">
-            Jedna umowa obejmuje wybrane dzieci. Wygeneruj ją dopiero gdy każde dziecko ma status
-            zaakceptowane lub odrzucone — w umowie zaznacz tylko te zaakceptowane.
+            Każde dziecko ma osobną umowę. Zaznacz dzieci w kolejce, a umowy wygenerujesz po kolei
+            (po podpisaniu jednej pojawi się kolejna). Rabat rodzeństwa naliczany jest na każdej
+            umowie, gdy masz co najmniej dwoje dzieci zaakceptowanych lub z podpisaną umową.
           </p>
           {contractReadiness.hasPendingDecisions && (
             <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
@@ -1221,12 +1334,20 @@ export default function EnrollmentParentFlow({
                     <div>
                       <p className="text-base font-semibold text-zinc-900">Dane rodzica do umowy</p>
                       <p className="mt-1 text-sm text-zinc-600">
-                        Te informacje zostaną użyte w jednej wspólnej umowie.
+                        Te informacje trafią do każdej umowy generowanej dla Twoich dzieci.
                       </p>
                     </div>
                     {profileLocked && (
                       <div className="rounded-xl border border-zinc-200 bg-zinc-100 px-4 py-3 text-sm text-zinc-700">
-                        Dane są zablokowane — umowa została już wygenerowana.
+                        Dane w tym kroku są zablokowane — umowa w tym roku została już podpisana.
+                        Aktualizację danych na przyszłe dokumenty znajdziesz w zakładce{' '}
+                        <strong>Profil i dane do faktury</strong>.
+                      </div>
+                    )}
+                    {!profileLocked && !isContractSigned && (
+                      <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
+                        1) Sprawdź i zapisz dane. 2) Potwierdź, że są aktualne. 3) Dopiero potem
+                        wygenerujesz umowę. Po zmianie pól trzeba zapisać i potwierdzić ponownie.
                       </div>
                     )}
                     <div className="grid gap-4 md:grid-cols-2">
@@ -1234,18 +1355,20 @@ export default function EnrollmentParentFlow({
                         <label className="text-sm font-medium text-zinc-800">Imię</label>
                         <input
                           type="text"
-                          readOnly
-                          value={userInfo.firstName}
-                          className="w-full rounded-xl border border-zinc-200 bg-zinc-100 px-3 py-2.5 text-sm text-zinc-700"
+                          disabled={commonProfileLocked}
+                          value={contractProfile.firstName}
+                          onChange={(e) => patchContractProfile({ firstName: e.target.value })}
+                          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
                         />
                       </div>
                       <div className="space-y-1">
                         <label className="text-sm font-medium text-zinc-800">Nazwisko</label>
                         <input
                           type="text"
-                          readOnly
-                          value={userInfo.lastName}
-                          className="w-full rounded-xl border border-zinc-200 bg-zinc-100 px-3 py-2.5 text-sm text-zinc-700"
+                          disabled={commonProfileLocked}
+                          value={contractProfile.lastName}
+                          onChange={(e) => patchContractProfile({ lastName: e.target.value })}
+                          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
                         />
                       </div>
                       <div className="space-y-1">
@@ -1261,13 +1384,10 @@ export default function EnrollmentParentFlow({
                         <label className="text-sm font-medium text-zinc-800">Telefon</label>
                         <input
                           type="text"
-                          readOnly
-                          value={
-                            userInfo.phone?.trim() ||
-                            enrollmentRequestSummary?.parentPhone?.trim() ||
-                            '—'
-                          }
-                          className="w-full rounded-xl border border-zinc-200 bg-zinc-100 px-3 py-2.5 text-sm text-zinc-700"
+                          disabled={commonProfileLocked}
+                          value={contractProfile.phone}
+                          onChange={(e) => patchContractProfile({ phone: e.target.value })}
+                          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
                         />
                       </div>
                       <div className="space-y-1 md:col-span-2">
@@ -1276,10 +1396,8 @@ export default function EnrollmentParentFlow({
                           type="text"
                           disabled={commonProfileLocked}
                           value={contractProfile.address}
-                          onChange={(e) =>
-                            setContractProfile((prev) => ({ ...prev, address: e.target.value }))
-                          }
-                          className="w-full rounded-xl border border-zinc-300 px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                          onChange={(e) => patchContractProfile({ address: e.target.value })}
+                          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
                         />
                       </div>
                       <div className="space-y-1">
@@ -1288,10 +1406,8 @@ export default function EnrollmentParentFlow({
                           type="text"
                           disabled={commonProfileLocked}
                           value={contractProfile.city}
-                          onChange={(e) =>
-                            setContractProfile((prev) => ({ ...prev, city: e.target.value }))
-                          }
-                          className="w-full rounded-xl border border-zinc-300 px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                          onChange={(e) => patchContractProfile({ city: e.target.value })}
+                          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
                         />
                       </div>
                       <div className="space-y-1">
@@ -1300,10 +1416,8 @@ export default function EnrollmentParentFlow({
                           type="text"
                           disabled={commonProfileLocked}
                           value={contractProfile.zipCode}
-                          onChange={(e) =>
-                            setContractProfile((prev) => ({ ...prev, zipCode: e.target.value }))
-                          }
-                          className="w-full rounded-xl border border-zinc-300 px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                          onChange={(e) => patchContractProfile({ zipCode: e.target.value })}
+                          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
                         />
                       </div>
                     </div>
@@ -1318,9 +1432,7 @@ export default function EnrollmentParentFlow({
                             className="accent-[#0f6e56]"
                             disabled={commonProfileLocked}
                             checked={contractProfile.billingType === 'private'}
-                            onChange={() =>
-                              setContractProfile((prev) => ({ ...prev, billingType: 'private' }))
-                            }
+                            onChange={() => patchContractProfile({ billingType: 'private' })}
                           />
                           Osoba prywatna (PESEL)
                         </label>
@@ -1331,9 +1443,7 @@ export default function EnrollmentParentFlow({
                             className="accent-[#0f6e56]"
                             disabled={commonProfileLocked}
                             checked={contractProfile.billingType === 'company'}
-                            onChange={() =>
-                              setContractProfile((prev) => ({ ...prev, billingType: 'company' }))
-                            }
+                            onChange={() => patchContractProfile({ billingType: 'company' })}
                           />
                           Firma (faktura)
                         </label>
@@ -1348,10 +1458,8 @@ export default function EnrollmentParentFlow({
                           maxLength={11}
                           disabled={commonProfileLocked}
                           value={contractProfile.pesel}
-                          onChange={(e) =>
-                            setContractProfile((prev) => ({ ...prev, pesel: e.target.value }))
-                          }
-                          className="w-full rounded-xl border border-zinc-300 px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                          onChange={(e) => patchContractProfile({ pesel: e.target.value })}
+                          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
                         />
                       </div>
                     ) : (
@@ -1362,13 +1470,8 @@ export default function EnrollmentParentFlow({
                             type="text"
                             disabled={commonProfileLocked}
                             value={contractProfile.companyName}
-                            onChange={(e) =>
-                              setContractProfile((prev) => ({
-                                ...prev,
-                                companyName: e.target.value,
-                              }))
-                            }
-                            className="w-full rounded-xl border border-zinc-300 px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                            onChange={(e) => patchContractProfile({ companyName: e.target.value })}
+                            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
                           />
                         </div>
                         <div className="space-y-1">
@@ -1377,39 +1480,59 @@ export default function EnrollmentParentFlow({
                             type="text"
                             disabled={commonProfileLocked}
                             value={contractProfile.nip}
-                            onChange={(e) =>
-                              setContractProfile((prev) => ({ ...prev, nip: e.target.value }))
-                            }
-                            className="w-full rounded-xl border border-zinc-300 px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                            onChange={(e) => patchContractProfile({ nip: e.target.value })}
+                            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
                           />
                         </div>
                       </div>
                     )}
 
                     {!commonProfileLocked && (
-                      <button
-                        type="button"
-                        disabled={savingContractProfile}
-                        onClick={() => void handleSaveContractProfile()}
-                        className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {savingContractProfile ? 'Zapisywanie…' : 'Zapisz dane do umowy'}
-                      </button>
-                    )}
-                    {profileComplete && !profileLocked && (
-                      <p className="text-sm text-emerald-800">
-                        Dane zapisane — wybierz dzieci i wygeneruj umowę poniżej.
-                      </p>
+                      <div className="space-y-3">
+                        <label
+                          className={`flex items-start gap-3 rounded-xl border px-4 py-3 text-sm transition ${
+                            dataConfirmed
+                              ? 'border-zinc-200 bg-zinc-100 text-zinc-500'
+                              : 'border-amber-200 bg-amber-50 text-amber-950'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            className={`mt-0.5 ${dataConfirmed ? 'accent-zinc-400' : 'accent-[#0f6e56]'}`}
+                            checked={dataConfirmed}
+                            onChange={(e) => setDataConfirmed(e.target.checked)}
+                          />
+                          <span>
+                            Potwierdzam, że powyższe dane do umowy i faktury są{' '}
+                            <strong className={dataConfirmed ? 'text-zinc-600' : undefined}>
+                              aktualne i poprawne
+                            </strong>
+                            . Dopiero po tym potwierdzeniu mogę wygenerować umowę.
+                          </span>
+                        </label>
+                        <button
+                          type="button"
+                          disabled={savingContractProfile}
+                          onClick={() => void handleSaveContractProfile()}
+                          className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {savingContractProfile ? 'Zapisywanie…' : 'Zapisz dane do umowy'}
+                        </button>
+                      </div>
                     )}
                   </div>
 
                   {(profileComplete || profileLocked) && (
                   <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 space-y-4">
                     <div>
-                      <p className="text-base font-semibold text-zinc-900">Dzieci w umowie</p>
+                      <p className="text-base font-semibold text-zinc-900">Kolejka umów</p>
                       <p className="mt-1 text-sm text-zinc-600">
-                        Oznacz dzieci, dla których ma zostać wygenerowana umowa.
+                        Oznacz dzieci, dla których mają powstać osobne umowy (generowanie po
+                        kolei).
                       </p>
+                      {nextGenerateHint ? (
+                        <p className="mt-2 text-sm text-sky-900">{nextGenerateHint}</p>
+                      ) : null}
                     </div>
                     <div className="space-y-3">
                       {proposals.map((p) => {
@@ -1448,8 +1571,8 @@ export default function EnrollmentParentFlow({
                                 ) : null}
                                 {isPending && (
                                   <span className="mt-1 block text-xs text-amber-800">
-                                    Brak akceptacji — zostanie pominięte i odrzucone przy generowaniu
-                                    umowy
+                                    Brak akceptacji — nie można jeszcze wygenerować umowy dla tego
+                                    dziecka
                                   </span>
                                 )}
                                 {!isAccepted && !isPending && (
@@ -1537,67 +1660,92 @@ export default function EnrollmentParentFlow({
                           )}
                           {paymentType !== 'PER_LESSON' && (
                           <p className="text-sm text-zinc-700">
-                            Łączna kwota:{' '}
-                            {pricingPreview.discountKeys.length > 0 && !formLocked && baseTotal != null && (
-                              <span className="mr-1 text-zinc-500 line-through">
-                                {formatPlnAmount(baseTotal)}
-                              </span>
-                            )}
-                            <span className="font-semibold text-zinc-900">
-                              {formatPlnAmount(
-                                formLocked && parentContract?.amount != null
-                                  ? Number(parentContract.amount)
-                                  : pricingPreview.finalTotal,
-                              )}
-                            </span>
-                            {pricingPreview.discountLabels.length > 0 && !formLocked && (
-                              <span className="ml-1 text-xs text-emerald-700">
-                                (zniżki: {pricingPreview.discountLabels.join(', ')})
-                              </span>
+                            {includedProposals.length > 1 ? (
+                              <>
+                                Suma podglądowa (osobne umowy):{' '}
+                                <span className="font-semibold text-zinc-900">
+                                  {formatPlnAmount(pricingPreview.finalTotal)}
+                                </span>
+                                {pricingPreview.discountLabels.length > 0 && !formLocked && (
+                                  <span className="ml-1 text-xs text-emerald-700">
+                                    (zniżki na każdej umowie: {pricingPreview.discountLabels.join(', ')})
+                                  </span>
+                                )}
+                              </>
+                            ) : (
+                              <>
+                                Kwota umowy:{' '}
+                                {pricingPreview.discountKeys.length > 0 &&
+                                  !formLocked &&
+                                  baseTotal != null && (
+                                    <span className="mr-1 text-zinc-500 line-through">
+                                      {formatPlnAmount(baseTotal)}
+                                    </span>
+                                  )}
+                                <span className="font-semibold text-zinc-900">
+                                  {formatPlnAmount(
+                                    formLocked && parentContract?.amount != null
+                                      ? Number(parentContract.amount)
+                                      : pricingPreview.finalTotal,
+                                  )}
+                                </span>
+                                {pricingPreview.discountLabels.length > 0 && !formLocked && (
+                                  <span className="ml-1 text-xs text-emerald-700">
+                                    (zniżki: {pricingPreview.discountLabels.join(', ')})
+                                  </span>
+                                )}
+                              </>
                             )}
                           </p>
                           )}
                           {paymentType === 'PER_LESSON' && !formLocked && (
                             <p className="text-sm text-zinc-600">
-                              Rozliczenie za pojedyncze zajęcia następuje co miesiąc na podstawie liczby odbytych zajęć —
-                              kwota faktury zostanie ustalona przez szkołę.
+                              Rozliczenie za pojedyncze zajęcia następuje co miesiąc na podstawie liczby odbytych zajęć.
                             </p>
                           )}
                         </div>
 
                         {!formLocked && (
-                          <button
-                            type="button"
-                            disabled={
-                              savingContract ||
-                              !profileLoaded ||
-                              !profileComplete ||
-                              includedCount === 0 ||
-                              !canGenerateContract
-                            }
-                            onClick={() => void handleGenerateParentContract()}
-                            className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {savingContract
-                              ? 'Generowanie…'
-                              : contractPreview
-                                ? 'Wygeneruj ponownie'
-                                : 'Wygeneruj umowę'}
-                          </button>
+                          <div className="space-y-2">
+                            {!dataConfirmed && !contractPreview && (
+                              <p className="text-sm text-amber-800">
+                                Aby wygenerować umowę, zaznacz potwierdzenie aktualności danych
+                                powyżej.
+                              </p>
+                            )}
+                            <button
+                              type="button"
+                              disabled={
+                                savingContract ||
+                                !profileLoaded ||
+                                !profileComplete ||
+                                !dataConfirmed ||
+                                includedProposals.length === 0 ||
+                                !canGenerateContract
+                              }
+                              onClick={() => void handleGenerateParentContract()}
+                              className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {savingContract ? 'Generowanie…' : 'Wygeneruj umowę'}
+                            </button>
+                          </div>
                         )}
                         {contractPreview && !isContractSigned ? (
                           <div className="space-y-4 border-t border-emerald-200 pt-4">
                             <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-                              Umowa została wygenerowana wraz z osobnymi załącznikami dla każdego
-                              dziecka. Najpierw zaakceptuj umowę, potem każdy załącznik, a na końcu
-                              podpisz wszystkie dokumenty jednym przyciskiem.
+                              Umowa dotyczy jednego dziecka. Zaakceptuj umowę i załączniki, a
+                              następnie podpisz. Jeśli w kolejce są kolejne dzieci — po podpisie
+                              wygenerujesz następną umowę.
                             </div>
                             <ContractPortal
                               contract={contractPreview}
-                              onSigned={async () => {
+                              onSigned={async (result) => {
+                                const next = result?.nextChildToContract;
                                 setFlash({
                                   kind: 'success',
-                                  message: 'Umowa podpisana. Dziękujemy!',
+                                  message: next
+                                    ? `Umowa podpisana. Wygeneruj teraz umowę dla: ${next.first_name} ${next.last_name}`.trim()
+                                    : 'Umowa podpisana. Dziękujemy!',
                                 });
                                 await loadProposals();
                                 await refreshUserAccessLevel();
@@ -1610,20 +1758,6 @@ export default function EnrollmentParentFlow({
                   </div>
                   )}
                 </div>
-          )}
-
-          {flash && (
-            <div
-              className={`rounded-xl border px-4 py-3 text-sm ${
-                flash.kind === 'success'
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-                  : flash.kind === 'error'
-                    ? 'border-rose-200 bg-rose-50 text-rose-900'
-                    : 'border-sky-200 bg-sky-50 text-sky-900'
-              }`}
-            >
-              {flash.message}
-            </div>
           )}
         </section>
       );
@@ -1639,8 +1773,12 @@ export default function EnrollmentParentFlow({
         <h3 className="text-lg font-semibold text-zinc-900">Podsumowanie</h3>
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-900">
           {userInfo.complimentaryAccess
-            ? 'Zapis został zakończony (tryb bez opłat). Dziecko jest aktywnym uczestnikiem zajęć — umowa nie była wymagana.'
-            : 'Zapis został zakończony i dziecko jest aktywnym uczestnikiem zajęć.'}
+            ? `Zapis został zakończony (tryb bez opłat). Dziecko jest aktywnym uczestnikiem zajęć${
+                schoolYearName ? ` w roku szkolnym ${schoolYearName}` : ''
+              } — umowa nie była wymagana.`
+            : `Zapis został zakończony i dziecko jest aktywnym uczestnikiem zajęć${
+                schoolYearName ? ` w roku szkolnym ${schoolYearName}` : ''
+              }.`}
         </div>
         {enrolledChildren.length > 0 ? (
           <div className="space-y-3">
@@ -1680,6 +1818,12 @@ export default function EnrollmentParentFlow({
       <RenewalParentFlowSection
         onFlash={setFlash}
         onUpdated={refreshUserAccessLevel}
+      />
+      <ParentAddChildSection
+        onSuccess={async () => {
+          setManualStepSelection(false);
+          await Promise.all([loadProposals(), refreshUserAccessLevel()]);
+        }}
       />
       <section className="space-y-6 rounded-3xl border border-emerald-100 bg-white p-5 md:p-6">
       <header>

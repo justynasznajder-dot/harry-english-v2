@@ -1,4 +1,4 @@
-﻿import { randomUUID } from "crypto";
+import { randomUUID } from "crypto";
 import {
   Pool,
   type PoolClient,
@@ -9,6 +9,10 @@ import {
   DuplicateEnrollmentError,
 } from "@/lib/enrollment-duplicate";
 import { formatPersonName } from "@/lib/format-person-name";
+import {
+  allocateChildClientNumber,
+  allocateParentClientNumber,
+} from "@/lib/client-numbers";
 
 export { DuplicateEnrollmentError } from "@/lib/enrollment-duplicate";
 
@@ -40,7 +44,14 @@ export function getRegistrationSchoolId(): string {
 }
 
 /** Dozwolone wartości kolumny `users.role` (TEXT w PostgreSQL). */
-export const USER_ROLES = ["ADMIN", "MANAGER", "TEACHER", "PARENT", "CHILD"] as const;
+export const USER_ROLES = [
+  "ADMIN",
+  "MANAGER",
+  "TEACHER",
+  "PARENT",
+  "CHILD",
+  "ACCOUNTANT",
+] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
 export function parseUserRole(raw: string | null | undefined): UserRole | null {
@@ -64,8 +75,19 @@ export type ChildAccessLevel =
 
 function getConnectionString(): string {
   const url = process.env.DATABASE_URL;
-  if (url) return url;
-  throw new Error("DATABASE_URL is not set");
+  if (!url) throw new Error("DATABASE_URL is not set");
+  try {
+    const u = new URL(url.replace(/^postgres(ql)?:/i, "http:"));
+    const opts = u.searchParams.get("options") ?? "";
+    if (!/TimeZone\s*=/i.test(opts)) {
+      const tzOpt = "-c TimeZone=Europe/Warsaw";
+      u.searchParams.set("options", opts ? `${opts} ${tzOpt}` : tzOpt);
+    }
+    const proto = url.startsWith("postgresql:") ? "postgresql:" : "postgres:";
+    return `${proto}${u.toString().slice("http:".length)}`;
+  } catch {
+    return url;
+  }
 }
 
 const connectionString = getConnectionString();
@@ -87,6 +109,13 @@ const pool = new Pool({
     : undefined,
 });
 
+/** Dodatkowo na każdej nowej sesji (pasuje do ALTER DATABASE timezone). */
+pool.on("connect", (client) => {
+  client.query("SET TIME ZONE 'Europe/Warsaw'").catch((err) => {
+    console.error("SET TIME ZONE Europe/Warsaw failed:", err);
+  });
+});
+
 export interface User {
   id: string;
   /** NULL wyłącznie dla roli ADMIN (globalny super admin). */
@@ -101,6 +130,8 @@ export interface User {
   active: boolean;
   confirmed: boolean;
   must_change_password: boolean;
+  /** Stały numer klienta rodzica (5 cyfr), null dla innych ról / przed backfillem. */
+  client_number: string | null;
   reset_token: string | null;
   reset_token_expiry: Date | null;
   resignation_date: Date | null;
@@ -112,6 +143,8 @@ export interface Child {
   id: string;
   school_id: string;
   parent_id: string;
+  /** Stały numer dziecka: {parent}/{seq}, np. 00001/1 */
+  client_number: string | null;
   first_name: string;
   last_name: string;
   birth_date: string;
@@ -203,6 +236,7 @@ type ChildRow = QueryResultRow & {
   id: string;
   school_id: string;
   parent_id: string;
+  client_number?: string | null;
   first_name: string;
   last_name: string;
   birth_date: Date | string;
@@ -240,6 +274,10 @@ function mapUserRow(row: QueryResultRow): User {
     active: row.active === undefined ? true : Boolean(row.active),
     confirmed: Boolean(row.confirmed),
     must_change_password: Boolean(row.must_change_password),
+    client_number:
+      row.client_number != null && String(row.client_number).trim() !== ""
+        ? String(row.client_number)
+        : null,
     reset_token: row.reset_token != null ? (row.reset_token as string) : null,
     reset_token_expiry: (row.reset_token_expiry as Date | null) ?? null,
     resignation_date: (row.resignation_date as Date | null) ?? null,
@@ -261,6 +299,10 @@ function mapChildRow(row: ChildRow): Child {
     id: row.id,
     school_id: row.school_id,
     parent_id: row.parent_id,
+    client_number:
+      row.client_number != null && String(row.client_number).trim() !== ""
+        ? String(row.client_number)
+        : null,
     first_name: row.first_name,
     last_name: row.last_name,
     birth_date: birthDateToIso(row.birth_date),
@@ -401,11 +443,17 @@ export async function createUser(data: {
       await ensureDefaultSchoolRow(client, insertSchoolId);
     }
 
+    let clientNumber: string | null = null;
+    if (role === "PARENT" && insertSchoolId != null) {
+      clientNumber = await allocateParentClientNumber(client, insertSchoolId);
+    }
+
     const r = await client.query<UserRow>(
       `INSERT INTO users (
          id, school_id, email, password_hash, role,
-         first_name, last_name, phone, active, confirmed, access_level
-       ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9, $10)
+         first_name, last_name, phone, active, confirmed, access_level,
+         client_number
+       ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9, $10, $11)
        RETURNING *`,
       [
         id,
@@ -418,6 +466,7 @@ export async function createUser(data: {
         data.phone ?? null,
         confirmed,
         accessLevel,
+        clientNumber,
       ]
     );
     if (role === "PARENT" && insertSchoolId != null) {
@@ -736,24 +785,40 @@ export async function createChild(data: {
   const schoolId = data.schoolId ?? DEFAULT_SCHOOL_ID;
   const accessLevel = data.accessLevel ?? "NEW";
 
-  const r = await pool.query<ChildRow>(
-    `INSERT INTO children (
-       id, school_id, parent_id, first_name, last_name, birth_date,
-       avatar_url, confirmed, access_level
-     ) VALUES ($1, $2, $3, $4, $5, $6::date, $7, FALSE, $8)
-     RETURNING *`,
-    [
-      id,
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const childClientNumber = await allocateChildClientNumber(
+      client,
       schoolId,
-      data.parentId,
-      firstName,
-      lastName,
-      data.birthDate.slice(0, 10),
-      data.avatarUrl ?? null,
-      accessLevel,
-    ]
-  );
-  return mapChildRow(r.rows[0]);
+      data.parentId
+    );
+    const r = await client.query<ChildRow>(
+      `INSERT INTO children (
+         id, school_id, parent_id, client_number, first_name, last_name, birth_date,
+         avatar_url, confirmed, access_level
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7::date, $8, FALSE, $9)
+       RETURNING *`,
+      [
+        id,
+        schoolId,
+        data.parentId,
+        childClientNumber,
+        firstName,
+        lastName,
+        data.birthDate.slice(0, 10),
+        data.avatarUrl ?? null,
+        accessLevel,
+      ]
+    );
+    await client.query("COMMIT");
+    return mapChildRow(r.rows[0]);
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 /**
@@ -881,18 +946,116 @@ export async function upsertParentProfileForUser(params: {
   return getParentProfileByUserId(userId);
 }
 
-/** Czy rodzic ma już wygenerowaną umowę (SENT/SIGNED) — wspólne dane do umowy są wtedy zablokowane. */
+/**
+ * Blokada edycji danych do umowy — tylko w aktywnym roku szkolnym.
+ * Lock gdy jest ≥1 dziecko ACCEPTED i każde ma już SIGNED w bieżącym roku.
+ * Umowy z zamkniętych lat / bez school_year_id nie blokują. Brak ACCEPTED = odblokowane.
+ */
 export async function parentHasGeneratedContract(userId: string): Promise<boolean> {
-  const r = await pool.query<{ ok: boolean }>(
-    `SELECT EXISTS(
-       SELECT 1
-       FROM contracts
-       WHERE parent_id = $1
-         AND status IN ('SENT', 'SIGNED')
-     ) AS ok`,
-    [userId]
+  const user = await getUserById(userId);
+  if (!user?.school_id) return false;
+
+  const activeYear = await getActiveSchoolYear(user.school_id);
+  const yearId = activeYear?.id ? String(activeYear.id) : null;
+  if (!yearId) return false;
+
+  const r = await pool.query<{ locked: boolean }>(
+    `SELECT (
+       EXISTS (
+         SELECT 1
+         FROM children ch
+         WHERE ch.parent_id = $1
+           AND ch.school_id = $2
+           AND ch.active = TRUE
+           AND UPPER(BTRIM(COALESCE(ch.access_level::text, ''))) = 'ACCEPTED'
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM children ch
+         WHERE ch.parent_id = $1
+           AND ch.school_id = $2
+           AND ch.active = TRUE
+           AND UPPER(BTRIM(COALESCE(ch.access_level::text, ''))) = 'ACCEPTED'
+           AND NOT EXISTS (
+             SELECT 1
+             FROM contract_children cc
+             JOIN contracts ct ON ct.id = cc.contract_id
+             WHERE cc.child_id = ch.id
+               AND ct.parent_id = $1
+               AND ct.school_id = $2
+               AND ct.status = 'SIGNED'
+               AND ct.school_year_id = $3
+           )
+       )
+     ) AS locked`,
+    [userId, user.school_id, yearId]
   );
-  return Boolean(r.rows[0]?.ok);
+  return Boolean(r.rows[0]?.locked);
+}
+
+/**
+ * Gdy zgłoszenie ma inne imię/nazwisko niż konto (np. drugi rodzic na tym samym emailu),
+ * zsynchronizuj `users` ze zgłoszenia — o ile nie ma już podpisanej umowy.
+ */
+export async function syncParentIdentityFromEnrollments(
+  parentId: string
+): Promise<{ firstName: string; lastName: string; phone: string | null } | null> {
+  if (await parentHasGeneratedContract(parentId)) return null;
+
+  const userRes = await pool.query<{
+    id: string;
+    school_id: string | null;
+    email: string;
+    first_name: string;
+    last_name: string;
+    phone: string | null;
+  }>(
+    `SELECT id, school_id, email, first_name, last_name, phone
+     FROM users WHERE id = $1 AND role = 'PARENT' LIMIT 1`,
+    [parentId]
+  );
+  const user = userRes.rows[0];
+  if (!user?.school_id) return null;
+
+  const erRes = await pool.query<{
+    parent_first_name: string;
+    parent_last_name: string;
+    parent_phone: string | null;
+  }>(
+    `SELECT parent_first_name, parent_last_name, parent_phone
+     FROM enrollment_requests
+     WHERE school_id = $1
+       AND (
+         user_id = $2
+         OR LOWER(parent_email::text) = LOWER($3::text)
+       )
+       AND UPPER(BTRIM(COALESCE(status::text, ''))) NOT IN ('COMPLETED', 'REJECTED')
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [user.school_id, parentId, user.email]
+  );
+  const er = erRes.rows[0];
+  if (!er) return null;
+
+  const firstName = formatPersonName(er.parent_first_name?.trim() || user.first_name);
+  const lastName = formatPersonName(er.parent_last_name?.trim() || user.last_name);
+  const phone = er.parent_phone?.trim() || user.phone;
+
+  if (
+    firstName === user.first_name &&
+    lastName === user.last_name &&
+    (phone ?? null) === (user.phone ?? null)
+  ) {
+    return { firstName, lastName, phone };
+  }
+
+  await updateUser(parentId, {
+    first_name: firstName,
+    last_name: lastName,
+    phone: phone ?? null,
+  });
+
+  return { firstName, lastName, phone };
 }
 
 async function activeEnrollmentChildExists(
@@ -1021,6 +1184,8 @@ export async function insertPublicEnrollmentRequests(data: {
   lastName: string;
   phone: string | null;
   children: EnrollmentRequestChildInput[];
+  /** Gdy rodzic potwierdził powiązanie z istniejącym kontem. */
+  userId?: string | null;
 }): Promise<void> {
   const hasTable = await pool.query<{ exists: boolean }>(
     `SELECT EXISTS(
@@ -1048,7 +1213,7 @@ export async function insertPublicEnrollmentRequests(data: {
     await ensureDefaultSchoolRow(client, schoolId);
     await insertEnrollmentRequestsInTx(client, {
       schoolId,
-      userId: null,
+      userId: data.userId?.trim() || null,
       parentEmail,
       parentFirstName,
       parentLastName,
@@ -1098,11 +1263,14 @@ export async function createParentUserWithEnrollmentRequests(data: {
     await client.query("BEGIN");
     await ensureDefaultSchoolRow(client, schoolId);
 
+    const clientNumber = await allocateParentClientNumber(client, schoolId);
+
     const ur = await client.query<UserRow>(
       `INSERT INTO users (
          id, school_id, email, password_hash, role,
-         first_name, last_name, phone, active, confirmed, access_level
-       ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9, $10)
+         first_name, last_name, phone, active, confirmed, access_level,
+         client_number
+       ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9, $10, $11)
        RETURNING *`,
       [
         userId,
@@ -1115,6 +1283,7 @@ export async function createParentUserWithEnrollmentRequests(data: {
         parentPhone,
         confirmed,
         accessLevel,
+        clientNumber,
       ]
     );
 
@@ -1192,10 +1361,13 @@ export async function insertEnrollmentRequestsForParent(data: {
 
 export async function getChildrenByParentId(parentId: string): Promise<Child[]> {
   const r = await pool.query<ChildRow>(
-    `SELECT * FROM children
-     WHERE parent_id = $1 AND school_id = $2
-     ORDER BY created_at ASC`,
-    [parentId, DEFAULT_SCHOOL_ID]
+    `SELECT c.*
+     FROM children c
+     JOIN users u ON u.id = c.parent_id
+     WHERE c.parent_id = $1
+       AND c.school_id IS NOT DISTINCT FROM u.school_id
+     ORDER BY c.created_at ASC`,
+    [parentId]
   );
   return r.rows.map(mapChildRow);
 }
@@ -1413,12 +1585,18 @@ export async function requestChildResignation(
   reason: string
 ): Promise<boolean> {
   const r = await pool.query(
-    `UPDATE children
+    `UPDATE children c
      SET resignation_requested = TRUE,
-         resignation_reason = $1
-     WHERE id = $2 AND parent_id = $3 AND school_id = $4
-     RETURNING id`,
-    [reason, childId, parentUserId, DEFAULT_SCHOOL_ID]
+         resignation_reason = $1,
+         resignation_date = COALESCE(c.resignation_date, NOW())
+     FROM users u
+     WHERE c.id = $2
+       AND c.parent_id = $3
+       AND u.id = c.parent_id
+       AND c.school_id IS NOT DISTINCT FROM u.school_id
+       AND c.active = TRUE
+     RETURNING c.id`,
+    [reason, childId, parentUserId]
   );
   return (r.rowCount ?? 0) > 0;
 }

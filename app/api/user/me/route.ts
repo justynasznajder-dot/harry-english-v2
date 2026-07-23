@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getChildrenByParentId, getUserById, queryDb } from "@/lib/db";
+import {
+  getChildrenByParentId,
+  getUserById,
+  queryDb,
+  syncParentIdentityFromEnrollments,
+} from "@/lib/db";
 import { getTokenFromRequest } from "@/lib/auth";
 import { isComplimentaryForParent } from "@/lib/school-discounts";
 
@@ -69,7 +74,16 @@ export async function GET(request: NextRequest) {
 
     // Rodzic widzi swoje dzieci; admin/teacher bez listy dzieci.
     let children: any[] = [];
+    let displayFirstName = user.first_name;
+    let displayLastName = user.last_name;
+    let displayPhone = user.phone;
     if (user.role === "PARENT") {
+      const synced = await syncParentIdentityFromEnrollments(userId);
+      if (synced) {
+        displayFirstName = synced.firstName;
+        displayLastName = synced.lastName;
+        displayPhone = synced.phone;
+      }
       const rows = await getChildrenByParentId(userId);
       children = rows.map((c) => ({
         childId: c.id,
@@ -82,6 +96,7 @@ export async function GET(request: NextRequest) {
         enrollmentRequestId: c.enrollment_request_id,
         resignationRequested: c.resignation_requested || false,
         resignationReason: c.resignation_reason || null,
+        clientNumber: c.client_number,
       }));
     }
 
@@ -102,15 +117,16 @@ export async function GET(request: NextRequest) {
       user: {
         id: user.id,
         email: user.email,
-        phone: user.phone,
-        firstName: user.first_name,
-        lastName: user.last_name,
+        phone: displayPhone,
+        firstName: displayFirstName,
+        lastName: displayLastName,
         role: user.role,
         accessLevel: user.access_level,
         mustChangePassword: user.must_change_password === true,
         schoolId: user.school_id,
         schoolName,
         complimentaryAccess,
+        clientNumber: user.client_number,
         children,
       },
     });

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import MessagesPanel from '@/src/components/messages/MessagesPanel';
 import MessagesTabLabel from '@/src/components/messages/MessagesTabLabel';
 import { useUnreadMessagesCount } from '@/src/components/messages/useUnreadMessagesCount';
+import { formatSchoolDateTimeMedium } from '@/lib/school-timezone';
 
 type LektorTab = 'materials' | 'groups' | 'messages';
 
@@ -45,12 +46,7 @@ const tabs: Array<{ key: LektorTab; label: string }> = [
 ];
 
 function formatLessonDate(value: string): string {
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value;
-  return d.toLocaleString('pl-PL', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  });
+  return formatSchoolDateTimeMedium(value);
 }
 
 export default function LektorPortal() {

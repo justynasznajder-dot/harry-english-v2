@@ -2,9 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { getParentProfileByUserId, getRegistrationSchoolId, getUserById } from "@/lib/db";
 import { getTokenFromRequest } from "@/lib/auth";
 import {
+  findNextChildNeedingContract,
+  findNextQueuedChildWithoutContract,
   generateParentContract,
   resolveIncludeAttachment2FromGroups,
   validateParentContractSelection,
+  validateSingleChildForContract,
+  type ParentContractChildRow,
 } from "@/lib/parent-contract";
 import { isParentContractProfileComplete, resolveBillingTypeFromProfile } from "@/lib/parent-contract-profile";
 import { fetchParentRenewalContractChildren } from "@/lib/renewal-contract";
@@ -62,7 +66,10 @@ export async function POST(request: NextRequest) {
 
     const profile = await getParentProfileByUserId(parentId);
     if (!profile || !isParentContractProfileComplete(profile)) {
-      return NextResponse.json({ message: "Najpierw zapisz wspólne dane do umowy w procesie zapisu" }, { status: 400 });
+      return NextResponse.json(
+        { message: "Najpierw zapisz wspólne dane do umowy w procesie zapisu" },
+        { status: 400 }
+      );
     }
 
     const children = await fetchParentRenewalContractChildren(
@@ -70,16 +77,31 @@ export async function POST(request: NextRequest) {
       schoolId,
       includedRenewalIds
     );
-    const includedIds =
-      includedRenewalIds ??
-      children.map((c) => c.renewal_id);
-    const validation = validateParentContractSelection(children, includedIds);
+    const queueIds =
+      includedRenewalIds ?? children.map((c) => c.renewal_id);
+    const validation = validateParentContractSelection(children, queueIds);
     if (!validation.ok) {
       return NextResponse.json({ message: validation.message }, { status: 409 });
     }
 
-    const includedSet = new Set(includedIds);
-    const included = children.filter((c) => includedSet.has(c.renewal_id));
+    // Mapowanie renewal_id → request_id dla kolejki findNextChildNeedingContract
+    const asEnrollmentShape: ParentContractChildRow[] = children.map((c) => ({
+      ...c,
+      request_id: c.renewal_id,
+    }));
+
+    const nextChild = await findNextChildNeedingContract(
+      parentId,
+      schoolId,
+      asEnrollmentShape,
+      queueIds
+    );
+    const single = validateSingleChildForContract(nextChild);
+    if (!single.ok) {
+      return NextResponse.json({ message: single.message }, { status: 409 });
+    }
+
+    const included = [single.child];
     const includeAttachment2 = resolveIncludeAttachment2FromGroups(included);
     const billingType = resolveBillingTypeFromProfile(profile);
 
@@ -110,10 +132,26 @@ export async function POST(request: NextRequest) {
       billingType
     );
 
+    const remaining = await findNextQueuedChildWithoutContract(
+      parentId,
+      schoolId,
+      asEnrollmentShape,
+      queueIds,
+      single.child.child_id
+    );
+
     return NextResponse.json({
       success: true,
       contractId: result.contractId,
       season: planned.name,
+      nextChildToContract: remaining
+        ? {
+            child_id: remaining.child_id,
+            request_id: remaining.request_id,
+            first_name: remaining.first_name,
+            last_name: remaining.last_name,
+          }
+        : null,
     });
   } catch (error) {
     console.error("Renewal contract generate error:", error);

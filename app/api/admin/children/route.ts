@@ -35,9 +35,11 @@ export async function GET(request: NextRequest) {
       confirmed: boolean;
       access_level: string | null;
       enrollment_request_id: string | null;
+      client_number: string | null;
       parent_first_name: string;
       parent_last_name: string;
       parent_email: string;
+      parent_client_number: string | null;
       group_name: string | null;
       created_at: Date;
     }>(
@@ -51,9 +53,11 @@ export async function GET(request: NextRequest) {
          c.confirmed,
          c.access_level,
          c.enrollment_request_id,
+         c.client_number,
          u.first_name AS parent_first_name,
          u.last_name AS parent_last_name,
          u.email AS parent_email,
+         u.client_number AS parent_client_number,
          g.name AS group_name,
          c.created_at
        FROM children c

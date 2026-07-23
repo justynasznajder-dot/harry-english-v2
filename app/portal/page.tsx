@@ -7,6 +7,7 @@ import UserPortal from '@/src/components/UserPortal';
 import LektorPortal from '@/src/components/LektorPortal';
 import AdminPortal from '@/src/components/AdminPortal';
 import ChildPortal from '@/src/components/ChildPortal';
+import AccountantPortal from '@/src/components/AccountantPortal';
 
 interface UserInfo {
   id: string;
@@ -45,6 +46,7 @@ function panelRoleLabel(role: string | undefined): string {
   if (role === 'TEACHER') return 'PANEL NAUCZYCIELA';
   if (role === 'CHILD') return 'PANEL UCZNIA';
   if (role === 'PARENT') return 'PANEL RODZICA';
+  if (role === 'ACCOUNTANT') return 'PANEL KSIĘGOWEJ';
   return 'PANEL';
 }
 
@@ -202,6 +204,8 @@ export default function PortalPage() {
         {/* Render odpowiedniego portalu w zależności od typu konta */}
         {userInfo?.role === "ADMIN" || userInfo?.role === "MANAGER" ? (
           <AdminPortal />
+        ) : userInfo?.role === "ACCOUNTANT" ? (
+          <AccountantPortal />
         ) : userInfo?.role === "PARENT" ? (
           <UserPortal userInfo={userInfo} onUserInfoUpdate={setUserInfo} />
         ) : userInfo?.role === "TEACHER" ? (

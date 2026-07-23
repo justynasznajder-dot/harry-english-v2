@@ -4,6 +4,10 @@ import {
   resolveSchoolIdForTenant,
 } from "@/lib/admin-school-context";
 import {
+  getSchoolInvoiceGenerationDay,
+  setSchoolInvoiceGenerationDay,
+} from "@/lib/invoicing";
+import {
   ALL_DISCOUNT_KEYS,
   DISCOUNT_LABELS,
   addComplimentaryParent,
@@ -26,11 +30,13 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const [settings, complimentaryParents, complimentaryCandidates] = await Promise.all([
-      getSchoolDiscountSettings(schoolId),
-      listComplimentaryParents(schoolId),
-      listComplimentaryCandidates(schoolId),
-    ]);
+    const [settings, complimentaryParents, complimentaryCandidates, invoiceGenerationDay] =
+      await Promise.all([
+        getSchoolDiscountSettings(schoolId),
+        listComplimentaryParents(schoolId),
+        listComplimentaryCandidates(schoolId),
+        getSchoolInvoiceGenerationDay(schoolId),
+      ]);
 
     return NextResponse.json({
       discounts: ALL_DISCOUNT_KEYS.map((key) => ({
@@ -38,6 +44,7 @@ export async function GET(request: NextRequest) {
         label: DISCOUNT_LABELS[key],
         percent: settings[key],
       })),
+      invoiceGenerationDay,
       complimentaryParents,
       complimentaryCandidates,
       availableParents: complimentaryCandidates
@@ -89,15 +96,31 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    const settings = await upsertSchoolDiscountSettings(schoolId, patch);
+    const settings =
+      Object.keys(patch).length > 0
+        ? await upsertSchoolDiscountSettings(schoolId, patch)
+        : await getSchoolDiscountSettings(schoolId);
+
+    let invoiceGenerationDay = await getSchoolInvoiceGenerationDay(schoolId);
+    if (body?.invoiceGenerationDay != null || body?.invoice_generation_day != null) {
+      const raw = Number(body?.invoiceGenerationDay ?? body?.invoice_generation_day);
+      if (!Number.isFinite(raw) || raw < 1 || raw > 28) {
+        return NextResponse.json(
+          { message: "Dzień generowania faktur musi być liczbą od 1 do 28" },
+          { status: 400 }
+        );
+      }
+      invoiceGenerationDay = await setSchoolInvoiceGenerationDay(schoolId, Math.round(raw));
+    }
 
     return NextResponse.json({
-      message: "Ustawienia zniżek zostały zapisane",
+      message: "Ustawienia zostały zapisane",
       discounts: ALL_DISCOUNT_KEYS.map((key) => ({
         key,
         label: DISCOUNT_LABELS[key],
         percent: settings[key],
       })),
+      invoiceGenerationDay,
     });
   } catch (error) {
     console.error("PUT /api/admin/discounts:", error);

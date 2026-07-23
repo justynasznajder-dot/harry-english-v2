@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { getActiveSchoolYear, queryDb } from "@/lib/db";
 import { assertGroupInSchool, requireAdminSchoolContext, tenantNotFoundResponse } from "@/lib/admin-school-context";
+import { SCHOOL_TIMEZONE, sqlSchoolWallTimestamp } from "@/lib/school-timezone";
 
-const TZ = "Europe/Warsaw";
+const TZ = SCHOOL_TIMEZONE;
 
 function nextDateForWeekday(base: Date, dayOfWeek: number): Date {
   const current = ((base.getDay() + 6) % 7) + 1;
@@ -132,23 +133,26 @@ export async function POST(request: NextRequest) {
         }
         const dateStr = dateOnlyYmd(d);
 
+        // `scheduled_at` = czas ścienny szkoły (Europe/Warsaw), bez konwersji przez GMT sesji Neon.
+        const wallTs = sqlSchoolWallTimestamp(2, 3);
         const exists = await queryDb<{ id: string }>(
           `SELECT id FROM lessons
            WHERE group_id = $1
-             AND scheduled_at = (($2::date + $3::time) AT TIME ZONE '${TZ}')
+             AND scheduled_at = ${wallTs}
            LIMIT 1`,
           [groupId, dateStr, startTime],
         );
         if (!exists.rows[0]) {
           await queryDb(
             `INSERT INTO lessons (
-              id, group_id, teacher_id, location_id, scheduled_at, duration_min, status, created_at, school_year_id, schedule_template_id
+              school_id, id, group_id, teacher_id, location_id, scheduled_at, duration_min, status, created_at, school_year_id, schedule_template_id
              ) VALUES (
-              $1, $2, $3, $4,
-              (($5::date + $6::time) AT TIME ZONE '${TZ}'),
-              $7, 'SCHEDULED', NOW(), $8, $9
+              $1, $2, $3, $4, $5,
+              ${sqlSchoolWallTimestamp(6, 7)},
+              $8, 'SCHEDULED', NOW(), $9, $10
              )`,
             [
+              schoolId,
               randomUUID(),
               groupId,
               teacherId,

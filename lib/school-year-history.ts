@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import type { PoolClient } from "pg";
+import { sqlSchoolTimestampAsTimestamptz } from "@/lib/school-timezone";
 
 type DbLike = Pick<PoolClient, "query">;
 
@@ -139,7 +140,7 @@ export async function runSchoolYearCloseSteps(
        AND g.school_id = $1
        AND g.school_year_id = $2
        AND l.status = 'SCHEDULED'
-       AND (l.scheduled_at + (l.duration_min * interval '1 minute')) <= NOW()
+       AND (${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} + (l.duration_min * interval '1 minute')) <= NOW()
      RETURNING l.id`,
     [schoolId, yearId]
   );
@@ -152,7 +153,7 @@ export async function runSchoolYearCloseSteps(
        AND g.school_id = $1
        AND g.school_year_id = $2
        AND l.status = 'SCHEDULED'
-       AND l.scheduled_at > NOW()
+       AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} > NOW()
      RETURNING l.id`,
     [schoolId, yearId]
   );

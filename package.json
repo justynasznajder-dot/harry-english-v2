@@ -19,7 +19,8 @@
     "db:migrate:resolve-init": "npx tsx scripts/prisma-migrate-guard.ts resolve-init",
     "db:migrate:deploy": "npx tsx scripts/prisma-migrate-guard.ts deploy",
     "db:migrate:dev": "npx tsx scripts/prisma-migrate-guard.ts dev",
-    "db:backfill:school-year-history": "npx tsx scripts/backfill-school-year-history.ts"
+    "db:backfill:school-year-history": "npx tsx scripts/backfill-school-year-history.ts",
+    "db:dev-purge-documents": "npx tsx scripts/dev-purge-documents.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1063.0",
@@ -33,6 +34,7 @@
     "@sparticuz/chromium": "^147.0.0",
     "bcryptjs": "^3.0.3",
     "cookie": "^1.1.1",
+    "googleapis": "^173.0.0",
     "jose": "^6.2.3",
     "next": "^16.1.6",
     "nodemailer": "^7.0.12",

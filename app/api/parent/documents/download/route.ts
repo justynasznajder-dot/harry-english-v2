@@ -23,7 +23,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ message: "Brak dostępu do pliku" }, { status: 403 });
     }
 
-    const { buffer, contentType } = await getR2ObjectBuffer(key);
+    const { buffer, contentType } = await getR2ObjectBuffer(key, {
+      source: "parent.documents.download",
+    });
     const filename = key.split("/").pop() ?? "umowa.pdf";
 
     return new NextResponse(new Uint8Array(buffer), {

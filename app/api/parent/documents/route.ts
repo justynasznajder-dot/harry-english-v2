@@ -22,6 +22,7 @@ export async function GET(request: NextRequest) {
     try {
       pdfFiles = await listSignedContractPdfsForParent({
         parentUserId: parentId,
+        source: "parent.documents.list",
       });
     } catch (r2Error) {
       console.warn("R2 list for parent documents failed:", r2Error);

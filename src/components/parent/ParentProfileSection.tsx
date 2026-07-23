@@ -1,25 +1,44 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { validateParentContractProfileInput } from '@/lib/parent-contract-profile';
 
-type ProfileData = {
-  address: string | null;
-  city: string | null;
-  zipCode: string | null;
-  billingType: string;
-  companyName: string | null;
-  nip: string | null;
-  pesel: string | null;
+type BillingType = 'private' | 'company';
+
+type ProfileForm = {
+  firstName: string;
+  lastName: string;
+  phone: string;
+  address: string;
+  city: string;
+  zipCode: string;
+  billingType: BillingType;
+  companyName: string;
+  nip: string;
+  pesel: string;
 };
 
 type Flash = { kind: 'success' | 'error'; message: string };
 
+const emptyForm = (): ProfileForm => ({
+  firstName: '',
+  lastName: '',
+  phone: '',
+  address: '',
+  city: '',
+  zipCode: '',
+  billingType: 'private',
+  companyName: '',
+  nip: '',
+  pesel: '',
+});
+
 export default function ParentProfileSection() {
-  const [profile, setProfile] = useState<ProfileData | null>(null);
-  const [profileLocked, setProfileLocked] = useState(false);
+  const [form, setForm] = useState<ProfileForm>(emptyForm);
+  const [hasProfile, setHasProfile] = useState(false);
+  const [clientNumber, setClientNumber] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [changeMessage, setChangeMessage] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [flash, setFlash] = useState<Flash | null>(null);
 
   const load = useCallback(async () => {
@@ -27,13 +46,38 @@ export default function ParentProfileSection() {
     try {
       const r = await fetch('/api/user/profile', { cache: 'no-store', credentials: 'include' });
       const data = (await r.json().catch(() => ({}))) as {
-        profile?: ProfileData | null;
-        profileLocked?: boolean;
+        profile?: {
+          address?: string | null;
+          city?: string | null;
+          zipCode?: string | null;
+          billingType?: string;
+          companyName?: string | null;
+          nip?: string | null;
+          pesel?: string | null;
+        } | null;
+        user?: {
+          firstName?: string;
+          lastName?: string;
+          phone?: string | null;
+          clientNumber?: string | null;
+        };
       };
-      if (r.ok) {
-        setProfile(data.profile ?? null);
-        setProfileLocked(Boolean(data.profileLocked));
-      }
+      if (!r.ok) return;
+      const p = data.profile;
+      setHasProfile(Boolean(p));
+      setClientNumber(data.user?.clientNumber ?? null);
+      setForm({
+        firstName: data.user?.firstName ?? '',
+        lastName: data.user?.lastName ?? '',
+        phone: data.user?.phone?.trim() ?? '',
+        address: p?.address ?? '',
+        city: p?.city ?? '',
+        zipCode: p?.zipCode ?? '',
+        billingType: p?.billingType === 'company' ? 'company' : 'private',
+        companyName: p?.companyName ?? '',
+        nip: p?.nip ?? '',
+        pesel: p?.pesel ?? '',
+      });
     } finally {
       setLoading(false);
     }
@@ -43,31 +87,64 @@ export default function ParentProfileSection() {
     void load();
   }, [load]);
 
-  async function submitChangeRequest() {
-    if (!changeMessage.trim()) {
-      setFlash({ kind: 'error', message: 'Opisz proponowane zmiany.' });
+  function patch(partial: Partial<ProfileForm>) {
+    setForm((prev) => ({ ...prev, ...partial }));
+  }
+
+  async function handleSave() {
+    const validationError = validateParentContractProfileInput({
+      billingType: form.billingType,
+      address: form.address,
+      city: form.city,
+      zipCode: form.zipCode,
+      pesel: form.pesel,
+      companyName: form.companyName,
+      nip: form.nip,
+    });
+    if (validationError) {
+      setFlash({ kind: 'error', message: validationError });
       return;
     }
-    setBusy(true);
+    if (!form.firstName.trim() || !form.lastName.trim()) {
+      setFlash({ kind: 'error', message: 'Podaj imię i nazwisko rodzica.' });
+      return;
+    }
+
+    setSaving(true);
     setFlash(null);
     try {
-      const r = await fetch('/api/user/profile/change-request', {
-        method: 'POST',
+      const r = await fetch('/api/user/profile', {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ message: changeMessage.trim() }),
+        body: JSON.stringify({
+          firstName: form.firstName,
+          lastName: form.lastName,
+          phone: form.phone,
+          billingType: form.billingType,
+          address: form.address,
+          city: form.city,
+          zipCode: form.zipCode,
+          pesel: form.billingType === 'private' ? form.pesel : null,
+          companyName: form.billingType === 'company' ? form.companyName : null,
+          nip: form.billingType === 'company' ? form.nip : null,
+        }),
       });
       const data = (await r.json().catch(() => ({}))) as { message?: string };
       if (!r.ok) {
-        setFlash({ kind: 'error', message: data.message ?? 'Nie udało się wysłać prośby' });
+        setFlash({ kind: 'error', message: data.message ?? 'Nie udało się zapisać danych' });
         return;
       }
-      setFlash({ kind: 'success', message: data.message ?? 'Prośba wysłana do szkoły.' });
-      setChangeMessage('');
+      setHasProfile(true);
+      setFlash({
+        kind: 'success',
+        message: 'Dane zapisane. Będą używane przy przyszłych umowach i fakturach.',
+      });
+      await load();
     } catch {
       setFlash({ kind: 'error', message: 'Błąd połączenia z serwerem' });
     } finally {
-      setBusy(false);
+      setSaving(false);
     }
   }
 
@@ -85,63 +162,151 @@ export default function ParentProfileSection() {
       <header>
         <h2 className="text-xl font-bold text-zinc-900 md:text-2xl">Profil i dane do faktury</h2>
         <p className="mt-1 text-sm text-zinc-600">
-          Dane użyte przy generowaniu umowy i faktur.
+          Dane używane przy generowaniu umów i faktur.
         </p>
       </header>
 
-      {!profile ? (
-        <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-700">
-          Uzupełnij dane do umowy w zakładce „Proces zapisu” przed generowaniem umowy.
-        </div>
-      ) : (
-        <div className="grid gap-2 rounded-2xl border border-zinc-200 p-4 text-sm sm:grid-cols-[max-content_1fr]">
-          <span className="font-semibold text-zinc-800">Adres:</span>
-          <span>
-            {profile.address ?? '—'}, {profile.zipCode ?? ''} {profile.city ?? ''}
-          </span>
-          {profile.billingType === 'company' ? (
-            <>
-              <span className="font-semibold text-zinc-800">Firma:</span>
-              <span>{profile.companyName ?? '—'}</span>
-              <span className="font-semibold text-zinc-800">NIP:</span>
-              <span>{profile.nip ?? '—'}</span>
-            </>
-          ) : (
-            <>
-              <span className="font-semibold text-zinc-800">PESEL:</span>
-              <span>{profile.pesel ? '•••••••••••' : '—'}</span>
-            </>
-          )}
-        </div>
-      )}
+      <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
+        Zmiana danych obowiązuje <strong>na przyszłość</strong> (kolejne umowy i faktury). Treść już
+        podpisanych umów się nie zmienia.
+      </div>
 
-      {profileLocked ? (
-        <div className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-4">
-          <p className="text-sm text-amber-950">
-            Po wygenerowaniu umowy dane są zablokowane do edycji. Aby je zmienić, zgłoś prośbę do
-            szkoły.
-          </p>
-          <textarea
-            value={changeMessage}
-            onChange={(e) => setChangeMessage(e.target.value)}
-            rows={3}
-            className="w-full rounded-xl border border-zinc-200 px-3 py-2 text-sm"
-            placeholder="Opisz, jakie dane należy zmienić (adres, PESEL/NIP, firma…)"
-          />
-          <button
-            type="button"
-            disabled={busy || !changeMessage.trim()}
-            onClick={() => void submitChangeRequest()}
-            className="rounded-full bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-          >
-            {busy ? 'Wysyłanie…' : 'Zgłoś zmianę do szkoły'}
-          </button>
+      {clientNumber ? (
+        <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-800">
+          Numer klienta: <span className="font-mono font-semibold">{clientNumber}</span>
         </div>
-      ) : (
-        <p className="text-sm text-zinc-600">
-          Edycja danych jest dostępna w zakładce „Proces zapisu” przed wygenerowaniem umowy.
-        </p>
-      )}
+      ) : null}
+
+      {!hasProfile ? (
+        <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-700">
+          Nie masz jeszcze zapisanych danych do umowy — uzupełnij formularz poniżej.
+        </div>
+      ) : null}
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="space-y-1">
+          <label className="text-sm font-medium text-zinc-800">Imię</label>
+          <input
+            type="text"
+            value={form.firstName}
+            onChange={(e) => patch({ firstName: e.target.value })}
+            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-sm font-medium text-zinc-800">Nazwisko</label>
+          <input
+            type="text"
+            value={form.lastName}
+            onChange={(e) => patch({ lastName: e.target.value })}
+            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+          />
+        </div>
+        <div className="space-y-1 md:col-span-2">
+          <label className="text-sm font-medium text-zinc-800">Telefon</label>
+          <input
+            type="text"
+            value={form.phone}
+            onChange={(e) => patch({ phone: e.target.value })}
+            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+          />
+        </div>
+        <div className="space-y-1 md:col-span-2">
+          <label className="text-sm font-medium text-zinc-800">Adres</label>
+          <input
+            type="text"
+            value={form.address}
+            onChange={(e) => patch({ address: e.target.value })}
+            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-sm font-medium text-zinc-800">Miasto</label>
+          <input
+            type="text"
+            value={form.city}
+            onChange={(e) => patch({ city: e.target.value })}
+            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-sm font-medium text-zinc-800">Kod pocztowy</label>
+          <input
+            type="text"
+            value={form.zipCode}
+            onChange={(e) => patch({ zipCode: e.target.value })}
+            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+          />
+        </div>
+        <div className="space-y-2 md:col-span-2">
+          <p className="text-sm font-medium text-zinc-800">Rozliczenie</p>
+          <div className="flex flex-wrap gap-4">
+            <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
+              <input
+                type="radio"
+                name="billingType"
+                checked={form.billingType === 'private'}
+                onChange={() => patch({ billingType: 'private' })}
+                className="accent-[#0f6e56]"
+              />
+              Osoba prywatna (PESEL)
+            </label>
+            <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
+              <input
+                type="radio"
+                name="billingType"
+                checked={form.billingType === 'company'}
+                onChange={() => patch({ billingType: 'company' })}
+                className="accent-[#0f6e56]"
+              />
+              Firma (NIP)
+            </label>
+          </div>
+        </div>
+        {form.billingType === 'private' ? (
+          <div className="space-y-1 md:col-span-2">
+            <label className="text-sm font-medium text-zinc-800">PESEL</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={form.pesel}
+              onChange={(e) => patch({ pesel: e.target.value })}
+              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+            />
+          </div>
+        ) : (
+          <>
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-zinc-800">Nazwa firmy</label>
+              <input
+                type="text"
+                value={form.companyName}
+                onChange={(e) => patch({ companyName: e.target.value })}
+                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-zinc-800">NIP</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={form.nip}
+                onChange={(e) => patch({ nip: e.target.value })}
+                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+              />
+            </div>
+          </>
+        )}
+      </div>
+
+      <button
+        type="button"
+        disabled={saving}
+        onClick={() => void handleSave()}
+        className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {saving ? 'Zapisywanie…' : 'Zapisz dane'}
+      </button>
 
       {flash ? (
         <div

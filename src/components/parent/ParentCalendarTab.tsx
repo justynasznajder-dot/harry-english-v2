@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { UserInfo } from '@/src/components/enrollment/EnrollmentParentFlow';
 import { formatLessonDateTime } from '@/src/components/parent/parent-portal-utils';
+import { formatSchoolTime, schoolYmd } from '@/lib/school-timezone';
 
 type CalendarLesson = {
   id: string;
@@ -107,7 +108,7 @@ export default function ParentCalendarTab({ userInfo }: { userInfo: UserInfo }) 
   const lessonsByDay = useMemo(() => {
     const map = new Map<string, CalendarLesson[]>();
     for (const l of lessons) {
-      const key = l.scheduledAt.slice(0, 10);
+      const key = schoolYmd(l.scheduledAt);
       const list = map.get(key) ?? [];
       list.push(l);
       map.set(key, list);
@@ -227,10 +228,7 @@ export default function ParentCalendarTab({ userInfo }: { userInfo: UserInfo }) 
                       }`}
                       title={formatLessonDateTime(l.scheduledAt)}
                     >
-                      {new Date(l.scheduledAt).toLocaleTimeString('pl-PL', {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}{' '}
+                      {formatSchoolTime(l.scheduledAt)}{' '}
                       {l.childFirstName.charAt(0)}.
                     </div>
                   ))}

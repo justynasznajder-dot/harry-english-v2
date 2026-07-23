@@ -5,6 +5,8 @@ import {
   findUserBySchoolAndEmail,
   POLISH_DAY_FROM_ST_SQL,
   queryDb,
+  runPgTransaction,
+  updateUser,
   updateUserPasswordHash,
 } from "@/lib/db";
 import { generateTempPassword } from "@/lib/password";
@@ -13,6 +15,10 @@ import {
   syncChildrenAccessLevelForEnrollment,
   syncParentUserAccessLevel,
 } from "@/lib/enrollment-sync";
+import {
+  allocateChildClientNumber,
+  ensureChildClientNumber,
+} from "@/lib/client-numbers";
 
 export type EnrollmentRow = {
   id: string;
@@ -232,7 +238,8 @@ export async function submitEnrollmentProposal(
       id: string;
       first_name: string;
       last_name: string;
-    }>(`SELECT id, first_name, last_name FROM users WHERE id = $1 LIMIT 1`, [
+      phone: string | null;
+    }>(`SELECT id, first_name, last_name, phone FROM users WHERE id = $1 LIMIT 1`, [
       enrollment.user_id,
     ]);
     const existing = existingRes.rows[0];
@@ -244,14 +251,33 @@ export async function submitEnrollmentProposal(
       };
     }
     parentUserId = existing.id;
-    parentFirstName = existing.first_name;
-    parentLastName = existing.last_name;
+    // Preferuj imię/nazwisko ze zgłoszenia — konto mogło powstać wcześniej pod innym imieniem.
+    parentFirstName = formatPersonName(
+      enrollment.parent_first_name?.trim() || existing.first_name
+    );
+    parentLastName = formatPersonName(
+      enrollment.parent_last_name?.trim() || existing.last_name
+    );
+    await updateUser(parentUserId, {
+      first_name: parentFirstName,
+      last_name: parentLastName,
+      phone: enrollment.parent_phone?.trim() || existing.phone || null,
+    });
   } else {
     const existing = await findUserBySchoolAndEmail(parentSchoolId, parentEmail);
     if (existing) {
       parentUserId = existing.id;
-      parentFirstName = existing.first_name;
-      parentLastName = existing.last_name;
+      parentFirstName = formatPersonName(
+        enrollment.parent_first_name?.trim() || existing.first_name
+      );
+      parentLastName = formatPersonName(
+        enrollment.parent_last_name?.trim() || existing.last_name
+      );
+      await updateUser(parentUserId, {
+        first_name: parentFirstName,
+        last_name: parentLastName,
+        phone: enrollment.parent_phone?.trim() || existing.phone || null,
+      });
     } else {
       tempPassword = generateTempPassword();
       const passwordHash = await bcrypt.hash(tempPassword, 10);
@@ -327,24 +353,48 @@ export async function submitEnrollmentProposal(
 
   if (existingChildId) {
     resolvedChildId = existingChildId;
-    await queryDb(
-      `UPDATE children
-       SET active = TRUE,
-           enrollment_request_id = $2,
-           access_level = 'PROPOSED'
-       WHERE id = $1`,
-      [existingChildId, requestId]
-    );
+    await runPgTransaction(async (client) => {
+      await ensureChildClientNumber(
+        client,
+        existingChildId,
+        parentSchoolId,
+        parentUserId
+      );
+      await client.query(
+        `UPDATE children
+         SET active = TRUE,
+             enrollment_request_id = $2,
+             access_level = 'PROPOSED'
+         WHERE id = $1`,
+        [existingChildId, requestId]
+      );
+    });
   } else {
     const childId = randomUUID();
     resolvedChildId = childId;
-    await queryDb(
-      `INSERT INTO children (
-         id, school_id, parent_id, first_name, last_name, birth_date,
-         active, confirmed, enrollment_request_id, access_level
-       ) VALUES ($1, $2, $3, $4, $5, $6::date, TRUE, FALSE, $7, 'PROPOSED')`,
-      [childId, parentSchoolId, parentUserId, childFirst, childLast, childBirth, requestId]
-    );
+    await runPgTransaction(async (client) => {
+      const childClientNumber = await allocateChildClientNumber(
+        client,
+        parentSchoolId,
+        parentUserId
+      );
+      await client.query(
+        `INSERT INTO children (
+           id, school_id, parent_id, client_number, first_name, last_name, birth_date,
+           active, confirmed, enrollment_request_id, access_level
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7::date, TRUE, FALSE, $8, 'PROPOSED')`,
+        [
+          childId,
+          parentSchoolId,
+          parentUserId,
+          childClientNumber,
+          childFirst,
+          childLast,
+          childBirth,
+          requestId,
+        ]
+      );
+    });
   }
 
   await syncChildrenAccessLevelForEnrollment(requestId, "PROPOSED");

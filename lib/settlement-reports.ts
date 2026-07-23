@@ -1,8 +1,6 @@
 import { queryDb } from "@/lib/db";
 import { completePastScheduledLessons } from "@/lib/lesson-completion";
 
-const TZ = "Europe/Warsaw";
-
 export type SchoolYearScope = {
   id: string;
   school_id: string;
@@ -70,8 +68,8 @@ export async function fetchTeacherSettlement(
     params.push(`${periodMonth}-01`);
     params.push(monthEndYmd(periodMonth));
     monthClause = `
-      AND (l.scheduled_at AT TIME ZONE '${TZ}')::date >= $5::date
-      AND (l.scheduled_at AT TIME ZONE '${TZ}')::date <= $6::date`;
+      AND l.scheduled_at::date >= $5::date
+      AND l.scheduled_at::date <= $6::date`;
   }
 
   const lessons = await queryDb<{
@@ -94,7 +92,7 @@ export async function fetchTeacherSettlement(
        g.name AS group_name,
        l.location_id,
        loc.name AS location_name,
-       to_char(date_trunc('month', l.scheduled_at AT TIME ZONE '${TZ}'), 'YYYY-MM') AS period_month,
+       to_char(date_trunc('month', l.scheduled_at), 'YYYY-MM') AS period_month,
        COUNT(*)::int AS lessons_count,
        COALESCE(SUM(l.duration_min), 0)::int AS total_duration_min
      FROM lessons l
@@ -104,8 +102,8 @@ export async function fetchTeacherSettlement(
      WHERE g.school_id = $1
        AND l.school_year_id = $2
        AND l.status = 'COMPLETED'
-       AND (l.scheduled_at AT TIME ZONE '${TZ}')::date >= $3::date
-       AND (l.scheduled_at AT TIME ZONE '${TZ}')::date <= $4::date
+       AND l.scheduled_at::date >= $3::date
+       AND l.scheduled_at::date <= $4::date
        ${monthClause}
      GROUP BY l.teacher_id, u.first_name, u.last_name, l.group_id, g.name,
               l.location_id, loc.name, period_month
@@ -175,8 +173,8 @@ export async function fetchLocationSettlement(
     params.push(`${periodMonth}-01`);
     params.push(monthEndYmd(periodMonth));
     monthClause = `
-      AND (l.scheduled_at AT TIME ZONE '${TZ}')::date >= $5::date
-      AND (l.scheduled_at AT TIME ZONE '${TZ}')::date <= $6::date`;
+      AND l.scheduled_at::date >= $5::date
+      AND l.scheduled_at::date <= $6::date`;
   }
 
   const res = await queryDb<{
@@ -195,7 +193,7 @@ export async function fetchLocationSettlement(
        l.teacher_id,
        u.first_name AS teacher_first_name,
        u.last_name AS teacher_last_name,
-       to_char(date_trunc('month', l.scheduled_at AT TIME ZONE '${TZ}'), 'YYYY-MM') AS period_month,
+       to_char(date_trunc('month', l.scheduled_at), 'YYYY-MM') AS period_month,
        COUNT(*)::int AS lessons_count,
        COALESCE(SUM(l.duration_min), 0)::int AS total_duration_min
      FROM lessons l
@@ -205,8 +203,8 @@ export async function fetchLocationSettlement(
      WHERE g.school_id = $1
        AND l.school_year_id = $2
        AND l.status = 'COMPLETED'
-       AND (l.scheduled_at AT TIME ZONE '${TZ}')::date >= $3::date
-       AND (l.scheduled_at AT TIME ZONE '${TZ}')::date <= $4::date
+       AND l.scheduled_at::date >= $3::date
+       AND l.scheduled_at::date <= $4::date
        ${monthClause}
      GROUP BY l.location_id, loc.name, l.teacher_id, u.first_name, u.last_name, period_month
      ORDER BY period_month DESC, loc.name, u.last_name, u.first_name`,

@@ -85,6 +85,7 @@ async function main(): Promise<void> {
         parentUserId: row.parent_id,
         signedAt: row.signed_at,
         pdfFiles,
+        source: "script.backfill-contracts",
       });
 
       console.log(`  → ${keys.length} plik(ów): ${keys.join(", ")}`);

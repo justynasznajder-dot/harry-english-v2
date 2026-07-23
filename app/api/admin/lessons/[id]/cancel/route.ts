@@ -4,8 +4,6 @@ import { requireAdminSchoolContext } from "@/lib/admin-school-context";
 import { requireMessageActor } from "@/lib/messages";
 import { notifyParents } from "@/lib/parent-notifications";
 
-const TZ = "Europe/Warsaw";
-
 type RouteCtx = { params: Promise<{ id: string }> };
 
 export async function POST(request: NextRequest, context: RouteCtx) {
@@ -47,8 +45,8 @@ export async function POST(request: NextRequest, context: RouteCtx) {
          g.name AS group_name,
          g.school_id,
          loc.name AS location_name,
-         to_char(l.scheduled_at AT TIME ZONE '${TZ}', 'DD.MM.YYYY') AS date_pl,
-         to_char(l.scheduled_at AT TIME ZONE '${TZ}', 'HH24:MI') AS time_pl
+         to_char(l.scheduled_at, 'DD.MM.YYYY') AS date_pl,
+         to_char(l.scheduled_at, 'HH24:MI') AS time_pl
        FROM lessons l
        INNER JOIN groups g ON g.id = l.group_id
        LEFT JOIN locations loc ON loc.id = l.location_id

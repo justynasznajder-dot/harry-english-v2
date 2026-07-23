@@ -64,6 +64,8 @@ model children {
   id                    String               @id @default(dbgenerated("(gen_random_uuid())::text"))
   school_id             String
   parent_id             String
+  /// Stały numer dziecka: {parent.client_number}/{seq}, np. 00001/1
+  client_number         String?              @db.VarChar(16)
   first_name            String               @db.VarChar(100)
   last_name             String               @db.VarChar(100)
   birth_date            DateTime             @db.Date
@@ -87,16 +89,19 @@ model children {
   contracts             contracts[]
   group_students        group_students[]
   lesson_billing_periods lesson_billing_periods[]
+  invoices              invoices[]
   payments              payments[]
   progress_notes        progress_notes[]
   renewals              renewals[]
   subscriptions         subscriptions[]
 
+  @@unique([school_id, client_number], map: "children_school_client_number_key")
   @@index([parent_id], map: "idx_children_parent_id")
   @@index([school_id], map: "idx_children_school_id")
 }
 
 model contract_children {
+  school_id             String
   contract_id           String
   child_id              String
   enrollment_request_id String?
@@ -107,6 +112,7 @@ model contract_children {
   lesson_unit_price     Decimal?             @db.Decimal(10, 2)
   monthly_unit_price    Decimal?             @db.Decimal(10, 2)
   yearly_unit_price     Decimal?             @db.Decimal(10, 2)
+  schools               schools              @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   children              children             @relation(fields: [child_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   contracts             contracts            @relation(fields: [contract_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   enrollment_requests   enrollment_requests? @relation(fields: [enrollment_request_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -114,6 +120,7 @@ model contract_children {
 
   @@id([contract_id, child_id])
   @@index([child_id], map: "idx_contract_children_child")
+  @@index([school_id], map: "idx_contract_children_school_id")
 }
 
 model contract_templates {
@@ -149,6 +156,9 @@ model contracts {
   school_year_id        String?
   payment_type          String?
   amount                Decimal?            @db.Decimal
+  /// Snapshot składowych kwoty (dzieci, stawki, rabaty). Zamrażany przy podpisie.
+  amount_breakdown      Json?
+  amount_frozen_at      DateTime?           @db.Timestamp(6)
   payment_due_day       Int?
   enrollment_request_id String?
   attachment_1_html     String?
@@ -157,6 +167,8 @@ model contracts {
   discount_large_family Boolean             @default(false)
   discount_sibling      Boolean             @default(false)
   billing_exempt        Boolean             @default(false)
+  /// Numer umowy: ChildID/rok[/n|/An]
+  contract_number       String?             @db.VarChar(40)
   contract_children     contract_children[]
   lesson_billing_periods lesson_billing_periods[]
   children              children?           @relation(fields: [child_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -165,8 +177,10 @@ model contracts {
   schools               schools             @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   school_years          school_years?       @relation(fields: [school_year_id], references: [id], onUpdate: NoAction)
   contract_templates    contract_templates  @relation(fields: [template_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  invoices              invoices[]
   payments              payments[]
 
+  @@unique([school_id, contract_number], map: "contracts_school_contract_number_key")
   @@index([enrollment_request_id])
   @@index([child_id], map: "idx_contracts_child_id")
   @@index([parent_id], map: "idx_contracts_parent_id")
@@ -277,6 +291,7 @@ model groups {
 }
 
 model lessons {
+  school_id            String
   id                   String              @id @default(dbgenerated("(gen_random_uuid())::text"))
   group_id             String
   teacher_id           String
@@ -290,6 +305,7 @@ model lessons {
   school_year_id       String?
   schedule_template_id String?
   attendance           attendance[]
+  schools              schools             @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   groups               groups              @relation(fields: [group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   locations            locations           @relation(fields: [location_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   schedule_templates   schedule_templates? @relation(fields: [schedule_template_id], references: [id], onUpdate: NoAction)
@@ -301,6 +317,7 @@ model lessons {
   @@index([schedule_template_id], map: "idx_lessons_schedule_template_id")
   @@index([scheduled_at], map: "idx_lessons_scheduled_at")
   @@index([school_year_id], map: "idx_lessons_school_year_id")
+  @@index([school_id], map: "idx_lessons_school_id")
 }
 
 model lesson_billing_periods {
@@ -430,6 +447,7 @@ model payments {
   schools        schools?      @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   school_years   school_years? @relation(fields: [school_year_id], references: [id], onUpdate: NoAction)
   lesson_billing_periods lesson_billing_periods?
+  invoices       invoices?
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -506,6 +524,7 @@ model rewards {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model schedule_templates {
+  school_id      String
   id             String        @id @default(dbgenerated("(gen_random_uuid())::text"))
   group_id       String
   location_id    String
@@ -514,12 +533,14 @@ model schedule_templates {
   duration_min   Int           @default(60)
   school_year_id String?
   active         Boolean       @default(true)
+  schools        schools       @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   lessons        lessons[]
   groups         groups        @relation(fields: [group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   locations      locations     @relation(fields: [location_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   school_years   school_years? @relation(fields: [school_year_id], references: [id], onUpdate: NoAction)
 
   @@index([group_id], map: "idx_schedule_templates_group_id")
+  @@index([school_id], map: "idx_schedule_templates_school_id")
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -587,6 +608,23 @@ model school_year_close_logs {
   @@index([school_id], map: "idx_school_year_close_logs_school")
 }
 
+/// Log operacji Cloudflare R2 (Class A/B) — monitoring limitu free tier / atrybucja procesów.
+model r2_usage_logs {
+  id            BigInt   @id @default(autoincrement())
+  created_at    DateTime @default(now()) @db.Timestamptz(6)
+  op            String   @db.VarChar(16)
+  billing_class String   @db.VarChar(8)
+  source        String   @db.VarChar(64)
+  bucket        String   @db.VarChar(128)
+  key_or_prefix String
+  ok            Boolean
+  duration_ms   Int
+  error         String?
+
+  @@index([created_at], map: "idx_r2_usage_logs_created_at")
+  @@index([source, billing_class, created_at], map: "idx_r2_usage_logs_source_class_created")
+}
+
 model school_year_teacher_stats {
   id                      String       @id @default(dbgenerated("(gen_random_uuid())::text"))
   school_id               String
@@ -623,6 +661,7 @@ model school_years {
   groups                  groups[]
   lessons                 lessons[]
   lesson_billing_periods  lesson_billing_periods[]
+  invoices                invoices[]
   payments                payments[]
   schedule_templates      schedule_templates[]
   school_holidays         school_holidays[]
@@ -645,14 +684,30 @@ model schools {
   renewals_open                Boolean                        @default(false)
   renewals_season              String?                        @db.VarChar(20)
   city                         String?                        @db.VarChar(100)
+  invoice_seller_name          String?                        @db.VarChar(255)
+  invoice_seller_address       String?
+  invoice_seller_nip           String?                        @db.VarChar(20)
+  invoice_place                String?                        @db.VarChar(100)
+  invoice_bank_account         String?                        @db.VarChar(40)
+  invoice_bank_label           String?                        @db.VarChar(100)
+  invoice_issuer_name          String?                        @db.VarChar(255)
+  invoice_vat_exemption        String?
+  invoice_default_item_name    String?                        @db.VarChar(255)
+  invoice_generation_day       Int                            @default(10)
   announcements                announcements[]
   children                     children[]
+  contract_children            contract_children[]
   contract_templates           contract_templates[]
   contracts                    contracts[]
   enrollment_requests          enrollment_requests[]
   group_students               group_students[]
   groups                       groups[]
+  client_number_counters       client_number_counters[]
+  invoice_counters             invoice_counters[]
+  invoice_parent_month_counters invoice_parent_month_counters[]
+  invoices                     invoices[]
   lesson_billing_periods       lesson_billing_periods[]
+  lessons                      lessons[]
   locations                    locations[]
   materials                    materials[]
   messages                     messages[]
@@ -661,6 +716,7 @@ model schools {
   renewal_proposals            renewal_proposals[]
   renewals                     renewals[]
   rewards                      rewards[]
+  schedule_templates           schedule_templates[]
   school_complimentary_parents school_complimentary_parents[]
   school_discount_settings     school_discount_settings[]
   school_holidays              school_holidays[]
@@ -669,6 +725,97 @@ model schools {
   school_years                 school_years?
   subscriptions                subscriptions[]
   users                        users[]
+}
+
+/// Kolejny numer klienta (rodzica) per szkoła — 00001, 00002…
+model client_number_counters {
+  school_id   String
+  last_number Int      @default(0)
+  updated_at  DateTime @default(now()) @db.Timestamptz(6)
+  schools     schools  @relation(fields: [school_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([school_id])
+}
+
+/// Kolejny numer faktury sprzedaży per rodzic + miesiąc (ParentID/m/yyyy/n)
+model invoice_parent_month_counters {
+  school_id   String
+  parent_id   String
+  year_month  String   @db.VarChar(7)
+  last_number Int      @default(0)
+  updated_at  DateTime @default(now()) @db.Timestamptz(6)
+  schools     schools  @relation(fields: [school_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users       users    @relation(fields: [parent_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([school_id, parent_id, year_month])
+  @@index([parent_id], map: "idx_invoice_parent_month_counters_parent")
+}
+
+model invoice_counters {
+  school_id   String
+  year_month  String   @db.VarChar(7)
+  /// Seria numeracji: FS (sprzedaż) | FK (korekty)
+  series      String   @default("FS") @db.VarChar(8)
+  last_number Int      @default(0)
+  updated_at  DateTime @default(now()) @db.Timestamptz(6)
+  schools     schools  @relation(fields: [school_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([school_id, year_month, series])
+}
+
+/// Niemutowalny snapshot faktury (1:1 z payment) — dane skopiowane w momencie wystawienia.
+model invoices {
+  id                  String        @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id           String
+  payment_id          String        @unique
+  parent_id           String
+  child_id            String?
+  contract_id         String?
+  school_year_id      String?
+  /// SALE = faktura sprzedaży, CORRECTIVE = faktura korygująca
+  document_type       String        @default("SALE") @db.VarChar(20)
+  corrects_invoice_id String?
+  correction_reason   String?
+  invoice_number      String        @db.VarChar(40)
+  issue_date          DateTime      @db.Date
+  sale_date           DateTime      @db.Date
+  due_date            DateTime      @db.Date
+  seller_name         String        @db.VarChar(255)
+  seller_address      String
+  seller_nip          String        @db.VarChar(20)
+  issue_place         String        @db.VarChar(100)
+  bank_account        String        @db.VarChar(40)
+  bank_label          String        @db.VarChar(100)
+  issuer_name         String        @db.VarChar(255)
+  vat_exemption       String
+  buyer_name          String        @db.VarChar(255)
+  buyer_address       String
+  buyer_nip           String?       @db.VarChar(20)
+  item_name           String        @db.VarChar(255)
+  item_qty            String        @db.VarChar(40)
+  item_discount       String        @db.VarChar(40)
+  item_unit_price     Decimal       @db.Decimal
+  item_value          Decimal       @db.Decimal
+  amount              Decimal       @db.Decimal
+  amount_in_words     String
+  payment_method      String        @default("Przelew") @db.VarChar(40)
+  currency            String        @default("PLN") @db.VarChar(10)
+  content_html        String
+  pdf_key             String?
+  created_at          DateTime      @default(now()) @db.Timestamp(6)
+  schools             schools       @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  payments            payments      @relation(fields: [payment_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users               users         @relation(fields: [parent_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  children            children?     @relation(fields: [child_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  contracts           contracts?    @relation(fields: [contract_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  school_years        school_years? @relation(fields: [school_year_id], references: [id], onUpdate: NoAction)
+  corrects_invoice    invoices?     @relation("InvoiceCorrections", fields: [corrects_invoice_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  corrective_invoices invoices[]    @relation("InvoiceCorrections")
+
+  @@unique([school_id, invoice_number], map: "invoices_school_invoice_number_key")
+  @@index([parent_id], map: "idx_invoices_parent_id")
+  @@index([school_id, issue_date], map: "idx_invoices_school_issue")
+  @@index([corrects_invoice_id], map: "idx_invoices_corrects_invoice_id")
 }
 
 model subscriptions {
@@ -715,11 +862,14 @@ model users {
   created_at                            DateTime                       @default(now()) @db.Timestamp(6)
   access_level                          String                         @default("PENDING")
   must_change_password                  Boolean                        @default(false)
+  /// Stały numer klienta rodzica (5 cyfr), unikalny per school_id
+  client_number                         String?                        @db.VarChar(5)
   announcements                         announcements[]
   children                              children[]
   contracts                             contracts[]
   enrollment_requests                   enrollment_requests[]
   groups                                groups[]
+  invoice_parent_month_counters         invoice_parent_month_counters[]
   lesson_billing_periods_parent         lesson_billing_periods[]       @relation("lesson_billing_parent")
   lesson_billing_periods_entered        lesson_billing_periods[]       @relation("lesson_billing_entered_by")
   lessons                               lessons[]
@@ -728,6 +878,7 @@ model users {
   messages_messages_recipient_idTousers messages[]                     @relation("messages_recipient_idTousers")
   messages_messages_sender_idTousers    messages[]                     @relation("messages_sender_idTousers")
   parent_profiles                       parent_profiles[]
+  invoices                              invoices[]
   payments                              payments[]
   progress_notes                        progress_notes[]
   renewal_proposals                     renewal_proposals[]
@@ -740,6 +891,7 @@ model users {
   schools                               schools?                       @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([school_id, email])
+  @@unique([school_id, client_number], map: "users_school_client_number_key")
   @@index([email], map: "idx_users_email")
   @@index([reset_token], map: "idx_users_reset_token")
   @@index([role], map: "idx_users_role")

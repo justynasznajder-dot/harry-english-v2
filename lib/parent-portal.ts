@@ -1,11 +1,12 @@
+import { extractContractNumber } from "@/lib/contract-html";
 import { POLISH_DAY_FROM_ST_SQL, queryDb } from "@/lib/db";
-
-const TZ = "Europe/Warsaw";
+import {
+  sqlSchoolTimestampAsTimestamptz,
+  toIsoUtc,
+} from "@/lib/school-timezone";
 
 function toIso(value: unknown): string {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
-  if (typeof value === "string") return value;
-  return String(value);
+  return toIsoUtc(value as Date | string);
 }
 
 function formatYmd(value: unknown): string | null {
@@ -63,6 +64,12 @@ export type ParentPaymentRow = {
   paymentType: string | null;
   source: "payment" | "lesson_billing";
   billingPeriodStatus: string | null;
+  invoiceNumber: string | null;
+  hasInvoicePdf: boolean;
+  schoolYearId: string | null;
+  schoolYearName: string | null;
+  schoolYearActive: boolean;
+  schoolYearDateFrom: string | null;
 };
 
 export type ParentCalendarLesson = {
@@ -91,7 +98,11 @@ export type ParentSignedContract = {
   signedAt: string | null;
   status: string;
   paymentType: string | null;
+  schoolYearId: string | null;
   schoolYearName: string | null;
+  schoolYearActive: boolean;
+  schoolYearDateFrom: string | null;
+  contractNumber: string | null;
   children: Array<{ childId: string; firstName: string; lastName: string }>;
 };
 
@@ -186,7 +197,7 @@ export async function fetchUpcomingLessonsForGroups(
   }>(
     `SELECT l.id,
             l.group_id,
-            l.scheduled_at,
+            ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at,
             l.duration_min,
             l.status::text AS status,
             loc.name AS location_name
@@ -194,7 +205,7 @@ export async function fetchUpcomingLessonsForGroups(
      LEFT JOIN locations loc ON loc.id = l.location_id
      WHERE l.group_id = ANY($1::text[])
        AND l.status IN ('SCHEDULED', 'COMPLETED')
-       AND l.scheduled_at >= NOW()
+       AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} >= NOW()
      ORDER BY l.scheduled_at ASC
      LIMIT $2`,
     [groupIds, limit]
@@ -239,7 +250,7 @@ export async function fetchParentAttendance(
        c.first_name AS child_first_name,
        c.last_name AS child_last_name,
        l.id AS lesson_id,
-       l.scheduled_at,
+       ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at,
        a.status::text AS attendance_status,
        a.note,
        g.name AS group_name,
@@ -343,6 +354,12 @@ export async function fetchParentPayments(
       period_month: Date | string | null;
       description: string | null;
       payment_type: string | null;
+      invoice_number: string | null;
+      invoice_pdf_key: string | null;
+      school_year_id: string | null;
+      school_year_name: string | null;
+      school_year_active: boolean | null;
+      school_year_date_from: Date | string | null;
     }>(
       `SELECT
          p.id,
@@ -354,13 +371,21 @@ export async function fetchParentPayments(
          p.paid_at,
          p.period_month,
          p.description,
-         COALESCE(ct.payment_type, 'MONTHLY') AS payment_type
+         COALESCE(ct.payment_type, 'MONTHLY') AS payment_type,
+         i.invoice_number,
+         i.pdf_key AS invoice_pdf_key,
+         sy.id AS school_year_id,
+         sy.name AS school_year_name,
+         COALESCE(sy.active, FALSE) AS school_year_active,
+         sy.date_from AS school_year_date_from
        FROM payments p
        LEFT JOIN children c ON c.id = p.child_id
        LEFT JOIN contracts ct ON ct.id = p.contract_id
+       LEFT JOIN invoices i ON i.payment_id = p.id
+       LEFT JOIN school_years sy ON sy.id = COALESCE(p.school_year_id, ct.school_year_id)
        WHERE p.parent_id = $1 AND p.school_id = $2
        ORDER BY COALESCE(p.due_date, p.period_month, p.created_at) DESC
-       LIMIT 100`,
+       LIMIT 500`,
       [parentId, schoolId]
     ),
     queryDb<{
@@ -371,6 +396,10 @@ export async function fetchParentPayments(
       status: string;
       period_month: Date | string;
       payment_id: string | null;
+      school_year_id: string | null;
+      school_year_name: string | null;
+      school_year_active: boolean | null;
+      school_year_date_from: Date | string | null;
     }>(
       `SELECT
          lbp.id,
@@ -379,13 +408,19 @@ export async function fetchParentPayments(
          lbp.amount::text AS amount,
          lbp.status,
          lbp.period_month,
-         lbp.payment_id
+         lbp.payment_id,
+         sy.id AS school_year_id,
+         sy.name AS school_year_name,
+         COALESCE(sy.active, FALSE) AS school_year_active,
+         sy.date_from AS school_year_date_from
        FROM lesson_billing_periods lbp
        JOIN children c ON c.id = lbp.child_id
+       LEFT JOIN contracts ct ON ct.id = lbp.contract_id
+       LEFT JOIN school_years sy ON sy.id = COALESCE(lbp.school_year_id, ct.school_year_id)
        WHERE lbp.parent_id = $1 AND lbp.school_id = $2
          AND lbp.payment_id IS NULL
        ORDER BY lbp.period_month DESC
-       LIMIT 24`,
+       LIMIT 200`,
       [parentId, schoolId]
     ),
   ]);
@@ -403,6 +438,14 @@ export async function fetchParentPayments(
     paymentType: row.payment_type,
     source: "payment" as const,
     billingPeriodStatus: null,
+    invoiceNumber: row.invoice_number,
+    hasInvoicePdf: Boolean(row.invoice_pdf_key),
+    schoolYearId: row.school_year_id,
+    schoolYearName: row.school_year_name,
+    schoolYearActive: Boolean(row.school_year_active),
+    schoolYearDateFrom: row.school_year_date_from
+      ? String(row.school_year_date_from).slice(0, 10)
+      : null,
   }));
 
   const billingRows: ParentPaymentRow[] = billingRes.rows.map((row) => ({
@@ -418,6 +461,14 @@ export async function fetchParentPayments(
     paymentType: "PER_LESSON",
     source: "lesson_billing" as const,
     billingPeriodStatus: row.status,
+    invoiceNumber: null,
+    hasInvoicePdf: false,
+    schoolYearId: row.school_year_id,
+    schoolYearName: row.school_year_name,
+    schoolYearActive: Boolean(row.school_year_active),
+    schoolYearDateFrom: row.school_year_date_from
+      ? String(row.school_year_date_from).slice(0, 10)
+      : null,
   }));
 
   return [...paymentRows, ...billingRows].sort((a, b) => {
@@ -469,7 +520,7 @@ export async function fetchParentCalendar(
          c.last_name AS child_last_name,
          g.id AS group_id,
          g.name AS group_name,
-         l.scheduled_at,
+         ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at,
          l.duration_min,
          l.status::text AS status,
          loc.name AS location_name
@@ -483,8 +534,8 @@ export async function fetchParentCalendar(
          AND c.school_id = $2
          AND c.active = TRUE
          ${childFilter}
-         AND l.scheduled_at >= ($3::date AT TIME ZONE '${TZ}')
-         AND l.scheduled_at < (($4::date + interval '1 day') AT TIME ZONE '${TZ}')
+         AND l.scheduled_at >= $3::date
+         AND l.scheduled_at < ($4::date + interval '1 day')
        ORDER BY l.scheduled_at ASC`,
       params
     ),
@@ -538,7 +589,12 @@ export async function fetchParentSignedContracts(
     signed_at: Date | string | null;
     status: string;
     payment_type: string | null;
+    content_html: string;
+    contract_number: string | null;
+    school_year_id: string | null;
     school_year_name: string | null;
+    school_year_active: boolean | null;
+    school_year_date_from: Date | string | null;
     children_json: string;
   }>(
     `SELECT
@@ -546,7 +602,12 @@ export async function fetchParentSignedContracts(
        ct.signed_at,
        ct.status,
        ct.payment_type,
+       ct.content_html,
+       ct.contract_number,
+       ct.school_year_id,
        sy.name AS school_year_name,
+       COALESCE(sy.active, FALSE) AS school_year_active,
+       sy.date_from AS school_year_date_from,
        COALESCE(
          JSON_AGG(
            JSONB_BUILD_OBJECT(
@@ -564,7 +625,17 @@ export async function fetchParentSignedContracts(
      WHERE ct.parent_id = $1
        AND ct.school_id = $2
        AND ct.status = 'SIGNED'
-     GROUP BY ct.id, ct.signed_at, ct.status, ct.payment_type, sy.name
+     GROUP BY
+       ct.id,
+       ct.signed_at,
+       ct.status,
+       ct.payment_type,
+       ct.content_html,
+       ct.contract_number,
+       ct.school_year_id,
+       sy.name,
+       sy.active,
+       sy.date_from
      ORDER BY ct.signed_at DESC NULLS LAST`,
     [parentId, schoolId]
   );
@@ -574,7 +645,16 @@ export async function fetchParentSignedContracts(
     signedAt: row.signed_at ? toIso(row.signed_at) : null,
     status: row.status,
     paymentType: row.payment_type,
+    schoolYearId: row.school_year_id,
     schoolYearName: row.school_year_name,
+    schoolYearActive: Boolean(row.school_year_active),
+    schoolYearDateFrom: row.school_year_date_from
+      ? String(row.school_year_date_from).slice(0, 10)
+      : null,
+    contractNumber:
+      row.contract_number?.trim() ||
+      extractContractNumber(row.content_html ?? "") ||
+      null,
     children: JSON.parse(row.children_json || "[]") as Array<{
       childId: string;
       firstName: string;

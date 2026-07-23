@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useState } from 'react';
 import EnrollmentParentFlow, { type UserInfo } from '@/src/components/enrollment/EnrollmentParentFlow';
 import MessagesPanel from '@/src/components/messages/MessagesPanel';
 import MessagesTabLabel from '@/src/components/messages/MessagesTabLabel';
@@ -11,7 +11,6 @@ import ParentDocumentsTab from '@/src/components/parent/ParentDocumentsTab';
 import ParentGroupTab from '@/src/components/parent/ParentGroupTab';
 import ParentPaymentsTab from '@/src/components/parent/ParentPaymentsTab';
 import ParentProfileSection from '@/src/components/parent/ParentProfileSection';
-import ParentResignationSection from '@/src/components/parent/ParentResignationSection';
 
 export type { UserInfo };
 
@@ -47,16 +46,13 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
   const { unreadCount: messagesUnreadCount, refresh: refreshMessagesUnreadCount } =
     useUnreadMessagesCount(messagesListResetToken);
 
-  const refreshUserAccessLevel = useCallback(async () => {
-    try {
-      const r = await fetch('/api/user/me', { cache: 'no-store' });
-      if (!r.ok) return;
-      const data = (await r.json()) as { user?: UserInfo };
-      if (data.user) onUserInfoUpdate(data.user);
-    } catch (err) {
-      console.error('Nie udało się odświeżyć profilu rodzica', err);
-    }
-  }, [onUserInfoUpdate]);
+  const activeChildren = (userInfo.children ?? [])
+    .filter((c) => c.active !== false && c.childId)
+    .map((c) => ({
+      id: c.childId as string,
+      firstName: c.firstName,
+      lastName: c.lastName,
+    }));
 
   const renderMessagesTab = () => (
     <MessagesPanel
@@ -64,6 +60,7 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
       currentUserId={userInfo.id}
       listResetToken={messagesListResetToken}
       onInboxChange={refreshMessagesUnreadCount}
+      parentChildren={activeChildren}
     />
   );
 
@@ -82,12 +79,7 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
     }
     if (activeTab === 'documents') return <ParentDocumentsTab />;
     if (activeTab === 'profile') {
-      return (
-        <div className="space-y-4">
-          <ParentProfileSection />
-          <ParentResignationSection userInfo={userInfo} onUpdated={refreshUserAccessLevel} />
-        </div>
-      );
+      return <ParentProfileSection />;
     }
     return null;
   };

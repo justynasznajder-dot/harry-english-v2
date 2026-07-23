@@ -1,10 +1,16 @@
 import { queryDb } from "@/lib/db";
 import { formatRenewalStatusLabel } from "@/lib/renewal-status";
+import {
+  SCHOOL_TIMEZONE,
+  sqlSchoolTimestampAsTimestamptz,
+  toIsoUtc,
+  todayYmdSchool,
+} from "@/lib/school-timezone";
 
-const TZ = "Europe/Warsaw";
+const TZ = SCHOOL_TIMEZONE;
 
 export function todayYmdWarsaw(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+  return todayYmdSchool();
 }
 
 function weekEndYmd(fromYmd: string): string {
@@ -130,7 +136,7 @@ export async function fetchDashboardLessons(
   }>(
     `SELECT
        l.id,
-       l.scheduled_at,
+       ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at,
        l.duration_min,
        l.status::text AS status,
        g.id AS group_id,
@@ -145,15 +151,14 @@ export async function fetchDashboardLessons(
      LEFT JOIN locations loc ON loc.id = l.location_id
      JOIN users u ON u.id = l.teacher_id
      WHERE l.status <> 'CANCELLED'
-       AND l.scheduled_at >= ($2::date AT TIME ZONE '${TZ}')
-       AND l.scheduled_at < (($3::date + interval '1 day') AT TIME ZONE '${TZ}')
+       AND l.scheduled_at >= $2::date
+       AND l.scheduled_at < ($3::date + interval '1 day')
      ORDER BY l.scheduled_at ASC`,
     [schoolId, fromYmd, toYmd]
   );
   return res.rows.map((row) => ({
     id: row.id,
-    scheduledAt:
-      row.scheduled_at instanceof Date ? row.scheduled_at.toISOString() : String(row.scheduled_at),
+    scheduledAt: toIsoUtc(row.scheduled_at),
     durationMin: row.duration_min,
     status: row.status,
     groupId: row.group_id,
@@ -184,7 +189,7 @@ export async function fetchDashboardScheduleSlots(
     `SELECT
        CONCAT('schedule-', st.id, '-', TO_CHAR(d.day, 'YYYY-MM-DD')) AS id,
        g.id AS group_id,
-       ((d.day::text || ' ' || st.start_time::text)::timestamp AT TIME ZONE '${TZ}') AS scheduled_at,
+       ((d.day::date + st.start_time) AT TIME ZONE '${TZ}') AS scheduled_at,
        st.duration_min,
        'HARMONOGRAM' AS status,
        g.name AS group_name,
@@ -204,8 +209,7 @@ export async function fetchDashboardScheduleSlots(
 
   return res.rows.map((row) => ({
     id: row.id,
-    scheduledAt:
-      row.scheduled_at instanceof Date ? row.scheduled_at.toISOString() : String(row.scheduled_at),
+    scheduledAt: toIsoUtc(row.scheduled_at),
     durationMin: row.duration_min,
     status: row.status,
     groupId: row.group_id,
@@ -297,7 +301,27 @@ export async function fetchDashboardBillingSummary(
   };
 }
 
+export type ResignationListRow = ResignationAlert & {
+  groupName: string | null;
+  accessLevel: string | null;
+};
+
 export async function fetchResignationAlerts(schoolId: string): Promise<ResignationAlert[]> {
+  const rows = await fetchResignationsList(schoolId);
+  return rows.map(
+    ({ childId, childName, parentId, parentName, parentEmail, reason, requestedAt }) => ({
+      childId,
+      childName,
+      parentId,
+      parentName,
+      parentEmail,
+      reason,
+      requestedAt,
+    })
+  );
+}
+
+export async function fetchResignationsList(schoolId: string): Promise<ResignationListRow[]> {
   const res = await queryDb<{
     child_id: string;
     child_first: string;
@@ -308,6 +332,8 @@ export async function fetchResignationAlerts(schoolId: string): Promise<Resignat
     parent_email: string;
     reason: string | null;
     requested_at: Date | string | null;
+    group_name: string | null;
+    access_level: string | null;
   }>(
     `SELECT
        c.id AS child_id,
@@ -318,7 +344,16 @@ export async function fetchResignationAlerts(schoolId: string): Promise<Resignat
        u.last_name AS parent_last,
        u.email AS parent_email,
        c.resignation_reason AS reason,
-       c.resignation_date AS requested_at
+       c.resignation_date AS requested_at,
+       UPPER(BTRIM(COALESCE(c.access_level::text, ''))) AS access_level,
+       (
+         SELECT g.name
+         FROM group_students gs
+         JOIN groups g ON g.id = gs.group_id AND g.school_id = c.school_id
+         WHERE gs.child_id = c.id AND gs.left_at IS NULL
+         ORDER BY gs.enrolled_at DESC NULLS LAST
+         LIMIT 1
+       ) AS group_name
      FROM children c
      JOIN users u ON u.id = c.parent_id
      WHERE c.school_id = $1
@@ -339,7 +374,21 @@ export async function fetchResignationAlerts(schoolId: string): Promise<Resignat
         ? row.requested_at.toISOString()
         : String(row.requested_at)
       : null,
+    groupName: row.group_name,
+    accessLevel: row.access_level || null,
   }));
+}
+
+export async function countOpenResignations(schoolId: string): Promise<number> {
+  const res = await queryDb<{ n: string }>(
+    `SELECT COUNT(*)::text AS n
+     FROM children c
+     WHERE c.school_id = $1
+       AND c.active = TRUE
+       AND c.resignation_requested = TRUE`,
+    [schoolId]
+  );
+  return Number(res.rows[0]?.n ?? 0);
 }
 
 export async function fetchStaleNegotiationAlerts(
@@ -398,7 +447,7 @@ export async function fetchMissingAttendanceAlerts(
   }>(
     `SELECT
        l.id AS lesson_id,
-       l.scheduled_at,
+       ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at,
        g.name AS group_name,
        u.first_name AS teacher_first,
        u.last_name AS teacher_last,
@@ -419,8 +468,8 @@ export async function fetchMissingAttendanceAlerts(
        WHERE a.lesson_id = l.id
      ) att ON TRUE
      WHERE l.status IN ('COMPLETED', 'SCHEDULED')
-       AND l.scheduled_at < NOW() - interval '1 day'
-       AND l.scheduled_at > NOW() - interval '30 days'
+       AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} < NOW() - interval '1 day'
+       AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} > NOW() - interval '30 days'
        AND COALESCE(stu.cnt, 0) > 0
        AND COALESCE(att.cnt, 0) < COALESCE(stu.cnt, 0)
      ORDER BY l.scheduled_at DESC
@@ -429,8 +478,7 @@ export async function fetchMissingAttendanceAlerts(
   );
   return res.rows.map((row) => ({
     lessonId: row.lesson_id,
-    scheduledAt:
-      row.scheduled_at instanceof Date ? row.scheduled_at.toISOString() : String(row.scheduled_at),
+    scheduledAt: toIsoUtc(row.scheduled_at),
     groupName: row.group_name,
     teacherName: `${row.teacher_first} ${row.teacher_last}`.trim(),
     expectedStudents: Number(row.expected_students) || 0,
@@ -761,9 +809,10 @@ export async function fetchScheduleConflicts(
          l.id,
          l.teacher_id,
          l.location_id,
-         l.scheduled_at,
+         ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at,
          l.duration_min,
-         l.scheduled_at + (l.duration_min || ' minutes')::interval AS ends_at,
+         ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")}
+           + (l.duration_min || ' minutes')::interval AS ends_at,
          g.name AS group_name,
          loc.name AS location_name,
          u.first_name || ' ' || u.last_name AS teacher_name
@@ -772,8 +821,8 @@ export async function fetchScheduleConflicts(
        JOIN locations loc ON loc.id = l.location_id
        JOIN users u ON u.id = l.teacher_id
        WHERE l.status <> 'CANCELLED'
-         AND l.scheduled_at >= ($2::date AT TIME ZONE '${TZ}')
-         AND l.scheduled_at < (($3::date + interval '1 day') AT TIME ZONE '${TZ}')
+         AND l.scheduled_at >= $2::date
+         AND l.scheduled_at < ($3::date + interval '1 day')
      )
      SELECT
        'teacher' AS conflict_type,
@@ -813,10 +862,8 @@ export async function fetchScheduleConflicts(
     resourceName: row.resource_name,
     lessonAId: row.lesson_a_id,
     lessonBId: row.lesson_b_id,
-    scheduledAtA:
-      row.scheduled_a instanceof Date ? row.scheduled_a.toISOString() : String(row.scheduled_a),
-    scheduledAtB:
-      row.scheduled_b instanceof Date ? row.scheduled_b.toISOString() : String(row.scheduled_b),
+      scheduledAtA: toIsoUtc(row.scheduled_a),
+      scheduledAtB: toIsoUtc(row.scheduled_b),
     groupAName: row.group_a,
     groupBName: row.group_b,
     locationAName: row.loc_a,

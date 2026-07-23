@@ -1,8 +1,14 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getTokenFromRequest } from "@/lib/auth";
-import { sendMessageNotificationEmail } from "@/lib/email";
-import { queryDb, runPgTransaction } from "@/lib/db";
+import { sendMessageNotificationEmail, sendResignationEmail } from "@/lib/email";
+import {
+  getChildById,
+  getUserById,
+  queryDb,
+  requestChildResignation,
+  runPgTransaction,
+} from "@/lib/db";
 import { isValidEmailAddress } from "@/lib/email-address";
 import {
   fetchThreadRoots,
@@ -92,6 +98,8 @@ export async function POST(request: NextRequest) {
     subject?: unknown;
     content?: unknown;
     parentMessageId?: unknown;
+    templateKey?: unknown;
+    templateFields?: unknown;
   };
   try {
     body = await request.json();
@@ -115,6 +123,12 @@ export async function POST(request: NextRequest) {
     typeof body.parentMessageId === "string" && body.parentMessageId.length > 0
       ? body.parentMessageId
       : null;
+  const templateKey =
+    typeof body.templateKey === "string" ? body.templateKey.trim() : "";
+  const templateFields =
+    body.templateFields && typeof body.templateFields === "object" && !Array.isArray(body.templateFields)
+      ? (body.templateFields as Record<string, unknown>)
+      : {};
 
   if (!subject || !content) {
     return NextResponse.json({ message: "Temat i treść są wymagane" }, { status: 400 });
@@ -214,6 +228,53 @@ export async function POST(request: NextRequest) {
     });
     if (!validation.ok) {
       return NextResponse.json({ message: validation.message }, { status: 403 });
+    }
+  }
+
+  /** Szablon rezygnacji: zapisz formalne zgłoszenie przed wysłaniem wiadomości. */
+  if (actor.user.role === "PARENT" && !parentMessageId && templateKey === "resignation") {
+    const childId =
+      typeof templateFields.dziecko === "string" ? templateFields.dziecko.trim() : "";
+    const reason =
+      typeof templateFields.powod === "string" ? templateFields.powod.trim() : "";
+    if (!childId || !reason) {
+      return NextResponse.json(
+        { message: "Rezygnacja wymaga wyboru dziecka i podania powodu" },
+        { status: 400 }
+      );
+    }
+
+    const child = await getChildById(childId);
+    if (!child || child.parent_id !== actor.user.id) {
+      return NextResponse.json(
+        { message: "Dziecko nie zostało znalezione lub nie należy do użytkownika" },
+        { status: 404 }
+      );
+    }
+
+    const success = await requestChildResignation(childId, actor.user.id, reason);
+    if (!success) {
+      return NextResponse.json(
+        { message: "Nie udało się zgłosić rezygnacji — spróbuj ponownie" },
+        { status: 500 }
+      );
+    }
+
+    const parentUser = await getUserById(actor.user.id);
+    if (parentUser) {
+      try {
+        await sendResignationEmail(
+          parentUser.first_name,
+          parentUser.last_name,
+          parentUser.email,
+          child.first_name,
+          child.last_name,
+          child.id,
+          reason
+        );
+      } catch (emailError) {
+        console.error("Resignation email after message template failed:", emailError);
+      }
     }
   }
 

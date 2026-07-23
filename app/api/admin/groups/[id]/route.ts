@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryDb } from "@/lib/db";
 import { requireAdminSchoolContext } from "@/lib/admin-school-context";
+import { sqlSchoolTimestampAsTimestamptz, toIsoUtc } from "@/lib/school-timezone";
 
 export async function GET(
   request: NextRequest,
@@ -36,7 +37,7 @@ export async function GET(
        FROM lessons
        WHERE group_id = $1
          AND schedule_template_id IS NOT NULL
-         AND scheduled_at > NOW()
+         AND ${sqlSchoolTimestampAsTimestamptz("scheduled_at")} > NOW()
          AND status = 'SCHEDULED'
        GROUP BY schedule_template_id`,
       [id]
@@ -65,7 +66,7 @@ export async function GET(
       `SELECT COUNT(*)::int AS cnt
        FROM lessons
        WHERE group_id = $1
-         AND scheduled_at > NOW()
+         AND ${sqlSchoolTimestampAsTimestamptz("scheduled_at")} > NOW()
          AND status = 'SCHEDULED'`,
       [id]
     );
@@ -96,11 +97,18 @@ export async function GET(
        ORDER BY gs.enrolled_at DESC`,
       [id]
     );
-    const nearestLessons = await queryDb(
-      `SELECT *
-       FROM lessons
-       WHERE group_id = $1
-       ORDER BY scheduled_at ASC
+    const nearestLessons = await queryDb<{
+      id: string;
+      scheduled_at: Date | string;
+      status: string;
+      [key: string]: unknown;
+    }>(
+      `SELECT
+         l.*,
+         ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at_utc
+       FROM lessons l
+       WHERE l.group_id = $1
+       ORDER BY l.scheduled_at ASC
        LIMIT 20`,
       [id]
     );
@@ -115,7 +123,13 @@ export async function GET(
       group: group.rows[0],
       scheduleTemplates,
       students: students.rows,
-      nearestLessons: nearestLessons.rows,
+      nearestLessons: nearestLessons.rows.map((row) => {
+        const { scheduled_at_utc, ...rest } = row;
+        return {
+          ...rest,
+          scheduled_at: toIsoUtc(scheduled_at_utc as Date | string),
+        };
+      }),
       locations: locations.rows,
       generatedLessons: {
         futureCount: futureLessonsTotal.rows[0]?.cnt ?? 0,

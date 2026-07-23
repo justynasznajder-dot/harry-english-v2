@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTokenFromRequest } from "@/lib/auth";
 import { isLektor, queryDb } from "@/lib/db";
 import { completePastScheduledLessons } from "@/lib/lesson-completion";
+import { sqlSchoolTimestampAsTimestamptz, toIsoUtc } from "@/lib/school-timezone";
 
 async function ensureTeacherOwnsGroup(userId: string, groupId: string): Promise<boolean> {
   const res = await queryDb<{ id: string }>(
@@ -40,7 +41,7 @@ export async function GET(request: NextRequest) {
       location_name: string | null;
     }>(
       `SELECT l.id,
-              l.scheduled_at,
+              ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at,
               l.duration_min,
               l.status::text AS status,
               loc.name AS location_name
@@ -56,7 +57,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       lessons: res.rows.map((row) => ({
         id: row.id,
-        scheduledAt: row.scheduled_at,
+        scheduledAt: toIsoUtc(row.scheduled_at),
         durationMin: row.duration_min,
         status: row.status,
         locationName: row.location_name,

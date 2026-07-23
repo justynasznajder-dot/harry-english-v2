@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ComposeMessageModal, {
   type ComposeSection,
 } from '@/src/components/messages/ComposeMessageModal';
@@ -99,6 +99,8 @@ interface MessagesPanelProps {
   listResetToken?: number;
   /** Wywołaj po zmianie skrzynki (odśwież licznik na zakładce). */
   onInboxChange?: () => void;
+  /** Aktywne dzieci rodzica (select w szablonach). */
+  parentChildren?: Array<{ id: string; firstName: string; lastName: string }>;
 }
 
 export default function MessagesPanel({
@@ -106,6 +108,7 @@ export default function MessagesPanel({
   currentUserId: currentUserIdProp,
   listResetToken = 0,
   onInboxChange,
+  parentChildren,
 }: MessagesPanelProps) {
   const [currentUserId, setCurrentUserId] = useState(currentUserIdProp ?? '');
 
@@ -160,6 +163,10 @@ export default function MessagesPanel({
   const [bulkAddLoading, setBulkAddLoading] = useState<'all' | 'active' | null>(null);
   const [externalEmails, setExternalEmails] = useState<string[]>([]);
   const [externalEmailBulkPaste, setExternalEmailBulkPaste] = useState('');
+  const pendingComposeMetaRef = useRef<{
+    templateKey?: string;
+    templateFieldValues?: Record<string, string>;
+  } | null>(null);
 
   const canPickIndividuals = mode === 'manager' || mode === 'teacher' || mode === 'parent';
   const canUseExternalEmails = mode === 'manager' || mode === 'teacher';
@@ -181,6 +188,7 @@ export default function MessagesPanel({
     setComposeContent('');
     setExternalEmails([]);
     setExternalEmailBulkPaste('');
+    pendingComposeMetaRef.current = null;
     setRecipientsReloadToken((t) => t + 1);
   }, []);
 
@@ -260,7 +268,7 @@ export default function MessagesPanel({
       const locationIds = overrides?.locationIds ?? filterLocationIds;
       const groupIds = overrides?.groupIds ?? filterGroupIds;
       const q = new URLSearchParams();
-      if (recipientSearchDebounced) q.set('search', recipientSearchDebounced);
+      if (mode !== 'parent' && recipientSearchDebounced) q.set('search', recipientSearchDebounced);
 
       if (mode === 'manager' && composeSection === 'teachers') {
         q.set('audience', 'teachers');
@@ -376,12 +384,11 @@ export default function MessagesPanel({
   }, []);
 
   useEffect(() => {
-    if (composeOpen && mode === 'manager') {
-      fetch('/api/admin/message-templates', { cache: 'no-store' })
-        .then((r) => r.json())
-        .then((data) => setMessageTemplates(data.templates ?? []))
-        .catch(() => setMessageTemplates([]));
-    }
+    if (!composeOpen) return;
+    fetch('/api/messages/templates', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((data) => setMessageTemplates(data.templates ?? []))
+      .catch(() => setMessageTemplates([]));
   }, [composeOpen, mode]);
 
   useEffect(() => {
@@ -446,7 +453,13 @@ export default function MessagesPanel({
     }
   };
 
-  const handleSendCompose = async () => {
+  const handleSendCompose = async (meta?: {
+    templateKey?: string;
+    templateFieldValues?: Record<string, string>;
+  }) => {
+    if (meta) pendingComposeMetaRef.current = meta;
+    const composeMeta = meta ?? pendingComposeMetaRef.current;
+
     const isEmailSection = composeSection === 'email';
     const recipientIds = isEmailSection
       ? []
@@ -486,6 +499,12 @@ export default function MessagesPanel({
             : {}),
           subject: composeSubject.trim(),
           content: composeContent.trim(),
+          ...(composeMeta?.templateKey
+            ? {
+                templateKey: composeMeta.templateKey,
+                templateFields: composeMeta.templateFieldValues ?? {},
+              }
+            : {}),
         }),
       });
       const data = (await res.json()) as {
@@ -500,12 +519,14 @@ export default function MessagesPanel({
           `Wysłano, ale ${data.emailsFailed} powiadomień e-mail nie powiodło się (wysłano: ${data.emailsSent ?? 0}).`
         );
       }
+      pendingComposeMetaRef.current = null;
       closeCompose();
       await loadThreads();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Błąd wysyłania');
     } finally {
       setSendingCompose(false);
+      setSendPreviewOpen(false);
     }
   };
 
@@ -899,7 +920,7 @@ export default function MessagesPanel({
         composeContent={composeContent}
         onComposeContentChange={setComposeContent}
         sendingCompose={sendingCompose}
-        onSend={() => void handleSendCompose()}
+        onSend={(meta) => void handleSendCompose(meta)}
         onClearForm={resetComposeForm}
         composeSection={composeSection}
         onComposeSectionChange={handleComposeSectionChange}
@@ -917,6 +938,7 @@ export default function MessagesPanel({
           setComposeSubject(subject);
           setComposeContent(content);
         }}
+        parentChildren={parentChildren}
         filterRenewalNoResponse={filterRenewalNoResponse}
         onFilterRenewalNoResponseChange={setFilterRenewalNoResponse}
       />

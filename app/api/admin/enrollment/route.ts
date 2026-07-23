@@ -34,13 +34,13 @@ export async function GET(request: NextRequest) {
          COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id, er.parent_email) AS id,
          MAX(COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id, '')) AS parent_user_id,
          COALESCE(
-           MAX(NULLIF(BTRIM(u.first_name), '')),
            MAX(NULLIF(BTRIM(er.parent_first_name), '')),
+           MAX(NULLIF(BTRIM(u.first_name), '')),
            ''
          ) AS first_name,
          COALESCE(
-           MAX(NULLIF(BTRIM(u.last_name), '')),
            MAX(NULLIF(BTRIM(er.parent_last_name), '')),
+           MAX(NULLIF(BTRIM(u.last_name), '')),
            ''
          ) AS last_name,
          COALESCE(

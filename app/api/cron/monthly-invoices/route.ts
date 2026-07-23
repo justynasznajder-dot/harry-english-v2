@@ -11,7 +11,7 @@ function isAuthorizedCron(request: NextRequest): boolean {
   return auth === `Bearer ${secret}`;
 }
 
-/** Comiesięczne faktury ratalne — uruchamiane 10. dnia miesiąca (Vercel Cron). */
+/** Codzienny cron: faktury ratalne tylko dla szkół z invoice_generation_day = dziś (Europe/Warsaw). */
 export async function GET(request: NextRequest) {
   if (!isAuthorizedCron(request)) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
@@ -20,7 +20,10 @@ export async function GET(request: NextRequest) {
   try {
     const result = await generateAllMonthlyInvoices(new Date());
     return NextResponse.json({
-      message: "Faktury ratalne wygenerowane",
+      message:
+        result.schoolsProcessed === 0
+          ? "Brak szkół z dniem generowania faktur równym dzisiejszej dacie"
+          : "Faktury ratalne wygenerowane",
       ...result,
     });
   } catch (error) {

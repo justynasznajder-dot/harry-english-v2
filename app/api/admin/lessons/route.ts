@@ -2,8 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { queryDb } from "@/lib/db";
 import { completePastScheduledLessons } from "@/lib/lesson-completion";
 import { requireAdminSchoolContext } from "@/lib/admin-school-context";
+import {
+  SCHOOL_TIMEZONE,
+  sqlSchoolTimestampAsTimestamptz,
+  toIsoUtc,
+} from "@/lib/school-timezone";
 
-const TZ = "Europe/Warsaw";
+const TZ = SCHOOL_TIMEZONE;
 const MAX_RANGE_DAYS = 120;
 
 function isYmd(s: string): boolean {
@@ -16,12 +21,6 @@ function parseIdList(raw: string | null): string[] {
     .split(",")
     .map((x) => x.trim())
     .filter((x) => x.length > 0);
-}
-
-function toIso(v: unknown): string {
-  if (v instanceof Date && !Number.isNaN(v.getTime())) return v.toISOString();
-  if (typeof v === "string") return v;
-  return String(v);
 }
 
 export async function GET(request: NextRequest) {
@@ -57,8 +56,8 @@ export async function GET(request: NextRequest) {
 
   const lessonParams: unknown[] = [fromYmd, toYmd];
   const lessonWhere: string[] = [
-    `l.scheduled_at >= ($1::date AT TIME ZONE '${TZ}')`,
-    `l.scheduled_at < (($2::date + interval '1 day') AT TIME ZONE '${TZ}')`,
+    `l.scheduled_at >= $1::date`,
+    `l.scheduled_at < ($2::date + interval '1 day')`,
   ];
   let p = 3;
   if (ctx.tenant.role === "MANAGER") {
@@ -97,7 +96,7 @@ export async function GET(request: NextRequest) {
     const lessonsSql = `SELECT
         l.id,
         l.group_id,
-        l.scheduled_at,
+        ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at,
         l.duration_min,
         l.status,
         l.location_id,
@@ -144,7 +143,7 @@ export async function GET(request: NextRequest) {
     const lessons = lessonsRes.rows.map((row) => ({
       id: row.id,
       group_id: row.group_id,
-      scheduled_at: toIso(row.scheduled_at),
+      scheduled_at: toIsoUtc(row.scheduled_at),
       duration_min: row.duration_min,
       status: row.status,
       location_id: row.location_id,

@@ -8,10 +8,12 @@ import RenewalsPanel from '@/src/components/admin/RenewalsPanel';
 import EnrollmentAdminPanel from '@/src/components/admin/EnrollmentAdminPanel';
 import ManagerDashboardPanel from '@/src/components/admin/ManagerDashboardPanel';
 import ContactHistoryPanel from '@/src/components/admin/ContactHistoryPanel';
+import ResignationsPanel from '@/src/components/admin/ResignationsPanel';
 import type { ComplimentaryParentRow, EnrollmentGroupRow, EnrollmentParentRow } from '@/src/components/enrollment/types';
 import MessagesPanel from '@/src/components/messages/MessagesPanel';
 import MessagesTabLabel from '@/src/components/messages/MessagesTabLabel';
 import { useUnreadMessagesCount } from '@/src/components/messages/useUnreadMessagesCount';
+import { useOpenResignationsCount } from '@/src/components/admin/useOpenResignationsCount';
 
 type TabKey =
   | 'dashboard'
@@ -20,17 +22,26 @@ type TabKey =
   | 'classes'
   | 'enrollment'
   | 'renewals'
+  | 'resignations'
   | 'announcements'
   | 'payments';
 type MobileTab = 'organization' | 'users' | 'more';
 type UsersSubTab = 'parents' | 'children' | 'teachers' | 'managers' | 'add';
-type OrganizationSubTab = 'schoolYear' | 'teachers' | 'locations' | 'discounts' | 'groups' | 'history' | 'settlements';
+type OrganizationSubTab =
+  | 'schoolYear'
+  | 'teachers'
+  | 'locations'
+  | 'billing'
+  | 'discounts'
+  | 'groups'
+  | 'history'
+  | 'settlements';
 type TeacherOrgSubTab = 'list' | 'add';
 type LocationOrgSubTab = 'list' | 'add' | 'edit';
 type GroupsSubTab = 'list' | 'add' | 'organize';
 
-/** Zgodnie z kolumną `users.role` (TEXT): ADMIN, MANAGER, TEACHER, PARENT, CHILD */
-type AdminPortalUserRole = 'ADMIN' | 'MANAGER' | 'TEACHER' | 'PARENT' | 'CHILD';
+/** Zgodnie z kolumną `users.role` (TEXT): ADMIN, MANAGER, TEACHER, PARENT, CHILD, ACCOUNTANT */
+type AdminPortalUserRole = 'ADMIN' | 'MANAGER' | 'TEACHER' | 'PARENT' | 'CHILD' | 'ACCOUNTANT';
 
 interface AdminUser {
   id: string;
@@ -42,6 +53,7 @@ interface AdminUser {
   active: boolean;
   access_level?: 'PENDING' | 'ACTIVE';
   phone?: string | null;
+  client_number?: string | null;
 }
 
 interface ChildRow {
@@ -52,9 +64,11 @@ interface ChildRow {
   birth_date: string;
   active: boolean;
   confirmed: boolean;
+  client_number?: string | null;
   parent_first_name: string;
   parent_last_name: string;
   parent_email: string;
+  parent_client_number?: string | null;
   group_name: string | null;
   access_level?: string | null;
 }
@@ -88,6 +102,26 @@ function priceFieldFromDb(value: unknown): string {
   const n = Number(String(value).replace(',', '.'));
   if (!Number.isFinite(n)) return '';
   return String(n);
+}
+
+function formatGroupPricePln(value: unknown): string | null {
+  if (value == null || value === '') return null;
+  const n = Number(String(value).replace(',', '.'));
+  if (!Number.isFinite(n)) return null;
+  return `${n.toLocaleString('pl-PL', { minimumFractionDigits: 0, maximumFractionDigits: 2 })} PLN`;
+}
+
+function formatGroupPriceLines(
+  group: Pick<GroupRow, 'price_monthly' | 'price_yearly' | 'price_per_lesson'>
+): string[] {
+  const monthly = formatGroupPricePln(group.price_monthly);
+  const yearly = formatGroupPricePln(group.price_yearly);
+  const perLesson = formatGroupPricePln(group.price_per_lesson);
+  return [
+    monthly ? `ratalnie ${monthly}` : null,
+    yearly ? `jednorazowo ${yearly}` : null,
+    perLesson ? `za zajęcia ${perLesson}` : null,
+  ].filter((line): line is string => Boolean(line));
 }
 
 function isSchoolYearEndDatePassed(dateTo: string): boolean {
@@ -280,6 +314,7 @@ const topTabs: Array<{ key: TabKey; label: string }> = [
   { key: 'classes', label: 'Zajęcia' },
   { key: 'enrollment', label: 'Zgłoszenia' },
   { key: 'renewals', label: 'Odnowienia' },
+  { key: 'resignations', label: 'Rezygnacje' },
   { key: 'users', label: 'Użytkownicy' },
   { key: 'announcements', label: 'Wiadomości' },
   { key: 'payments', label: 'Płatności' },
@@ -295,10 +330,11 @@ const organizationTabs: Array<{ key: OrganizationSubTab; label: string }> = [
   { key: 'schoolYear', label: 'Rok szkolny' },
   { key: 'teachers', label: 'Nauczyciele' },
   { key: 'locations', label: 'Lokalizacje' },
+  { key: 'billing', label: 'Rozliczenia' },
   { key: 'discounts', label: 'Zniżki' },
   { key: 'groups', label: 'Grupy' },
   { key: 'history', label: 'Historia' },
-  { key: 'settlements', label: 'Rozliczenia' },
+  { key: 'settlements', label: 'Podsumowanie miesiąca' },
 ];
 
 const teacherOrgSubTabs: Array<{ key: TeacherOrgSubTab; label: string }> = [
@@ -391,6 +427,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [messagesListResetToken, setMessagesListResetToken] = useState(0);
   const { unreadCount: messagesUnreadCount, refresh: refreshMessagesUnreadCount } =
     useUnreadMessagesCount(messagesListResetToken);
+  const { openCount: resignationsOpenCount, refresh: refreshResignationsOpenCount } =
+    useOpenResignationsCount();
   const [organizationSubTab, setOrganizationSubTab] = useState<OrganizationSubTab>(
     initialGroupId ? 'groups' : 'schoolYear',
   );
@@ -455,6 +493,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     LARGE_FAMILY_CARD: 0,
     SIBLING: 0,
   });
+  const [invoiceGenerationDayDraft, setInvoiceGenerationDayDraft] = useState('10');
+  const [invoiceGenerationDay, setInvoiceGenerationDay] = useState(10);
+  const [monthlyInvoicesGenerating, setMonthlyInvoicesGenerating] = useState(false);
   const [complimentaryParents, setComplimentaryParents] = useState<ComplimentaryParentRow[]>([]);
   const [complimentaryCandidates, setComplimentaryCandidates] = useState<
     Array<{
@@ -658,6 +699,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       if (dRes.ok) {
         const dJson = (await dRes.json()) as {
           discounts?: Array<{ key: string; percent: number }>;
+          invoiceGenerationDay?: number;
           complimentaryParents?: ComplimentaryParentRow[];
         };
         const nextSettings = { LARGE_FAMILY_CARD: 0, SIBLING: 0 };
@@ -671,6 +713,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           LARGE_FAMILY_CARD: String(nextSettings.LARGE_FAMILY_CARD),
           SIBLING: String(nextSettings.SIBLING),
         });
+        const genDay = Math.min(28, Math.max(1, Number(dJson.invoiceGenerationDay) || 10));
+        setInvoiceGenerationDay(genDay);
+        setInvoiceGenerationDayDraft(String(genDay));
         setComplimentaryParents(
           Array.isArray(dJson.complimentaryParents) ? dJson.complimentaryParents : [],
         );
@@ -938,6 +983,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       const res = await fetch('/api/admin/discounts');
       const data = (await res.json().catch(() => ({}))) as {
         discounts?: Array<{ key: string; label: string; percent: number }>;
+        invoiceGenerationDay?: number;
         complimentaryParents?: typeof complimentaryParents;
         complimentaryCandidates?: typeof complimentaryCandidates;
         message?: string;
@@ -957,6 +1003,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         LARGE_FAMILY_CARD: String(nextSettings.LARGE_FAMILY_CARD),
         SIBLING: String(nextSettings.SIBLING),
       });
+      const genDay = Math.min(28, Math.max(1, Number(data.invoiceGenerationDay) || 10));
+      setInvoiceGenerationDay(genDay);
+      setInvoiceGenerationDayDraft(String(genDay));
       setComplimentaryParents(
         Array.isArray(data.complimentaryParents) ? data.complimentaryParents : [],
       );
@@ -1034,7 +1083,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   }, [activeTab, organizationSubTab, loadLocations]);
 
   useEffect(() => {
-    if (activeTab === 'organization' && organizationSubTab === 'discounts') {
+    if (
+      activeTab === 'organization' &&
+      (organizationSubTab === 'discounts' || organizationSubTab === 'billing')
+    ) {
       void loadDiscounts();
     }
   }, [activeTab, organizationSubTab, loadDiscounts]);
@@ -1639,6 +1691,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               <option value="PARENT">Rodzic</option>
               <option value="TEACHER">Nauczyciel</option>
               <option value="MANAGER">Manager</option>
+              <option value="ACCOUNTANT">Księgowa</option>
             </select>
             </div>
 
@@ -1751,6 +1804,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           <table className="w-full min-w-[760px] text-sm">
             <thead className="bg-emerald-50 text-zinc-700">
               <tr>
+                <th className="px-4 py-3 text-left">ID</th>
                 <th className="px-4 py-3 text-left">Użytkownik</th>
                 <th className="px-4 py-3 text-left">Email</th>
                 <th className="px-4 py-3 text-left">Rola</th>
@@ -1767,6 +1821,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   return (
                     <>
                     <tr key={user.id} className="border-t border-emerald-50">
+                      <td className="px-4 py-3 font-mono text-xs text-zinc-600">
+                        {user.client_number ?? '—'}
+                      </td>
                       <td className="px-4 py-3">
                         <span>{user.first_name} {user.last_name}</span>
                       </td>
@@ -1812,7 +1869,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     </tr>
                     {showHistory && (
                       <tr key={`${user.id}-history`}>
-                        <td colSpan={5} className="px-4 pb-4">
+                        <td colSpan={6} className="px-4 pb-4">
                           <ContactHistoryPanel parentId={user.id} />
                         </td>
                       </tr>
@@ -1823,6 +1880,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
 
                 return (
                   <tr key={user.id} className="border-t border-emerald-50">
+                    <td className="px-4 py-3 font-mono text-xs text-zinc-600">
+                      {user.client_number ?? '—'}
+                    </td>
                     <td className="px-4 py-3">
                       {editing ? (
                         <div className="grid grid-cols-2 gap-2">
@@ -1854,6 +1914,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                           <option value="PARENT">Rodzic</option>
                           <option value="TEACHER">Nauczyciel</option>
                           {!isManagerView && <option value="MANAGER">Manager</option>}
+                          <option value="ACCOUNTANT">Księgowa</option>
                           <option value="CHILD">Uczeń</option>
                           {!isManagerView && <option value="ADMIN">Super admin</option>}
                         </select>
@@ -1914,6 +1975,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           <table className="w-full min-w-[820px] text-sm">
             <thead className="bg-emerald-50 text-zinc-700">
               <tr>
+                <th className="px-4 py-3 text-left">ID</th>
                 <th className="px-4 py-3 text-left">Imię</th>
                 <th className="px-4 py-3 text-left">Nazwisko</th>
                 <th className="px-4 py-3 text-left">Data urodzenia</th>
@@ -1928,10 +1990,20 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 return (
                   <>
                   <tr key={child.child_id} className="border-t border-emerald-50">
+                    <td className="px-4 py-3 font-mono text-xs text-zinc-600">
+                      {child.client_number ?? '—'}
+                    </td>
                     <td className="px-4 py-3">{child.first_name}</td>
                     <td className="px-4 py-3">{child.last_name}</td>
                     <td className="px-4 py-3">{child.birth_date}</td>
-                    <td className="px-4 py-3">{child.parent_first_name} {child.parent_last_name}</td>
+                    <td className="px-4 py-3">
+                      {child.parent_first_name} {child.parent_last_name}
+                      {child.parent_client_number ? (
+                        <span className="ml-1 font-mono text-xs text-zinc-500">
+                          ({child.parent_client_number})
+                        </span>
+                      ) : null}
+                    </td>
                     <td className="px-4 py-3">
                       <span className={`rounded-full px-2 py-1 text-xs font-semibold ${child.confirmed ? 'bg-emerald-100 text-emerald-700' : 'bg-yellow-100 text-yellow-800'}`}>
                         {child.confirmed ? 'potwierdzony' : 'niepotwierdzony'}
@@ -1955,7 +2027,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   </tr>
                   {showHistory && (
                     <tr key={`${child.child_id}-history`}>
-                      <td colSpan={6} className="px-4 pb-4">
+                      <td colSpan={7} className="px-4 pb-4">
                         <ContactHistoryPanel childId={child.child_id} />
                       </td>
                     </tr>
@@ -2770,11 +2842,145 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             </div>
           )}
 
+          {organizationSubTab === 'billing' && (
+            <div className="mt-4 space-y-6">
+              <p className="text-sm text-zinc-600">
+                Ustawienia faktur ratalnych: dzień automatycznego generowania oraz ręczne
+                wystawienie na testy.
+              </p>
+
+              {discountsLoading ? (
+                <div className="space-y-3">
+                  <div className="h-24 animate-pulse rounded-2xl bg-emerald-100/80" />
+                </div>
+              ) : (
+                <div className="rounded-xl border border-emerald-100 bg-white p-4">
+                  <h4 className="font-semibold text-[#0f6e56]">Faktury ratalne</h4>
+                  <p className="mt-1 text-sm text-zinc-600">
+                    Automatycznie i ręcznie generowane są wyłącznie faktury dla umów z
+                    rozliczeniem ratalnym (miesięcznym). Jednorazowe powstają przy podpisaniu
+                    umowy; za zajęcia pojedyncze — później, w osobnej sekcji.
+                  </p>
+                    <p className="mt-2 text-sm text-zinc-600">
+                      W wybranym dniu miesiąca cron wystawia faktury ratalne. Termin płatności to
+                      zawsze ostatni dzień miesiąca rozliczeniowego.
+                    </p>
+                  <div className="mt-4 flex flex-wrap items-end gap-3">
+                    <label className="block space-y-1">
+                      <span className="text-sm font-medium text-zinc-700">
+                        Dzień generowania faktur (1–28)
+                      </span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={28}
+                        step={1}
+                        className="w-28 rounded-xl border border-emerald-200 px-3 py-2"
+                        value={invoiceGenerationDayDraft}
+                        onChange={(e) => setInvoiceGenerationDayDraft(e.target.value)}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      disabled={discountsSaving || monthlyInvoicesGenerating}
+                      className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                      onClick={async () => {
+                        const day = Math.round(Number(invoiceGenerationDayDraft));
+                        if (!Number.isFinite(day) || day < 1 || day > 28) {
+                          pushToast('error', 'Podaj dzień od 1 do 28');
+                          return;
+                        }
+                        setDiscountsSaving(true);
+                        try {
+                          const res = await fetch('/api/admin/discounts', {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ invoiceGenerationDay: day }),
+                          });
+                          const data = (await res.json().catch(() => ({}))) as {
+                            message?: string;
+                            invoiceGenerationDay?: number;
+                          };
+                          if (!res.ok) {
+                            pushToast(
+                              'error',
+                              data.message ?? 'Nie udało się zapisać dnia generowania faktur',
+                            );
+                            return;
+                          }
+                          const saved = Math.min(
+                            28,
+                            Math.max(1, Number(data.invoiceGenerationDay) || day),
+                          );
+                          setInvoiceGenerationDay(saved);
+                          setInvoiceGenerationDayDraft(String(saved));
+                          pushToast('success', 'Zapisano dzień generowania faktur');
+                        } catch {
+                          pushToast('error', 'Błąd zapisu dnia generowania faktur');
+                        } finally {
+                          setDiscountsSaving(false);
+                        }
+                      }}
+                    >
+                      {discountsSaving ? 'Zapisywanie…' : 'Zapisz dzień faktur'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={discountsSaving || monthlyInvoicesGenerating}
+                      className="rounded-xl border border-[#0f6e56] bg-white px-4 py-2 text-sm font-semibold text-[#0f6e56] disabled:opacity-60"
+                      onClick={async () => {
+                        setMonthlyInvoicesGenerating(true);
+                        try {
+                          const res = await fetch('/api/admin/invoices/generate-monthly', {
+                            method: 'POST',
+                          });
+                          const data = (await res.json().catch(() => ({}))) as {
+                            message?: string;
+                            generated?: number;
+                            skipped?: number;
+                            alreadyInvoiced?: number;
+                            errors?: Array<{ contractId: string; message: string }>;
+                          };
+                          if (!res.ok) {
+                            pushToast(
+                              'error',
+                              data.message ?? 'Nie udało się wygenerować faktur ratalnych',
+                            );
+                            return;
+                          }
+                          const errCount = data.errors?.length ?? 0;
+                          pushToast(
+                            errCount > 0 && (data.generated ?? 0) === 0 ? 'error' : 'success',
+                            data.message ??
+                              `Wygenerowano ${data.generated ?? 0}, już było ${data.alreadyInvoiced ?? 0}`,
+                          );
+                        } catch {
+                          pushToast('error', 'Błąd generowania faktur ratalnych');
+                        } finally {
+                          setMonthlyInvoicesGenerating(false);
+                        }
+                      }}
+                    >
+                      {monthlyInvoicesGenerating
+                        ? 'Generowanie…'
+                        : 'Wygeneruj faktury ratalne teraz'}
+                    </button>
+                    {invoiceGenerationDay !== Number(invoiceGenerationDayDraft) ? (
+                      <span className="text-xs text-zinc-500">
+                        Aktualnie zapisane: {invoiceGenerationDay}.
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {organizationSubTab === 'discounts' && (
             <div className="mt-4 space-y-6">
               <p className="text-sm text-zinc-600">
-                Ustaw procentowe zniżki stosowane przy kwotach umów oraz rodziców w trybie bez
-                opłat (bez faktur i płatności).
+                Zniżki procentowe przy kwotach umów oraz rodzice w trybie bez opłat (bez faktur i
+                płatności).
               </p>
 
               {discountsLoading ? (
@@ -4057,7 +4263,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           )}
           {groupsSubTab === 'list' ? (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[980px] text-sm">
+              <table className="w-full min-w-[1100px] text-sm">
                 <thead className="bg-emerald-50 text-zinc-700">
                   <tr>
                     <th className="px-4 py-3 text-left">Nazwa</th>
@@ -4065,13 +4271,16 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     <th className="px-4 py-3 text-left">Nauczyciel</th>
                     <th className="px-4 py-3 text-left">Lokalizacja</th>
                     <th className="px-4 py-3 text-left">Termin zajęć</th>
+                    <th className="px-4 py-3 text-left">Ceny</th>
                     <th className="px-4 py-3 text-left">Uczniowie</th>
                     <th className="px-4 py-3 text-left">Status</th>
                     <th className="px-4 py-3 text-left">Akcje</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {groups.map((g) => (
+                  {groups.map((g) => {
+                    const priceLines = formatGroupPriceLines(g);
+                    return (
                     <tr
                       key={g.id}
                       className="cursor-pointer border-t border-emerald-50 hover:bg-emerald-50/40"
@@ -4082,6 +4291,17 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       <td className="px-4 py-3">{g.teacher_name ?? '-'}</td>
                       <td className="px-4 py-3">{g.location_name ?? '-'}</td>
                       <td className="px-4 py-3 whitespace-normal text-zinc-700">{g.schedule ?? '-'}</td>
+                      <td className="px-4 py-3 whitespace-nowrap text-xs text-zinc-700">
+                        {priceLines.length > 0 ? (
+                          <div className="space-y-0.5">
+                            {priceLines.map((line) => (
+                              <div key={line}>{line}</div>
+                            ))}
+                          </div>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
                       <td className="px-4 py-3">{g.students_count}/{g.max_students}</td>
                       <td className="px-4 py-3">
                         <span className={`rounded-full px-2 py-1 text-xs font-semibold ${g.active ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-700'}`}>
@@ -4101,7 +4321,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         </button>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -4597,6 +4818,14 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     if (activeTab === 'renewals') {
       return <RenewalsPanel pushToast={pushToast} />;
     }
+    if (activeTab === 'resignations') {
+      return (
+        <ResignationsPanel
+          pushToast={pushToast}
+          onChange={refreshResignationsOpenCount}
+        />
+      );
+    }
     if (activeTab === 'enrollment') {
       return (
         <EnrollmentAdminPanel
@@ -4646,6 +4875,15 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   label={tab.label}
                   unreadCount={messagesUnreadCount}
                   isActive={activeTab === 'announcements'}
+                />
+              ) : tab.key === 'resignations' ? (
+                <MessagesTabLabel
+                  label={tab.label}
+                  unreadCount={resignationsOpenCount}
+                  isActive={activeTab === 'resignations'}
+                  badgeAriaLabel={(n) =>
+                    n === 1 ? '1 otwarte zgłoszenie rezygnacji' : `${n} otwartych zgłoszeń rezygnacji`
+                  }
                 />
               ) : (
                 tab.label

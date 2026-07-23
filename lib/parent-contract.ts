@@ -8,7 +8,7 @@ import {
   type DiscountKey,
   type SchoolDiscountSettings,
 } from "@/lib/school-discounts";
-import { queryDb } from "@/lib/db";
+import { getActiveSchoolYear, queryDb, runPgTransaction } from "@/lib/db";
 import { sumChildrenBaseAmounts } from "@/lib/enrollment-pricing";
 import { getParentLargeFamilyCard } from "@/lib/parent-profile-discount";
 import {
@@ -28,9 +28,30 @@ import {
   formatLessonDuration,
   formatPaymentTypeLabel,
   generateContractHtml,
+  nextBaseContractIndex,
   paymentTypeToClauseKey,
 } from "@/lib/contract-html";
+import { ensureChildClientNumber, isAnnexContractNumber } from "@/lib/client-numbers";
+import {
+  buildContractAmountBreakdown,
+  parseContractAmountBreakdown,
+  type ContractAmountBreakdown,
+} from "@/lib/contract-amount-breakdown";
 import { resolveLessonUnitPrice, resolveMonthlyUnitPrice, resolveYearlyUnitPrice, type PaymentType } from "@/lib/lesson-pricing";
+
+function parsePaymentType(raw: string | null | undefined): PaymentType {
+  const value = String(raw ?? "").trim().toUpperCase();
+  if (value === "YEARLY" || value === "PER_LESSON" || value === "MONTHLY") {
+    return value;
+  }
+  return "MONTHLY";
+}
+
+function parseNullableMoney(raw: string | number | null | undefined): number | null {
+  if (raw == null || raw === "") return null;
+  const n = Number(String(raw).replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
 
 export type ParentContractChildRow = {
   child_id: string;
@@ -64,6 +85,7 @@ export function resolveIncludeAttachment2FromGroups(
 export type ParentContractContext = {
   parentId: string;
   schoolId: string;
+  /** Dokładnie jedno dziecko — jedna umowa = jedno dziecko. */
   included: ParentContractChildRow[];
   excludedRequestIds: string[];
   paymentType: PaymentType;
@@ -71,6 +93,145 @@ export type ParentContractContext = {
   /** Umowa odnowienia — rok docelowy zamiast aktywnego. */
   schoolYearOverride?: { id: string; name: string };
 };
+
+/** Liczba aktywnych dzieci rodzica ze statusem ACCEPTED lub SIGNED (rabat rodzeństwa). */
+export async function countActiveSiblingChildren(
+  parentId: string,
+  schoolId: string
+): Promise<number> {
+  const res = await queryDb<{ count: string }>(
+    `SELECT COUNT(*)::text AS count
+     FROM children c
+     WHERE c.parent_id = $1
+       AND c.school_id = $2
+       AND c.active = TRUE
+       AND UPPER(BTRIM(COALESCE(c.access_level::text, ''))) IN ('ACCEPTED', 'SIGNED')`,
+    [parentId, schoolId]
+  );
+  return Number(res.rows[0]?.count ?? 0);
+}
+
+export async function parentHasSiblingDiscount(
+  parentId: string,
+  schoolId: string
+): Promise<boolean> {
+  return (await countActiveSiblingChildren(parentId, schoolId)) >= 2;
+}
+
+/** Czy dziecko ma aktywną umowę SENT/SIGNED w bieżącym roku szkolnym. */
+export async function childHasActiveContract(
+  parentId: string,
+  schoolId: string,
+  childId: string
+): Promise<boolean> {
+  const activeYear = await getActiveSchoolYear(schoolId);
+  const yearId = activeYear?.id ? String(activeYear.id) : null;
+  if (!yearId) return false;
+
+  const res = await queryDb<{ id: string }>(
+    `SELECT c.id
+     FROM contracts c
+     WHERE c.parent_id = $1
+       AND c.school_id = $2
+       AND c.school_year_id = $4
+       AND c.status IN ('SENT', 'SIGNED')
+       AND (
+         c.child_id = $3
+         OR EXISTS (
+           SELECT 1 FROM contract_children cc
+           WHERE cc.contract_id = c.id AND cc.child_id = $3
+         )
+       )
+     LIMIT 1`,
+    [parentId, schoolId, childId, yearId]
+  );
+  return Boolean(res.rows[0]);
+}
+
+/**
+ * Pierwsze dziecko z kolejki bez umowy SENT/SIGNED (ignoruje istniejącą SENT).
+ * Używane po podpisie / w odpowiedzi generate jako „kolejne w kolejce”.
+ */
+export async function findNextQueuedChildWithoutContract(
+  parentId: string,
+  schoolId: string,
+  children: ParentContractChildRow[],
+  queueRequestIds: string[],
+  excludeChildId?: string | null
+): Promise<ParentContractChildRow | null> {
+  const queue = queueRequestIds.map((id) => String(id).trim()).filter(Boolean);
+  const accepted = children.filter((c) => String(c.access_level).toUpperCase() === "ACCEPTED");
+  const ordered =
+    queue.length > 0
+      ? queue
+          .map((id) => accepted.find((c) => c.request_id === id))
+          .filter((c): c is ParentContractChildRow => Boolean(c))
+      : accepted;
+
+  for (const child of ordered) {
+    if (excludeChildId && child.child_id === excludeChildId) continue;
+    if (!(await childHasActiveContract(parentId, schoolId, child.child_id))) {
+      return child;
+    }
+  }
+  return null;
+}
+
+/**
+ * Kolejne dziecko z kolejki do umowy.
+ * Najpierw dziecko z istniejącą umową SENT (regeneracja) — max jedna SENT naraz.
+ * Potem pierwsze ACCEPTED z kolejki bez SENT/SIGNED.
+ */
+export async function findNextChildNeedingContract(
+  parentId: string,
+  schoolId: string,
+  children: ParentContractChildRow[],
+  queueRequestIds: string[]
+): Promise<ParentContractChildRow | null> {
+  const queue = queueRequestIds.map((id) => String(id).trim()).filter(Boolean);
+  const accepted = children.filter((c) => String(c.access_level).toUpperCase() === "ACCEPTED");
+  const ordered =
+    queue.length > 0
+      ? queue
+          .map((id) => accepted.find((c) => c.request_id === id))
+          .filter((c): c is ParentContractChildRow => Boolean(c))
+      : accepted;
+
+  const activeYear = await getActiveSchoolYear(schoolId);
+  const yearId = activeYear?.id ? String(activeYear.id) : null;
+  if (!yearId) return null;
+
+  const existingSent = await queryDb<{ child_id: string | null }>(
+    `SELECT COALESCE(
+       c.child_id,
+       (SELECT cc.child_id FROM contract_children cc WHERE cc.contract_id = c.id ORDER BY cc.sort_order ASC LIMIT 1)
+     ) AS child_id
+     FROM contracts c
+     WHERE c.parent_id = $1
+       AND c.school_id = $2
+       AND c.school_year_id = $3
+       AND c.status = 'SENT'
+     ORDER BY c.created_at ASC
+     LIMIT 1`,
+    [parentId, schoolId, yearId]
+  );
+  const sentChildId = existingSent.rows[0]?.child_id ?? null;
+  if (sentChildId) {
+    const fromQueue = ordered.find((c) => c.child_id === sentChildId);
+    if (fromQueue) return fromQueue;
+    const fromAll = accepted.find((c) => c.child_id === sentChildId);
+    if (fromAll) return fromAll;
+    // SENT istnieje — nie generuj kolejnej, dopóki ta nie zostanie podpisana/anulowana
+    return null;
+  }
+
+  for (const child of ordered) {
+    if (!(await childHasActiveContract(parentId, schoolId, child.child_id))) {
+      return child;
+    }
+  }
+  return null;
+}
 
 const MAX_CHILD_PLACEHOLDERS = 5;
 
@@ -98,7 +259,8 @@ export async function fetchParentEnrollmentChildren(
        er.preferred_location,
        loc.name AS preferred_location_name,
        u.first_name AS teacher_first_name,
-       u.last_name AS teacher_last_name
+       u.last_name AS teacher_last_name,
+       COALESCE(g.teacher_pickup_consent, FALSE) AS teacher_pickup_consent
      FROM children c
      JOIN enrollment_requests er ON er.id = c.enrollment_request_id
      LEFT JOIN groups g ON g.id = er.proposed_group_id
@@ -147,6 +309,31 @@ export function validateParentContractSelection(
   return { ok: true };
 }
 
+/** Walidacja generowania umowy dla dokładnie jednego dziecka. */
+export function validateSingleChildForContract(
+  child: ParentContractChildRow | null | undefined
+): { ok: true; child: ParentContractChildRow } | { ok: false; message: string } {
+  if (!child) {
+    return {
+      ok: false,
+      message: "Brak kolejnego dziecka do wygenerowania umowy — wszystkie zaznaczone mają już umowę.",
+    };
+  }
+  if (String(child.access_level).toUpperCase() !== "ACCEPTED") {
+    return {
+      ok: false,
+      message: "Umowę można wygenerować tylko dla dziecka ze statusem „zaakceptowano propozycję”.",
+    };
+  }
+  if (!child.group_id) {
+    return {
+      ok: false,
+      message: `Brak przypisanej grupy dla dziecka ${child.first_name} ${child.last_name}.`,
+    };
+  }
+  return { ok: true, child };
+}
+
 export function computeParentContractAmount(
   included: ParentContractChildRow[],
   paymentType: PaymentType,
@@ -163,6 +350,44 @@ export function computeParentContractAmount(
   if (total == null || total <= 0) return null;
 
   return applyDiscountsToAmount(total, options.discountKeys, options.discountSettings);
+}
+
+export function buildChildRateSnapshots(
+  included: ParentContractChildRow[]
+): Array<{
+  child_id: string;
+  name: string;
+  lesson_unit_price: number | null;
+  monthly_unit_price: number | null;
+  yearly_unit_price: number | null;
+}> {
+  return included.map((child) => ({
+    child_id: child.child_id,
+    name: `${formatPersonName(child.first_name)} ${formatPersonName(child.last_name)}`.trim(),
+    lesson_unit_price: resolveChildLessonUnitPriceForContract(child),
+    monthly_unit_price: resolveChildMonthlyUnitPriceForContract(child),
+    yearly_unit_price: resolveChildYearlyUnitPriceForContract(child),
+  }));
+}
+
+export function buildParentContractAmountBreakdown(
+  included: ParentContractChildRow[],
+  paymentType: PaymentType,
+  options: {
+    billingExempt: boolean;
+    discountSettings: SchoolDiscountSettings;
+    discountKeys: DiscountKey[];
+    frozenAt?: Date | string | null;
+  }
+): ContractAmountBreakdown {
+  return buildContractAmountBreakdown({
+    paymentType,
+    billingExempt: options.billingExempt,
+    discountKeys: options.discountKeys,
+    discountSettings: options.discountSettings,
+    children: buildChildRateSnapshots(included),
+    frozenAt: options.frozenAt ?? null,
+  });
 }
 
 export function resolveChildLessonUnitPriceForContract(
@@ -222,6 +447,18 @@ export function buildChildPlaceholders(
     placeholders[`child_${n}_birth_date`] = child ? formatBirthDatePl(child.birth_date) : "";
   }
   return placeholders;
+}
+
+/** Lista wszystkich dzieci w umowie (HTML, wiele wierszy). */
+export function buildChildrenListHtml(included: ParentContractChildRow[]): string {
+  return included
+    .map((child) => {
+      const name =
+        `${formatPersonName(child.first_name)} ${formatPersonName(child.last_name)}`.trim();
+      return `${name} / ${formatBirthDatePl(child.birth_date)}`;
+    })
+    .filter(Boolean)
+    .join("<br>");
 }
 
 /** Placeholdery załącznika dla jednego dziecka (szablony używają child_1_*). */
@@ -349,6 +586,11 @@ export async function generateParentContract(
   const { parentId, schoolId, included, excludedRequestIds, paymentType, includeAttachment2, schoolYearOverride } =
     ctx;
 
+  if (included.length !== 1) {
+    throw new Error("Umowa obejmuje dokładnie jedno dziecko — wygeneruj umowy po kolei.");
+  }
+  const child = included[0];
+
   if (excludedRequestIds.length > 0) {
     await rejectExcludedEnrollmentRequests(parentId, schoolId, excludedRequestIds);
   }
@@ -359,7 +601,7 @@ export async function generateParentContract(
   });
   const discountSettings = await getSchoolDiscountSettings(schoolId);
   const discountKeys: DiscountKey[] = [];
-  if (!billingExempt && included.length >= 2) {
+  if (!billingExempt && (await parentHasSiblingDiscount(parentId, schoolId))) {
     discountKeys.push(DISCOUNT_KEYS.SIBLING);
   }
   const hasLargeFamilyCard = await getParentLargeFamilyCard(parentId);
@@ -367,21 +609,25 @@ export async function generateParentContract(
     discountKeys.push(DISCOUNT_KEYS.LARGE_FAMILY_CARD);
   }
 
-  const amount =
-    computeParentContractAmount(included, paymentType, {
-      billingExempt,
-      discountSettings,
-      discountKeys,
-    });
+  const childRates = buildChildRateSnapshots([child]);
+  const amountBreakdown = buildContractAmountBreakdown({
+    paymentType,
+    billingExempt,
+    discountKeys,
+    discountSettings,
+    children: childRates,
+    frozenAt: null,
+  });
+  const amount = amountBreakdown.final_total;
 
   if (paymentType === "PER_LESSON") {
-    const perLessonValidation = validatePerLessonContractRates(included, billingExempt);
+    const perLessonValidation = validatePerLessonContractRates([child], billingExempt);
     if (!perLessonValidation.ok) {
       throw new Error(perLessonValidation.message);
     }
   } else if (!billingExempt && (amount == null || amount <= 0)) {
     throw new Error(
-      "Brak stawki dla wybranych dzieci — skontaktuj się ze szkołą, aby ustalić kwotę w umowie."
+      "Brak stawki dla dziecka — skontaktuj się ze szkołą, aby ustalić kwotę w umowie."
     );
   }
 
@@ -415,13 +661,9 @@ export async function generateParentContract(
   );
   const school = schoolRes.rows[0];
 
-  const scheduleParts: string[] = [];
-  const schoolNames = new Set<string>();
   let lessonDuration = "";
-  const primary = included[0];
-
-  for (const child of included) {
-    if (!child.group_id) continue;
+  let groupSchedule = "Do ustalenia";
+  if (child.group_id) {
     const scheduleRes = await queryDb<{
       day_of_week: number;
       start_time: Date | string;
@@ -434,61 +676,118 @@ export async function generateParentContract(
       [child.group_id]
     );
     const schedule = buildGroupSchedule(scheduleRes.rows);
-    const childLabel = `${formatPersonName(child.first_name)} ${formatPersonName(child.last_name)}`.trim();
-    scheduleParts.push(
-      schedule ? `${childLabel}: ${schedule}` : `${childLabel}: Do ustalenia`
-    );
-    if (!lessonDuration && scheduleRes.rows[0]) {
+    groupSchedule = schedule || "Do ustalenia";
+    if (scheduleRes.rows[0]) {
       lessonDuration = formatLessonDuration(scheduleRes.rows[0].duration_min);
     }
-    schoolNames.add(
-      buildChildSchoolName(child.preferred_location_name, child.preferred_location)
+  }
+  const childSchoolName =
+    buildChildSchoolName(child.preferred_location_name, child.preferred_location) || "—";
+
+  if (!schoolYearId) {
+    throw new Error("Brak aktywnego roku szkolnego — nie można wygenerować umowy");
+  }
+
+  const signedOnly = await queryDb<{ id: string }>(
+    `SELECT c.id
+     FROM contracts c
+     WHERE c.parent_id = $1
+       AND c.school_id = $2
+       AND c.school_year_id = $4
+       AND c.status = 'SIGNED'
+       AND (
+         c.child_id = $3
+         OR EXISTS (
+           SELECT 1 FROM contract_children cc
+           WHERE cc.contract_id = c.id AND cc.child_id = $3
+         )
+       )
+     LIMIT 1`,
+    [parentId, schoolId, child.child_id, schoolYearId]
+  );
+  if (signedOnly.rows[0]) {
+    throw new Error(
+      `${formatPersonName(child.first_name)} ${formatPersonName(child.last_name)} ma już podpisaną umowę w tym roku szkolnym`
     );
   }
 
-  const existingSent = await queryDb<{ id: string; content_html: string }>(
-    `SELECT id, content_html
-     FROM contracts
-     WHERE parent_id = $1
-       AND school_id = $2
-       AND child_id IS NULL
-       AND status IN ('SENT', 'DRAFT')
-     ORDER BY created_at DESC
+  // Ponów edycję SENT/DRAFT dla tego samego dziecka (tylko bieżący rok).
+  const existingSent = await queryDb<{
+    id: string;
+    content_html: string;
+    contract_number: string | null;
+  }>(
+    `SELECT id, content_html, contract_number
+     FROM contracts c
+     WHERE c.parent_id = $1
+       AND c.school_id = $2
+       AND c.school_year_id = $4
+       AND c.status IN ('SENT', 'DRAFT')
+       AND (
+         c.child_id = $3
+         OR (
+           c.child_id IS NULL
+           AND EXISTS (
+             SELECT 1 FROM contract_children cc
+             WHERE cc.contract_id = c.id AND cc.child_id = $3
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM contract_children cc2
+             WHERE cc2.contract_id = c.id AND cc2.child_id <> $3
+           )
+         )
+       )
+     ORDER BY c.created_at DESC
      LIMIT 1`,
-    [parentId, schoolId]
+    [parentId, schoolId, child.child_id, schoolYearId]
   );
-
-  const existingSigned = await queryDb<{ id: string }>(
-    `SELECT id FROM contracts
-     WHERE parent_id = $1 AND school_id = $2 AND child_id IS NULL AND status = 'SIGNED'
-     LIMIT 1`,
-    [parentId, schoolId]
-  );
-  if (existingSigned.rows[0]) {
-    throw new Error("Umowa została już podpisana");
-  }
 
   const contractDate = new Date();
   const contractYear = contractDate.getFullYear();
 
   let contractNumber: string;
-  const existingNumber = existingSent.rows[0]?.content_html
-    ? extractContractNumber(existingSent.rows[0].content_html)
-    : null;
+  const existingNumber =
+    existingSent.rows[0]?.contract_number?.trim() ||
+    (existingSent.rows[0]?.content_html
+      ? extractContractNumber(existingSent.rows[0].content_html)
+      : null);
   if (existingNumber) {
     contractNumber = existingNumber;
   } else {
-    const countRes = await queryDb<{ count: string }>(
-      `SELECT COUNT(*)::text AS count
-       FROM contracts
-       WHERE school_id = $1
-         AND EXTRACT(YEAR FROM created_at) = $2`,
-      [schoolId, contractYear]
-    );
-    contractNumber = buildContractNumber(
-      contractYear,
-      Number(countRes.rows[0]?.count ?? 0) + 1
-    );
+    contractNumber = await runPgTransaction(async (client) => {
+      const childClientNumber = await ensureChildClientNumber(
+        client,
+        child.child_id,
+        schoolId,
+        parentId
+      );
+      const yearNumbers = await client.query<{ contract_number: string | null; content_html: string }>(
+        `SELECT contract_number, content_html
+         FROM contracts
+         WHERE school_id = $1
+           AND child_id = $2
+           AND EXTRACT(YEAR FROM created_at) = $3
+         FOR UPDATE`,
+        [schoolId, child.child_id, contractYear]
+      );
+      const numbers: string[] = [];
+      for (const row of yearNumbers.rows) {
+        const n =
+          row.contract_number?.trim() ||
+          extractContractNumber(row.content_html) ||
+          "";
+        if (!n || isAnnexContractNumber(n)) continue;
+        if (n.startsWith(`${childClientNumber}/${contractYear}`)) {
+          numbers.push(n);
+        }
+      }
+      const baseIndex = nextBaseContractIndex(numbers);
+      return buildContractNumber({
+        childClientNumber,
+        year: contractYear,
+        baseIndex,
+      });
+    });
   }
 
   const parentFullName =
@@ -499,18 +798,20 @@ export async function generateParentContract(
     profile.pesel,
     profile.nip
   );
+  const childFullName =
+    `${formatPersonName(child.first_name)} ${formatPersonName(child.last_name)}`.trim();
   const amountClause =
     paymentType === "PER_LESSON"
-      ? buildPerLessonClause(
-          included.map((child) => ({
-            name: `${formatPersonName(child.first_name)} ${formatPersonName(child.last_name)}`.trim(),
+      ? buildPerLessonClause([
+          {
+            name: childFullName,
             unitPrice: resolveChildLessonUnitPriceForContract(child) ?? 0,
-          }))
-        )
+          },
+        ])
       : buildAmountClause(paymentTypeToClauseKey(paymentType), amount);
   const teacherFullName = buildTeacherFullName(
-    primary.teacher_first_name,
-    primary.teacher_last_name
+    child.teacher_first_name,
+    child.teacher_last_name
   );
 
   const contractSchoolYear = formatSchoolYearFromDate(contractDate);
@@ -526,7 +827,7 @@ export async function generateParentContract(
     parent_phone: user.phone?.trim() ?? "",
     parent_email: user.email?.trim() ?? "",
     lesson_duration: lessonDuration || formatLessonDuration(60),
-    group_schedule: scheduleParts.join("; ") || "Do ustalenia",
+    group_schedule: groupSchedule,
     payment_type: formatPaymentTypeLabel(paymentType),
     amount_clause: amountClause,
     signed_at_line: "",
@@ -534,66 +835,65 @@ export async function generateParentContract(
     school_signature_line: "",
     teacher_full_name: teacherFullName || "Do ustalenia",
     teacher_id_suffix: buildTeacherIdSuffix(),
-    child_school_name: [...schoolNames].filter(Boolean).join(", ") || "—",
-    ...buildChildPlaceholders(included),
-    child_1_full_name: buildChildPlaceholders(included).child_1_full_name,
-    child_1_birth_date: buildChildPlaceholders(included).child_1_birth_date,
+    child_school_name: childSchoolName,
+    ...buildChildPlaceholders([child]),
+    children_list: buildChildrenListHtml([child]),
   };
 
   const contentHtml = generateContractHtml(template.content_html, placeholders);
 
-  const perChildAttachments: Array<{
-    childId: string;
-    attachment1Html: string | null;
-    attachment2Html: string | null;
-  }> = [];
+  const childPlaceholders = buildSingleChildAttachmentPlaceholders(placeholders, child);
+  const childAttachment1 = attachment1Template
+    ? generateContractHtml(attachment1Template.content_html, childPlaceholders)
+    : null;
 
-  for (const child of included) {
-    const childPlaceholders = buildSingleChildAttachmentPlaceholders(placeholders, child);
-    const childAttachment1 = attachment1Template
-      ? generateContractHtml(attachment1Template.content_html, childPlaceholders)
-      : null;
-
-    let childAttachment2: string | null = null;
-    if (includeAttachment2) {
-      if (!attachment2Template) {
-        throw new Error("Brak szablonu Załącznika nr 2 — skontaktuj się ze szkołą");
-      }
-      const childTeacher = buildTeacherFullName(
-        child.teacher_first_name,
-        child.teacher_last_name
-      );
-      if (!childTeacher) {
-        throw new Error(
-          `Grupa dziecka ${child.first_name} ${child.last_name} nie ma przypisanego lektora — nie można wygenerować Załącznika nr 2`
-        );
-      }
-      childAttachment2 = generateContractHtml(
-        attachment2Template.content_html,
-        childPlaceholders
+  let childAttachment2: string | null = null;
+  if (includeAttachment2) {
+    if (!attachment2Template) {
+      throw new Error("Brak szablonu Załącznika nr 2 — skontaktuj się ze szkołą");
+    }
+    if (!teacherFullName) {
+      throw new Error(
+        `Grupa dziecka ${child.first_name} ${child.last_name} nie ma przypisanego lektora — nie można wygenerować Załącznika nr 2`
       );
     }
-
-    perChildAttachments.push({
-      childId: child.child_id,
-      attachment1Html: childAttachment1,
-      attachment2Html: childAttachment2,
-    });
+    childAttachment2 = generateContractHtml(
+      attachment2Template.content_html,
+      childPlaceholders
+    );
   }
 
+  // Anuluj tylko stare szkice powiązane z tym dzieckiem (nie ruszaj SENT innych dzieci).
   await queryDb(
     `UPDATE contracts
      SET status = 'CANCELLED'
      WHERE parent_id = $1
        AND school_id = $2
        AND status IN ('DRAFT', 'SENT')
-       AND (child_id IS NOT NULL OR enrollment_request_id IS NOT NULL)`,
-    [parentId, schoolId]
+       AND id <> COALESCE($4::text, '')
+       AND (
+         child_id = $3
+         OR enrollment_request_id = $5
+         OR (
+           child_id IS NOT NULL
+           AND child_id = $3
+         )
+       )`,
+    [
+      parentId,
+      schoolId,
+      child.child_id,
+      existingSent.rows[0]?.id ?? null,
+      child.request_id && child.request_id !== child.child_id ? child.request_id : null,
+    ]
   );
 
-  const primaryGroupId = primary.group_id;
+  const primaryGroupId = child.group_id;
+  const enrollmentRequestId =
+    child.request_id && child.request_id !== child.child_id ? child.request_id : null;
   const discountSibling = discountKeys.includes(DISCOUNT_KEYS.SIBLING);
   const discountLargeFamily = discountKeys.includes(DISCOUNT_KEYS.LARGE_FAMILY_CARD);
+  const rates = childRates[0];
 
   let contractId: string;
   if (existingSent.rows[0]) {
@@ -606,14 +906,17 @@ export async function generateParentContract(
            sent_at = NOW(),
            payment_type = $4,
            amount = $5,
-           template_id = $6,
-           group_id = $7,
-           child_id = NULL,
-           enrollment_request_id = NULL,
-           discount_large_family = $8,
-           discount_sibling = $9,
-           billing_exempt = $10,
-           school_year_id = $11
+           amount_breakdown = $6::jsonb,
+           amount_frozen_at = NULL,
+           template_id = $7,
+           group_id = $8,
+           child_id = $9,
+           enrollment_request_id = $10,
+           discount_large_family = $11,
+           discount_sibling = $12,
+           billing_exempt = $13,
+           school_year_id = $14,
+           contract_number = $15
        WHERE id = $1`,
       [
         contractId,
@@ -621,12 +924,16 @@ export async function generateParentContract(
         includeAttachment2,
         paymentType,
         billingExempt ? 0 : amount,
+        JSON.stringify(amountBreakdown),
         template.id,
         primaryGroupId,
+        child.child_id,
+        enrollmentRequestId,
         discountLargeFamily,
         discountSibling,
         billingExempt,
         schoolYearId,
+        contractNumber,
       ]
     );
     await queryDb(`DELETE FROM contract_children WHERE contract_id = $1`, [contractId]);
@@ -635,27 +942,33 @@ export async function generateParentContract(
     await queryDb(
       `INSERT INTO contracts (
          id, school_id, child_id, parent_id, group_id, template_id,
-         enrollment_request_id, content_html,
+         enrollment_request_id, content_html, contract_number,
          include_attachment_2, status, sent_at,
-         payment_type, amount, discount_large_family, discount_sibling, billing_exempt,
+         payment_type, amount, amount_breakdown, amount_frozen_at,
+         discount_large_family, discount_sibling, billing_exempt,
          school_year_id, created_at
        ) VALUES (
-         $1, $2, NULL, $3, $4, $5,
-         NULL, $6,
-         $7, 'SENT', NOW(),
-         $8, $9, $10, $11, $12,
-         $13, NOW()
+         $1, $2, $3, $4, $5, $6,
+         $7, $8, $9,
+         $10, 'SENT', NOW(),
+         $11, $12, $13::jsonb, NULL,
+         $14, $15, $16,
+         $17, NOW()
        )`,
       [
         contractId,
         schoolId,
+        child.child_id,
         parentId,
         primaryGroupId,
         template.id,
+        enrollmentRequestId,
         contentHtml,
+        contractNumber,
         includeAttachment2,
         paymentType,
         billingExempt ? 0 : amount,
+        JSON.stringify(amountBreakdown),
         discountLargeFamily,
         discountSibling,
         billingExempt,
@@ -664,51 +977,140 @@ export async function generateParentContract(
     );
   }
 
-  for (let i = 0; i < included.length; i++) {
-    const child = included[i];
-    const attachments = perChildAttachments.find((a) => a.childId === child.child_id);
-    await queryDb(
-      `INSERT INTO contract_children (
-         contract_id, child_id, enrollment_request_id, group_id, sort_order,
-         attachment_1_html, attachment_2_html, lesson_unit_price,
-         monthly_unit_price, yearly_unit_price
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [
-        contractId,
-        child.child_id,
-        child.request_id,
-        child.group_id,
-        i,
-        attachments?.attachment1Html ?? null,
-        attachments?.attachment2Html ?? null,
-        paymentType === "PER_LESSON"
-          ? resolveChildLessonUnitPriceForContract(child)
-          : null,
-        paymentType === "MONTHLY"
-          ? resolveChildMonthlyUnitPriceForContract(child)
-          : null,
-        paymentType === "YEARLY"
-          ? resolveChildYearlyUnitPriceForContract(child)
-          : null,
-      ]
-    );
-  }
+  await queryDb(
+    `INSERT INTO contract_children (
+       school_id, contract_id, child_id, enrollment_request_id, group_id, sort_order,
+       attachment_1_html, attachment_2_html, lesson_unit_price,
+       monthly_unit_price, yearly_unit_price
+     ) VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8, $9, $10)`,
+    [
+      schoolId,
+      contractId,
+      child.child_id,
+      enrollmentRequestId,
+      child.group_id,
+      childAttachment1,
+      childAttachment2,
+      rates.lesson_unit_price,
+      rates.monthly_unit_price,
+      rates.yearly_unit_price,
+    ]
+  );
 
   return {
     contractId,
     contentHtml,
-    childAttachments: perChildAttachments.map((a) => {
-      const child = included.find((c) => c.child_id === a.childId)!;
-      return {
-        child_id: a.childId,
+    childAttachments: [
+      {
+        child_id: child.child_id,
         first_name: child.first_name,
         last_name: child.last_name,
-        attachment_1_html: a.attachment1Html,
-        attachment_2_html: a.attachment2Html,
-      };
-    }),
+        attachment_1_html: childAttachment1,
+        attachment_2_html: childAttachment2,
+      },
+    ],
     amount,
   };
+}
+
+/**
+ * Zamraża kwotę umowy przy podpisie na podstawie snapshotu w contract_children
+ * i procentów rabatów z amount_breakdown (bez ponownego odczytu cennika grup).
+ */
+export async function finalizeContractPricingAtSign(
+  contractId: string,
+  frozenAt: Date = new Date()
+): Promise<{ amount: number | null; breakdown: ContractAmountBreakdown }> {
+  const contractRes = await queryDb<{
+    school_id: string;
+    payment_type: string | null;
+    billing_exempt: boolean;
+    discount_sibling: boolean;
+    discount_large_family: boolean;
+    amount_breakdown: unknown;
+  }>(
+    `SELECT school_id, payment_type, billing_exempt,
+            discount_sibling, discount_large_family, amount_breakdown
+     FROM contracts
+     WHERE id = $1
+     LIMIT 1`,
+    [contractId]
+  );
+  const contract = contractRes.rows[0];
+  if (!contract) {
+    throw new Error("Nie znaleziono umowy do zamrożenia kwoty");
+  }
+
+  const childrenRes = await queryDb<{
+    child_id: string;
+    first_name: string;
+    last_name: string;
+    lesson_unit_price: string | null;
+    monthly_unit_price: string | null;
+    yearly_unit_price: string | null;
+  }>(
+    `SELECT cc.child_id, ch.first_name, ch.last_name,
+            cc.lesson_unit_price::text AS lesson_unit_price,
+            cc.monthly_unit_price::text AS monthly_unit_price,
+            cc.yearly_unit_price::text AS yearly_unit_price
+     FROM contract_children cc
+     JOIN children ch ON ch.id = cc.child_id
+     WHERE cc.contract_id = $1
+     ORDER BY cc.sort_order ASC`,
+    [contractId]
+  );
+
+  const children = childrenRes.rows.map((row) => ({
+    child_id: row.child_id,
+    name: `${formatPersonName(row.first_name)} ${formatPersonName(row.last_name)}`.trim(),
+    lesson_unit_price: parseNullableMoney(row.lesson_unit_price),
+    monthly_unit_price: parseNullableMoney(row.monthly_unit_price),
+    yearly_unit_price: parseNullableMoney(row.yearly_unit_price),
+  }));
+
+  const paymentType = parsePaymentType(contract.payment_type);
+  const existing = parseContractAmountBreakdown(contract.amount_breakdown);
+
+  let discountKeys: DiscountKey[];
+  let discountSettings: SchoolDiscountSettings;
+
+  if (existing && existing.discounts.length > 0) {
+    discountKeys = existing.discounts.map((d) => d.key);
+    discountSettings = {
+      LARGE_FAMILY_CARD: 0,
+      SIBLING: 0,
+      ...Object.fromEntries(existing.discounts.map((d) => [d.key, d.percent])),
+    };
+  } else {
+    discountKeys = [];
+    if (contract.discount_sibling) discountKeys.push(DISCOUNT_KEYS.SIBLING);
+    if (contract.discount_large_family) {
+      discountKeys.push(DISCOUNT_KEYS.LARGE_FAMILY_CARD);
+    }
+    discountSettings = await getSchoolDiscountSettings(contract.school_id);
+  }
+
+  const breakdown = buildContractAmountBreakdown({
+    paymentType,
+    billingExempt: contract.billing_exempt,
+    discountKeys,
+    discountSettings,
+    children,
+    frozenAt,
+  });
+
+  const amount = contract.billing_exempt ? 0 : breakdown.final_total;
+
+  await queryDb(
+    `UPDATE contracts
+     SET amount = $2,
+         amount_breakdown = $3::jsonb,
+         amount_frozen_at = $4
+     WHERE id = $1`,
+    [contractId, amount, JSON.stringify(breakdown), frozenAt]
+  );
+
+  return { amount, breakdown };
 }
 
 export type ParentContractChildAttachment = {
@@ -734,6 +1136,11 @@ export async function fetchParentContractForPortal(
   included_children: Array<{ child_id: string; request_id: string; first_name: string; last_name: string }>;
   child_attachments: ParentContractChildAttachment[];
 } | null> {
+  const activeYear = await getActiveSchoolYear(schoolId);
+  const yearId = activeYear?.id ? String(activeYear.id) : null;
+  if (!yearId) return null;
+
+  // Preferuj SENT (kolejna umowa do podpisu). SIGNED tylko gdy brak SENT i brak ACCEPTED bez umowy w tym roku.
   const res = await queryDb<{
     id: string;
     status: string;
@@ -745,12 +1152,34 @@ export async function fetchParentContractForPortal(
   }>(
     `SELECT id, status, content_html,
             include_attachment_2, payment_type, amount::text, signed_at
-     FROM contracts
-     WHERE parent_id = $1 AND school_id = $2 AND child_id IS NULL
-       AND status IN ('SENT', 'SIGNED')
-     ORDER BY created_at DESC
+     FROM contracts c
+     WHERE c.parent_id = $1 AND c.school_id = $2
+       AND c.school_year_id = $3
+       AND c.status IN ('SENT', 'SIGNED')
+       AND (
+         c.status = 'SENT'
+         OR NOT EXISTS (
+           SELECT 1
+           FROM children ch
+           WHERE ch.parent_id = $1
+             AND ch.school_id = $2
+             AND ch.active = TRUE
+             AND UPPER(BTRIM(COALESCE(ch.access_level::text, ''))) = 'ACCEPTED'
+             AND NOT EXISTS (
+               SELECT 1
+               FROM contracts ct
+               LEFT JOIN contract_children cc ON cc.contract_id = ct.id
+               WHERE ct.parent_id = $1
+                 AND ct.school_id = $2
+                 AND ct.school_year_id = $3
+                 AND ct.status IN ('SENT', 'SIGNED')
+                 AND (ct.child_id = ch.id OR cc.child_id = ch.id)
+             )
+         )
+       )
+     ORDER BY CASE c.status WHEN 'SENT' THEN 0 ELSE 1 END, c.created_at DESC
      LIMIT 1`,
-    [parentId, schoolId]
+    [parentId, schoolId, yearId]
   );
   const row = res.rows[0];
   if (!row) return null;

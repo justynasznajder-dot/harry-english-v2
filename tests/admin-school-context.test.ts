@@ -58,6 +58,7 @@ describe("admin-school-context helpers", () => {
       active: true,
       confirmed: true,
       must_change_password: false,
+      client_number: null,
       reset_token: null,
       reset_token_expiry: null,
       resignation_date: null,

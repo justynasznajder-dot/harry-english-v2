@@ -12,7 +12,6 @@ import { notifyParents, type ParentNotifyRow } from "@/lib/parent-notifications"
 import { requireMessageActor } from "@/lib/messages";
 
 const HOLIDAY_TYPES = ["HOLIDAY", "PUBLIC", "SCHOOL", "CANCELLED"] as const;
-const TZ = "Europe/Warsaw";
 
 async function cancelScheduledLessonsInHolidayRange(
   schoolId: string,
@@ -27,8 +26,8 @@ async function cancelScheduledLessonsInHolidayRange(
      WHERE l.group_id = g.id
        AND g.school_id = $1
        AND l.status = 'SCHEDULED'
-       AND (l.scheduled_at AT TIME ZONE '${TZ}')::date >= $2::date
-       AND (l.scheduled_at AT TIME ZONE '${TZ}')::date <= $3::date
+       AND l.scheduled_at::date >= $2::date
+       AND l.scheduled_at::date <= $3::date
      RETURNING l.id`,
     [schoolId, dateFrom, dateTo],
   );
@@ -54,8 +53,8 @@ async function getParentsWithScheduledLessonsInRange(
      INNER JOIN users u ON u.id = c.parent_id
      WHERE g.school_id = $1
        AND l.status = 'SCHEDULED'
-       AND (l.scheduled_at AT TIME ZONE '${TZ}')::date >= $2::date
-       AND (l.scheduled_at AT TIME ZONE '${TZ}')::date <= $3::date
+       AND l.scheduled_at::date >= $2::date
+       AND l.scheduled_at::date <= $3::date
        AND u.role = 'PARENT'
        AND u.active = TRUE
        AND u.email IS NOT NULL

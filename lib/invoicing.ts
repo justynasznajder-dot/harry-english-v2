@@ -513,12 +513,13 @@ async function insertPaymentWithInvoice(params: {
         issuedAt: issueDate,
         filename,
         content: pdf,
+        source: "invoice.create",
       });
       await queryDb(`UPDATE invoices SET pdf_key = $2 WHERE id = $1`, [invoiceId, uploadedKey]);
     } catch (err) {
       if (uploadedKey) {
         try {
-          await deleteR2Object(uploadedKey);
+          await deleteR2Object(uploadedKey, { source: "invoice.orphan-cleanup" });
         } catch (cleanupErr) {
           console.warn(`[R2] Nie udało się usunąć orphan PDF ${uploadedKey}:`, cleanupErr);
         }
@@ -1182,12 +1183,13 @@ export async function createCorrectiveInvoice(
           issuedAt: issueDate,
           filename,
           content: pdf,
+          source: "invoice.corrective",
         });
         await queryDb(`UPDATE invoices SET pdf_key = $2 WHERE id = $1`, [invoiceId, uploadedKey]);
       } catch (err) {
         if (uploadedKey) {
           try {
-            await deleteR2Object(uploadedKey);
+            await deleteR2Object(uploadedKey, { source: "invoice.orphan-cleanup" });
           } catch (cleanupErr) {
             console.warn(`[R2] Nie udało się usunąć orphan PDF ${uploadedKey}:`, cleanupErr);
           }

@@ -7,6 +7,10 @@ import {
 } from "@aws-sdk/client-s3";
 
 import type { ContractPdfFile } from "@/lib/contract-pdf";
+import { getR2Source, recordR2Usage, type R2Op, type R2Source } from "@/lib/r2-usage";
+
+export type { R2Source } from "@/lib/r2-usage";
+export { runWithR2Source } from "@/lib/r2-usage";
 
 type R2Config = {
   accountId: string;
@@ -62,6 +66,41 @@ function getR2Client(config: R2Config): S3Client {
     });
   }
   return cachedClient;
+}
+
+async function sendR2Command<T>(params: {
+  op: R2Op;
+  keyOrPrefix: string;
+  source?: R2Source;
+  run: (client: S3Client, bucket: string) => Promise<T>;
+}): Promise<T> {
+  const config = getR2Config();
+  const client = getR2Client(config);
+  const source = params.source ?? getR2Source();
+  const started = Date.now();
+  try {
+    const result = await params.run(client, config.bucketName);
+    recordR2Usage({
+      op: params.op,
+      source,
+      bucket: config.bucketName,
+      keyOrPrefix: params.keyOrPrefix,
+      ok: true,
+      durationMs: Date.now() - started,
+    });
+    return result;
+  } catch (err) {
+    recordR2Usage({
+      op: params.op,
+      source,
+      bucket: config.bucketName,
+      keyOrPrefix: params.keyOrPrefix,
+      ok: false,
+      durationMs: Date.now() - started,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
 }
 
 export type DocumentKind = "umowy" | "faktury";
@@ -133,22 +172,27 @@ export async function storeInvoicePdfInR2(params: {
   issuedAt: Date;
   filename: string;
   content: Buffer;
+  source?: R2Source;
 }): Promise<string> {
-  const config = getR2Config();
-  const client = getR2Client(config);
   const prefix = buildInvoiceR2Prefix(params);
   const key = `${prefix}/${params.filename}`;
 
-  console.info(`[R2] PUT bucket=${config.bucketName} key=${key}`);
-  await client.send(
-    new PutObjectCommand({
-      Bucket: config.bucketName,
-      Key: key,
-      Body: params.content,
-      ContentType: "application/pdf",
-      ContentLength: params.content.length,
-    })
-  );
+  await sendR2Command({
+    op: "PUT",
+    keyOrPrefix: key,
+    source: params.source,
+    run: async (client, bucket) => {
+      await client.send(
+        new PutObjectCommand({
+          Bucket: bucket,
+          Key: key,
+          Body: params.content,
+          ContentType: "application/pdf",
+          ContentLength: params.content.length,
+        })
+      );
+    },
+  });
 
   return key;
 }
@@ -157,24 +201,29 @@ export async function storeSignedContractPdfsInR2(params: {
   parentUserId: string;
   signedAt: Date;
   pdfFiles: ContractPdfFile[];
+  source?: R2Source;
 }): Promise<string[]> {
-  const config = getR2Config();
-  const client = getR2Client(config);
   const prefix = buildSignedContractR2Prefix(params);
   const uploadedKeys: string[] = [];
 
   for (const file of params.pdfFiles) {
     const key = `${prefix}/${file.filename}`;
-    console.info(`[R2] PUT bucket=${config.bucketName} key=${key}`);
-    await client.send(
-      new PutObjectCommand({
-        Bucket: config.bucketName,
-        Key: key,
-        Body: file.content,
-        ContentType: "application/pdf",
-        ContentLength: file.content.length,
-      })
-    );
+    await sendR2Command({
+      op: "PUT",
+      keyOrPrefix: key,
+      source: params.source,
+      run: async (client, bucket) => {
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            Body: file.content,
+            ContentType: "application/pdf",
+            ContentLength: file.content.length,
+          })
+        );
+      },
+    });
     uploadedKeys.push(key);
   }
 
@@ -188,18 +237,24 @@ export type R2StoredFile = {
   lastModified: string | null;
 };
 
-export async function listR2ObjectsUnderPrefix(prefix: string): Promise<R2StoredFile[]> {
-  const config = getR2Config();
-  const client = getR2Client(config);
+export async function listR2ObjectsUnderPrefix(
+  prefix: string,
+  options?: { source?: R2Source }
+): Promise<R2StoredFile[]> {
   const normalizedPrefix = prefix.endsWith("/") ? prefix : `${prefix}/`;
 
-  console.info(`[R2] LIST bucket=${config.bucketName} prefix=${normalizedPrefix}`);
-  const res = await client.send(
-    new ListObjectsV2Command({
-      Bucket: config.bucketName,
-      Prefix: normalizedPrefix,
-    })
-  );
+  const res = await sendR2Command({
+    op: "LIST",
+    keyOrPrefix: normalizedPrefix,
+    source: options?.source,
+    run: async (client, bucket) =>
+      client.send(
+        new ListObjectsV2Command({
+          Bucket: bucket,
+          Prefix: normalizedPrefix,
+        })
+      ),
+  });
 
   return (res.Contents ?? [])
     .filter((obj) => obj.Key && !obj.Key.endsWith("/"))
@@ -211,17 +266,22 @@ export async function listR2ObjectsUnderPrefix(prefix: string): Promise<R2Stored
     }));
 }
 
-export async function getR2ObjectBuffer(key: string): Promise<{ buffer: Buffer; contentType: string }> {
-  const config = getR2Config();
-  const client = getR2Client(config);
-
-  console.info(`[R2] GET bucket=${config.bucketName} key=${key}`);
-  const res = await client.send(
-    new GetObjectCommand({
-      Bucket: config.bucketName,
-      Key: key,
-    })
-  );
+export async function getR2ObjectBuffer(
+  key: string,
+  options?: { source?: R2Source }
+): Promise<{ buffer: Buffer; contentType: string }> {
+  const res = await sendR2Command({
+    op: "GET",
+    keyOrPrefix: key,
+    source: options?.source,
+    run: async (client, bucket) =>
+      client.send(
+        new GetObjectCommand({
+          Bucket: bucket,
+          Key: key,
+        })
+      ),
+  });
 
   const body = res.Body;
   if (!body) {
@@ -236,25 +296,35 @@ export async function getR2ObjectBuffer(key: string): Promise<{ buffer: Buffer; 
 }
 
 /** Best-effort usunięcie obiektu (np. orphan po rollbacku faktury). */
-export async function deleteR2Object(key: string): Promise<void> {
-  const config = getR2Config();
-  const client = getR2Client(config);
-  console.info(`[R2] DELETE bucket=${config.bucketName} key=${key}`);
-  await client.send(
-    new DeleteObjectCommand({
-      Bucket: config.bucketName,
-      Key: key,
-    })
-  );
+export async function deleteR2Object(
+  key: string,
+  options?: { source?: R2Source }
+): Promise<void> {
+  await sendR2Command({
+    op: "DELETE",
+    keyOrPrefix: key,
+    source: options?.source,
+    run: async (client, bucket) => {
+      await client.send(
+        new DeleteObjectCommand({
+          Bucket: bucket,
+          Key: key,
+        })
+      );
+    },
+  });
 }
 
 export async function listSignedContractPdfsForParent(params: {
   parentUserId: string;
+  source?: R2Source;
 }): Promise<R2StoredFile[]> {
   const parentUserId = params.parentUserId.trim();
   if (!parentUserId) return [];
 
-  const files = await listR2ObjectsUnderPrefix(`${parentUserId}/`);
+  const files = await listR2ObjectsUnderPrefix(`${parentUserId}/`, {
+    source: params.source,
+  });
   return files
     .filter((file) =>
       isParentDokumentyKeyAllowed({

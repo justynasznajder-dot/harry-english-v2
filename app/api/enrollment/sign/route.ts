@@ -365,6 +365,7 @@ export async function POST(request: NextRequest) {
           parentUserId: parentId,
           signedAt,
           pdfFiles,
+          source: "enrollment.sign",
         });
       } catch (r2Err) {
         console.error("Signed contract R2 backup error:", r2Err);

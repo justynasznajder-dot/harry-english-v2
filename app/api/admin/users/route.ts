@@ -113,6 +113,8 @@ export async function GET(request: NextRequest) {
 
       phone: u.phone,
 
+      client_number: u.client_number,
+
       resignation_date: u.resignation_date,
 
       created_at: u.created_at,

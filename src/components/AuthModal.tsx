@@ -40,6 +40,11 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
   const [isLoading, setIsLoading] = useState(false);
   const [registerSuccess, setRegisterSuccess] = useState(false);
   const [forgotPasswordSuccess, setForgotPasswordSuccess] = useState(false);
+  const [existingAccountConfirm, setExistingAccountConfirm] = useState<{
+    firstName: string;
+    lastName: string;
+  } | null>(null);
+  const [confirmExistingAccount, setConfirmExistingAccount] = useState(false);
 
   useEffect(() => {
     if (!forgotPasswordSuccess) return;
@@ -54,6 +59,8 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
     if (isOpen) {
       setMode(initialMode);
       setRegisterSuccess(false);
+      setExistingAccountConfirm(null);
+      setConfirmExistingAccount(false);
     }
   }, [isOpen, initialMode]);
 
@@ -126,11 +133,9 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
     }
   };
 
-  const handleRegister = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submitRegister = async (opts?: { confirmExistingAccount?: boolean }) => {
     setErrors({});
 
-    // Walidacja
     const newErrors: Record<string, string> = {};
 
     if (!formData.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
@@ -205,6 +210,9 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
       return;
     }
 
+    const withConfirm =
+      opts?.confirmExistingAccount === true || confirmExistingAccount;
+
     setIsLoading(true);
 
     try {
@@ -223,21 +231,47 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
             preferredLocationId: s.preferredLocationId.trim() || undefined,
           })),
           rodoConsent: formData.rodoConsent,
+          confirmExistingAccount: withConfirm || undefined,
         }),
       });
 
-      const data = await response.json();
+      const data = (await response.json()) as {
+        message?: string;
+        code?: string;
+        existingAccount?: { firstName?: string; lastName?: string };
+      };
 
       if (response.ok) {
+        setExistingAccountConfirm(null);
+        setConfirmExistingAccount(false);
         setRegisterSuccess(true);
-      } else {
-        setErrors({ form: data.message || "Nie udało się wysłać zgłoszenia" });
+        return;
       }
-    } catch (error) {
+
+      if (
+        response.status === 409 &&
+        data.code === "EXISTING_ACCOUNT_CONFIRMATION_REQUIRED" &&
+        data.existingAccount
+      ) {
+        setExistingAccountConfirm({
+          firstName: String(data.existingAccount.firstName ?? "").trim(),
+          lastName: String(data.existingAccount.lastName ?? "").trim(),
+        });
+        setConfirmExistingAccount(false);
+        return;
+      }
+
+      setErrors({ form: data.message || "Nie udało się wysłać zgłoszenia" });
+    } catch {
       setErrors({ form: "Wystąpił błąd. Spróbuj ponownie." });
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await submitRegister();
   };
 
   const handleForgotPassword = async (e: React.FormEvent) => {
@@ -564,7 +598,11 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
                 <input
                   type="email"
                   value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  onChange={(e) => {
+                    setFormData({ ...formData, email: e.target.value });
+                    setExistingAccountConfirm(null);
+                    setConfirmExistingAccount(false);
+                  }}
                   className={`w-full rounded-lg border ${errors.email ? 'border-red-300' : 'border-gray-300'} px-4 py-2.5 text-gray-900 focus:border-[#175244] focus:ring-2 focus:ring-[#175244]/20 outline-none transition-all`}
                   placeholder="twoj@email.pl"
                   required
@@ -748,13 +786,51 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
                 </div>
               )}
 
-              <button
-                type="submit"
-                disabled={isLoading}
-                className="w-full rounded-full bg-[#ffc94a] px-6 py-3 text-[#3b2a10] font-semibold hover:bg-[#ffd76f] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isLoading ? "Wysyłanie..." : "Zgłoszenie dziecka"}
-              </button>
+              {existingAccountConfirm && (
+                <div className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+                  <p>
+                    Na ten email jest już konto{" "}
+                    <strong>
+                      {`${existingAccountConfirm.firstName} ${existingAccountConfirm.lastName}`.trim()}
+                    </strong>
+                    . Kontynuować? Zgłoszenie będzie powiązane z tym kontem.
+                  </p>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <button
+                      type="button"
+                      disabled={isLoading}
+                      onClick={() => {
+                        setExistingAccountConfirm(null);
+                        setConfirmExistingAccount(false);
+                      }}
+                      className="w-full rounded-full border border-amber-400 bg-white px-4 py-2.5 font-semibold text-amber-950 hover:bg-amber-100 disabled:opacity-50"
+                    >
+                      Anuluj
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isLoading}
+                      onClick={() => {
+                        setConfirmExistingAccount(true);
+                        void submitRegister({ confirmExistingAccount: true });
+                      }}
+                      className="w-full rounded-full bg-[#ffc94a] px-4 py-2.5 font-semibold text-[#3b2a10] hover:bg-[#ffd76f] disabled:opacity-50"
+                    >
+                      {isLoading ? "Wysyłanie..." : "Kontynuuj zgłoszenie"}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {!existingAccountConfirm && (
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className="w-full rounded-full bg-[#ffc94a] px-6 py-3 text-[#3b2a10] font-semibold hover:bg-[#ffd76f] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isLoading ? "Wysyłanie..." : "Zgłoszenie dziecka"}
+                </button>
+              )}
 
               <button
                 type="button"

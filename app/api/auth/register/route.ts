@@ -5,10 +5,13 @@ import { NextResponse } from "next/server";
  */
 import {
   DuplicateEnrollmentError,
+  findUserBySchoolAndEmail,
   getRegistrationSchoolId,
   insertPublicEnrollmentRequests,
   queryDb,
+  updateUser,
 } from "@/lib/db";
+import { formatPersonName } from "@/lib/format-person-name";
 import {
   sendEnrollmentConfirmationToParent,
   sendPublicEnrollmentBackupEmail,
@@ -134,6 +137,7 @@ export async function POST(request: Request) {
       phone,
       children,
       rodoConsent,
+      confirmExistingAccount,
     } = body;
 
     if (
@@ -163,6 +167,8 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+
+    const parentEmailNormalized = String(email).trim().toLowerCase();
 
     const phoneNorm = normalizeParentPhone(phone);
     if (!phoneNorm.ok) {
@@ -315,10 +321,33 @@ export async function POST(request: Request) {
       };
     });
 
+    const existingParent = await findUserBySchoolAndEmail(
+      schoolId,
+      parentEmailNormalized
+    );
+    const existingParentAccount =
+      existingParent && existingParent.role === "PARENT" ? existingParent : null;
+
+    if (existingParentAccount && confirmExistingAccount !== true) {
+      const accountName =
+        `${existingParentAccount.first_name} ${existingParentAccount.last_name}`.trim();
+      return NextResponse.json(
+        {
+          code: "EXISTING_ACCOUNT_CONFIRMATION_REQUIRED",
+          message: `Na ten email jest już konto ${accountName}. Potwierdź, aby kontynuować — zgłoszenie będzie powiązane z tym kontem.`,
+          existingAccount: {
+            firstName: existingParentAccount.first_name,
+            lastName: existingParentAccount.last_name,
+          },
+        },
+        { status: 409 }
+      );
+    }
+
     const enrollmentEmailPayload = {
       parentFirstName: String(firstName).trim(),
       parentLastName: String(lastName).trim(),
-      parentEmail: String(email).trim().toLowerCase(),
+      parentEmail: parentEmailNormalized,
       children: enrollmentChildren,
     };
 
@@ -340,13 +369,21 @@ export async function POST(request: Request) {
     }
 
     try {
+      if (existingParentAccount) {
+        await updateUser(existingParentAccount.id, {
+          first_name: formatPersonName(String(firstName).trim()),
+          last_name: formatPersonName(String(lastName).trim()),
+          phone: phoneNorm.value,
+        });
+      }
       await insertPublicEnrollmentRequests({
         schoolId,
-        email: String(email).trim(),
+        email: parentEmailNormalized,
         firstName: String(firstName).trim(),
         lastName: String(lastName).trim(),
         phone: phoneNorm.value,
         children: normalizedChildren,
+        userId: existingParentAccount?.id ?? null,
       });
     } catch (insertErr) {
       if (insertErr instanceof DuplicateEnrollmentError) {
