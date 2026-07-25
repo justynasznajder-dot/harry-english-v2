@@ -14,6 +14,7 @@ export const R2_SOURCES = [
   "parent.documents.list",
   "parent.documents.download",
   "parent.payments.invoice",
+  "admin.invoice.pdf",
   "accountant.invoice.pdf",
   "script.backfill-contracts",
   "unknown",
