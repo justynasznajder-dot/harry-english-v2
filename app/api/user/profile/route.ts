@@ -36,6 +36,7 @@ function profileToJson(profile: NonNullable<Awaited<ReturnType<typeof getParentP
     companyName: profile.company_name,
     nip: profile.nip,
     pesel: profile.pesel,
+    discountLargeFamily: profile.discount_large_family === true,
     createdAt: profile.created_at,
     updatedAt: profile.updated_at,
     complete: isParentContractProfileComplete(profile),
@@ -139,6 +140,15 @@ export async function PUT(request: NextRequest) {
     const pesel = String(body.pesel ?? "").trim();
     const companyName = String(body.companyName ?? body.company_name ?? "").trim();
     const nip = String(body.nip ?? "").trim();
+    const discountLargeFamilyRaw =
+      body.discountLargeFamily ?? body.discount_large_family;
+    const discountLargeFamily =
+      discountLargeFamilyRaw === undefined
+        ? undefined
+        : discountLargeFamilyRaw === true ||
+          discountLargeFamilyRaw === "true" ||
+          discountLargeFamilyRaw === 1 ||
+          discountLargeFamilyRaw === "1";
 
     const validationError = validateParentContractProfileInput({
       billingType,
@@ -168,6 +178,9 @@ export async function PUT(request: NextRequest) {
       company_name: billingType === "company" ? companyName : null,
       nip: billingType === "company" ? nip : null,
       pesel: billingType === "company" ? null : pesel,
+      ...(discountLargeFamily !== undefined
+        ? { discount_large_family: discountLargeFamily }
+        : {}),
     });
 
     if (!profile) {

@@ -2,6 +2,7 @@ import { queryDb } from "@/lib/db";
 import { formatRenewalStatusLabel } from "@/lib/renewal-status";
 import {
   SCHOOL_TIMEZONE,
+  periodMonthStartYmd,
   sqlSchoolTimestampAsTimestamptz,
   toIsoUtc,
   todayYmdSchool,
@@ -16,7 +17,7 @@ export function todayYmdWarsaw(): string {
 function weekEndYmd(fromYmd: string): string {
   const d = new Date(`${fromYmd}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() + 6);
-  return d.toISOString().slice(0, 10);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 
 export type DashboardCounters = {
@@ -66,24 +67,6 @@ export type ResignationAlert = {
   parentEmail: string;
   reason: string | null;
   requestedAt: string | null;
-};
-
-export type StaleNegotiationAlert = {
-  requestId: string;
-  childName: string;
-  parentName: string;
-  parentEmail: string;
-  daysSince: number;
-  createdAt: string;
-};
-
-export type MissingAttendanceAlert = {
-  lessonId: string;
-  scheduledAt: string;
-  groupName: string;
-  teacherName: string;
-  expectedStudents: number;
-  markedStudents: number;
 };
 
 export async function fetchDashboardCounters(schoolId: string): Promise<DashboardCounters> {
@@ -241,8 +224,7 @@ async function fetchDashboardLessonsMerged(
 export async function fetchDashboardBillingSummary(
   schoolId: string
 ): Promise<DashboardBillingSummary> {
-  const today = new Date();
-  const periodMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-01`;
+  const periodMonth = periodMonthStartYmd();
 
   const res = await queryDb<{
     child_id: string;
@@ -305,21 +287,6 @@ export type ResignationListRow = ResignationAlert & {
   groupName: string | null;
   accessLevel: string | null;
 };
-
-export async function fetchResignationAlerts(schoolId: string): Promise<ResignationAlert[]> {
-  const rows = await fetchResignationsList(schoolId);
-  return rows.map(
-    ({ childId, childName, parentId, parentName, parentEmail, reason, requestedAt }) => ({
-      childId,
-      childName,
-      parentId,
-      parentName,
-      parentEmail,
-      reason,
-      requestedAt,
-    })
-  );
-}
 
 export async function fetchResignationsList(schoolId: string): Promise<ResignationListRow[]> {
   const res = await queryDb<{
@@ -409,101 +376,6 @@ export async function countPendingEnrollments(schoolId: string | null): Promise<
   return Number(res.rows[0]?.n ?? 0);
 }
 
-export async function fetchStaleNegotiationAlerts(
-  schoolId: string,
-  daysThreshold: number
-): Promise<StaleNegotiationAlert[]> {
-  const res = await queryDb<{
-    request_id: string;
-    child_first: string;
-    child_last: string;
-    parent_first: string;
-    parent_last: string;
-    parent_email: string;
-    created_at: Date | string;
-    days_since: string;
-  }>(
-    `SELECT
-       er.id AS request_id,
-       er.child_first_name AS child_first,
-       er.child_last_name AS child_last,
-       COALESCE(u.first_name, er.parent_first_name) AS parent_first,
-       COALESCE(u.last_name, er.parent_last_name) AS parent_last,
-       COALESCE(u.email, er.parent_email) AS parent_email,
-       er.created_at,
-       EXTRACT(DAY FROM NOW() - COALESCE(er.proposed_at, er.created_at))::int::text AS days_since
-     FROM enrollment_requests er
-     LEFT JOIN users u ON u.id = NULLIF(BTRIM(er.user_id), '')
-     WHERE er.school_id = $1
-       AND UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'NEGOTIATING'
-       AND COALESCE(er.proposed_at, er.created_at) < NOW() - ($2 || ' days')::interval
-     ORDER BY COALESCE(er.proposed_at, er.created_at) ASC`,
-    [schoolId, String(daysThreshold)]
-  );
-  return res.rows.map((row) => ({
-    requestId: row.request_id,
-    childName: `${row.child_first} ${row.child_last}`.trim(),
-    parentName: `${row.parent_first} ${row.parent_last}`.trim(),
-    parentEmail: row.parent_email,
-    daysSince: Number(row.days_since) || daysThreshold,
-    createdAt:
-      row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
-  }));
-}
-
-export async function fetchMissingAttendanceAlerts(
-  schoolId: string
-): Promise<MissingAttendanceAlert[]> {
-  const res = await queryDb<{
-    lesson_id: string;
-    scheduled_at: Date | string;
-    group_name: string;
-    teacher_first: string;
-    teacher_last: string;
-    expected_students: string;
-    marked_students: string;
-  }>(
-    `SELECT
-       l.id AS lesson_id,
-       ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at,
-       g.name AS group_name,
-       u.first_name AS teacher_first,
-       u.last_name AS teacher_last,
-       COALESCE(stu.cnt, 0)::text AS expected_students,
-       COALESCE(att.cnt, 0)::text AS marked_students
-     FROM lessons l
-     JOIN groups g ON g.id = l.group_id AND g.school_id = $1
-     JOIN users u ON u.id = l.teacher_id
-     JOIN school_years sy ON sy.id = l.school_year_id AND sy.active = TRUE
-     LEFT JOIN LATERAL (
-       SELECT COUNT(*)::int AS cnt
-       FROM group_students gs
-       WHERE gs.group_id = g.id AND gs.left_at IS NULL
-     ) stu ON TRUE
-     LEFT JOIN LATERAL (
-       SELECT COUNT(DISTINCT a.child_id)::int AS cnt
-       FROM attendance a
-       WHERE a.lesson_id = l.id
-     ) att ON TRUE
-     WHERE l.status IN ('COMPLETED', 'SCHEDULED')
-       AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} < NOW() - interval '1 day'
-       AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} > NOW() - interval '30 days'
-       AND COALESCE(stu.cnt, 0) > 0
-       AND COALESCE(att.cnt, 0) < COALESCE(stu.cnt, 0)
-     ORDER BY l.scheduled_at DESC
-     LIMIT 50`,
-    [schoolId]
-  );
-  return res.rows.map((row) => ({
-    lessonId: row.lesson_id,
-    scheduledAt: toIsoUtc(row.scheduled_at),
-    groupName: row.group_name,
-    teacherName: `${row.teacher_first} ${row.teacher_last}`.trim(),
-    expectedStudents: Number(row.expected_students) || 0,
-    markedStudents: Number(row.marked_students) || 0,
-  }));
-}
-
 export type PipelineRow = {
   childId: string;
   childName: string;
@@ -535,8 +407,7 @@ export async function fetchStudentPipeline(
     )`;
   }
 
-  const today = new Date();
-  const periodMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-01`;
+  const periodMonth = periodMonthStartYmd();
 
   const res = await queryDb<{
     child_id: string;
@@ -728,195 +599,93 @@ export async function fetchRenewalPipeline(
   }));
 }
 
-export type OccupancyRow = {
+export type GroupRosterChild = {
+  childId: string;
+  childName: string;
+};
+
+export type GroupRosterRow = {
   groupId: string;
   groupName: string;
   level: string | null;
   locationName: string;
-  maxStudents: number;
-  currentStudents: number;
-  freeSeats: number;
-  pendingRequests: number;
+  teacherName: string;
+  children: GroupRosterChild[];
 };
 
-export async function fetchGroupOccupancy(schoolId: string): Promise<OccupancyRow[]> {
+export async function fetchGroupsRoster(schoolId: string): Promise<GroupRosterRow[]> {
   const res = await queryDb<{
     group_id: string;
     group_name: string;
     level: string | null;
     location_name: string;
-    max_students: number;
-    current_students: string;
-    pending_requests: string;
+    teacher_name: string;
+    child_id: string | null;
+    child_first_name: string | null;
+    child_last_name: string | null;
   }>(
     `SELECT
        g.id AS group_id,
        g.name AS group_name,
        g.level,
        COALESCE(loc.name, '—') AS location_name,
-       g.max_students,
-       COALESCE(stu.cnt, 0)::text AS current_students,
-       COALESCE(pend.cnt, 0)::text AS pending_requests
+       CASE
+         WHEN t.id IS NULL THEN '—'
+         ELSE TRIM(CONCAT(COALESCE(t.first_name, ''), ' ', COALESCE(t.last_name, '')))
+       END AS teacher_name,
+       c.id AS child_id,
+       c.first_name AS child_first_name,
+       c.last_name AS child_last_name
      FROM groups g
      LEFT JOIN locations loc ON loc.id = g.location_id
-     LEFT JOIN LATERAL (
-       SELECT COUNT(*)::int AS cnt
-       FROM group_students gs
-       JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
-       WHERE gs.group_id = g.id AND gs.left_at IS NULL
-     ) stu ON TRUE
-     LEFT JOIN LATERAL (
-       SELECT COUNT(*)::int AS cnt
-       FROM enrollment_requests er
-       WHERE er.proposed_group_id = g.id
-         AND UPPER(BTRIM(COALESCE(er.status::text, ''))) IN ('NEW', 'PROPOSED', 'NEGOTIATING', 'ACCEPTED')
-     ) pend ON TRUE
+     LEFT JOIN users t ON t.id = g.teacher_id
+     LEFT JOIN group_students gs
+       ON gs.group_id = g.id
+      AND gs.left_at IS NULL
+      AND EXISTS (
+        SELECT 1 FROM school_years sy
+        WHERE sy.id = gs.school_year_id AND sy.active = TRUE
+      )
+     LEFT JOIN children c ON c.id = gs.child_id
      WHERE g.school_id = $1 AND g.active = TRUE
-     ORDER BY loc.name NULLS LAST, g.level NULLS LAST, g.name`,
+     ORDER BY loc.name NULLS LAST, g.name, c.last_name NULLS LAST, c.first_name NULLS LAST`,
     [schoolId]
   );
 
-  return res.rows.map((row) => {
-    const current = Number(row.current_students) || 0;
-    const max = row.max_students || 0;
-    return {
-      groupId: row.group_id,
-      groupName: row.group_name,
-      level: row.level,
-      locationName: row.location_name,
-      maxStudents: max,
-      currentStudents: current,
-      freeSeats: Math.max(0, max - current),
-      pendingRequests: Number(row.pending_requests) || 0,
-    };
-  });
+  const byGroup = new Map<string, GroupRosterRow>();
+  for (const row of res.rows) {
+    let group = byGroup.get(row.group_id);
+    if (!group) {
+      group = {
+        groupId: row.group_id,
+        groupName: row.group_name,
+        level: row.level,
+        locationName: row.location_name,
+        teacherName: row.teacher_name.trim() || "—",
+        children: [],
+      };
+      byGroup.set(row.group_id, group);
+    }
+    if (row.child_id) {
+      const childName =
+        `${String(row.child_first_name ?? "").trim()} ${String(row.child_last_name ?? "").trim()}`.trim() ||
+        "dziecko";
+      group.children.push({ childId: row.child_id, childName });
+    }
+  }
+
+  return Array.from(byGroup.values());
 }
 
-export type ScheduleConflict = {
-  type: "teacher" | "location";
-  resourceName: string;
-  lessonAId: string;
-  lessonBId: string;
-  scheduledAtA: string;
-  scheduledAtB: string;
-  groupAName: string;
-  groupBName: string;
-  locationAName: string;
-  locationBName: string;
-};
-
-export async function fetchScheduleConflicts(
-  schoolId: string,
-  fromYmd: string,
-  toYmd: string
-): Promise<ScheduleConflict[]> {
-  const res = await queryDb<{
-    conflict_type: string;
-    resource_name: string;
-    lesson_a_id: string;
-    lesson_b_id: string;
-    scheduled_a: Date | string;
-    scheduled_b: Date | string;
-    group_a: string;
-    group_b: string;
-    loc_a: string;
-    loc_b: string;
-  }>(
-    `WITH lesson_window AS (
-       SELECT
-         l.id,
-         l.teacher_id,
-         l.location_id,
-         ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at,
-         l.duration_min,
-         ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")}
-           + (l.duration_min || ' minutes')::interval AS ends_at,
-         g.name AS group_name,
-         loc.name AS location_name,
-         u.first_name || ' ' || u.last_name AS teacher_name
-       FROM lessons l
-       JOIN groups g ON g.id = l.group_id AND g.school_id = $1
-       JOIN locations loc ON loc.id = l.location_id
-       JOIN users u ON u.id = l.teacher_id
-       WHERE l.status <> 'CANCELLED'
-         AND l.scheduled_at >= $2::date
-         AND l.scheduled_at < ($3::date + interval '1 day')
-     )
-     SELECT
-       'teacher' AS conflict_type,
-       a.teacher_name AS resource_name,
-       a.id AS lesson_a_id,
-       b.id AS lesson_b_id,
-       a.scheduled_at AS scheduled_a,
-       b.scheduled_at AS scheduled_b,
-       a.group_name AS group_a,
-       b.group_name AS group_b,
-       a.location_name AS loc_a,
-       b.location_name AS loc_b
-     FROM lesson_window a
-     JOIN lesson_window b ON a.teacher_id = b.teacher_id AND a.id < b.id
-       AND a.scheduled_at < b.ends_at AND b.scheduled_at < a.ends_at
-     UNION ALL
-     SELECT
-       'location' AS conflict_type,
-       a.location_name AS resource_name,
-       a.id AS lesson_a_id,
-       b.id AS lesson_b_id,
-       a.scheduled_at AS scheduled_a,
-       b.scheduled_at AS scheduled_b,
-       a.group_name AS group_a,
-       b.group_name AS group_b,
-       a.location_name AS loc_a,
-       b.location_name AS loc_b
-     FROM lesson_window a
-     JOIN lesson_window b ON a.location_id = b.location_id AND a.id < b.id
-       AND a.scheduled_at < b.ends_at AND b.scheduled_at < a.ends_at
-     ORDER BY scheduled_a`,
-    [schoolId, fromYmd, toYmd]
-  );
-
-  return res.rows.map((row) => ({
-    type: row.conflict_type as "teacher" | "location",
-    resourceName: row.resource_name,
-    lessonAId: row.lesson_a_id,
-    lessonBId: row.lesson_b_id,
-      scheduledAtA: toIsoUtc(row.scheduled_a),
-      scheduledAtB: toIsoUtc(row.scheduled_b),
-    groupAName: row.group_a,
-    groupBName: row.group_b,
-    locationAName: row.loc_a,
-    locationBName: row.loc_b,
-  }));
-}
-
-export function getWeekRangeFromToday(): { from: string; to: string } {
-  const today = todayYmdWarsaw();
-  return { from: today, to: weekEndYmd(today) };
-}
-
-export async function fetchFullDashboard(
-  schoolId: string,
-  negotiatingDaysThreshold: number
-) {
+export async function fetchFullDashboard(schoolId: string) {
   const today = todayYmdWarsaw();
   const weekEnd = weekEndYmd(today);
 
-  const [
-    counters,
-    lessonsToday,
-    lessonsThisWeek,
-    billing,
-    resignations,
-    staleNegotiations,
-    missingAttendance,
-  ] = await Promise.all([
+  const [counters, lessonsToday, lessonsThisWeek, billing] = await Promise.all([
     fetchDashboardCounters(schoolId),
     fetchDashboardLessonsMerged(schoolId, today, today),
     fetchDashboardLessonsMerged(schoolId, today, weekEnd),
     fetchDashboardBillingSummary(schoolId),
-    fetchResignationAlerts(schoolId),
-    fetchStaleNegotiationAlerts(schoolId, negotiatingDaysThreshold),
-    fetchMissingAttendanceAlerts(schoolId),
   ]);
 
   return {
@@ -924,11 +693,5 @@ export async function fetchFullDashboard(
     lessonsToday,
     lessonsThisWeek,
     billing,
-    alerts: {
-      resignations,
-      staleNegotiations,
-      missingAttendance,
-    },
-    negotiatingDaysThreshold,
   };
 }

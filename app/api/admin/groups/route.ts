@@ -60,13 +60,6 @@ export async function GET(request: NextRequest) {
          ) AS schedule,
          COUNT(DISTINCT gs.id) FILTER (
            WHERE gs.left_at IS NULL
-             AND (
-               gs.school_year_id IS NULL
-               OR EXISTS (
-                 SELECT 1 FROM school_years sy
-                 WHERE sy.id = gs.school_year_id AND sy.active = TRUE
-               )
-             )
          )::text AS students_count
        FROM groups g
        LEFT JOIN users t ON t.id = g.teacher_id

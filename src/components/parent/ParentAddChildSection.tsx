@@ -5,6 +5,7 @@ import {
   DUPLICATE_CHILD_IN_FORM_MESSAGE,
   findDuplicateChildIndices,
 } from '@/lib/enrollment-duplicate';
+import { todayYmdSchool } from '@/lib/school-timezone';
 
 type ChildForm = {
   firstName: string;
@@ -228,7 +229,7 @@ export default function ParentAddChildSection({ onSuccess }: Props) {
                   type="date"
                   value={child.birthDate}
                   min="2000-01-01"
-                  max={new Date().toISOString().slice(0, 10)}
+                  max={todayYmdSchool()}
                   onChange={(e) => updateChild(index, 'birthDate', e.target.value)}
                   className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-zinc-900 outline-none focus:border-[#0f6e56] focus:ring-2 focus:ring-[#0f6e56]/20"
                   required

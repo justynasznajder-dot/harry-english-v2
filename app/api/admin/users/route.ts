@@ -84,53 +84,48 @@ export async function GET(request: NextRequest) {
 
 
     if (filterConfirmed !== null) {
-
-      const confirmed = filterConfirmed === 'true';
-
-      users = users.filter(u => u.confirmed === confirmed);
-
+      const confirmed = filterConfirmed === "true";
+      users = users.filter((u) => u.confirmed === confirmed);
     }
 
+    const parentIds = users.filter((u) => u.role === "PARENT").map((u) => u.id);
+    const childrenCountByParent = new Map<string, number>();
+    if (parentIds.length > 0 && schoolScope) {
+      const counts = await queryDb<{ parent_id: string; cnt: number }>(
+        `SELECT parent_id, COUNT(*)::int AS cnt
+         FROM children
+         WHERE school_id = $1
+           AND parent_id = ANY($2::text[])
+           AND active = TRUE
+         GROUP BY parent_id`,
+        [schoolScope, parentIds]
+      );
+      for (const row of counts.rows) {
+        childrenCountByParent.set(row.parent_id, row.cnt);
+      }
+    }
 
-
-    const safeUsers = users.map(u => ({
-
+    const safeUsers = users.map((u) => ({
       id: u.id,
-
       first_name: u.first_name,
-
       last_name: u.last_name,
-
       email: u.email,
-
       role: u.role,
-
       confirmed: u.confirmed,
-
       active: u.active,
-
       access_level: u.access_level,
-
       phone: u.phone,
-
       client_number: u.client_number,
-
       resignation_date: u.resignation_date,
-
       created_at: u.created_at,
-
       last_login: u.last_login,
-
+      children_count:
+        u.role === "PARENT" ? (childrenCountByParent.get(u.id) ?? 0) : null,
     }));
 
-
-
     return NextResponse.json({ users: safeUsers });
-
   } catch (error) {
-
     console.error("Get users error:", error);
-
     return NextResponse.json(
 
       { message: "Wystąpił błąd podczas pobierania użytkowników" },

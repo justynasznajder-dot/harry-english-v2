@@ -3,22 +3,36 @@ import { Readable } from "node:stream";
 import { google, type drive_v3 } from "googleapis";
 
 /**
- * Google Drive — tylko pod przyszłe eksporty (nie umowy/faktury; te zostają na R2).
+ * Google Drive — eksporty + odczyt wyciągów bankowych (faktury/umowy zostają na R2).
  *
- * Wymagane env:
+ * Wymagane env (auth):
  * - GOOGLE_SERVICE_ACCOUNT_EMAIL
  * - GOOGLE_PRIVATE_KEY  (z JSON; \n jako literal "\\n" OK)
- * - GOOGLE_DRIVE_FOLDER_ID  (folder udostępniony service accountowi)
+ *
+ * Upload / domyślny folder:
+ * - GOOGLE_DRIVE_FOLDER_ID
+ *
+ * Wyciągi bankowe (foldery lat kalendarzowych):
+ * - GOOGLE_DRIVE_BANK_STATEMENTS_FOLDER_ID  (opcjonalnie; domyślnie folder wyciągów)
  *
  * Opcjonalnie:
  * - GOOGLE_DRIVE_SHARED_DRIVE_ID  (gdy folder jest na Shared Drive)
  */
 
-type GoogleDriveConfig = {
+/** Domyślny folder wyciągów: lata kalendarzowe → pliki CSV ING. */
+export const DEFAULT_BANK_STATEMENTS_FOLDER_ID = "1Akf2fsW8D01wdH7r0MshqthjhbBx8Uu5";
+
+/** Prefiks nazwy pliku po imporcie — system pomija takie pliki przy kolejnym skanie. */
+export const BANK_STATEMENT_PROCESSED_PREFIX = "PRZETWORZONE_";
+
+type GoogleDriveCredentials = {
   clientEmail: string;
   privateKey: string;
-  folderId: string;
   sharedDriveId?: string;
+};
+
+type GoogleDriveConfig = GoogleDriveCredentials & {
+  folderId: string;
 };
 
 export type GoogleDriveUploadResult = {
@@ -28,16 +42,20 @@ export type GoogleDriveUploadResult = {
   webContentLink: string | null;
 };
 
-function getGoogleDriveConfig(): GoogleDriveConfig {
+export type GoogleDriveListedFile = {
+  id: string;
+  name: string;
+  mimeType: string;
+};
+
+function getGoogleDriveCredentials(): GoogleDriveCredentials {
   const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
   const privateKeyRaw = process.env.GOOGLE_PRIVATE_KEY?.trim();
-  const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID?.trim();
   const sharedDriveId = process.env.GOOGLE_DRIVE_SHARED_DRIVE_ID?.trim() || undefined;
 
   const missing = [
     !clientEmail && "GOOGLE_SERVICE_ACCOUNT_EMAIL",
     !privateKeyRaw && "GOOGLE_PRIVATE_KEY",
-    !folderId && "GOOGLE_DRIVE_FOLDER_ID",
   ].filter(Boolean);
 
   if (missing.length > 0) {
@@ -49,9 +67,26 @@ function getGoogleDriveConfig(): GoogleDriveConfig {
   return {
     clientEmail: clientEmail!,
     privateKey: privateKeyRaw!.replace(/\\n/g, "\n"),
-    folderId: folderId!,
     sharedDriveId,
   };
+}
+
+function getGoogleDriveConfig(): GoogleDriveConfig {
+  const creds = getGoogleDriveCredentials();
+  const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID?.trim();
+  if (!folderId) {
+    throw new Error(
+      "Google Drive not configured — brak zmiennej: GOOGLE_DRIVE_FOLDER_ID. Dodaj ją do .env.local / Vercel i zrestartuj serwer."
+    );
+  }
+  return { ...creds, folderId };
+}
+
+export function getBankStatementsFolderId(): string {
+  return (
+    process.env.GOOGLE_DRIVE_BANK_STATEMENTS_FOLDER_ID?.trim() ||
+    DEFAULT_BANK_STATEMENTS_FOLDER_ID
+  );
 }
 
 export function isGoogleDriveConfigured(): boolean {
@@ -62,18 +97,36 @@ export function isGoogleDriveConfigured(): boolean {
   );
 }
 
+export function isBankStatementsDriveConfigured(): boolean {
+  return Boolean(
+    process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim() &&
+      process.env.GOOGLE_PRIVATE_KEY?.trim()
+  );
+}
+
 let cachedDrive: drive_v3.Drive | null = null;
 
-function getDriveClient(config: GoogleDriveConfig): drive_v3.Drive {
+function getDriveClient(creds: GoogleDriveCredentials): drive_v3.Drive {
   if (!cachedDrive) {
     const auth = new google.auth.JWT({
-      email: config.clientEmail,
-      key: config.privateKey,
-      scopes: ["https://www.googleapis.com/auth/drive.file"],
+      email: creds.clientEmail,
+      key: creds.privateKey,
+      // drive (nie drive.file) — odczyt plików wrzuconych ręcznie do udostępnionego folderu
+      scopes: ["https://www.googleapis.com/auth/drive"],
     });
     cachedDrive = google.drive({ version: "v3", auth });
   }
   return cachedDrive;
+}
+
+function driveListSupports(creds: GoogleDriveCredentials) {
+  const supportsAllDrives = Boolean(creds.sharedDriveId);
+  return {
+    supportsAllDrives,
+    includeItemsFromAllDrives: supportsAllDrives,
+    corpora: supportsAllDrives ? ("drive" as const) : undefined,
+    driveId: creds.sharedDriveId,
+  };
 }
 
 function toReadable(body: Buffer | Readable | string): Readable {
@@ -170,4 +223,80 @@ export async function ensureGoogleDriveSubfolder(name: string, parentFolderId?: 
     throw new Error(`Google Drive: nie udało się utworzyć folderu "${name}".`);
   }
   return created.data.id;
+}
+
+/** Lista dzieci (pliki/foldery) w folderze Drive. */
+export async function listGoogleDriveChildren(
+  parentFolderId: string
+): Promise<GoogleDriveListedFile[]> {
+  const creds = getGoogleDriveCredentials();
+  const drive = getDriveClient(creds);
+  const listOpts = driveListSupports(creds);
+  const out: GoogleDriveListedFile[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const res = await drive.files.list({
+      q: `'${parentFolderId}' in parents and trashed = false`,
+      fields: "nextPageToken, files(id, name, mimeType)",
+      pageSize: 100,
+      pageToken,
+      ...listOpts,
+    });
+    for (const f of res.data.files ?? []) {
+      if (!f.id || !f.name) continue;
+      out.push({
+        id: f.id,
+        name: f.name,
+        mimeType: f.mimeType ?? "application/octet-stream",
+      });
+    }
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken);
+
+  return out;
+}
+
+/** Pobiera zawartość pliku binarnego z Drive do Buffer. */
+export async function downloadGoogleDriveFile(fileId: string): Promise<Buffer> {
+  const creds = getGoogleDriveCredentials();
+  const drive = getDriveClient(creds);
+  const res = await drive.files.get(
+    {
+      fileId,
+      alt: "media",
+      supportsAllDrives: Boolean(creds.sharedDriveId),
+    },
+    { responseType: "arraybuffer" }
+  );
+  const data = res.data as ArrayBuffer | Buffer | string;
+  if (Buffer.isBuffer(data)) return data;
+  if (typeof data === "string") return Buffer.from(data);
+  return Buffer.from(data);
+}
+
+/** Zmienia nazwę pliku na Drive (np. prefix PRZETWORZONE_). */
+export async function renameGoogleDriveFile(
+  fileId: string,
+  newName: string
+): Promise<string> {
+  const creds = getGoogleDriveCredentials();
+  const drive = getDriveClient(creds);
+  const res = await drive.files.update({
+    fileId,
+    requestBody: { name: newName },
+    fields: "id, name",
+    supportsAllDrives: Boolean(creds.sharedDriveId),
+  });
+  return res.data.name ?? newName;
+}
+
+export function isBankStatementFileName(name: string): boolean {
+  const lower = name.trim().toLowerCase();
+  if (lower.startsWith(BANK_STATEMENT_PROCESSED_PREFIX.toLowerCase())) return false;
+  return lower.endsWith(".csv") || lower.endsWith(".txt");
+}
+
+export function isYearFolderName(name: string): boolean {
+  return /^\d{4}$/.test(name.trim());
 }

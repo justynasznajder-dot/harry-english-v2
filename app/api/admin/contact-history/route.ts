@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryDb } from "@/lib/db";
 import { requireAdminSchoolContext } from "@/lib/admin-school-context";
+import { pgDateToYmd } from "@/lib/school-timezone";
 
 export async function GET(request: NextRequest) {
   const ctx = await requireAdminSchoolContext(request);
@@ -231,10 +232,7 @@ export async function GET(request: NextRequest) {
       })),
       billing: billingRes.rows.map((b) => ({
         childName: b.child_name,
-        periodMonth:
-          b.period_month instanceof Date
-            ? b.period_month.toISOString().slice(0, 7)
-            : String(b.period_month).slice(0, 7),
+        periodMonth: pgDateToYmd(b.period_month)?.slice(0, 7) ?? String(b.period_month).slice(0, 7),
         status: b.status,
         amount: b.amount,
       })),

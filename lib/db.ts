@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import {
   Pool,
+  types,
   type PoolClient,
   type QueryResultRow,
 } from "pg";
@@ -13,8 +14,15 @@ import {
   allocateChildClientNumber,
   allocateParentClientNumber,
 } from "@/lib/client-numbers";
+import { pgDateToYmd } from "@/lib/school-timezone";
 
 export { DuplicateEnrollmentError } from "@/lib/enrollment-duplicate";
+
+/**
+ * DATE z Postgresa jako string `YYYY-MM-DD` — bez Date o lokalnej północy,
+ * która przy `toISOString()` cofa dzień w Europe/Warsaw.
+ */
+types.setTypeParser(types.builtins.DATE, (val) => val);
 
 /** Domyślna szkoła z env — multi-tenant (pusty string gdy brak `SCHOOL_ID`). */
 export const DEFAULT_SCHOOL_ID = process.env.SCHOOL_ID || "";
@@ -287,11 +295,7 @@ function mapUserRow(row: QueryResultRow): User {
 }
 
 function birthDateToIso(d: Date | string): string {
-  if (typeof d === "string") return d.slice(0, 10);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  return pgDateToYmd(d) ?? String(d).slice(0, 10);
 }
 
 function mapChildRow(row: ChildRow): Child {

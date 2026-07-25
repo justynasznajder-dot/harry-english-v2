@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { periodMonthKey } from '@/lib/school-timezone';
 
 type SchoolYear = {
   id: string;
@@ -63,6 +64,23 @@ type InvoiceDetail = {
   dueDate: string;
 };
 
+type HeldParentRow = {
+  parentId: string;
+  parentFirstName: string;
+  parentLastName: string;
+  parentEmail: string;
+  totalAmount: number;
+  alreadyInvoiced: boolean;
+  lines: Array<{
+    contractId: string;
+    childId: string | null;
+    childName: string;
+    amount: number;
+    alreadyInvoiced: boolean;
+    signedAt: string | null;
+  }>;
+};
+
 type Tab = 'clients' | 'invoices';
 type BillingFilter = 'all' | 'company' | 'private';
 
@@ -123,11 +141,11 @@ export default function AccountantPortal() {
   const [billingFilter, setBillingFilter] = useState<BillingFilter>('all');
   const [loading, setLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [invoiceMonth, setInvoiceMonth] = useState(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  });
+  const [invoiceMonth, setInvoiceMonth] = useState(() => periodMonthKey());
   const [eppDownloading, setEppDownloading] = useState(false);
+  const [heldParents, setHeldParents] = useState<HeldParentRow[]>([]);
+  const [heldLoading, setHeldLoading] = useState(false);
+  const [heldIssuingContractId, setHeldIssuingContractId] = useState<string | null>(null);
 
   const [correctiveOpen, setCorrectiveOpen] = useState(false);
   const [correctiveSourceId, setCorrectiveSourceId] = useState('');
@@ -232,6 +250,31 @@ export default function AccountantPortal() {
     []
   );
 
+  const loadHeldInvoices = useCallback(async (periodMonth: string) => {
+    setHeldLoading(true);
+    try {
+      const res = await fetch(
+        `/api/accountant/invoices/held?periodMonth=${encodeURIComponent(periodMonth)}`,
+        { cache: 'no-store' }
+      );
+      const data = (await res.json().catch(() => ({}))) as {
+        message?: string;
+        heldParents?: HeldParentRow[];
+      };
+      if (!res.ok) {
+        setStatusMessage(data.message ?? 'Nie udało się wczytać wstrzymanych faktur');
+        setHeldParents([]);
+        return;
+      }
+      setHeldParents(data.heldParents ?? []);
+    } catch {
+      setStatusMessage('Błąd wczytywania wstrzymanych faktur');
+      setHeldParents([]);
+    } finally {
+      setHeldLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadYears();
   }, [loadYears]);
@@ -239,8 +282,39 @@ export default function AccountantPortal() {
   useEffect(() => {
     if (!schoolYearId) return;
     if (tab === 'clients') loadClients(schoolYearId);
-    else loadInvoices(schoolYearId, billingFilter, invoiceMonth);
-  }, [schoolYearId, tab, billingFilter, invoiceMonth, loadClients, loadInvoices]);
+    else {
+      loadInvoices(schoolYearId, billingFilter, invoiceMonth);
+      void loadHeldInvoices(invoiceMonth);
+    }
+  }, [schoolYearId, tab, billingFilter, invoiceMonth, loadClients, loadInvoices, loadHeldInvoices]);
+
+  const issueHeldInvoice = async (contractId: string) => {
+    setHeldIssuingContractId(contractId);
+    setStatusMessage(null);
+    try {
+      const res = await fetch('/api/accountant/invoices/held', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contractId, periodMonth: invoiceMonth }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        message?: string;
+        heldParents?: HeldParentRow[];
+      };
+      if (!res.ok) {
+        setStatusMessage(data.message ?? 'Nie udało się wystawić faktury');
+        return;
+      }
+      if (data.heldParents) setHeldParents(data.heldParents);
+      else await loadHeldInvoices(invoiceMonth);
+      if (schoolYearId) await loadInvoices(schoolYearId, billingFilter, invoiceMonth);
+      setStatusMessage(data.message ?? 'Wystawiono fakturę ręcznie');
+    } catch {
+      setStatusMessage('Błąd ręcznego wystawiania faktury');
+    } finally {
+      setHeldIssuingContractId(null);
+    }
+  };
 
   const downloadEpp = async () => {
     if (!schoolYearId) {
@@ -706,77 +780,152 @@ export default function AccountantPortal() {
           </table>
         </div>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="min-w-full border-collapse text-left text-sm">
-            <thead>
-              <tr className="border-b border-zinc-300 text-xs uppercase tracking-wide text-zinc-500">
-                <th className="px-2 py-2">Numer</th>
-                <th className="px-2 py-2">Typ</th>
-                <th className="px-2 py-2">Data</th>
-                <th className="px-2 py-2">Nabywca</th>
-                <th className="px-2 py-2">Kwota</th>
-                <th className="px-2 py-2">Status płatności</th>
-                <th className="px-2 py-2">Akcje</th>
-              </tr>
-            </thead>
-            <tbody>
-              {invoices.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-2 py-6 text-center text-zinc-500">
-                    Brak faktur dla wybranego roku szkolnego i miesiąca
-                    {invoiceMonth ? ` (${invoiceMonth})` : ''}.
-                  </td>
+        <div className="space-y-6">
+          <div className="overflow-x-auto">
+            <table className="min-w-full border-collapse text-left text-sm">
+              <thead>
+                <tr className="border-b border-zinc-300 text-xs uppercase tracking-wide text-zinc-500">
+                  <th className="px-2 py-2">Numer</th>
+                  <th className="px-2 py-2">Typ</th>
+                  <th className="px-2 py-2">Data</th>
+                  <th className="px-2 py-2">Nabywca</th>
+                  <th className="px-2 py-2">Kwota</th>
+                  <th className="px-2 py-2">Status płatności</th>
+                  <th className="px-2 py-2">Akcje</th>
                 </tr>
-              ) : (
-                invoices.map((inv) => (
-                  <tr key={inv.id} className="border-b border-zinc-200 align-top">
-                    <td className="px-2 py-2 font-medium text-[#1e3a4c]">{inv.invoiceNumber}</td>
-                    <td className="px-2 py-2">
-                      {inv.documentType === 'CORRECTIVE' ? 'Korekta' : 'Sprzedaż'}
-                      {inv.originalInvoiceNumber && (
-                        <div className="text-xs text-zinc-500">→ {inv.originalInvoiceNumber}</div>
-                      )}
-                    </td>
-                    <td className="px-2 py-2 whitespace-nowrap">{inv.issueDate}</td>
-                    <td className="px-2 py-2">
-                      <div>{inv.buyerName}</div>
-                      <div className="text-xs text-zinc-500">
-                        {inv.billingType === 'company' ? 'Firma' : 'Osoba prywatna'}
-                        {inv.buyerNip ? ` · NIP ${inv.buyerNip}` : ''}
-                      </div>
-                    </td>
-                    <td className="px-2 py-2 whitespace-nowrap">{money(inv.amount)}</td>
-                    <td className="px-2 py-2">
-                      <span title="Edycja statusu — wkrótce">
-                        {paymentStatusLabel(inv.paymentStatus)}
-                      </span>
-                    </td>
-                    <td className="px-2 py-2">
-                      <div className="flex flex-col gap-1">
-                        {inv.hasPdf && (
-                          <a
-                            href={`/api/accountant/invoices/${encodeURIComponent(inv.id)}?format=pdf`}
-                            className="text-xs font-semibold text-[#0f6e56] hover:underline"
-                          >
-                            Pobierz PDF
-                          </a>
-                        )}
-                        {inv.documentType === 'SALE' && (
-                          <button
-                            type="button"
-                            onClick={() => openCorrective(inv.id)}
-                            className="text-left text-xs font-semibold text-[#1e3a4c] hover:underline"
-                          >
-                            Wystaw korektę
-                          </button>
-                        )}
-                      </div>
+              </thead>
+              <tbody>
+                {invoices.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-2 py-6 text-center text-zinc-500">
+                      Brak faktur dla wybranego roku szkolnego i miesiąca
+                      {invoiceMonth ? ` (${invoiceMonth})` : ''}.
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : (
+                  invoices.map((inv) => (
+                    <tr key={inv.id} className="border-b border-zinc-200 align-top">
+                      <td className="px-2 py-2 font-medium text-[#1e3a4c]">{inv.invoiceNumber}</td>
+                      <td className="px-2 py-2">
+                        {inv.documentType === 'CORRECTIVE' ? 'Korekta' : 'Sprzedaż'}
+                        {inv.originalInvoiceNumber && (
+                          <div className="text-xs text-zinc-500">→ {inv.originalInvoiceNumber}</div>
+                        )}
+                      </td>
+                      <td className="px-2 py-2 whitespace-nowrap">{inv.issueDate}</td>
+                      <td className="px-2 py-2">
+                        <div>{inv.buyerName}</div>
+                        <div className="text-xs text-zinc-500">
+                          {inv.billingType === 'company' ? 'Firma' : 'Osoba prywatna'}
+                          {inv.buyerNip ? ` · NIP ${inv.buyerNip}` : ''}
+                        </div>
+                      </td>
+                      <td className="px-2 py-2 whitespace-nowrap">{money(inv.amount)}</td>
+                      <td className="px-2 py-2">
+                        <span title="Edycja statusu — wkrótce">
+                          {paymentStatusLabel(inv.paymentStatus)}
+                        </span>
+                      </td>
+                      <td className="px-2 py-2">
+                        <div className="flex flex-col gap-1">
+                          {inv.hasPdf && (
+                            <a
+                              href={`/api/accountant/invoices/${encodeURIComponent(inv.id)}?format=pdf`}
+                              className="text-xs font-semibold text-[#0f6e56] hover:underline"
+                            >
+                              Pobierz PDF
+                            </a>
+                          )}
+                          {inv.documentType === 'SALE' && (
+                            <button
+                              type="button"
+                              onClick={() => openCorrective(inv.id)}
+                              className="text-left text-xs font-semibold text-[#1e3a4c] hover:underline"
+                            >
+                              Wystaw korektę
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="rounded-2xl border border-amber-200 bg-amber-50/40 p-4">
+            <h3 className="text-base font-bold text-[#1e3a4c]">Faktury wstrzymane</h3>
+            <p className="mt-1 text-sm text-zinc-600">
+              Dzieci wyłączone przez managera z automatycznego/ręcznego generowania w miesiącu{' '}
+              {invoiceMonth}. Możesz wystawić fakturę ręcznie dla wybranego dziecka.
+            </p>
+
+            {heldLoading ? (
+              <p className="mt-3 text-sm text-zinc-500">Wczytywanie…</p>
+            ) : heldParents.length === 0 ? (
+              <p className="mt-3 rounded-xl border border-dashed border-zinc-300 bg-white px-4 py-6 text-center text-sm text-zinc-600">
+                Brak wstrzymanych faktur.
+              </p>
+            ) : (
+              <div className="mt-3 overflow-x-auto rounded-xl border border-amber-100 bg-white">
+                <table className="min-w-full border-collapse text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-zinc-200 text-xs uppercase tracking-wide text-zinc-500">
+                      <th className="px-2 py-2">Rodzic</th>
+                      <th className="px-2 py-2">Dziecko</th>
+                      <th className="px-2 py-2">Kwota</th>
+                      <th className="px-2 py-2">Status</th>
+                      <th className="px-2 py-2">Akcja</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {heldParents.flatMap((parent) =>
+                      parent.lines.map((line, idx) => (
+                        <tr key={line.contractId} className="border-b border-zinc-100 align-top">
+                          <td className="px-2 py-2">
+                            {idx === 0 ? (
+                              <>
+                                <div className="font-medium text-[#1e3a4c]">
+                                  {`${parent.parentFirstName} ${parent.parentLastName}`.trim()}
+                                </div>
+                                <div className="text-xs text-zinc-500">{parent.parentEmail}</div>
+                              </>
+                            ) : null}
+                          </td>
+                          <td className="px-2 py-2">{line.childName}</td>
+                          <td className="px-2 py-2 whitespace-nowrap">{money(line.amount)}</td>
+                          <td className="px-2 py-2">
+                            {line.alreadyInvoiced ? (
+                              <span className="text-emerald-700">Wystawiona ręcznie</span>
+                            ) : (
+                              <span className="text-amber-800">Wstrzymana</span>
+                            )}
+                          </td>
+                          <td className="px-2 py-2">
+                            {line.alreadyInvoiced ? (
+                              <span className="text-xs text-zinc-500">Już wystawiona</span>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={heldIssuingContractId === line.contractId}
+                                onClick={() => void issueHeldInvoice(line.contractId)}
+                                className="rounded-full bg-[#0f6e56] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                              >
+                                {heldIssuingContractId === line.contractId
+                                  ? 'Wystawianie…'
+                                  : 'Wystaw fakturę ręcznie'}
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

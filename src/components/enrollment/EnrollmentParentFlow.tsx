@@ -320,6 +320,8 @@ export default function EnrollmentParentFlow({
     canPrepareContract: false,
   });
   const [contractPricing, setContractPricing] = useState<ContractPricing | null>(null);
+  const [discountLargeFamily, setDiscountLargeFamily] = useState(false);
+  const [savedDiscountLargeFamily, setSavedDiscountLargeFamily] = useState(false);
   const [includedInContract, setIncludedInContract] = useState<Record<string, boolean>>({});
   const [profileLoaded, setProfileLoaded] = useState(false);
   const [profileComplete, setProfileComplete] = useState(false);
@@ -404,6 +406,14 @@ export default function EnrollmentParentFlow({
       setProposals(sortProposalsByStableOrder(incoming, proposalOrderRef.current));
       setParentContract(data.parentContract ?? null);
       setContractPricing(data.contractPricing ?? null);
+      if (data.contractPricing && !data.contractPricing.billingExempt) {
+        const kdr = Boolean(data.contractPricing.discountLargeFamily);
+        setDiscountLargeFamily(kdr);
+        setSavedDiscountLargeFamily(kdr);
+      } else if (data.contractPricing?.billingExempt) {
+        setDiscountLargeFamily(false);
+        setSavedDiscountLargeFamily(false);
+      }
       setContractReadiness(
         data.contractReadiness ?? {
           hasPendingDecisions: true,
@@ -487,6 +497,7 @@ export default function EnrollmentParentFlow({
           companyName?: string | null;
           nip?: string | null;
           pesel?: string | null;
+          discountLargeFamily?: boolean;
           complete?: boolean;
         } | null;
         profileLocked?: boolean;
@@ -502,6 +513,12 @@ export default function EnrollmentParentFlow({
         });
         return;
       }
+      const kdr = Boolean(p.discountLargeFamily);
+      setDiscountLargeFamily(kdr);
+      setSavedDiscountLargeFamily(kdr);
+      setContractPricing((prev) =>
+        prev ? { ...prev, discountLargeFamily: kdr } : prev,
+      );
       setContractProfile((prev) => ({
         firstName: data.user?.firstName ?? prev.firstName,
         lastName: data.user?.lastName ?? prev.lastName,
@@ -570,11 +587,12 @@ export default function EnrollmentParentFlow({
           companyName:
             contractProfile.billingType === 'company' ? contractProfile.companyName : null,
           nip: contractProfile.billingType === 'company' ? contractProfile.nip : null,
+          discountLargeFamily,
         }),
       });
       const data = (await r.json().catch(() => ({}))) as {
         message?: string;
-        profile?: { complete?: boolean };
+        profile?: { complete?: boolean; discountLargeFamily?: boolean };
         profileLocked?: boolean;
         user?: { firstName?: string; lastName?: string; phone?: string | null };
       };
@@ -586,6 +604,12 @@ export default function EnrollmentParentFlow({
       setProfileLocked(Boolean(data.profileLocked));
       setIsEditingContractProfile(false);
       setAllowContractRegenerate(true);
+      const savedKdr = Boolean(data.profile?.discountLargeFamily ?? discountLargeFamily);
+      setDiscountLargeFamily(savedKdr);
+      setSavedDiscountLargeFamily(savedKdr);
+      setContractPricing((prev) =>
+        prev ? { ...prev, discountLargeFamily: savedKdr } : prev,
+      );
       if (data.user) {
         onUserInfoUpdate({
           ...userInfoRef.current,
@@ -609,7 +633,7 @@ export default function EnrollmentParentFlow({
     } finally {
       setSavingContractProfile(false);
     }
-  }, [contractProfile, profileLocked, onUserInfoUpdate, dataConfirmed]);
+  }, [contractProfile, discountLargeFamily, profileLocked, onUserInfoUpdate, dataConfirmed]);
 
   const handleGenerateParentContract = useCallback(async () => {
     if (!profileComplete) {
@@ -633,6 +657,11 @@ export default function EnrollmentParentFlow({
           'Umowę można wygenerować dopiero gdy wszystkie dzieci mają rozstrzygniętą propozycję grupy.',
       });
       return;
+    }
+
+    if (discountLargeFamily !== savedDiscountLargeFamily) {
+      const saved = await handleSaveContractProfile({ silent: true });
+      if (!saved) return;
     }
 
     const includedRequestIds = proposals
@@ -700,12 +729,15 @@ export default function EnrollmentParentFlow({
   }, [
     contractReadiness.canPrepareContract,
     dataConfirmed,
+    discountLargeFamily,
+    handleSaveContractProfile,
     includedInContract,
     loadParentProfile,
     loadProposals,
     paymentType,
     profileComplete,
     proposals,
+    savedDiscountLargeFamily,
   ]);
 
   useEffect(() => {
@@ -1746,6 +1778,26 @@ export default function EnrollmentParentFlow({
                               {paymentTypeShortLabel('PER_LESSON')}
                             </label>
                           </div>
+                          {contractPricing && !contractPricing.billingExempt ? (
+                            <label className="inline-flex items-center gap-2 text-sm text-zinc-800">
+                              <input
+                                type="checkbox"
+                                className="accent-[#0f6e56]"
+                                disabled={formLocked}
+                                checked={discountLargeFamily}
+                                onChange={(e) => {
+                                  const checked = e.target.checked;
+                                  setDiscountLargeFamily(checked);
+                                  setAllowContractRegenerate(true);
+                                  setContractPricing((prev) =>
+                                    prev ? { ...prev, discountLargeFamily: checked } : prev,
+                                  );
+                                }}
+                              />
+                              Posiadam Kartę Dużej Rodziny (
+                              {contractPricing.discountSettings.LARGE_FAMILY_CARD ?? 0}%)
+                            </label>
+                          ) : null}
                           {childAmountBreakdown.length > 0 && (
                             <div className="rounded-xl border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-700">
                               <p className="font-medium text-zinc-800">

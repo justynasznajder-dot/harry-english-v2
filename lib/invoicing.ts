@@ -22,6 +22,14 @@ import {
 } from "@/lib/parent-contract-profile";
 import { deleteR2Object, storeInvoicePdfInR2 } from "@/lib/r2-storage";
 import {
+  firstDayOfMonthUtcDate,
+  lastDayOfMonthYmd,
+  periodMonthKey,
+  periodMonthStartYmd,
+  pgDateToYmd,
+  warsawYmdParts,
+} from "@/lib/school-timezone";
+import {
   buildCorrectiveInvoiceNumber,
   buildSaleInvoiceNumber,
   ensureParentClientNumber,
@@ -76,22 +84,16 @@ type BuyerInvoiceData = {
 };
 
 function toDateString(value: Date | string | null | undefined): string | null {
-  if (value == null) return null;
-  if (typeof value === "string") return value.slice(0, 10);
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, "0");
-  const day = String(value.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return pgDateToYmd(value);
 }
 
-function firstDayOfMonth(date: Date): Date {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+function firstDayOfMonth(date: Date | string): Date {
+  return firstDayOfMonthUtcDate(date);
 }
 
-/** Ostatni dzień miesiąca (UTC date string YYYY-MM-DD) — termin płatności faktury. */
-export function lastDayOfMonthDateString(date: Date): string {
-  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0));
-  return d.toISOString().slice(0, 10);
+/** Ostatni dzień miesiąca (YYYY-MM-DD, kalendarz szkolny Europe/Warsaw). */
+export function lastDayOfMonthDateString(date: Date | string): string {
+  return lastDayOfMonthYmd(date);
 }
 
 /** Data sprzedaży: ostatni dzień miesiąca rozliczeniowego (lub miesiąca wystawienia). */
@@ -101,13 +103,9 @@ export function resolveInvoiceSaleDateString(params: {
 }): string {
   const period = String(params.periodMonth ?? "").trim().slice(0, 7);
   if (/^\d{4}-\d{2}$/.test(period)) {
-    return lastDayOfMonthDateString(new Date(`${period}-01T12:00:00.000Z`));
+    return lastDayOfMonthYmd(period);
   }
-  return lastDayOfMonthDateString(
-    new Date(
-      Date.UTC(params.issueDate.getFullYear(), params.issueDate.getMonth(), 1)
-    )
-  );
+  return lastDayOfMonthYmd(params.issueDate);
 }
 
 function formatPeriodMonthLabel(periodMonth: string): string {
@@ -168,12 +166,7 @@ export function clampInvoiceGenerationDay(value: unknown): number {
 
 /** Dzień miesiąca w Europe/Warsaw (1–31). */
 export function warsawCalendarDay(date: Date = new Date()): number {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Europe/Warsaw",
-    day: "numeric",
-  }).formatToParts(date);
-  const day = Number(parts.find((p) => p.type === "day")?.value);
-  return Number.isFinite(day) ? day : date.getDate();
+  return warsawYmdParts(date).day;
 }
 
 async function fetchPaymentForNotification(paymentId: string): Promise<PaymentNotifyRow | null> {
@@ -266,6 +259,68 @@ export async function setSchoolInvoiceAutoGeneration(
   return value;
 }
 
+export async function isContractMonthlyInvoiceHeld(
+  schoolId: string,
+  contractId: string,
+  periodMonth: Date | string
+): Promise<boolean> {
+  const periodMonthStr = periodMonthStartYmd(periodMonth);
+  const res = await queryDb<{ exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM school_invoice_holds
+       WHERE school_id = $1
+         AND contract_id = $2
+         AND period_month = $3::date
+     ) AS exists`,
+    [schoolId, contractId, periodMonthStr]
+  );
+  return Boolean(res.rows[0]?.exists);
+}
+
+export async function setContractMonthlyInvoiceHold(
+  schoolId: string,
+  contractId: string,
+  periodMonth: Date | string,
+  held: boolean
+): Promise<void> {
+  const periodMonthStr = periodMonthStartYmd(periodMonth);
+  const contractRes = await queryDb<{ id: string }>(
+    `SELECT id FROM contracts
+     WHERE id = $1
+       AND school_id = $2
+       AND payment_type = 'MONTHLY'
+       AND status = 'SIGNED'
+     LIMIT 1`,
+    [contractId, schoolId]
+  );
+  if (!contractRes.rows[0]) {
+    throw new Error("Nie znaleziono podpisanej umowy ratalnej w tej szkole");
+  }
+
+  if (held) {
+    await queryDb(
+      `INSERT INTO school_invoice_holds (school_id, contract_id, period_month)
+       SELECT $1, $2, $3::date
+       WHERE NOT EXISTS (
+         SELECT 1 FROM school_invoice_holds
+         WHERE school_id = $1
+           AND contract_id = $2
+           AND period_month = $3::date
+       )`,
+      [schoolId, contractId, periodMonthStr]
+    );
+    return;
+  }
+
+  await queryDb(
+    `DELETE FROM school_invoice_holds
+     WHERE school_id = $1
+       AND contract_id = $2
+       AND period_month = $3::date`,
+    [schoolId, contractId, periodMonthStr]
+  );
+}
+
 /**
  * Nabywca faktury — zawsze bieżące dane z „Profil i dane do faktury”:
  * `users` (imię, nazwisko) + `parent_profiles` (adres, PESEL / firma+NIP).
@@ -347,9 +402,10 @@ async function allocateSaleInvoiceNumber(
     parentId,
     schoolId
   );
-  const year = issueDate.getFullYear();
-  const month = issueDate.getMonth() + 1;
-  const yearMonth = `${year}-${String(month).padStart(2, "0")}`;
+  const yearMonth = periodMonthKey(issueDate);
+  const [yearStr, monthStr] = yearMonth.split("-");
+  const year = Number(yearStr);
+  const month = Number(monthStr);
 
   const res = await client.query<{ last_number: number }>(
     `INSERT INTO invoice_parent_month_counters (
@@ -807,19 +863,27 @@ async function resolveContractChildLabel(contractId: string): Promise<{
   };
 }
 
-/** Zbiorcza faktura miesięczna: wszystkie umowy MONTHLY rodzica w okresie → 1 faktura + N pozycji. */
+/** Zbiorcza faktura miesięczna: umowy MONTHLY rodzica w okresie → 1 faktura + N pozycji.
+ *  Domyślnie pomija umowy wstrzymane na ten miesiąc.
+ *  `onlyContractIds` — wystaw tylko wskazane umowy (np. ręcznie przez księgową mimo holdu).
+ */
 export async function createParentMonthlyInvoice(
   parentId: string,
   schoolId: string,
-  periodMonth: Date
+  periodMonth: Date,
+  options?: { onlyContractIds?: string[] }
 ): Promise<InvoiceCreateResult> {
   const periodStart = firstDayOfMonth(periodMonth);
-  const periodMonthStr = periodStart.toISOString().slice(0, 10);
+  const periodMonthStr = periodMonthStartYmd(periodStart);
   const periodLabel = periodMonthStr.slice(0, 7);
+  const onlyContractIds = (options?.onlyContractIds ?? [])
+    .map((id) => String(id ?? "").trim())
+    .filter(Boolean);
+  const onlySet = onlyContractIds.length > 0 ? new Set(onlyContractIds) : null;
 
   return withPgAdvisoryLock(
     "invoice-monthly-parent",
-    `${schoolId}:${parentId}:${periodMonthStr}`,
+    `${schoolId}:${parentId}:${periodMonthStr}${onlySet ? `:manual:${[...onlySet].sort().join(",")}` : ""}`,
     async () => {
       const contractsRes = await queryDb<{
         id: string;
@@ -852,6 +916,10 @@ export async function createParentMonthlyInvoice(
       }> = [];
 
       for (const row of contractsRes.rows) {
+        if (onlySet && !onlySet.has(row.id)) continue;
+        if (!onlySet && (await isContractMonthlyInvoiceHeld(schoolId, row.id, periodStart))) {
+          continue;
+        }
         if (row.signed_at) {
           const signedMonth = firstDayOfMonth(new Date(row.signed_at));
           if (periodStart < signedMonth) continue;
@@ -872,6 +940,38 @@ export async function createParentMonthlyInvoice(
       }
 
       if (pending.length === 0) {
+        if (onlySet) {
+          const anyOfRequested = await queryDb<{ id: string }>(
+            `SELECT p.id
+             FROM payments p
+             WHERE p.parent_id = $1
+               AND p.school_id = $2
+               AND p.period_month = $3::date
+               AND p.description LIKE $4
+               AND (
+                 p.contract_id = ANY($5::text[])
+                 OR EXISTS (
+                   SELECT 1 FROM invoice_items ii
+                   JOIN invoices i ON i.id = ii.invoice_id
+                   WHERE i.payment_id = p.id
+                     AND ii.contract_id = ANY($5::text[])
+                 )
+               )
+             LIMIT 1`,
+            [
+              parentId,
+              schoolId,
+              periodMonthStr,
+              `${INVOICE_DESC_MONTHLY_PREFIX}%`,
+              [...onlySet],
+            ]
+          );
+          if (anyOfRequested.rows[0]) {
+            return { ok: true, paymentId: anyOfRequested.rows[0].id, created: false };
+          }
+          return { ok: false, message: "Brak umów do zafakturowania", status: 409 };
+        }
+
         const anyExisting = await queryDb<{ id: string }>(
           `SELECT p.id
            FROM payments p
@@ -940,7 +1040,7 @@ export async function createContractMonthlyInvoice(
   periodMonth: Date
 ): Promise<InvoiceCreateResult> {
   const periodStart = firstDayOfMonth(periodMonth);
-  const periodMonthStr = periodStart.toISOString().slice(0, 10);
+  const periodMonthStr = periodMonthStartYmd(periodStart);
 
   const contractRes = await queryDb<{
     id: string;
@@ -1043,11 +1143,10 @@ export async function createLessonBillingInvoice(
     }
 
     const periodMonth =
-      billing.period_month instanceof Date
-        ? billing.period_month.toISOString().slice(0, 10)
-        : String(billing.period_month).slice(0, 10);
+      pgDateToYmd(billing.period_month) ??
+      periodMonthStartYmd(new Date());
 
-    const dueDate = lastDayOfMonthDateString(new Date(`${periodMonth.slice(0, 7)}-01T00:00:00.000Z`));
+    const dueDate = lastDayOfMonthDateString(periodMonth);
 
     try {
       const { paymentId } = await insertPaymentWithInvoice({
@@ -1080,6 +1179,62 @@ export async function createLessonBillingInvoice(
       return mapInvoiceError(err);
     }
   });
+}
+
+export type LessonBillingInvoiceSchoolResult = {
+  periodMonth: string;
+  schoolId: string;
+  generated: number;
+  alreadyInvoiced: number;
+  eligible: number;
+  errors: Array<{ billingId: string; message: string }>;
+};
+
+/** Faktury za pojedyncze zajęcia — wszystkie zapisane rozliczenia miesiąca bez faktury. */
+export async function generateLessonBillingInvoicesForSchool(
+  schoolId: string,
+  periodMonth: Date | string = new Date()
+): Promise<LessonBillingInvoiceSchoolResult> {
+  const periodMonthStr = periodMonthStartYmd(periodMonth);
+
+  const pendingRes = await queryDb<{ id: string; payment_id: string | null }>(
+    `SELECT id, payment_id
+     FROM lesson_billing_periods
+     WHERE school_id = $1
+       AND period_month = $2::date
+       AND status IN ('APPROVED', 'DRAFT')
+       AND amount IS NOT NULL
+       AND amount > 0
+     ORDER BY entered_at ASC`,
+    [schoolId, periodMonthStr]
+  );
+
+  let generated = 0;
+  let alreadyInvoiced = 0;
+  const errors: Array<{ billingId: string; message: string }> = [];
+
+  for (const row of pendingRes.rows) {
+    if (row.payment_id) {
+      alreadyInvoiced += 1;
+      continue;
+    }
+    const result = await createLessonBillingInvoice(row.id);
+    if (!result.ok) {
+      errors.push({ billingId: row.id, message: result.message });
+      continue;
+    }
+    if (result.created) generated += 1;
+    else alreadyInvoiced += 1;
+  }
+
+  return {
+    periodMonth: periodMonthStr,
+    schoolId,
+    generated,
+    alreadyInvoiced,
+    eligible: pendingRes.rows.length,
+    errors,
+  };
 }
 
 export type MonthlyInvoiceBatchResult = {
@@ -1126,6 +1281,8 @@ export type MonthlyInvoicePreviewResult = {
   periodMonth: string;
   dueDate: string;
   parents: MonthlyInvoicePreviewParent[];
+  /** Rodzice wyłączeni z generowania (wstrzymane faktury). */
+  heldParents: MonthlyInvoicePreviewParent[];
   totals: {
     parents: number;
     lines: number;
@@ -1141,7 +1298,7 @@ export async function previewMonthlyInvoicesForSchool(
   periodMonth: Date = new Date()
 ): Promise<MonthlyInvoicePreviewResult> {
   const periodStart = firstDayOfMonth(periodMonth);
-  const periodMonthStr = periodStart.toISOString().slice(0, 10);
+  const periodMonthStr = periodMonthStartYmd(periodStart);
   const dueDate = lastDayOfMonthDateString(periodStart);
   const hasItems = await invoicesSupportInvoiceItems();
 
@@ -1180,6 +1337,7 @@ export async function previewMonthlyInvoicesForSchool(
     child_first_name: string | null;
     child_last_name: string | null;
     already_invoiced: boolean;
+    invoice_held: boolean;
   }>(
     `SELECT
        c.id AS contract_id,
@@ -1195,7 +1353,13 @@ export async function previewMonthlyInvoicesForSchool(
        ) AS child_id,
        ch.first_name AS child_first_name,
        ch.last_name AS child_last_name,
-       (${alreadySql}) AS already_invoiced
+       (${alreadySql}) AS already_invoiced,
+       EXISTS (
+         SELECT 1 FROM school_invoice_holds h
+         WHERE h.school_id = c.school_id
+           AND h.contract_id = c.id
+           AND h.period_month = $2::date
+       ) AS invoice_held
      FROM contracts c
      JOIN users u ON u.id = c.parent_id
      LEFT JOIN children ch ON ch.id = COALESCE(
@@ -1213,7 +1377,30 @@ export async function previewMonthlyInvoicesForSchool(
     [schoolId, periodMonthStr, `${INVOICE_DESC_MONTHLY_PREFIX}%`]
   );
 
-  const byParent = new Map<string, MonthlyInvoicePreviewParent>();
+  type ParentBucket = MonthlyInvoicePreviewParent;
+
+  const activeByParent = new Map<string, ParentBucket>();
+  const heldByParent = new Map<string, ParentBucket>();
+
+  const ensureParent = (
+    map: Map<string, ParentBucket>,
+    row: (typeof res.rows)[number]
+  ): ParentBucket => {
+    let parent = map.get(row.parent_id);
+    if (!parent) {
+      parent = {
+        parentId: row.parent_id,
+        parentFirstName: formatPersonName(row.parent_first_name),
+        parentLastName: formatPersonName(row.parent_last_name),
+        parentEmail: row.parent_email,
+        totalAmount: 0,
+        alreadyInvoiced: true,
+        lines: [],
+      };
+      map.set(row.parent_id, parent);
+    }
+    return parent;
+  };
 
   for (const row of res.rows) {
     const amount = Number(row.amount);
@@ -1229,19 +1416,10 @@ export async function previewMonthlyInvoicesForSchool(
           ? row.signed_at.toISOString()
           : String(row.signed_at);
 
-    let parent = byParent.get(row.parent_id);
-    if (!parent) {
-      parent = {
-        parentId: row.parent_id,
-        parentFirstName: formatPersonName(row.parent_first_name),
-        parentLastName: formatPersonName(row.parent_last_name),
-        parentEmail: row.parent_email,
-        totalAmount: 0,
-        alreadyInvoiced: true,
-        lines: [],
-      };
-      byParent.set(row.parent_id, parent);
-    }
+    const parent = ensureParent(
+      row.invoice_held ? heldByParent : activeByParent,
+      row
+    );
 
     parent.lines.push({
       contractId: row.contract_id,
@@ -1255,7 +1433,9 @@ export async function previewMonthlyInvoicesForSchool(
     if (!row.already_invoiced) parent.alreadyInvoiced = false;
   }
 
-  const parents = Array.from(byParent.values());
+  const parents = Array.from(activeByParent.values());
+  const heldParents = Array.from(heldByParent.values());
+
   let lines = 0;
   let amount = 0;
   let pendingAmount = 0;
@@ -1273,6 +1453,7 @@ export async function previewMonthlyInvoicesForSchool(
     periodMonth: periodMonthStr,
     dueDate,
     parents,
+    heldParents,
     totals: {
       parents: parents.length,
       lines,
@@ -1289,7 +1470,7 @@ export async function generateMonthlyInvoicesForSchool(
   periodMonth: Date = new Date()
 ): Promise<MonthlyInvoiceSchoolResult> {
   const periodStart = firstDayOfMonth(periodMonth);
-  const periodMonthStr = periodStart.toISOString().slice(0, 10);
+  const periodMonthStr = periodMonthStartYmd(periodStart);
   const dueDate = lastDayOfMonthDateString(periodStart);
   const hasItems = await invoicesSupportInvoiceItems();
 
@@ -1323,7 +1504,13 @@ export async function generateMonthlyInvoicesForSchool(
       AND c.billing_exempt = false
       AND c.amount IS NOT NULL
       AND c.amount > 0
-      AND (c.signed_at IS NULL OR DATE_TRUNC('month', c.signed_at) <= $2::date)`;
+      AND (c.signed_at IS NULL OR DATE_TRUNC('month', c.signed_at) <= $2::date)
+      AND NOT EXISTS (
+        SELECT 1 FROM school_invoice_holds h
+        WHERE h.school_id = c.school_id
+          AND h.contract_id = c.id
+          AND h.period_month = $2::date
+      )`;
 
   const [alreadyRes, parentsRes] = await Promise.all([
     queryDb<{ count: string }>(
@@ -1376,7 +1563,7 @@ export async function generateAllMonthlyInvoices(
 ): Promise<MonthlyInvoiceBatchResult> {
   const generationDay = warsawCalendarDay(periodMonth);
   const periodStart = firstDayOfMonth(periodMonth);
-  const periodMonthStr = periodStart.toISOString().slice(0, 10);
+  const periodMonthStr = periodMonthStartYmd(periodStart);
 
   const schoolsRes = await queryDb<{ id: string }>(
     `SELECT id

@@ -27,12 +27,6 @@ type DashboardData = {
       amount: string | null;
     }>;
   };
-  alerts: {
-    resignations: ResignationAlert[];
-    staleNegotiations: StaleAlert[];
-    missingAttendance: AttendanceAlert[];
-  };
-  negotiatingDaysThreshold: number;
 };
 
 type LessonRow = {
@@ -46,51 +40,13 @@ type LessonRow = {
   fromSchedule?: boolean;
 };
 
-type ResignationAlert = {
-  childId: string;
-  childName: string;
-  parentName: string;
-  parentEmail: string;
-  reason: string | null;
-};
-
-type StaleAlert = {
-  requestId: string;
-  childName: string;
-  parentName: string;
-  parentEmail: string;
-  daysSince: number;
-};
-
-type AttendanceAlert = {
-  lessonId: string;
-  scheduledAt: string;
-  groupName: string;
-  teacherName: string;
-  expectedStudents: number;
-  markedStudents: number;
-};
-
-type OccupancyRow = {
+type GroupRosterRow = {
   groupId: string;
   groupName: string;
   level: string | null;
   locationName: string;
-  maxStudents: number;
-  currentStudents: number;
-  freeSeats: number;
-  pendingRequests: number;
-};
-
-type ConflictRow = {
-  type: 'teacher' | 'location';
-  resourceName: string;
-  scheduledAtA: string;
-  scheduledAtB: string;
-  groupAName: string;
-  groupBName: string;
-  locationAName: string;
-  locationBName: string;
+  teacherName: string;
+  children: Array<{ childId: string; childName: string }>;
 };
 
 function formatDt(value: string): string {
@@ -181,16 +137,14 @@ export default function ManagerDashboardPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
-  const [negotiatingDays, setNegotiatingDays] = useState(3);
 
-  const [occupancy, setOccupancy] = useState<OccupancyRow[]>([]);
-  const [conflicts, setConflicts] = useState<ConflictRow[]>([]);
+  const [groupRoster, setGroupRoster] = useState<GroupRosterRow[]>([]);
 
   const loadDashboard = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch(`/api/admin/dashboard?negotiatingDays=${negotiatingDays}`, {
+      const r = await fetch('/api/admin/dashboard', {
         cache: 'no-store',
       });
       const data = await r.json();
@@ -201,18 +155,12 @@ export default function ManagerDashboardPanel() {
     } finally {
       setLoading(false);
     }
-  }, [negotiatingDays]);
-
-  const loadOccupancy = useCallback(async () => {
-    const r = await fetch('/api/admin/groups/occupancy', { cache: 'no-store' });
-    const data = await r.json();
-    if (r.ok) setOccupancy(data.rows ?? []);
   }, []);
 
-  const loadConflicts = useCallback(async () => {
-    const r = await fetch('/api/admin/schedule/conflicts', { cache: 'no-store' });
+  const loadGroupRoster = useCallback(async () => {
+    const r = await fetch('/api/admin/groups/roster', { cache: 'no-store' });
     const data = await r.json();
-    if (r.ok) setConflicts(data.conflicts ?? []);
+    if (r.ok) setGroupRoster(data.groups ?? []);
   }, []);
 
   useEffect(() => {
@@ -220,9 +168,8 @@ export default function ManagerDashboardPanel() {
   }, [loadDashboard]);
 
   useEffect(() => {
-    void loadOccupancy();
-    void loadConflicts();
-  }, [loadOccupancy, loadConflicts]);
+    void loadGroupRoster();
+  }, [loadGroupRoster]);
 
   if (loading && !dashboard) {
     return (
@@ -251,17 +198,12 @@ export default function ManagerDashboardPanel() {
 
   if (!dashboard) return null;
 
-  const alertTotal =
-    dashboard.alerts.resignations.length +
-    dashboard.alerts.staleNegotiations.length +
-    dashboard.alerts.missingAttendance.length;
-
   return (
     <div className="space-y-6">
       <header className="rounded-2xl border border-emerald-100 bg-white p-4 sm:p-5">
         <h2 className="text-xl font-bold text-[#0f6e56] sm:text-2xl">Pulpit operacyjny</h2>
         <p className="mt-1 text-sm text-zinc-600">
-          Szybki podgląd zgłoszeń, zajęć, płatności i alertów wymagających uwagi.
+          Szybki podgląd zgłoszeń, zajęć i płatności.
         </p>
       </header>
 
@@ -348,177 +290,51 @@ export default function ManagerDashboardPanel() {
       </Section>
 
       <Section
-        title="Centrum alertów"
-        description={
-          alertTotal === 0
-            ? 'Brak aktywnych alertów.'
-            : `${alertTotal} alertów wymaga uwagi`
-        }
+        title="Grupy i dzieci"
+        description="Aktywne grupy w bieżącym roku szkolnym"
       >
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <label className="text-sm text-zinc-600">
-            Negocjacje starsze niż
-            <input
-              type="number"
-              min={1}
-              max={30}
-              value={negotiatingDays}
-              onChange={(e) => setNegotiatingDays(Number(e.target.value) || 3)}
-              className="mx-2 w-14 rounded-lg border border-zinc-300 px-2 py-1 text-sm"
-            />
-            dni
-          </label>
-          <button
-            type="button"
-            onClick={() => void loadDashboard()}
-            className="rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-[#0f6e56]"
-          >
-            Zastosuj
-          </button>
-        </div>
-
-        <div className="space-y-4">
-          {dashboard.alerts.resignations.length > 0 && (
-            <div>
-              <h4 className="mb-2 text-sm font-bold text-rose-800">
-                Rezygnacje rodziców ({dashboard.alerts.resignations.length})
-              </h4>
-              <ul className="space-y-2 text-sm">
-                {dashboard.alerts.resignations.map((a) => (
-                  <li
-                    key={a.childId}
-                    className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2"
-                  >
-                    <p className="font-semibold">
-                      {a.childName} — {a.parentName}
-                    </p>
-                    <p className="text-zinc-600">{a.parentEmail}</p>
-                    {a.reason && <p className="mt-1 text-zinc-700">Powód: {a.reason}</p>}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {dashboard.alerts.staleNegotiations.length > 0 && (
-            <div>
-              <h4 className="mb-2 text-sm font-bold text-amber-800">
-                Zaległe negocjacje ({dashboard.alerts.staleNegotiations.length})
-              </h4>
-              <ul className="space-y-2 text-sm">
-                {dashboard.alerts.staleNegotiations.map((a) => (
-                  <li
-                    key={a.requestId}
-                    className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2"
-                  >
-                    <p className="font-semibold">
-                      {a.childName} — {a.parentName} ({a.daysSince} dni)
-                    </p>
-                    <p className="text-zinc-600">{a.parentEmail}</p>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {dashboard.alerts.missingAttendance.length > 0 && (
-            <div>
-              <h4 className="mb-2 text-sm font-bold text-sky-800">
-                Brak obecności ({dashboard.alerts.missingAttendance.length})
-              </h4>
-              <ul className="space-y-2 text-sm">
-                {dashboard.alerts.missingAttendance.map((a) => (
-                  <li
-                    key={a.lessonId}
-                    className="rounded-xl border border-sky-100 bg-sky-50 px-3 py-2"
-                  >
-                    <p className="font-semibold">{a.groupName}</p>
-                    <p className="text-zinc-600">
-                      {formatDt(a.scheduledAt)} · {a.teacherName} · {a.markedStudents}/
-                      {a.expectedStudents} uczniów
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-      </Section>
-
-      <Section
-        title="Prognoza obłożenia grup"
-        description="Wolne miejsca vs oczekujące zgłoszenia"
-      >
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-left text-sm">
-            <thead className="bg-zinc-50 text-zinc-700">
-              <tr>
-                <th className="px-3 py-2 font-semibold">Grupa</th>
-                <th className="px-3 py-2 font-semibold">Poziom</th>
-                <th className="px-3 py-2 font-semibold">Lokalizacja</th>
-                <th className="px-3 py-2 font-semibold">Zajęte</th>
-                <th className="px-3 py-2 font-semibold">Wolne</th>
-                <th className="px-3 py-2 font-semibold">Oczekujące</th>
-              </tr>
-            </thead>
-            <tbody>
-              {occupancy.map((row) => (
-                <tr key={row.groupId} className="border-t border-zinc-100">
-                  <td className="px-3 py-2 font-medium">{row.groupName}</td>
-                  <td className="px-3 py-2">{row.level ?? '—'}</td>
-                  <td className="px-3 py-2">{row.locationName}</td>
-                  <td className="px-3 py-2">
-                    {row.currentStudents}/{row.maxStudents}
-                  </td>
-                  <td className="px-3 py-2">
-                    <span
-                      className={
-                        row.freeSeats === 0
-                          ? 'font-semibold text-rose-700'
-                          : row.freeSeats <= 2
-                            ? 'font-semibold text-amber-700'
-                            : 'text-emerald-700'
-                      }
-                    >
-                      {row.freeSeats}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2">{row.pendingRequests}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {occupancy.length === 0 && (
-            <p className="py-4 text-center text-sm text-zinc-500">Brak aktywnych grup.</p>
-          )}
-        </div>
-      </Section>
-
-      <Section
-        title="Kalendarz konfliktów"
-        description="Ten sam lektor lub sala w dwóch miejscach jednocześnie (najbliższy tydzień)"
-      >
-        {conflicts.length === 0 ? (
-          <p className="text-sm text-zinc-500">Brak wykrytych konfliktów.</p>
+        {groupRoster.length === 0 ? (
+          <p className="text-sm text-zinc-500">Brak aktywnych grup.</p>
         ) : (
-          <ul className="space-y-2 text-sm">
-            {conflicts.map((c, i) => (
-              <li
-                key={`${c.type}-${c.scheduledAtA}-${i}`}
-                className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2"
+          <div className="space-y-3">
+            {groupRoster.map((group) => (
+              <div
+                key={group.groupId}
+                className="rounded-xl border border-emerald-100 bg-emerald-50/30 px-3 py-3 sm:px-4"
               >
-                <p className="font-semibold text-amber-900">
-                  {c.type === 'teacher' ? 'Lektor' : 'Sala'}: {c.resourceName}
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <p className="font-semibold text-zinc-900">{group.groupName}</p>
+                  <p className="text-xs font-medium text-zinc-500">
+                    {group.children.length}{' '}
+                    {group.children.length === 1
+                      ? 'dziecko'
+                      : group.children.length >= 2 && group.children.length <= 4
+                        ? 'dzieci'
+                        : 'dzieci'}
+                  </p>
+                </div>
+                <p className="mt-1 text-sm text-zinc-600">
+                  {group.level ? `${group.level} · ` : ''}
+                  {group.locationName}
+                  {group.teacherName !== '—' ? ` · ${group.teacherName}` : ''}
                 </p>
-                <p className="text-zinc-700">
-                  {formatDt(c.scheduledAtA)} — {c.groupAName} ({c.locationAName})
-                </p>
-                <p className="text-zinc-700">
-                  {formatDt(c.scheduledAtB)} — {c.groupBName} ({c.locationBName})
-                </p>
-              </li>
+                {group.children.length === 0 ? (
+                  <p className="mt-2 text-sm text-zinc-500">Brak dzieci w grupie.</p>
+                ) : (
+                  <ul className="mt-2 flex flex-wrap gap-1.5">
+                    {group.children.map((child) => (
+                      <li
+                        key={child.childId}
+                        className="rounded-lg border border-emerald-100 bg-white px-2.5 py-1 text-sm text-zinc-800"
+                      >
+                        {child.childName}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             ))}
-          </ul>
+          </div>
         )}
       </Section>
     </div>

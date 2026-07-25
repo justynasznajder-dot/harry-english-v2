@@ -181,6 +181,7 @@ model contracts {
   invoices              invoices[]
   invoice_items         invoice_items[]
   payments              payments[]
+  school_invoice_holds  school_invoice_holds[]
 
   @@unique([school_id, contract_number], map: "contracts_school_contract_number_key")
   @@index([enrollment_request_id])
@@ -447,6 +448,7 @@ model payments {
   school_years   school_years? @relation(fields: [school_year_id], references: [id], onUpdate: NoAction)
   lesson_billing_periods lesson_billing_periods?
   invoices       invoices?
+  bank_transfers bank_transfers[]
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -555,6 +557,21 @@ model school_complimentary_parents {
 
   @@unique([school_id, parent_id], map: "idx_school_complimentary_parents_user", where: raw("(parent_id IS NOT NULL)"))
   @@index([parent_id], map: "idx_school_complimentary_parents_parent")
+}
+
+/// Wstrzymanie generowania pozycji faktury ratalnej dla umowy (dziecka) w konkretnym miesiącu.
+model school_invoice_holds {
+  id           String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id    String
+  contract_id  String
+  period_month DateTime  @db.Date
+  created_at   DateTime  @default(now()) @db.Timestamptz(6)
+  contracts    contracts @relation(fields: [contract_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  schools      schools   @relation(fields: [school_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([school_id, contract_id, period_month], map: "idx_school_invoice_holds_school_contract_period")
+  @@index([contract_id], map: "idx_school_invoice_holds_contract")
+  @@index([school_id, period_month], map: "idx_school_invoice_holds_school_period")
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -722,11 +739,57 @@ model schools {
   school_complimentary_parents school_complimentary_parents[]
   school_discount_settings     school_discount_settings[]
   school_holidays              school_holidays[]
+  school_invoice_holds         school_invoice_holds[]
   school_year_close_logs       school_year_close_logs[]
   school_year_teacher_stats    school_year_teacher_stats[]
   school_years                 school_years?
   subscriptions                subscriptions[]
   users                        users[]
+  bank_statement_imports       bank_statement_imports[]
+  bank_transfers               bank_transfers[]
+}
+
+/// Przetworzony plik wyciągu z Google Drive — zapobiega ponownemu skanowaniu.
+model bank_statement_imports {
+  id               String          @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id        String
+  drive_file_id    String          @db.VarChar(128)
+  drive_file_name  String          @db.VarChar(512)
+  year_folder      String          @db.VarChar(10)
+  transfer_count   Int             @default(0)
+  processed_at     DateTime        @default(now()) @db.Timestamptz(6)
+  schools          schools         @relation(fields: [school_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  bank_transfers   bank_transfers[]
+
+  @@unique([school_id, drive_file_id], map: "bank_statement_imports_school_drive_file_key")
+  @@index([school_id], map: "idx_bank_statement_imports_school")
+}
+
+/// Przelew z wyciągu bankowego (ING CSV) — do weryfikacji płatności faktur.
+model bank_transfers {
+  id                   String                  @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id            String
+  import_id            String
+  transaction_date     DateTime                @db.Date
+  booking_date         DateTime                @db.Date
+  counterparty         String                  @db.VarChar(512)
+  title                String
+  amount               Decimal                 @db.Decimal
+  currency             String                  @default("PLN") @db.VarChar(10)
+  /// Nr transakcji z wyciągu ING — unikalny identyfikator przelewu w szkole.
+  bank_transaction_id  String?                 @db.VarChar(64)
+  matched_payment_id   String?
+  matched_at           DateTime?               @db.Timestamptz(6)
+  created_at           DateTime                @default(now()) @db.Timestamptz(6)
+  schools              schools                 @relation(fields: [school_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  bank_statement_imports bank_statement_imports @relation(fields: [import_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  payments             payments?               @relation(fields: [matched_payment_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([school_id], map: "idx_bank_transfers_school")
+  @@index([import_id], map: "idx_bank_transfers_import")
+  @@index([matched_payment_id], map: "idx_bank_transfers_matched_payment")
+  @@index([school_id, amount], map: "idx_bank_transfers_school_amount")
+  @@unique([school_id, bank_transaction_id], map: "bank_transfers_school_bank_tx_key")
 }
 
 /// Kolejny numer klienta (rodzica) per szkoła — 00001, 00002…

@@ -15,6 +15,11 @@ import MessagesTabLabel from '@/src/components/messages/MessagesTabLabel';
 import { useUnreadMessagesCount } from '@/src/components/messages/useUnreadMessagesCount';
 import { useOpenResignationsCount } from '@/src/components/admin/useOpenResignationsCount';
 import { usePendingEnrollmentsCount } from '@/src/components/admin/usePendingEnrollmentsCount';
+import {
+  addMonthsYmd,
+  periodMonthKey,
+  todayYmdSchool,
+} from '@/lib/school-timezone';
 
 type TabKey =
   | 'dashboard'
@@ -25,7 +30,7 @@ type TabKey =
   | 'billing'
   | 'settlements';
 type MobileTab = 'organization' | 'users' | 'more';
-type UsersSubTab = 'parents' | 'children' | 'teachers' | 'managers' | 'add';
+type UsersSubTab = 'parents' | 'children' | 'teachers' | 'managers' | 'accountants' | 'add';
 type OrganizationSubTab =
   | 'schoolYear'
   | 'teachers'
@@ -35,7 +40,8 @@ type OrganizationSubTab =
   | 'users'
   | 'history';
 type EnrollmentFlowSubTab = 'enrollment' | 'renewals' | 'resignations';
-type BillingSubTab = 'summary' | 'invoices' | 'payments' | 'settings';
+type BillingSubTab = 'summary' | 'invoices' | 'settings';
+type BillingSummaryKind = 'monthly' | 'per_lesson';
 type TeacherOrgSubTab = 'list' | 'add';
 type LocationOrgSubTab = 'list' | 'add' | 'edit';
 type GroupsSubTab = 'list' | 'add' | 'organize';
@@ -54,6 +60,7 @@ interface AdminUser {
   access_level?: 'PENDING' | 'ACTIVE';
   phone?: string | null;
   client_number?: string | null;
+  children_count?: number | null;
 }
 
 interface ChildRow {
@@ -126,13 +133,7 @@ function formatGroupPriceLines(
 function isSchoolYearEndDatePassed(dateTo: string): boolean {
   const end = String(dateTo).slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) return false;
-  const today = new Date();
-  const todayStr = [
-    today.getFullYear(),
-    String(today.getMonth() + 1).padStart(2, '0'),
-    String(today.getDate()).padStart(2, '0'),
-  ].join('-');
-  return todayStr > end;
+  return todayYmdSchool() > end;
 }
 
 function formatSchoolYearEndDatePl(dateTo: string): string {
@@ -341,8 +342,12 @@ const enrollmentFlowTabs: Array<{ key: EnrollmentFlowSubTab; label: string }> = 
 const billingTabs: Array<{ key: BillingSubTab; label: string }> = [
   { key: 'summary', label: 'Zestawienie' },
   { key: 'invoices', label: 'Faktury' },
-  { key: 'payments', label: 'Płatności' },
   { key: 'settings', label: 'Ustawienia' },
+];
+
+const billingSummaryKinds: Array<{ key: BillingSummaryKind; label: string }> = [
+  { key: 'monthly', label: 'Ratalne' },
+  { key: 'per_lesson', label: 'Za pojedyncze zajęcia' },
 ];
 
 const teacherOrgSubTabs: Array<{ key: TeacherOrgSubTab; label: string }> = [
@@ -359,6 +364,7 @@ const usersSubTabs: Array<{ key: UsersSubTab; label: string }> = [
   { key: 'children', label: 'Lista dzieci' },
   { key: 'teachers', label: 'Lista nauczycieli' },
   { key: 'managers', label: 'Lista managerów' },
+  { key: 'accountants', label: 'Lista księgowych' },
   { key: 'add', label: 'Dodaj nowego użytkownika' },
 ];
 const groupsSubTabs: Array<{ key: GroupsSubTab; label: string }> = [
@@ -445,6 +451,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [enrollmentFlowSubTab, setEnrollmentFlowSubTab] =
     useState<EnrollmentFlowSubTab>('enrollment');
   const [billingSubTab, setBillingSubTab] = useState<BillingSubTab>('summary');
+  const [billingSummaryKind, setBillingSummaryKind] = useState<BillingSummaryKind>('monthly');
   const [teacherOrgSubTab, setTeacherOrgSubTab] = useState<TeacherOrgSubTab>('list');
   const [locationOrgSubTab, setLocationOrgSubTab] = useState<LocationOrgSubTab>('list');
   const [groupsSubTab, setGroupsSubTab] = useState<GroupsSubTab>('list');
@@ -513,15 +520,28 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [invoiceAutoGeneration, setInvoiceAutoGeneration] = useState(false);
   const [invoiceAutoGenerationDraft, setInvoiceAutoGenerationDraft] = useState(false);
   const [monthlyInvoicesGenerating, setMonthlyInvoicesGenerating] = useState(false);
-  const [monthlyInvoiceMonth, setMonthlyInvoiceMonth] = useState(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  });
+  const [monthlyInvoiceMonth, setMonthlyInvoiceMonth] = useState(() => periodMonthKey());
   const [monthlyInvoicePreviewLoading, setMonthlyInvoicePreviewLoading] = useState(false);
   const [monthlyInvoicePreview, setMonthlyInvoicePreview] = useState<{
     periodMonth: string;
     dueDate: string;
     parents: Array<{
+      parentId: string;
+      parentFirstName: string;
+      parentLastName: string;
+      parentEmail: string;
+      totalAmount: number;
+      alreadyInvoiced: boolean;
+      lines: Array<{
+        contractId: string;
+        childId: string | null;
+        childName: string;
+        amount: number;
+        alreadyInvoiced: boolean;
+        signedAt: string | null;
+      }>;
+    }>;
+    heldParents: Array<{
       parentId: string;
       parentFirstName: string;
       parentLastName: string;
@@ -545,7 +565,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       alreadyInvoicedLines: number;
     };
   } | null>(null);
+  const [invoiceHoldBusyContractId, setInvoiceHoldBusyContractId] = useState<string | null>(null);
   const [issuedInvoicesLoading, setIssuedInvoicesLoading] = useState(false);
+  const [verifyPaymentsBusy, setVerifyPaymentsBusy] = useState(false);
   const [issuedInvoices, setIssuedInvoices] = useState<
     Array<{
       id: string;
@@ -599,10 +621,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [organizeLoadingGroupId, setOrganizeLoadingGroupId] = useState<string | null>(null);
   const [organizeFilterName, setOrganizeFilterName] = useState('');
   const [organizeFilterLocation, setOrganizeFilterLocation] = useState('');
-  const [lessonBillingMonth, setLessonBillingMonth] = useState(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  });
+  const [lessonBillingMonth, setLessonBillingMonth] = useState(() => periodMonthKey());
   const [lessonBillingRows, setLessonBillingRows] = useState<
     Array<{
       childId: string;
@@ -627,6 +646,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     Record<string, { amount: string; lessonsCount: string }>
   >({});
   const [lessonBillingBusyChildId, setLessonBillingBusyChildId] = useState<string | null>(null);
+  const [lessonInvoicesGenerating, setLessonInvoicesGenerating] = useState(false);
   const [organizeFilterTeacher, setOrganizeFilterTeacher] = useState('');
   const [groupLoading, setGroupLoading] = useState(false);
   const [initialGroupLoaded, setInitialGroupLoaded] = useState(false);
@@ -648,12 +668,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     quietReload?: boolean;
   } | null>(null);
   const [generateForm, setGenerateForm] = useState(() => {
-    const now = new Date();
-    const plus = new Date();
-    plus.setMonth(plus.getMonth() + 3);
+    const from = todayYmdSchool();
     return {
-      dateFrom: now.toISOString().slice(0, 10),
-      dateTo: plus.toISOString().slice(0, 10),
+      dateFrom: from,
+      dateTo: addMonthsYmd(from, 3),
     };
   });
 
@@ -861,10 +879,20 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   }, [lessonBillingMonth, pushToast]);
 
   useEffect(() => {
-    if (activeTab === 'billing' && billingSubTab === 'payments') {
+    if (billingSubTab === 'summary') {
+      setLessonBillingMonth(monthlyInvoiceMonth);
+    }
+  }, [billingSubTab, monthlyInvoiceMonth]);
+
+  useEffect(() => {
+    if (
+      activeTab === 'billing' &&
+      billingSubTab === 'summary' &&
+      billingSummaryKind === 'per_lesson'
+    ) {
       void loadLessonBilling();
     }
-  }, [activeTab, billingSubTab, loadLessonBilling]);
+  }, [activeTab, billingSubTab, billingSummaryKind, lessonBillingMonth, loadLessonBilling]);
 
   useEffect(() => {
     if (activeTab === 'enrollments' && enrollmentFlowSubTab === 'enrollment') {
@@ -1190,29 +1218,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         message?: string;
         periodMonth?: string;
         dueDate?: string;
-        parents?: Array<{
-          parentId: string;
-          parentFirstName: string;
-          parentLastName: string;
-          parentEmail: string;
-          totalAmount: number;
-          alreadyInvoiced: boolean;
-          lines: Array<{
-            contractId: string;
-            childId: string | null;
-            childName: string;
-            amount: number;
-            alreadyInvoiced: boolean;
-            signedAt: string | null;
-          }>;
-        }>;
-        totals?: {
-          parents: number;
-          lines: number;
-          amount: number;
-          pendingAmount: number;
-          alreadyInvoicedLines: number;
-        };
+        parents?: NonNullable<typeof monthlyInvoicePreview>['parents'];
+        heldParents?: NonNullable<typeof monthlyInvoicePreview>['heldParents'];
+        totals?: NonNullable<typeof monthlyInvoicePreview>['totals'];
       };
       if (!res.ok) {
         pushToast('error', data.message ?? 'Nie udało się pobrać podglądu faktur');
@@ -1223,6 +1231,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         periodMonth: data.periodMonth ?? `${monthlyInvoiceMonth}-01`,
         dueDate: data.dueDate ?? '',
         parents: data.parents ?? [],
+        heldParents: data.heldParents ?? [],
         totals: data.totals ?? {
           parents: 0,
           lines: 0,
@@ -1238,6 +1247,58 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       setMonthlyInvoicePreviewLoading(false);
     }
   }, [monthlyInvoiceMonth, pushToast]);
+
+  const setMonthlyInvoiceHold = useCallback(
+    async (contractId: string, held: boolean) => {
+      setInvoiceHoldBusyContractId(contractId);
+      try {
+        const res = await fetch('/api/admin/invoices/holds', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contractId,
+            held,
+            periodMonth: monthlyInvoiceMonth,
+          }),
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          message?: string;
+          periodMonth?: string;
+          dueDate?: string;
+          parents?: NonNullable<typeof monthlyInvoicePreview>['parents'];
+          heldParents?: NonNullable<typeof monthlyInvoicePreview>['heldParents'];
+          totals?: NonNullable<typeof monthlyInvoicePreview>['totals'];
+        };
+        if (!res.ok) {
+          pushToast('error', data.message ?? 'Nie udało się zaktualizować wstrzymania');
+          return;
+        }
+        setMonthlyInvoicePreview({
+          periodMonth: data.periodMonth ?? `${monthlyInvoiceMonth}-01`,
+          dueDate: data.dueDate ?? '',
+          parents: data.parents ?? [],
+          heldParents: data.heldParents ?? [],
+          totals: data.totals ?? {
+            parents: 0,
+            lines: 0,
+            amount: 0,
+            pendingAmount: 0,
+            alreadyInvoicedLines: 0,
+          },
+        });
+        pushToast(
+          'success',
+          data.message ??
+            (held ? 'Wstrzymano generowanie faktury' : 'Wznowiono generowanie faktury'),
+        );
+      } catch {
+        pushToast('error', 'Błąd wstrzymania faktury');
+      } finally {
+        setInvoiceHoldBusyContractId(null);
+      }
+    },
+    [monthlyInvoiceMonth, pushToast],
+  );
 
   const loadIssuedInvoices = useCallback(async () => {
     setIssuedInvoicesLoading(true);
@@ -1263,6 +1324,31 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       setIssuedInvoicesLoading(false);
     }
   }, [monthlyInvoiceMonth, pushToast]);
+
+  const verifyPayments = useCallback(async () => {
+    setVerifyPaymentsBusy(true);
+    try {
+      const res = await fetch('/api/admin/invoices/verify-payments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ periodMonth: monthlyInvoiceMonth }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        message?: string;
+        matched?: unknown[];
+      };
+      if (!res.ok) {
+        pushToast('error', data.message ?? 'Nie udało się zweryfikować płatności');
+        return;
+      }
+      pushToast('success', data.message ?? 'Weryfikacja płatności zakończona');
+      await loadIssuedInvoices();
+    } catch {
+      pushToast('error', 'Błąd weryfikacji płatności');
+    } finally {
+      setVerifyPaymentsBusy(false);
+    }
+  }, [loadIssuedInvoices, monthlyInvoiceMonth, pushToast]);
 
   useEffect(() => {
     if (activeTab === 'billing' && billingSubTab === 'summary') {
@@ -1654,12 +1740,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       setGenerateForm(yearDates);
       setGenerateWholeSchoolYear(true);
     } else {
-      const today = new Date().toISOString().slice(0, 10);
-      const plus = new Date();
-      plus.setMonth(plus.getMonth() + 3);
+      const today = todayYmdSchool();
       setGenerateForm({
         dateFrom: today,
-        dateTo: plus.toISOString().slice(0, 10),
+        dateTo: addMonthsYmd(today, 3),
       });
       setGenerateWholeSchoolYear(false);
     }
@@ -1827,7 +1911,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           ? filteredUsers.filter((user) => user.role === 'TEACHER')
           : usersSubTab === 'managers'
             ? filteredUsers.filter((user) => user.role === 'MANAGER')
-            : filteredUsers;
+            : usersSubTab === 'accountants'
+              ? filteredUsers.filter((user) => user.role === 'ACCOUNTANT')
+              : filteredUsers;
 
     return (
     <div className="space-y-4">
@@ -1990,7 +2076,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         )}
       </section>
 
-      {(usersSubTab === 'parents' || usersSubTab === 'teachers' || usersSubTab === 'managers') && (
+      {(usersSubTab === 'parents' ||
+        usersSubTab === 'teachers' ||
+        usersSubTab === 'managers' ||
+        usersSubTab === 'accountants') && (
       <section className="overflow-hidden rounded-2xl border border-emerald-100 bg-white">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[760px] text-sm">
@@ -1999,6 +2088,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 <th className="px-4 py-3 text-left">ID</th>
                 <th className="px-4 py-3 text-left">Użytkownik</th>
                 <th className="px-4 py-3 text-left">Email</th>
+                {usersSubTab === 'parents' ? (
+                  <th className="px-4 py-3 text-left">Dzieci</th>
+                ) : null}
                 <th className="px-4 py-3 text-left">Rola</th>
                 <th className="px-4 py-3 text-left">Status</th>
                 <th className="px-4 py-3 text-left">Akcje</th>
@@ -2010,6 +2102,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
 
                 if (user.role === 'PARENT') {
                   const showHistory = contactHistoryParentId === user.id;
+                  const parentColSpan = usersSubTab === 'parents' ? 7 : 6;
                   return (
                     <Fragment key={user.id}>
                     <tr className="border-t border-emerald-50">
@@ -2020,6 +2113,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         <span>{user.first_name} {user.last_name}</span>
                       </td>
                       <td className="px-4 py-3">{user.email}</td>
+                      {usersSubTab === 'parents' ? (
+                        <td className="px-4 py-3 tabular-nums">
+                          {user.children_count ?? 0}
+                        </td>
+                      ) : null}
                       <td className="px-4 py-3">
                         <span>{user.role}</span>
                       </td>
@@ -2061,7 +2159,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     </tr>
                     {showHistory && (
                       <tr>
-                        <td colSpan={6} className="px-4 pb-4">
+                        <td colSpan={parentColSpan} className="px-4 pb-4">
                           <ContactHistoryPanel parentId={user.id} />
                         </td>
                       </tr>
@@ -4777,10 +4875,19 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
 
     const paymentStatusLabel = (status: string | null) => {
       const s = String(status ?? '').toUpperCase();
-      if (s === 'PAID') return 'Opłacona';
-      if (s === 'PENDING' || s === 'UNPAID') return 'Oczekuje';
-      if (s === 'CANCELLED') return 'Anulowana';
-      return status || '—';
+      if (s === 'PAID') {
+        return <span className="font-medium text-emerald-700">Opłacona</span>;
+      }
+      if (s === 'PENDING' || s === 'UNPAID') {
+        return <span className="font-medium text-red-700/80">Oczekuje</span>;
+      }
+      if (s === 'CANCELLED') {
+        return <span className="text-zinc-500">Anulowana</span>;
+      }
+      if (s === 'OVERDUE') {
+        return <span className="font-medium text-red-700/80">Zaległa</span>;
+      }
+      return <span className="text-zinc-600">{status || '—'}</span>;
     };
 
     const invoiceKindLabel = (kind: string) => {
@@ -4788,6 +4895,16 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       if (kind === 'YEARLY') return 'Jednorazowa';
       if (kind === 'PER_LESSON') return 'Za zajęcia';
       return 'Inna';
+    };
+
+    const issuedInvoiceSummary = {
+      total: issuedInvoices.reduce((sum, inv) => sum + (Number(inv.amount) || 0), 0),
+      monthly: issuedInvoices
+        .filter((inv) => inv.kind === 'MONTHLY' && inv.documentType !== 'CORRECTIVE')
+        .reduce((sum, inv) => sum + (Number(inv.amount) || 0), 0),
+      perLesson: issuedInvoices
+        .filter((inv) => inv.kind === 'PER_LESSON' && inv.documentType !== 'CORRECTIVE')
+        .reduce((sum, inv) => sum + (Number(inv.amount) || 0), 0),
     };
 
     const renderMonthPicker = () => (
@@ -4805,7 +4922,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     const renderPreviewTable = (
       parents: NonNullable<typeof monthlyInvoicePreview>['parents'],
       emptyMessage: string,
+      options?: { held?: boolean },
     ) => {
+      const held = Boolean(options?.held);
       if (monthlyInvoicePreviewLoading) {
         return <p className="text-sm text-zinc-600">Wczytywanie…</p>;
       }
@@ -4826,7 +4945,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 <th className="px-3 py-2 text-left">Dziecko</th>
                 <th className="px-3 py-2 text-left">Kwota</th>
                 <th className="px-3 py-2 text-left">Suma rodzica</th>
-                <th className="px-3 py-2 text-left">Status</th>
+                <th className="px-3 py-2 text-left">Status faktury</th>
+                <th className="px-3 py-2 text-left w-10" title={held ? 'Wznów generowanie' : 'Wstrzymaj fakturę'}>
+                  {held ? 'Wznów' : 'Wstrzymaj'}
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -4847,11 +4969,36 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       {idx === 0 ? formatPln(parent.totalAmount) : ''}
                     </td>
                     <td className="px-3 py-2">
-                      {line.alreadyInvoiced ? (
+                      {held ? (
+                        line.alreadyInvoiced ? (
+                          <span className="text-emerald-700">Wystawiona ręcznie</span>
+                        ) : (
+                          <span className="text-amber-800">Wstrzymana</span>
+                        )
+                      ) : line.alreadyInvoiced ? (
                         <span className="text-emerald-700">Wystawiona</span>
                       ) : (
                         <span className="text-amber-700">Do wystawienia</span>
                       )}
+                    </td>
+                    <td className="px-3 py-2">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 accent-[#0f6e56]"
+                        checked={held}
+                        disabled={
+                          invoiceHoldBusyContractId === line.contractId ||
+                          monthlyInvoicesGenerating
+                        }
+                        title={
+                          held
+                            ? 'Odznacz, aby znów generować fakturę dla tego dziecka w tym miesiącu'
+                            : 'Zaznacz, aby wstrzymać fakturę dla tego dziecka tylko w tym miesiącu'
+                        }
+                        onChange={(e) => {
+                          void setMonthlyInvoiceHold(line.contractId, e.target.checked);
+                        }}
+                      />
                     </td>
                   </tr>
                 )),
@@ -4867,8 +5014,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         <div>
           <h2 className="text-lg font-semibold text-zinc-900">Rozliczenia</h2>
           <p className="text-sm text-zinc-600">
-            Zestawienie planowanych kwot, wystawione faktury, płatności za zajęcia oraz ustawienia
-            generowania.
+            Zestawienie (ratalne i za zajęcia), wystawione faktury oraz ustawienia generowania.
           </p>
         </div>
 
@@ -4891,74 +5037,122 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               <div>
                 <h4 className="font-semibold text-[#0f6e56]">Zestawienie planowanych kwot</h4>
                 <p className="mt-1 text-sm text-zinc-600">
-                  Podpisane umowy miesięczne (bez trybu bez opłat). Kwoty z umów — tak trafią na
-                  fakturę.
-                  {monthlyInvoicePreview?.dueDate
-                    ? ` Termin płatności: ${monthlyInvoicePreview.dueDate}.`
-                    : ''}
+                  Wybierz miesiąc, potem podsekcję: faktury ratalne albo rozliczenia za pojedyncze
+                  zajęcia.
                 </p>
               </div>
-              <div className="flex flex-wrap items-end gap-3">
-                {renderMonthPicker()}
-                <button
-                  type="button"
-                  disabled={monthlyInvoicesGenerating || monthlyInvoicePreviewLoading}
-                  className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                  onClick={async () => {
-                    setMonthlyInvoicesGenerating(true);
-                    try {
-                      const res = await fetch('/api/admin/invoices/generate-monthly', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ periodMonth: monthlyInvoiceMonth }),
-                      });
-                      const data = (await res.json().catch(() => ({}))) as {
-                        message?: string;
-                        generated?: number;
-                        alreadyInvoiced?: number;
-                        errors?: unknown[];
-                      };
-                      if (!res.ok) {
-                        pushToast(
-                          'error',
-                          data.message ?? 'Nie udało się wygenerować faktur ratalnych',
-                        );
-                        return;
-                      }
-                      const errCount = data.errors?.length ?? 0;
-                      pushToast(
-                        errCount > 0 && (data.generated ?? 0) === 0 ? 'error' : 'success',
-                        data.message ??
-                          `Wygenerowano ${data.generated ?? 0}, już było ${data.alreadyInvoiced ?? 0}`,
-                      );
-                      await loadMonthlyInvoicePreview();
-                      await loadIssuedInvoices();
-                    } catch {
-                      pushToast('error', 'Błąd generowania faktur ratalnych');
-                    } finally {
-                      setMonthlyInvoicesGenerating(false);
-                    }
-                  }}
-                >
-                  {monthlyInvoicesGenerating ? 'Generowanie…' : 'Wygeneruj faktury'}
-                </button>
-              </div>
+              {renderMonthPicker()}
             </div>
 
-            {monthlyInvoicePreview && !monthlyInvoicePreviewLoading ? (
-              <p className="text-sm text-zinc-600">
-                Rodzice: {monthlyInvoicePreview.totals.parents}, pozycje:{' '}
-                {monthlyInvoicePreview.totals.lines}, suma:{' '}
-                {formatPln(monthlyInvoicePreview.totals.amount)}
-                {monthlyInvoicePreview.totals.pendingAmount > 0
-                  ? ` (do wystawienia: ${formatPln(monthlyInvoicePreview.totals.pendingAmount)})`
-                  : ''}
-              </p>
-            ) : null}
+            <div className="flex flex-wrap gap-2">
+              {billingSummaryKinds.map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  onClick={() => setBillingSummaryKind(t.key)}
+                  className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${tabBtn(
+                    billingSummaryKind === t.key,
+                  )}`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
 
-            {renderPreviewTable(
-              monthlyInvoicePreview?.parents ?? [],
-              'Brak podpisanych umów ratalnych do faktury w wybranym miesiącu.',
+            {billingSummaryKind === 'monthly' ? (
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <h5 className="font-semibold text-zinc-900">Faktury ratalne</h5>
+                    <p className="mt-1 text-sm text-zinc-600">
+                      Podpisane umowy miesięczne (bez trybu bez opłat). Kwoty z umów — tak trafią na
+                      fakturę. Checkbox „Wstrzymaj” wyłącza konkretne dziecko tylko w wybranym
+                      miesiącu (kolejny miesiąc startuje bez wstrzymań). Przy częściowym
+                      wstrzymaniu faktura automatyczna wystawi się tylko na pozostałe dzieci;
+                      wstrzymane wystawi księgowa ręcznie.
+                      {monthlyInvoicePreview?.dueDate
+                        ? ` Termin płatności: ${monthlyInvoicePreview.dueDate}.`
+                        : ''}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={monthlyInvoicesGenerating || monthlyInvoicePreviewLoading}
+                    className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                    onClick={async () => {
+                      setMonthlyInvoicesGenerating(true);
+                      try {
+                        const res = await fetch('/api/admin/invoices/generate-monthly', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ periodMonth: monthlyInvoiceMonth }),
+                        });
+                        const data = (await res.json().catch(() => ({}))) as {
+                          message?: string;
+                          generated?: number;
+                          alreadyInvoiced?: number;
+                          errors?: unknown[];
+                        };
+                        if (!res.ok) {
+                          pushToast(
+                            'error',
+                            data.message ?? 'Nie udało się wygenerować faktur ratalnych',
+                          );
+                          return;
+                        }
+                        const errCount = data.errors?.length ?? 0;
+                        pushToast(
+                          errCount > 0 && (data.generated ?? 0) === 0 ? 'error' : 'success',
+                          data.message ??
+                            `Wygenerowano ${data.generated ?? 0}, już było ${data.alreadyInvoiced ?? 0}`,
+                        );
+                        await loadMonthlyInvoicePreview();
+                        await loadIssuedInvoices();
+                      } catch {
+                        pushToast('error', 'Błąd generowania faktur ratalnych');
+                      } finally {
+                        setMonthlyInvoicesGenerating(false);
+                      }
+                    }}
+                  >
+                    {monthlyInvoicesGenerating ? 'Generowanie…' : 'Wygeneruj faktury ratalne'}
+                  </button>
+                </div>
+
+                {monthlyInvoicePreview && !monthlyInvoicePreviewLoading ? (
+                  <p className="text-sm text-zinc-600">
+                    Rodzice: {monthlyInvoicePreview.totals.parents}, pozycje:{' '}
+                    {monthlyInvoicePreview.totals.lines}, suma:{' '}
+                    {formatPln(monthlyInvoicePreview.totals.amount)}
+                    {monthlyInvoicePreview.totals.pendingAmount > 0
+                      ? ` (do wystawienia: ${formatPln(monthlyInvoicePreview.totals.pendingAmount)})`
+                      : ''}
+                  </p>
+                ) : null}
+
+                {renderPreviewTable(
+                  monthlyInvoicePreview?.parents ?? [],
+                  'Brak podpisanych umów ratalnych do faktury w wybranym miesiącu.',
+                )}
+
+                <div className="space-y-3 border-t border-emerald-100 pt-4">
+                  <div>
+                    <h4 className="font-semibold text-[#0f6e56]">Faktury wstrzymane</h4>
+                    <p className="mt-1 text-sm text-zinc-600">
+                      Dzieci wyłączone z generowania w tym miesiącu. Odznacz checkbox, aby wznowić.
+                      Po ręcznym wystawieniu przez księgową status zmienia się na „Wystawiona
+                      ręcznie”.
+                    </p>
+                  </div>
+                  {renderPreviewTable(
+                    monthlyInvoicePreview?.heldParents ?? [],
+                    'Brak wstrzymanych faktur.',
+                    { held: true },
+                  )}
+                </div>
+              </div>
+            ) : (
+              renderLessonBilling({ embedded: true })
             )}
           </div>
         ) : billingSubTab === 'invoices' ? (
@@ -4971,7 +5165,17 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   pobrania PDF.
                 </p>
               </div>
-              {renderMonthPicker()}
+              <div className="flex flex-wrap items-end gap-2">
+                {renderMonthPicker()}
+                <button
+                  type="button"
+                  disabled={verifyPaymentsBusy || issuedInvoicesLoading}
+                  onClick={() => void verifyPayments()}
+                  className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0c5a47] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {verifyPaymentsBusy ? 'Weryfikacja…' : 'Zweryfikuj płatności'}
+                </button>
+              </div>
             </div>
 
             {issuedInvoicesLoading ? (
@@ -4981,61 +5185,81 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 Brak wystawionych faktur w wybranym miesiącu.
               </p>
             ) : (
-              <div className="overflow-x-auto rounded-xl border border-emerald-100">
-                <table className="min-w-full text-sm">
-                  <thead className="bg-emerald-50 text-zinc-700">
-                    <tr>
-                      <th className="px-3 py-2 text-left">Numer</th>
-                      <th className="px-3 py-2 text-left">Typ</th>
-                      <th className="px-3 py-2 text-left">Data wystawienia</th>
-                      <th className="px-3 py-2 text-left">Nabywca</th>
-                      <th className="px-3 py-2 text-left">Kwota</th>
-                      <th className="px-3 py-2 text-left">Płatność</th>
-                      <th className="px-3 py-2 text-left">PDF</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {issuedInvoices.map((inv) => (
-                      <tr key={inv.id} className="border-t border-emerald-50">
-                        <td className="px-3 py-2 font-medium">{inv.invoiceNumber}</td>
-                        <td className="px-3 py-2">
-                          {inv.documentType === 'CORRECTIVE'
-                            ? 'Korekta'
-                            : invoiceKindLabel(inv.kind)}
-                        </td>
-                        <td className="px-3 py-2 whitespace-nowrap">{inv.issueDate}</td>
-                        <td className="px-3 py-2">
-                          <div>{inv.buyerName}</div>
-                          {inv.parentEmail ? (
-                            <div className="text-xs text-zinc-500">{inv.parentEmail}</div>
-                          ) : null}
-                          {inv.buyerNip ? (
-                            <div className="text-xs text-zinc-500">NIP {inv.buyerNip}</div>
-                          ) : null}
-                        </td>
-                        <td className="px-3 py-2 whitespace-nowrap">{formatPln(inv.amount)}</td>
-                        <td className="px-3 py-2">{paymentStatusLabel(inv.paymentStatus)}</td>
-                        <td className="px-3 py-2">
-                          {inv.hasPdf ? (
-                            <a
-                              href={`/api/admin/invoices/${encodeURIComponent(inv.id)}?format=pdf`}
-                              className="font-semibold text-[#0f6e56] hover:underline"
-                            >
-                              Pobierz PDF
-                            </a>
-                          ) : (
-                            <span className="text-zinc-400">Brak pliku</span>
-                          )}
-                        </td>
+              <>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {[
+                    { label: 'Suma', value: issuedInvoiceSummary.total },
+                    { label: 'Faktury ratalne', value: issuedInvoiceSummary.monthly },
+                    { label: 'Za pojedyncze zajęcia', value: issuedInvoiceSummary.perLesson },
+                  ].map((item) => (
+                    <div
+                      key={item.label}
+                      className="rounded-xl border border-emerald-100 bg-white px-4 py-3"
+                    >
+                      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                        {item.label}
+                      </p>
+                      <p className="mt-1 text-xl font-semibold text-[#0f6e56]">
+                        {formatPln(item.value)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="overflow-x-auto rounded-xl border border-emerald-100">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-emerald-50 text-zinc-700">
+                      <tr>
+                        <th className="px-3 py-2 text-left">Numer</th>
+                        <th className="px-3 py-2 text-left">Typ</th>
+                        <th className="px-3 py-2 text-left">Data wystawienia</th>
+                        <th className="px-3 py-2 text-left">Nabywca</th>
+                        <th className="px-3 py-2 text-left">Kwota</th>
+                        <th className="px-3 py-2 text-left">Płatność</th>
+                        <th className="px-3 py-2 text-left">PDF</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {issuedInvoices.map((inv) => (
+                        <tr key={inv.id} className="border-t border-emerald-50">
+                          <td className="px-3 py-2 font-medium">{inv.invoiceNumber}</td>
+                          <td className="px-3 py-2">
+                            {inv.documentType === 'CORRECTIVE'
+                              ? 'Korekta'
+                              : invoiceKindLabel(inv.kind)}
+                          </td>
+                          <td className="px-3 py-2 whitespace-nowrap">{inv.issueDate}</td>
+                          <td className="px-3 py-2">
+                            <div>{inv.buyerName}</div>
+                            {inv.parentEmail ? (
+                              <div className="text-xs text-zinc-500">{inv.parentEmail}</div>
+                            ) : null}
+                            {inv.buyerNip ? (
+                              <div className="text-xs text-zinc-500">NIP {inv.buyerNip}</div>
+                            ) : null}
+                          </td>
+                          <td className="px-3 py-2 whitespace-nowrap">{formatPln(inv.amount)}</td>
+                          <td className="px-3 py-2">{paymentStatusLabel(inv.paymentStatus)}</td>
+                          <td className="px-3 py-2">
+                            {inv.hasPdf ? (
+                              <a
+                                href={`/api/admin/invoices/${encodeURIComponent(inv.id)}?format=pdf`}
+                                className="font-semibold text-[#0f6e56] hover:underline"
+                              >
+                                Pobierz PDF
+                              </a>
+                            ) : (
+                              <span className="text-zinc-400">Brak pliku</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </div>
-        ) : billingSubTab === 'payments' ? (
-          renderLessonBilling()
         ) : discountsLoading ? (
           <div className="space-y-3">
             <div className="h-24 animate-pulse rounded-2xl bg-emerald-100/80" />
@@ -5198,16 +5422,75 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     );
   };
 
-  const renderLessonBilling = () => (
+  const renderLessonBilling = (options?: { embedded?: boolean }) => (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h4 className="font-semibold text-[#0f6e56]">Płatności za pojedyncze zajęcia</h4>
+          <h5
+            className={
+              options?.embedded ? 'font-semibold text-zinc-900' : 'font-semibold text-[#0f6e56]'
+            }
+          >
+            {options?.embedded ? 'Za pojedyncze zajęcia' : 'Płatności za pojedyncze zajęcia'}
+          </h5>
           <p className="mt-1 text-sm text-zinc-600">
             Rozliczenie umów za pojedyncze zajęcia — obecności są informacyjne.
+            {options?.embedded ? ' Miesiąc wybierasz powyżej.' : ''} Najpierw zapisz kwoty, potem
+            wygeneruj faktury.
           </p>
         </div>
-        <label className="text-sm text-zinc-700">
+        <button
+          type="button"
+          disabled={
+            lessonInvoicesGenerating ||
+            lessonBillingLoading ||
+            lessonBillingBusyChildId != null
+          }
+          className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+          onClick={async () => {
+            setLessonInvoicesGenerating(true);
+            try {
+              const res = await fetch('/api/admin/lesson-billing/generate-invoices', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ periodMonth: lessonBillingMonth }),
+              });
+              const data = (await res.json().catch(() => ({}))) as {
+                message?: string;
+                generated?: number;
+                alreadyInvoiced?: number;
+                errors?: unknown[];
+              };
+              if (!res.ok) {
+                pushToast(
+                  'error',
+                  data.message ?? 'Nie udało się wygenerować faktur za zajęcia',
+                );
+                return;
+              }
+              const errCount = data.errors?.length ?? 0;
+              pushToast(
+                errCount > 0 && (data.generated ?? 0) === 0 ? 'error' : 'success',
+                data.message ??
+                  `Wygenerowano ${data.generated ?? 0}, już było ${data.alreadyInvoiced ?? 0}`,
+              );
+              await loadLessonBilling();
+              await loadIssuedInvoices();
+            } catch {
+              pushToast('error', 'Błąd generowania faktur za zajęcia');
+            } finally {
+              setLessonInvoicesGenerating(false);
+            }
+          }}
+        >
+          {lessonInvoicesGenerating
+            ? 'Generowanie…'
+            : 'Wygeneruj faktury za pojedyncze zajęcia'}
+        </button>
+      </div>
+
+      {!options?.embedded ? (
+        <label className="inline-block text-sm text-zinc-700">
           Miesiąc
           <input
             type="month"
@@ -5216,7 +5499,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             onChange={(e) => setLessonBillingMonth(e.target.value)}
           />
         </label>
-      </div>
+      ) : null}
 
       {lessonBillingLoading ? (
         <p className="text-sm text-zinc-600">Wczytywanie…</p>
@@ -5504,8 +5787,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             <h3 className="text-lg font-semibold text-zinc-900">Zakończenie roku szkolnego</h3>
             <p className="mt-3 text-sm text-zinc-600">
               Czy na pewno chcesz zakończyć rok szkolny <strong>{closeYearModal.name}</strong>? Spowoduje to
-              anulowanie zaplanowanych zajęć i wygaśnięcie subskrypcji. Grupy szkoły pozostaną aktywne, a
-              dzieci zostaną przypisane do tych samych grup w kolejnym roku (jeśli jest zaplanowany).
+              anulowanie zaplanowanych zajęć i wygaśnięcie subskrypcji. Grupy szkoły i przypisania dzieci
+              pozostaną aktywne — przy zaplanowanym kolejnym roku dzieci przejdą do tych samych grup w
+              nowym roku.
             </p>
             <div className="mt-5 flex justify-end gap-2">
               <button
@@ -5534,7 +5818,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       'success',
                       (data.activatedNextYear?.name
                         ? `Rok zamknięty. Aktywowano ${data.activatedNextYear.name}. `
-                        : 'Rok zamknięty. ') +
+                        : 'Rok zamknięty. Dzieci pozostają w grupach. ') +
                         `Anulowano ${data.lessonsCancelled ?? 0} zajęć, ` +
                         `wygaszono ${data.subscriptionsExpired ?? 0} subskrypcji.` +
                         (data.activatedNextYear

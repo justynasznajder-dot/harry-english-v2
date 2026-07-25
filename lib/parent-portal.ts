@@ -1,6 +1,7 @@
 import { extractContractNumber } from "@/lib/contract-html";
 import { POLISH_DAY_FROM_ST_SQL, queryDb } from "@/lib/db";
 import {
+  pgDateToYmd,
   sqlSchoolTimestampAsTimestamptz,
   toIsoUtc,
 } from "@/lib/school-timezone";
@@ -10,9 +11,7 @@ function toIso(value: unknown): string {
 }
 
 function formatYmd(value: unknown): string | null {
-  const iso = toIso(value);
-  if (!iso) return null;
-  return iso.slice(0, 10);
+  return pgDateToYmd(value as Date | string | null | undefined);
 }
 
 export type ParentGroupRow = {
@@ -443,9 +442,7 @@ export async function fetchParentPayments(
     schoolYearId: row.school_year_id,
     schoolYearName: row.school_year_name,
     schoolYearActive: Boolean(row.school_year_active),
-    schoolYearDateFrom: row.school_year_date_from
-      ? String(row.school_year_date_from).slice(0, 10)
-      : null,
+    schoolYearDateFrom: pgDateToYmd(row.school_year_date_from),
   }));
 
   const billingRows: ParentPaymentRow[] = billingRes.rows.map((row) => ({
@@ -466,9 +463,7 @@ export async function fetchParentPayments(
     schoolYearId: row.school_year_id,
     schoolYearName: row.school_year_name,
     schoolYearActive: Boolean(row.school_year_active),
-    schoolYearDateFrom: row.school_year_date_from
-      ? String(row.school_year_date_from).slice(0, 10)
-      : null,
+    schoolYearDateFrom: pgDateToYmd(row.school_year_date_from),
   }));
 
   return [...paymentRows, ...billingRows].sort((a, b) => {
@@ -648,9 +643,7 @@ export async function fetchParentSignedContracts(
     schoolYearId: row.school_year_id,
     schoolYearName: row.school_year_name,
     schoolYearActive: Boolean(row.school_year_active),
-    schoolYearDateFrom: row.school_year_date_from
-      ? String(row.school_year_date_from).slice(0, 10)
-      : null,
+    schoolYearDateFrom: pgDateToYmd(row.school_year_date_from),
     contractNumber:
       row.contract_number?.trim() ||
       extractContractNumber(row.content_html ?? "") ||

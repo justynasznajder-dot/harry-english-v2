@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireAdminSchoolContext } from "@/lib/admin-school-context";
-import { generateMonthlyInvoicesForSchool } from "@/lib/invoicing";
+import { generateLessonBillingInvoicesForSchool } from "@/lib/invoicing";
 import { firstDayOfMonthUtcDate } from "@/lib/school-timezone";
 
 export const maxDuration = 120;
@@ -14,25 +14,28 @@ function parsePeriodMonth(value: unknown): Date | null {
   return new Date(Date.UTC(y, m - 1, 1));
 }
 
-function buildMonthlyInvoiceMessage(result: {
+function buildMessage(result: {
   generated: number;
-  skipped: number;
   alreadyInvoiced: number;
+  eligible: number;
   errors: unknown[];
 }): string {
   if (result.generated > 0) {
-    return `Wygenerowano ${result.generated} faktur ratalnych (już było: ${result.alreadyInvoiced}, pominięto: ${result.skipped})`;
+    return `Wygenerowano ${result.generated} faktur za zajęcia (już było: ${result.alreadyInvoiced})`;
   }
   if (result.alreadyInvoiced > 0) {
-    return `Brak nowych faktur — ${result.alreadyInvoiced} umów ratalnych ma już fakturę za ten miesiąc`;
+    return `Brak nowych faktur — ${result.alreadyInvoiced} rozliczeń ma już fakturę`;
   }
   if (result.errors.length > 0) {
     return `Nie wygenerowano faktur (${result.errors.length} błędów)`;
   }
-  return "Brak umów ratalnych do zafakturowania w tym miesiącu";
+  if (result.eligible === 0) {
+    return "Brak zapisanych rozliczeń do zafakturowania w tym miesiącu";
+  }
+  return "Brak faktur do wygenerowania";
 }
 
-/** Ręczne generowanie faktur ratalnych (MONTHLY) dla szkoły — do testów / poza dniem crona. */
+/** Zbiorcze generowanie faktur za pojedyncze zajęcia dla miesiąca. */
 export async function POST(request: NextRequest) {
   const ctx = await requireAdminSchoolContext(request);
   if (!ctx.ok) return ctx.response;
@@ -40,14 +43,17 @@ export async function POST(request: NextRequest) {
   try {
     const body = (await request.json().catch(() => ({}))) as { periodMonth?: string };
     const periodMonth = parsePeriodMonth(body.periodMonth) ?? firstDayOfMonthUtcDate();
-    const result = await generateMonthlyInvoicesForSchool(ctx.schoolId, periodMonth);
+    const result = await generateLessonBillingInvoicesForSchool(ctx.schoolId, periodMonth);
 
     return NextResponse.json({
-      message: buildMonthlyInvoiceMessage(result),
+      message: buildMessage(result),
       ...result,
     });
   } catch (error) {
-    console.error("POST /api/admin/invoices/generate-monthly:", error);
-    return NextResponse.json({ message: "Błąd generowania faktur ratalnych" }, { status: 500 });
+    console.error("POST /api/admin/lesson-billing/generate-invoices:", error);
+    return NextResponse.json(
+      { message: "Błąd generowania faktur za zajęcia" },
+      { status: 500 }
+    );
   }
 }

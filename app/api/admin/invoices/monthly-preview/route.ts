@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { requireAdminSchoolContext } from "@/lib/admin-school-context";
 import { previewMonthlyInvoicesForSchool } from "@/lib/invoicing";
+import { firstDayOfMonthUtcDate } from "@/lib/school-timezone";
 
 function parsePeriodMonth(value: string | null): Date | null {
   const raw = String(value ?? "").trim();
@@ -17,7 +18,8 @@ export async function GET(request: NextRequest) {
   if (!ctx.ok) return ctx.response;
 
   const periodMonth =
-    parsePeriodMonth(request.nextUrl.searchParams.get("periodMonth")) ?? new Date();
+    parsePeriodMonth(request.nextUrl.searchParams.get("periodMonth")) ??
+    firstDayOfMonthUtcDate();
 
   try {
     const result = await previewMonthlyInvoicesForSchool(ctx.schoolId, periodMonth);

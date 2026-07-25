@@ -8,6 +8,7 @@ import {
   INVOICE_DESC_YEARLY_PREFIX,
 } from "@/lib/invoicing";
 import { invoicesSupportCorrectiveDocuments } from "@/lib/invoice-schema";
+import { periodMonthStartYmd } from "@/lib/school-timezone";
 
 function parsePeriodMonth(value: string | null): string | null {
   const raw = String(value ?? "").trim();
@@ -22,10 +23,7 @@ export async function GET(request: NextRequest) {
 
   const periodMonthStr =
     parsePeriodMonth(request.nextUrl.searchParams.get("periodMonth")) ??
-    (() => {
-      const now = new Date();
-      return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-01`;
-    })();
+    periodMonthStartYmd();
 
   try {
     const hasCorrective = await invoicesSupportCorrectiveDocuments();

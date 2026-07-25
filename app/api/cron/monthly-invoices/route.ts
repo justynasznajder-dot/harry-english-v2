@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateAllMonthlyInvoices } from "@/lib/invoicing";
+import { firstDayOfMonthUtcDate } from "@/lib/school-timezone";
 
 export const maxDuration = 120;
 
@@ -17,7 +18,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const result = await generateAllMonthlyInvoices(new Date());
+    const result = await generateAllMonthlyInvoices(firstDayOfMonthUtcDate());
     return NextResponse.json({
       message:
         result.schoolsProcessed === 0

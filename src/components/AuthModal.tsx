@@ -6,6 +6,7 @@ import {
   findDuplicateChildIndices,
 } from "@/lib/enrollment-duplicate";
 import { normalizePolishPhone } from "@/lib/phone";
+import { todayYmdSchool } from "@/lib/school-timezone";
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -690,7 +691,7 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
                         type="date"
                         value={student.birthDate}
                         onChange={(e) => updateStudent(index, "birthDate", e.target.value)}
-                        max={new Date().toISOString().slice(0, 10)}
+                        max={todayYmdSchool()}
                         min="2000-01-01"
                         className={`w-full rounded-lg border ${errors[`student_${index}_birthDate`] ? 'border-red-300' : 'border-gray-300'} px-4 py-2.5 text-gray-900 focus:border-[#175244] focus:ring-2 focus:ring-[#175244]/20 outline-none transition-all`}
                         required

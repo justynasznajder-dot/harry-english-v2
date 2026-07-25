@@ -1,10 +1,11 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { queryDb } from "@/lib/db";
+import { queryDb, runPgTransaction } from "@/lib/db";
 import {
   requireAdminSchoolContext,
   resolveInsertSchoolId,
 } from "@/lib/admin-school-context";
+import { attachOpenMembershipsToYear } from "@/lib/school-year-history";
 
 export async function GET(request: NextRequest) {
   const ctx = await requireAdminSchoolContext(request);
@@ -109,21 +110,35 @@ export async function POST(request: NextRequest) {
 
     const createActive = !activeRow;
     const id = randomUUID();
-    const ins = await queryDb<{
-      id: string;
-      school_id: string;
-      name: string;
-      date_from: string;
-      date_to: string;
-      active: boolean;
-      created_at: Date;
-    }>(
-      `INSERT INTO school_years (id, school_id, name, date_from, date_to, active, created_at)
-       VALUES ($1, $2, $3, $4::date, $5::date, $6, NOW())
-       RETURNING id, school_id, name, date_from::text, date_to::text, active, created_at`,
-      [id, insertSchoolId, name.trim(), date_from, date_to, createActive]
-    );
-    const row = ins.rows[0];
+    const row = await runPgTransaction(async (c) => {
+      const ins = await c.query<{
+        id: string;
+        school_id: string;
+        name: string;
+        date_from: string;
+        date_to: string;
+        active: boolean;
+        created_at: Date;
+      }>(
+        `INSERT INTO school_years (id, school_id, name, date_from, date_to, active, created_at)
+         VALUES ($1, $2, $3, $4::date, $5::date, $6, NOW())
+         RETURNING id, school_id, name, date_from::text, date_to::text, active, created_at`,
+        [id, insertSchoolId, name.trim(), date_from, date_to, createActive]
+      );
+      const created = ins.rows[0];
+      if (created && createActive) {
+        // Dzieci, które zostały w grupach po zamknięciu poprzedniego roku bez „kolejnego”,
+        // przypisz do nowego aktywnego roku.
+        await attachOpenMembershipsToYear(
+          c,
+          insertSchoolId,
+          created.id,
+          String(date_from).slice(0, 10)
+        );
+      }
+      return created;
+    });
+
     return NextResponse.json({
       year: row
         ? {

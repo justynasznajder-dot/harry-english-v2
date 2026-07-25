@@ -117,11 +117,122 @@ export async function computeSchoolYearTeacherStats(
   return upserted;
 }
 
+type MembershipCarryRow = {
+  id: string;
+  group_id: string;
+  child_id: string;
+  lesson_unit_price: string | null;
+  monthly_unit_price: string | null;
+  yearly_unit_price: string | null;
+};
+
+/** Tworzy/otwiera członkostwa na nextYearId na podstawie zamkniętych wierszy (ten sam group_id). */
+async function carryMembershipRowsToYear(
+  client: DbLike,
+  schoolId: string,
+  nextYearId: string,
+  memberships: MembershipCarryRow[]
+): Promise<number> {
+  let membershipsCarried = 0;
+  for (const m of memberships) {
+    const already = await client.query<{ id: string }>(
+      `SELECT id FROM group_students
+       WHERE child_id = $1
+         AND school_year_id = $2
+         AND left_at IS NULL
+       LIMIT 1`,
+      [m.child_id, nextYearId]
+    );
+    if (already.rows[0]) continue;
+
+    const prior = await client.query<{ id: string; left_at: string | null }>(
+      `SELECT id, left_at::text FROM group_students
+       WHERE group_id = $1 AND child_id = $2 AND school_year_id IS NOT DISTINCT FROM $3
+       LIMIT 1`,
+      [m.group_id, m.child_id, nextYearId]
+    );
+    if (prior.rows[0]) {
+      if (prior.rows[0].left_at == null) continue;
+      await client.query(
+        `UPDATE group_students
+         SET left_at = NULL,
+             enrolled_at = CURRENT_DATE,
+             school_id = $2,
+             lesson_unit_price = $3,
+             monthly_unit_price = $4,
+             yearly_unit_price = $5
+         WHERE id = $1`,
+        [
+          prior.rows[0].id,
+          schoolId,
+          m.lesson_unit_price,
+          m.monthly_unit_price,
+          m.yearly_unit_price,
+        ]
+      );
+    } else {
+      await client.query(
+        `INSERT INTO group_students (
+           id, school_id, group_id, child_id, enrolled_at, school_year_id,
+           lesson_unit_price, monthly_unit_price, yearly_unit_price
+         ) VALUES ($1, $2, $3, $4, CURRENT_DATE, $5, $6, $7, $8)`,
+        [
+          randomUUID(),
+          schoolId,
+          m.group_id,
+          m.child_id,
+          nextYearId,
+          m.lesson_unit_price,
+          m.monthly_unit_price,
+          m.yearly_unit_price,
+        ]
+      );
+    }
+    membershipsCarried += 1;
+  }
+  return membershipsCarried;
+}
+
+/**
+ * Przenosi wszystkie otwarte członkostwa szkoły na nowy rok (zamyka stare left_at).
+ * Używane gdy tworzony jest aktywny rok po luce bez aktywnego roku.
+ */
+export async function attachOpenMembershipsToYear(
+  client: DbLike,
+  schoolId: string,
+  nextYearId: string,
+  leftAtDate: string
+): Promise<{ membershipsClosed: number; membershipsCarried: number }> {
+  const memberships = await client.query<MembershipCarryRow>(
+    `UPDATE group_students gs
+     SET left_at = $2::date
+     FROM groups g
+     WHERE gs.group_id = g.id
+       AND g.school_id = $1
+       AND gs.left_at IS NULL
+       AND gs.school_year_id IS DISTINCT FROM $3
+     RETURNING gs.id, gs.group_id, gs.child_id,
+               gs.lesson_unit_price::text, gs.monthly_unit_price::text, gs.yearly_unit_price::text`,
+    [schoolId, leftAtDate, nextYearId]
+  );
+  const membershipsCarried = await carryMembershipRowsToYear(
+    client,
+    schoolId,
+    nextYearId,
+    memberships.rows
+  );
+  return {
+    membershipsClosed: memberships.rowCount ?? 0,
+    membershipsCarried,
+  };
+}
+
 /**
  * Kroki zamknięcia roku szkolnego (bez dezaktywacji school_years).
- * Grupy szkoły pozostają aktywne. Członkostwa zamykanego roku dostają left_at;
- * jeśli podano nextYearId — tworzone są otwarte członkostwa na ten sam group_id
- * (pomijane, gdy dziecko ma już zapis na kolejny rok, np. z odnowienia).
+ * Grupy szkoły pozostają aktywne.
+ * Jeśli jest nextYearId — członkostwa zamykanego roku dostają left_at i są przenoszone
+ * na ten sam group_id w kolejnym roku (pomijane, gdy dziecko ma już zapis, np. z odnowienia).
+ * Bez kolejnego roku — dzieci zostają w grupach (left_at bez zmian).
  */
 export async function runSchoolYearCloseSteps(
   client: DbLike,
@@ -130,25 +241,30 @@ export async function runSchoolYearCloseSteps(
   dateTo: string,
   nextYearId?: string | null
 ): Promise<SchoolYearCloseCounts> {
-  const memberships = await client.query<{
-    id: string;
-    group_id: string;
-    child_id: string;
-    lesson_unit_price: string | null;
-    monthly_unit_price: string | null;
-    yearly_unit_price: string | null;
-  }>(
-    `UPDATE group_students gs
-     SET left_at = $3::date
-     FROM groups g
-     WHERE gs.group_id = g.id
-       AND g.school_id = $1
-       AND gs.school_year_id = $2
-       AND gs.left_at IS NULL
-     RETURNING gs.id, gs.group_id, gs.child_id,
-               gs.lesson_unit_price::text, gs.monthly_unit_price::text, gs.yearly_unit_price::text`,
-    [schoolId, yearId, dateTo]
-  );
+  let membershipsClosed = 0;
+  let membershipsCarried = 0;
+
+  if (nextYearId) {
+    const memberships = await client.query<MembershipCarryRow>(
+      `UPDATE group_students gs
+       SET left_at = $3::date
+       FROM groups g
+       WHERE gs.group_id = g.id
+         AND g.school_id = $1
+         AND gs.school_year_id = $2
+         AND gs.left_at IS NULL
+       RETURNING gs.id, gs.group_id, gs.child_id,
+                 gs.lesson_unit_price::text, gs.monthly_unit_price::text, gs.yearly_unit_price::text`,
+      [schoolId, yearId, dateTo]
+    );
+    membershipsClosed = memberships.rowCount ?? 0;
+    membershipsCarried = await carryMembershipRowsToYear(
+      client,
+      schoolId,
+      nextYearId,
+      memberships.rows
+    );
+  }
 
   const completedLessons = await client.query(
     `UPDATE lessons l
@@ -188,73 +304,13 @@ export async function runSchoolYearCloseSteps(
     [schoolId, yearId]
   );
 
-  let membershipsCarried = 0;
-  if (nextYearId) {
-    for (const m of memberships.rows) {
-      const already = await client.query<{ id: string }>(
-        `SELECT id FROM group_students
-         WHERE child_id = $1
-           AND school_year_id = $2
-           AND left_at IS NULL
-         LIMIT 1`,
-        [m.child_id, nextYearId]
-      );
-      if (already.rows[0]) continue;
-
-      const prior = await client.query<{ id: string; left_at: string | null }>(
-        `SELECT id, left_at::text FROM group_students
-         WHERE group_id = $1 AND child_id = $2 AND school_year_id IS NOT DISTINCT FROM $3
-         LIMIT 1`,
-        [m.group_id, m.child_id, nextYearId]
-      );
-      if (prior.rows[0]) {
-        if (prior.rows[0].left_at == null) continue;
-        await client.query(
-          `UPDATE group_students
-           SET left_at = NULL,
-               enrolled_at = CURRENT_DATE,
-               school_id = $2,
-               lesson_unit_price = $3,
-               monthly_unit_price = $4,
-               yearly_unit_price = $5
-           WHERE id = $1`,
-          [
-            prior.rows[0].id,
-            schoolId,
-            m.lesson_unit_price,
-            m.monthly_unit_price,
-            m.yearly_unit_price,
-          ]
-        );
-      } else {
-        await client.query(
-          `INSERT INTO group_students (
-             id, school_id, group_id, child_id, enrolled_at, school_year_id,
-             lesson_unit_price, monthly_unit_price, yearly_unit_price
-           ) VALUES ($1, $2, $3, $4, CURRENT_DATE, $5, $6, $7, $8)`,
-          [
-            randomUUID(),
-            schoolId,
-            m.group_id,
-            m.child_id,
-            nextYearId,
-            m.lesson_unit_price,
-            m.monthly_unit_price,
-            m.yearly_unit_price,
-          ]
-        );
-      }
-      membershipsCarried += 1;
-    }
-  }
-
   await computeSchoolYearTeacherStats(client, schoolId, yearId);
 
   return {
     lessonsCancelled: lessons.rowCount ?? 0,
     lessonsCompleted: completedLessons.rowCount ?? 0,
     groupsClosed: 0,
-    membershipsClosed: memberships.rowCount ?? 0,
+    membershipsClosed,
     membershipsCarried,
     subscriptionsExpired: subs.rowCount ?? 0,
     scheduleTemplatesDeactivated: 0,

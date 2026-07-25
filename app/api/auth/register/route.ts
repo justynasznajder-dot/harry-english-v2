@@ -17,6 +17,7 @@ import {
   sendPublicEnrollmentBackupEmail,
 } from "@/lib/email";
 import { normalizePolishPhone } from "@/lib/phone";
+import { pgDateToYmd } from "@/lib/school-timezone";
 
 /** Kopia mailowa zgłoszeń na kontakt@ dla wskazanych szkół (prod + dev). */
 const ENROLLMENT_BACKUP_EMAIL_SCHOOL_IDS = new Set([
@@ -71,7 +72,7 @@ function normalizeParentPhone(raw: unknown):
 function normalizeBirthDate(value: string | Date | undefined): string | null {
   if (!value) return null;
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return value.toISOString().split("T")[0];
+    return pgDateToYmd(value);
   }
 
   const raw = String(value).trim();
@@ -91,12 +92,10 @@ function normalizeBirthDate(value: string | Date | undefined): string | null {
     return null;
   }
 
-  const parsed = new Date(raw);
-  if (!Number.isNaN(parsed.getTime())) {
-    return parsed.toISOString().split("T")[0];
-  }
+  const isoMatch = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (isoMatch) return isoMatch[1];
 
-  return null;
+  return pgDateToYmd(raw);
 }
 
 /** Publiczne zgłoszenie dziecka — zapis wyłącznie do `enrollment_requests` (bez konta rodzica). */

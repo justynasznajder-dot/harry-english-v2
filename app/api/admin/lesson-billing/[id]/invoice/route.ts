@@ -33,7 +33,9 @@ export async function POST(
     }
 
     return NextResponse.json({
-      message: result.created ? "Faktura wygenerowana i wysłana mailem" : "Faktura została już wygenerowana",
+      message: result.created
+        ? "Faktura wygenerowana — rodzic dostał informację o pobraniu w panelu"
+        : "Faktura została już wygenerowana",
       paymentId: result.paymentId,
       billingId: result.billingId ?? billingId,
       created: result.created,

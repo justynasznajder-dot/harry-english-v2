@@ -1285,27 +1285,29 @@ export async function sendInvoiceNotificationEmail(params: {
     address: process.env.EMAIL_USER || "kontakt@harry-english.pl",
   };
   const schoolEmail = params.schoolEmail?.trim() || "kontakt@harry-english.pl";
+  const portalUrl = `${getAppBaseUrl()}/portal/login`;
   const periodPart = params.periodLabel?.trim()
     ? `<p><strong>Okres:</strong> ${escapeHtmlForEmail(params.periodLabel.trim())}</p>`
     : "";
   const contentHtml = `
-    <p>Wygenerowano fakturę za zajęcia w Harry English.</p>
+    <p>Wystawiliśmy nową fakturę. <strong>Faktury nie wysyłamy mailem</strong> — dokument PDF jest do pobrania w panelu rodzica (zakładka <strong>Płatności</strong>).</p>
     <p><strong>Opis:</strong> ${escapeHtmlForEmail(params.description)}</p>
     ${periodPart}
     <p><strong>Kwota:</strong> ${escapeHtmlForEmail(params.amountLabel)}</p>
     <p><strong>Termin płatności:</strong> ${escapeHtmlForEmail(params.dueDateLabel)}</p>
+    ${emailCtaButton(portalUrl, "Przejdź do panelu rodzica")}
     <p>W razie pytań prosimy o kontakt: <a href="mailto:${escapeHtmlForEmail(schoolEmail)}" style="color:${p.link};">${escapeHtmlForEmail(schoolEmail)}</a>.</p>
   `;
   const textPeriod = params.periodLabel?.trim() ? ` Okres: ${params.periodLabel.trim()}.` : "";
-  const textBody = `Wygenerowano fakturę: ${params.description}.${textPeriod} Kwota: ${params.amountLabel}. Termin płatności: ${params.dueDateLabel}. Kontakt: ${schoolEmail}.`;
+  const textBody = `Wystawiono fakturę (do pobrania w panelu rodzica / Płatności): ${params.description}.${textPeriod} Kwota: ${params.amountLabel}. Termin płatności: ${params.dueDateLabel}. Panel: ${portalUrl}. Kontakt: ${schoolEmail}.`;
 
   await sendHarryMail({
     from,
     to: params.parentEmail,
-    subject: "Faktura — Harry English",
+    subject: "Nowa faktura w panelu rodzica — Harry English",
     html: buildEmailShell({
       title: `Dzień dobry ${escapeHtmlForEmail(params.parentFirstName)},`,
-      intro: "Informujemy o nowej fakturze do opłacenia.",
+      intro: "Faktura jest gotowa do pobrania w panelu rodzica.",
       contentHtml,
     }),
     text: `Dzień dobry ${params.parentFirstName}, ${textBody}`,

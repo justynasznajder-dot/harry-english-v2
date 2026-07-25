@@ -162,19 +162,23 @@ export async function submitEnrollmentProposal(
             g.name,
             g.price_monthly::text,
             g.price_yearly::text,
-            COALESCE(MAX(l.name), 'Do ustalenia') AS location_name,
+            COALESCE(MAX(gl.name), MAX(sl.name), 'Do ustalenia') AS location_name,
             COALESCE(
-              STRING_AGG(
-                DISTINCT CONCAT(${POLISH_DAY_FROM_ST_SQL}, ' ', TO_CHAR(st.start_time, 'HH24:MI')),
-                ', '
+              NULLIF(
+                STRING_AGG(
+                  DISTINCT CONCAT(${POLISH_DAY_FROM_ST_SQL}, ' ', TO_CHAR(st.start_time, 'HH24:MI')),
+                  ', '
+                ),
+                ''
               ),
               'Do ustalenia'
             ) AS schedule
      FROM groups g
+     LEFT JOIN locations gl ON gl.id = g.location_id
      LEFT JOIN schedule_templates st ON st.group_id = g.id AND st.active = TRUE
-     LEFT JOIN locations l ON l.id = st.location_id
+     LEFT JOIN locations sl ON sl.id = st.location_id
      WHERE g.id = $1 AND g.school_id = $2
-     GROUP BY g.id, g.name, g.price_monthly, g.price_yearly`,
+     GROUP BY g.id, g.name, g.price_monthly, g.price_yearly, gl.name`,
     [groupId, parentSchoolId]
   );
   const group = groupRes.rows[0];
