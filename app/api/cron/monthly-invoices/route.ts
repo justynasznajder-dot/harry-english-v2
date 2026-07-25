@@ -23,7 +23,6 @@ export async function GET(request: NextRequest) {
         result.schoolsProcessed === 0
           ? "Brak szkół z automatycznym generowaniem faktur na dziś"
           : `Przetworzono ${result.schoolsProcessed} szkół, wygenerowano ${result.generated} faktur`,
-      skipped: false,
       ...result,
     });
   } catch (error) {
