@@ -90,6 +90,7 @@ model children {
   group_students        group_students[]
   lesson_billing_periods lesson_billing_periods[]
   invoices              invoices[]
+  invoice_items         invoice_items[]
   payments              payments[]
   progress_notes        progress_notes[]
   renewals              renewals[]
@@ -178,6 +179,7 @@ model contracts {
   school_years          school_years?       @relation(fields: [school_year_id], references: [id], onUpdate: NoAction)
   contract_templates    contract_templates  @relation(fields: [template_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   invoices              invoices[]
+  invoice_items         invoice_items[]
   payments              payments[]
 
   @@unique([school_id, contract_number], map: "contracts_school_contract_number_key")
@@ -264,7 +266,6 @@ model groups {
   max_students           Int                   @default(12)
   active                 Boolean               @default(true)
   created_at             DateTime              @default(now()) @db.Timestamp(6)
-  school_year_id         String?
   location_id            String?
   price_monthly          Decimal?              @db.Decimal(10, 2)
   price_yearly           Decimal?              @db.Decimal(10, 2)
@@ -277,7 +278,6 @@ model groups {
   group_students         group_students[]
   locations              locations?            @relation(fields: [location_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   schools                schools               @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  school_years           school_years?         @relation(fields: [school_year_id], references: [id], onUpdate: NoAction)
   users                  users                 @relation(fields: [teacher_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   lessons                lessons[]
   renewal_proposals      renewal_proposals[]
@@ -286,7 +286,6 @@ model groups {
   subscriptions          subscriptions[]
 
   @@index([school_id], map: "idx_groups_school_id")
-  @@index([school_year_id], map: "idx_groups_school_year_id")
   @@index([teacher_id], map: "idx_groups_teacher_id")
 }
 
@@ -658,7 +657,6 @@ model school_years {
   closed_by               String?
   contracts               contracts[]
   group_students          group_students[]
-  groups                  groups[]
   lessons                 lessons[]
   lesson_billing_periods  lesson_billing_periods[]
   invoices                invoices[]
@@ -694,6 +692,10 @@ model schools {
   invoice_vat_exemption        String?
   invoice_default_item_name    String?                        @db.VarChar(255)
   invoice_generation_day       Int                            @default(10)
+  /// true = cron generuje faktury ratalne w invoice_generation_day; false = tylko ręcznie z panelu
+  invoice_auto_generation      Boolean                        @default(false)
+  /// Maksymalny łączny rabat % (KDR lub rodzeństwo) — system nie wyjdzie powyżej tej wartości.
+  max_discount_percent         Decimal                        @default(10) @db.Decimal(5, 2)
   announcements                announcements[]
   children                     children[]
   contract_children            contract_children[]
@@ -811,11 +813,35 @@ model invoices {
   school_years        school_years? @relation(fields: [school_year_id], references: [id], onUpdate: NoAction)
   corrects_invoice    invoices?     @relation("InvoiceCorrections", fields: [corrects_invoice_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   corrective_invoices invoices[]    @relation("InvoiceCorrections")
+  invoice_items       invoice_items[]
 
   @@unique([school_id, invoice_number], map: "invoices_school_invoice_number_key")
   @@index([parent_id], map: "idx_invoices_parent_id")
   @@index([school_id, issue_date], map: "idx_invoices_school_issue")
   @@index([corrects_invoice_id], map: "idx_invoices_corrects_invoice_id")
+}
+
+/// Pozycje faktury (1+ wierszy na fakturę zbiorczą / pojedynczą).
+model invoice_items {
+  id           String     @id @default(dbgenerated("(gen_random_uuid())::text"))
+  invoice_id   String
+  lp           Int
+  name         String     @db.VarChar(255)
+  qty          String     @default("1 szt") @db.VarChar(40)
+  discount     String     @default("0 %") @db.VarChar(40)
+  unit_price   Decimal    @db.Decimal
+  value        Decimal    @db.Decimal
+  child_id     String?
+  contract_id  String?
+  created_at   DateTime   @default(now()) @db.Timestamp(6)
+  invoices     invoices   @relation(fields: [invoice_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  children     children?  @relation(fields: [child_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  contracts    contracts? @relation(fields: [contract_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([invoice_id, lp], map: "invoice_items_invoice_lp_key")
+  @@index([invoice_id], map: "idx_invoice_items_invoice_id")
+  @@index([contract_id], map: "idx_invoice_items_contract_id")
+  @@index([child_id], map: "idx_invoice_items_child_id")
 }
 
 model subscriptions {

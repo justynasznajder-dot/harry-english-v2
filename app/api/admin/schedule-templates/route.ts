@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { queryDb } from "@/lib/db";
+import { getActiveSchoolYear, queryDb } from "@/lib/db";
 import {
   assertGroupInSchool,
   assertLocationInSchool,
@@ -65,6 +65,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const activeYear = await getActiveSchoolYear(ctx.schoolId);
     await queryDb(
       `INSERT INTO schedule_templates (school_id, id, group_id, location_id, day_of_week, start_time, duration_min, school_year_id)
        VALUES ($1, $2, $3, $4, $5, $6::time, $7, $8)`,
@@ -76,7 +77,7 @@ export async function POST(request: NextRequest) {
         dayOfWeek,
         startTime,
         durationMin,
-        group.schoolYearId,
+        activeYear?.id ?? null,
       ]
     );
 

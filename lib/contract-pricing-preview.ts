@@ -10,17 +10,26 @@ export type ContractPricingContext = {
   billingExempt: boolean;
   discountLargeFamily: boolean;
   discountSettings: DiscountPercents;
+  /** Gdy true — ceny indywidualne; żadna zniżka procentowa nie działa. */
+  hasIndividualPricing?: boolean;
 };
 
+/**
+ * Reguły zniżek:
+ * - tryb bez opłat → brak zniżek
+ * - cena indywidualna → brak zniżek
+ * - KDR → tylko KDR (wyłącza rodzeństwo), max 10%
+ * - inaczej → ewentualnie rodzeństwo
+ */
 export function resolveContractDiscountKeys(
   siblingEligible: boolean,
   pricing: ContractPricingContext
 ): DiscountKey[] {
   if (pricing.billingExempt) return [];
-  const keys: DiscountKey[] = [];
-  if (siblingEligible) keys.push(DISCOUNT_KEYS.SIBLING);
-  if (pricing.discountLargeFamily) keys.push(DISCOUNT_KEYS.LARGE_FAMILY_CARD);
-  return keys;
+  if (pricing.hasIndividualPricing) return [];
+  if (pricing.discountLargeFamily) return [DISCOUNT_KEYS.LARGE_FAMILY_CARD];
+  if (siblingEligible) return [DISCOUNT_KEYS.SIBLING];
+  return [];
 }
 
 /**

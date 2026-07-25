@@ -4,13 +4,16 @@ import {
   resolveSchoolIdForTenant,
 } from "@/lib/admin-school-context";
 import {
+  getSchoolInvoiceAutoGeneration,
   getSchoolInvoiceGenerationDay,
+  setSchoolInvoiceAutoGeneration,
   setSchoolInvoiceGenerationDay,
 } from "@/lib/invoicing";
 import {
   ALL_DISCOUNT_KEYS,
   DISCOUNT_LABELS,
   addComplimentaryParent,
+  clampMaxDiscountPercent,
   getSchoolDiscountSettings,
   listComplimentaryCandidates,
   listComplimentaryParents,
@@ -30,13 +33,19 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const [settings, complimentaryParents, complimentaryCandidates, invoiceGenerationDay] =
-      await Promise.all([
-        getSchoolDiscountSettings(schoolId),
-        listComplimentaryParents(schoolId),
-        listComplimentaryCandidates(schoolId),
-        getSchoolInvoiceGenerationDay(schoolId),
-      ]);
+    const [
+      settings,
+      complimentaryParents,
+      complimentaryCandidates,
+      invoiceGenerationDay,
+      invoiceAutoGeneration,
+    ] = await Promise.all([
+      getSchoolDiscountSettings(schoolId),
+      listComplimentaryParents(schoolId),
+      listComplimentaryCandidates(schoolId),
+      getSchoolInvoiceGenerationDay(schoolId),
+      getSchoolInvoiceAutoGeneration(schoolId),
+    ]);
 
     return NextResponse.json({
       discounts: ALL_DISCOUNT_KEYS.map((key) => ({
@@ -44,7 +53,9 @@ export async function GET(request: NextRequest) {
         label: DISCOUNT_LABELS[key],
         percent: settings[key],
       })),
+      maxDiscountPercent: settings.maxPercent,
       invoiceGenerationDay,
+      invoiceAutoGeneration,
       complimentaryParents,
       complimentaryCandidates,
       availableParents: complimentaryCandidates
@@ -79,19 +90,34 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    const patch: Partial<Record<DiscountKey, number>> = {};
+    const patch: Partial<{ LARGE_FAMILY_CARD: number; SIBLING: number; maxPercent: number }> = {};
+
+    if (body?.maxDiscountPercent != null || body?.max_discount_percent != null) {
+      const raw = Number(body?.maxDiscountPercent ?? body?.max_discount_percent);
+      if (!Number.isFinite(raw) || raw < 0 || raw > 100) {
+        return NextResponse.json(
+          { message: "Maksymalny poziom zniżek musi być liczbą od 0 do 100" },
+          { status: 400 }
+        );
+      }
+      patch.maxPercent = clampMaxDiscountPercent(raw);
+    }
+
+    const current = await getSchoolDiscountSettings(schoolId);
+    const maxForPercents = patch.maxPercent ?? current.maxPercent;
+
     const discountsInput = body?.discounts;
     if (Array.isArray(discountsInput)) {
       for (const item of discountsInput) {
         const key = String(item?.key ?? "").trim().toUpperCase() as DiscountKey;
         if ((ALL_DISCOUNT_KEYS as readonly string[]).includes(key)) {
-          patch[key] = parseDiscountPercent(item?.percent);
+          patch[key] = parseDiscountPercent(item?.percent, maxForPercents);
         }
       }
     } else if (discountsInput && typeof discountsInput === "object") {
       for (const key of ALL_DISCOUNT_KEYS) {
         if (discountsInput[key] != null) {
-          patch[key] = parseDiscountPercent(discountsInput[key]);
+          patch[key] = parseDiscountPercent(discountsInput[key], maxForPercents);
         }
       }
     }
@@ -113,6 +139,18 @@ export async function PUT(request: NextRequest) {
       invoiceGenerationDay = await setSchoolInvoiceGenerationDay(schoolId, Math.round(raw));
     }
 
+    let invoiceAutoGeneration = await getSchoolInvoiceAutoGeneration(schoolId);
+    if (
+      body?.invoiceAutoGeneration != null ||
+      body?.invoice_auto_generation != null
+    ) {
+      const raw = body?.invoiceAutoGeneration ?? body?.invoice_auto_generation;
+      invoiceAutoGeneration = await setSchoolInvoiceAutoGeneration(
+        schoolId,
+        raw === true || raw === "true" || raw === 1 || raw === "1"
+      );
+    }
+
     return NextResponse.json({
       message: "Ustawienia zostały zapisane",
       discounts: ALL_DISCOUNT_KEYS.map((key) => ({
@@ -120,7 +158,9 @@ export async function PUT(request: NextRequest) {
         label: DISCOUNT_LABELS[key],
         percent: settings[key],
       })),
+      maxDiscountPercent: settings.maxPercent,
       invoiceGenerationDay,
+      invoiceAutoGeneration,
     });
   } catch (error) {
     console.error("PUT /api/admin/discounts:", error);
@@ -163,10 +203,12 @@ export async function POST(request: NextRequest) {
     }
 
     const complimentaryParents = await listComplimentaryParents(schoolId);
+    const complimentaryCandidates = await listComplimentaryCandidates(schoolId);
 
     return NextResponse.json({
       message: "Rodzic dodany do trybu bez opłat",
       complimentaryParents,
+      complimentaryCandidates,
     });
   } catch (error) {
     console.error("POST /api/admin/discounts:", error);
@@ -203,10 +245,12 @@ export async function DELETE(request: NextRequest) {
 
     await removeComplimentaryParent(schoolId, { id, parentId, parentEmail });
     const complimentaryParents = await listComplimentaryParents(schoolId);
+    const complimentaryCandidates = await listComplimentaryCandidates(schoolId);
 
     return NextResponse.json({
       message: "Rodzic usunięty z trybu bez opłat",
       complimentaryParents,
+      complimentaryCandidates,
     });
   } catch (error) {
     console.error("DELETE /api/admin/discounts:", error);

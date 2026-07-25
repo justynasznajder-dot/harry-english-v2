@@ -64,6 +64,17 @@ async function backfillLessonBillingSchoolYearId(): Promise<number> {
 }
 
 async function backfillGroupStudentsSchoolYearId(): Promise<number> {
+  // Po migracji groups_drop_school_year_id kolumna g.school_year_id znika — pomiń ten krok.
+  const col = await pool.query<{ exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_name = 'groups' AND column_name = 'school_year_id'
+     ) AS exists`
+  );
+  if (!col.rows[0]?.exists) {
+    console.log("groups.school_year_id already dropped — skip membership backfill from groups.");
+    return 0;
+  }
   const res = await pool.query(
     `UPDATE group_students gs
      SET school_year_id = g.school_year_id

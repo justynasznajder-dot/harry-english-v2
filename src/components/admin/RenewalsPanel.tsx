@@ -19,6 +19,8 @@ type RenewalRow = {
   proposedGroupName: string | null;
   proposedLocationName: string | null;
   proposedSchedule: string | null;
+  currentGroupId: string | null;
+  currentGroupName: string | null;
   childFirstName: string;
   childLastName: string;
   parentFirstName: string;
@@ -225,7 +227,7 @@ export default function RenewalsPanel({
             <strong>
               {plannedNextYear.name} ({plannedNextYear.date_from} — {plannedNextYear.date_to})
             </strong>
-            . Grupy w propozycji pochodzą z tego roku.
+            . W propozycji domyślnie wybrana jest aktualna grupa dziecka — możesz ją zmienić.
           </div>
         ) : (
           <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
@@ -357,7 +359,11 @@ export default function RenewalsPanel({
                       className="mt-3 rounded-xl bg-emerald-600 px-3 py-2 text-sm text-white"
                       onClick={() => {
                         setProposeId(row.id);
-                        setProposeGroupId('');
+                        const suggested =
+                          row.currentGroupId && groups.some((g) => g.id === row.currentGroupId)
+                            ? row.currentGroupId
+                            : '';
+                        setProposeGroupId(suggested);
                       }}
                     >
                       Wyślij propozycję grupy
@@ -402,6 +408,16 @@ export default function RenewalsPanel({
               Propozycja dla {proposeRow.childFirstName} {proposeRow.childLastName}
             </h3>
             <p className="mt-1 text-sm text-zinc-600">Sezon {proposeRow.season}</p>
+            {proposeRow.currentGroupName ? (
+              <p className="mt-2 text-sm text-zinc-600">
+                Aktualna grupa: <strong>{proposeRow.currentGroupName}</strong>
+                {proposeGroupId && proposeGroupId === proposeRow.currentGroupId
+                  ? ' (sugerowana)'
+                  : ''}
+              </p>
+            ) : (
+              <p className="mt-2 text-sm text-amber-800">Brak aktywnej grupy w bieżącym roku.</p>
+            )}
             <select
               className="mt-4 w-full rounded-xl border border-emerald-200 px-3 py-2"
               value={proposeGroupId}
@@ -411,6 +427,7 @@ export default function RenewalsPanel({
               {groups.map((g) => (
                 <option key={g.id} value={g.id}>
                   {g.name} — {g.location_name} — {g.schedule}
+                  {proposeRow.currentGroupId === g.id ? ' (obecna)' : ''}
                 </option>
               ))}
             </select>

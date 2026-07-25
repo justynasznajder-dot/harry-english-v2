@@ -29,7 +29,6 @@ export async function GET(request: NextRequest) {
       teacher_name: string | null;
       location_name: string | null;
       location_id: string | null;
-      school_year_id: string | null;
       schedule: string | null;
       students_count: string;
       price_monthly: string | null;
@@ -43,7 +42,6 @@ export async function GET(request: NextRequest) {
          g.max_students,
          g.active,
          g.location_id,
-         g.school_year_id,
          g.teacher_id,
          g.price_monthly::text AS price_monthly,
          g.price_yearly::text AS price_yearly,
@@ -60,11 +58,20 @@ export async function GET(request: NextRequest) {
            ),
            '-'
          ) AS schedule,
-         COUNT(DISTINCT gs.id) FILTER (WHERE gs.left_at IS NULL)::text AS students_count
+         COUNT(DISTINCT gs.id) FILTER (
+           WHERE gs.left_at IS NULL
+             AND (
+               gs.school_year_id IS NULL
+               OR EXISTS (
+                 SELECT 1 FROM school_years sy
+                 WHERE sy.id = gs.school_year_id AND sy.active = TRUE
+               )
+             )
+         )::text AS students_count
        FROM groups g
        LEFT JOIN users t ON t.id = g.teacher_id
        LEFT JOIN locations gl ON gl.id = g.location_id
-       LEFT JOIN schedule_templates st ON st.group_id = g.id
+       LEFT JOIN schedule_templates st ON st.group_id = g.id AND st.active = TRUE
        LEFT JOIN locations l ON l.id = st.location_id
        LEFT JOIN group_students gs ON gs.group_id = g.id
        WHERE 1=1 ${schoolClause}
@@ -92,7 +99,6 @@ export async function POST(request: NextRequest) {
       teacherId,
       maxStudents = 12,
       active = true,
-      schoolYearId,
       locationId,
       school_id: bodySchoolId,
       schoolId: bodySchoolIdCamel,
@@ -106,7 +112,6 @@ export async function POST(request: NextRequest) {
       teacherId?: string | null;
       maxStudents?: number;
       active?: boolean;
-      schoolYearId?: string | null;
       locationId?: string | null;
       school_id?: string;
       schoolId?: string;
@@ -140,10 +145,10 @@ export async function POST(request: NextRequest) {
     const inserted = await queryDb<{ id: string }>(
       `INSERT INTO groups (
          id, school_id, teacher_id, name, level, max_students, active,
-         created_at, school_year_id, location_id, price_monthly, price_yearly,
+         created_at, location_id, price_monthly, price_yearly,
          price_per_lesson, teacher_pickup_consent
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, $9, $10, $11, $12, $13)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, $9, $10, $11, $12)
        RETURNING id`,
       [
         randomUUID(),
@@ -153,7 +158,6 @@ export async function POST(request: NextRequest) {
         level ?? null,
         maxStudents,
         active,
-        schoolYearId ?? null,
         locationId ?? null,
         priceMonthly != null && priceMonthly !== "" ? Number(priceMonthly) : null,
         priceYearly != null && priceYearly !== "" ? Number(priceYearly) : null,

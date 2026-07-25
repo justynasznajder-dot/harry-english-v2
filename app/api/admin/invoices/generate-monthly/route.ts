@@ -5,6 +5,14 @@ import { generateMonthlyInvoicesForSchool } from "@/lib/invoicing";
 
 export const maxDuration = 120;
 
+function parsePeriodMonth(value: unknown): Date | null {
+  const raw = String(value ?? "").trim();
+  if (!/^\d{4}-\d{2}$/.test(raw)) return null;
+  const [y, m] = raw.split("-").map(Number);
+  if (!y || !m || m < 1 || m > 12) return null;
+  return new Date(Date.UTC(y, m - 1, 1));
+}
+
 function buildMonthlyInvoiceMessage(result: {
   generated: number;
   skipped: number;
@@ -29,7 +37,9 @@ export async function POST(request: NextRequest) {
   if (!ctx.ok) return ctx.response;
 
   try {
-    const result = await generateMonthlyInvoicesForSchool(ctx.schoolId, new Date());
+    const body = (await request.json().catch(() => ({}))) as { periodMonth?: string };
+    const periodMonth = parsePeriodMonth(body.periodMonth) ?? new Date();
+    const result = await generateMonthlyInvoicesForSchool(ctx.schoolId, periodMonth);
 
     return NextResponse.json({
       message: buildMonthlyInvoiceMessage(result),

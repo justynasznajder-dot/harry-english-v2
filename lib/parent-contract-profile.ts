@@ -46,17 +46,24 @@ export function validateParentContractProfileInput(input: {
   companyName: string;
   nip: string;
 }): string | null {
-  if (!input.address.trim() || !input.city.trim() || !input.zipCode.trim()) {
-    return "Uzupełnij adres, miasto i kod pocztowy.";
-  }
   if (input.billingType === "private") {
+    if (!input.address.trim() || !input.city.trim() || !input.zipCode.trim()) {
+      return "Uzupełnij adres, miasto i kod pocztowy.";
+    }
     if (!input.pesel.trim()) return "Podaj numer PESEL.";
     if (!isExactDigits(input.pesel, 11)) return "PESEL musi składać się z dokładnie 11 cyfr.";
     return null;
   }
-  if (!input.companyName.trim() || !input.nip.trim()) {
-    return "Dla faktury na firmę podaj nazwę firmy i NIP.";
+
+  if (!input.companyName.trim()) {
+    return "Dla faktury na firmę podaj nazwę firmy.";
+  }
+  if (!input.nip.trim()) {
+    return "Dla faktury na firmę podaj NIP.";
   }
   if (!isExactDigits(input.nip, 10)) return "NIP musi składać się z dokładnie 10 cyfr.";
+  if (!input.address.trim() || !input.city.trim() || !input.zipCode.trim()) {
+    return "Dla faktury na firmę podaj pełny adres siedziby (ulica, miasto, kod pocztowy).";
+  }
   return null;
 }

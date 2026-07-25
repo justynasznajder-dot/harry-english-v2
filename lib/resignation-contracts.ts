@@ -3,11 +3,12 @@ import {
   buildContractAmountBreakdown,
   parseContractAmountBreakdown,
 } from "@/lib/contract-amount-breakdown";
+import { resolveContractDiscountKeys } from "@/lib/contract-pricing-preview";
 import { normalizePaymentType, type PaymentType } from "@/lib/lesson-pricing";
 import {
   DISCOUNT_KEYS,
   getSchoolDiscountSettings,
-  type DiscountKey,
+  hasIndividualPriceOverride,
 } from "@/lib/school-discounts";
 import { getParentLargeFamilyCard } from "@/lib/parent-profile-discount";
 import { formatPersonName } from "@/lib/format-person-name";
@@ -174,13 +175,20 @@ export async function recalculateSiblingPricingForParent(params: {
       lesson_unit_price: string | null;
       monthly_unit_price: string | null;
       yearly_unit_price: string | null;
+      enrollment_lesson_unit_price: string | null;
+      enrollment_monthly_unit_price: string | null;
+      enrollment_yearly_unit_price: string | null;
     }>(
       `SELECT cc.child_id, ch.first_name, ch.last_name,
               cc.lesson_unit_price::text AS lesson_unit_price,
               cc.monthly_unit_price::text AS monthly_unit_price,
-              cc.yearly_unit_price::text AS yearly_unit_price
+              cc.yearly_unit_price::text AS yearly_unit_price,
+              er.lesson_unit_price::text AS enrollment_lesson_unit_price,
+              er.monthly_unit_price::text AS enrollment_monthly_unit_price,
+              er.yearly_unit_price::text AS enrollment_yearly_unit_price
        FROM contract_children cc
        JOIN children ch ON ch.id = cc.child_id
+       LEFT JOIN enrollment_requests er ON er.id = cc.enrollment_request_id
        WHERE cc.contract_id = $1
        ORDER BY cc.sort_order ASC`,
       [contract.id]
@@ -190,13 +198,19 @@ export async function recalculateSiblingPricingForParent(params: {
 
     const paymentType =
       (normalizePaymentType(contract.payment_type) as PaymentType | null) ?? "MONTHLY";
-    const discountKeys: DiscountKey[] = [];
-    if (!contract.billing_exempt && siblingEligible) {
-      discountKeys.push(DISCOUNT_KEYS.SIBLING);
-    }
-    if (!contract.billing_exempt && (contract.discount_large_family || hasLargeFamily)) {
-      discountKeys.push(DISCOUNT_KEYS.LARGE_FAMILY_CARD);
-    }
+    const hasIndividualPricing = childrenRes.rows.some((row) =>
+      hasIndividualPriceOverride({
+        lesson_unit_price: row.enrollment_lesson_unit_price,
+        monthly_unit_price: row.enrollment_monthly_unit_price,
+        yearly_unit_price: row.enrollment_yearly_unit_price,
+      })
+    );
+    const discountKeys = resolveContractDiscountKeys(siblingEligible, {
+      billingExempt: contract.billing_exempt,
+      discountLargeFamily: contract.discount_large_family || hasLargeFamily,
+      discountSettings,
+      hasIndividualPricing,
+    });
 
     const breakdown = buildContractAmountBreakdown({
       paymentType,

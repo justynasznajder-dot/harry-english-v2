@@ -32,9 +32,11 @@ Aplikacja do zarządzania szkołą językową: zapisy, umowy, grupy, zajęcia, o
 
 ## Model roku szkolnego
 
-- Historia przez `school_year_id` (grupy, zajęcia, umowy, członkostwa)
+- Historia przez `school_year_id` (zajęcia, umowy, członkostwa) — **nie** na `groups`
+- Grupy należą do szkoły; żyją latami
 - `group_students`: unikalność `(group_id, child_id, school_year_id)` — nowy wiersz per rok
-- Zamknięcie: `DELETE .../school-years/[id]` + `{ "action": "close" }`
+- Zamknięcie: `DELETE .../school-years/[id]` + `{ "action": "close" }` — bez dezaktywacji grup; członkostwa przenoszone na kolejny rok na tym samym `group_id`
+- Odnowienia: lista aktywnych grup szkoły; domyślnie aktualna grupa dziecka
 - Statystyki: `school_year_teacher_stats`; log: `school_year_close_logs`
 
 ## Migracje — nigdy bez zgody użytkownika

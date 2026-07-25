@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTokenFromRequest } from "@/lib/auth";
 import { isLektor, queryDb } from "@/lib/db";
 import { completePastScheduledLessons } from "@/lib/lesson-completion";
+import { sqlSchoolTimestampAsTimestamptz, toIsoUtc } from "@/lib/school-timezone";
 
 const ATTENDANCE_STATUSES = new Set(["PRESENT", "ABSENT", "EXCUSED", "LATE"]);
 
@@ -15,6 +16,27 @@ async function ensureTeacherOwnsLesson(userId: string, lessonId: string): Promis
     [lessonId, userId]
   );
   return Boolean(res.rows[0]);
+}
+
+/** Dziecko ma podpisaną umowę PER_LESSON dla tej grupy (lub bez powiązania grupy). */
+async function childIsBilledPerLesson(
+  childId: string,
+  groupId: string
+): Promise<boolean> {
+  const res = await queryDb<{ ok: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1
+       FROM contracts ct
+       JOIN contract_children cc ON cc.contract_id = ct.id
+       WHERE cc.child_id = $1
+         AND ct.payment_type = 'PER_LESSON'
+         AND ct.status = 'SIGNED'
+         AND ct.billing_exempt = FALSE
+         AND (cc.group_id IS NULL OR cc.group_id = $2)
+     ) AS ok`,
+    [childId, groupId]
+  );
+  return res.rows[0]?.ok === true;
 }
 
 export async function GET(
@@ -41,11 +63,22 @@ export async function GET(
     const lessonRes = await queryDb<{
       id: string;
       group_id: string;
+      group_name: string;
       scheduled_at: Date | string;
       status: string;
+      location_name: string | null;
     }>(
-      `SELECT id, group_id, scheduled_at, status::text AS status
-       FROM lessons WHERE id = $1 LIMIT 1`,
+      `SELECT l.id,
+              l.group_id,
+              g.name AS group_name,
+              ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at,
+              l.status::text AS status,
+              loc.name AS location_name
+       FROM lessons l
+       JOIN groups g ON g.id = l.group_id
+       LEFT JOIN locations loc ON loc.id = l.location_id
+       WHERE l.id = $1
+       LIMIT 1`,
       [lessonId]
     );
     const lesson = lessonRes.rows[0];
@@ -59,13 +92,24 @@ export async function GET(
       last_name: string;
       status: string | null;
       note: string | null;
+      billed_per_lesson: boolean;
     }>(
       `SELECT
          c.id AS child_id,
          c.first_name,
          c.last_name,
          a.status::text AS status,
-         a.note
+         a.note,
+         EXISTS (
+           SELECT 1
+           FROM contracts ct
+           JOIN contract_children cc ON cc.contract_id = ct.id
+           WHERE cc.child_id = c.id
+             AND ct.payment_type = 'PER_LESSON'
+             AND ct.status = 'SIGNED'
+             AND ct.billing_exempt = FALSE
+             AND (cc.group_id IS NULL OR cc.group_id = gs.group_id)
+         ) AS billed_per_lesson
        FROM group_students gs
        JOIN children c ON c.id = gs.child_id
        LEFT JOIN attendance a ON a.lesson_id = $1 AND a.child_id = c.id
@@ -80,16 +124,23 @@ export async function GET(
       lesson: {
         id: lesson.id,
         groupId: lesson.group_id,
-        scheduledAt: lesson.scheduled_at,
+        groupName: lesson.group_name,
+        scheduledAt: toIsoUtc(lesson.scheduled_at),
         status: lesson.status,
+        locationName: lesson.location_name,
       },
-      attendance: studentsRes.rows.map((row) => ({
-        childId: row.child_id,
-        firstName: row.first_name,
-        lastName: row.last_name,
-        status: row.status ?? "PRESENT",
-        note: row.note,
-      })),
+      attendance: studentsRes.rows.map((row) => {
+        const billedPerLesson = row.billed_per_lesson === true;
+        return {
+          childId: row.child_id,
+          firstName: row.first_name,
+          lastName: row.last_name,
+          billedPerLesson,
+          // Obecność rozliczeniowa tylko dla PER_LESSON; reszta bez statusu do oznaczania.
+          status: billedPerLesson ? (row.status ?? "PRESENT") : row.status,
+          note: row.note,
+        };
+      }),
     });
   } catch (error) {
     console.error("GET /api/teacher/lessons/[id]/attendance:", error);
@@ -133,6 +184,9 @@ export async function PUT(
       return NextResponse.json({ message: "Nie znaleziono lekcji" }, { status: 404 });
     }
 
+    let saved = 0;
+    let skipped = 0;
+
     for (const entry of entries) {
       const childId = String(entry.childId ?? entry.child_id ?? "").trim();
       const status = String(entry.status ?? "PRESENT").trim().toUpperCase();
@@ -148,6 +202,11 @@ export async function PUT(
       );
       if (!memberRes.rows[0]) continue;
 
+      if (!(await childIsBilledPerLesson(childId, groupId))) {
+        skipped += 1;
+        continue;
+      }
+
       await queryDb(
         `INSERT INTO attendance (lesson_id, child_id, status, note)
          VALUES ($1, $2, $3, $4)
@@ -155,9 +214,26 @@ export async function PUT(
          DO UPDATE SET status = EXCLUDED.status, note = EXCLUDED.note`,
         [lessonId, childId, status, note]
       );
+      saved += 1;
     }
 
-    return NextResponse.json({ message: "Obecności zapisane" });
+    if (saved === 0) {
+      return NextResponse.json(
+        {
+          message:
+            skipped > 0
+              ? "Brak dzieci z rozliczeniem za pojedyncze zajęcia do zapisania"
+              : "Brak danych obecności do zapisania",
+        },
+        { status: 400 }
+      );
+    }
+
+    return NextResponse.json({
+      message: "Obecności zapisane",
+      saved,
+      skipped,
+    });
   } catch (error) {
     console.error("PUT /api/teacher/lessons/[id]/attendance:", error);
     return NextResponse.json({ message: "Błąd zapisu obecności" }, { status: 500 });

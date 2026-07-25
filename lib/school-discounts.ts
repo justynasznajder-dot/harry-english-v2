@@ -1,13 +1,26 @@
 import { queryDb } from "@/lib/db";
 import {
   applyDiscountsToAmount,
+  clampMaxDiscountPercent,
+  DEFAULT_MAX_DISCOUNT_PERCENT,
   DISCOUNT_KEYS,
   DISCOUNT_LABELS,
+  MAX_DISCOUNT_PERCENT,
+  hasIndividualPriceOverride,
   type DiscountKey,
 } from "@/lib/discount-math";
 import type { ComplimentaryCandidate, ComplimentaryParentRow } from "@/lib/complimentary-parent-list";
 
-export { applyDiscountsToAmount, DISCOUNT_KEYS, DISCOUNT_LABELS, type DiscountKey };
+export {
+  applyDiscountsToAmount,
+  clampMaxDiscountPercent,
+  DEFAULT_MAX_DISCOUNT_PERCENT,
+  DISCOUNT_KEYS,
+  DISCOUNT_LABELS,
+  MAX_DISCOUNT_PERCENT,
+  hasIndividualPriceOverride,
+  type DiscountKey,
+};
 export type { ComplimentaryCandidate, ComplimentaryParentRow };
 
 export const ALL_DISCOUNT_KEYS: DiscountKey[] = [
@@ -15,120 +28,107 @@ export const ALL_DISCOUNT_KEYS: DiscountKey[] = [
   DISCOUNT_KEYS.SIBLING,
 ];
 
-
-
-export type SchoolDiscountSettings = Record<DiscountKey, number>;
-
-
-
-const DEFAULT_SETTINGS: SchoolDiscountSettings = {
-
-  LARGE_FAMILY_CARD: 0,
-
-  SIBLING: 0,
-
+export type SchoolDiscountSettings = Record<DiscountKey, number> & {
+  maxPercent: number;
 };
 
-
+const DEFAULT_SETTINGS: SchoolDiscountSettings = {
+  LARGE_FAMILY_CARD: 0,
+  SIBLING: 0,
+  maxPercent: DEFAULT_MAX_DISCOUNT_PERCENT,
+};
 
 function normalizeEmail(email: string | null | undefined): string {
-
   return String(email ?? "").trim().toLowerCase();
-
 }
-
-
 
 export function parseDiscountKey(raw: unknown): DiscountKey | null {
-
   const key = String(raw ?? "").trim().toUpperCase();
-
   return (ALL_DISCOUNT_KEYS as readonly string[]).includes(key) ? (key as DiscountKey) : null;
-
 }
 
-
-
-export function parseDiscountPercent(raw: unknown): number {
-
+export function parseDiscountPercent(
+  raw: unknown,
+  maxPercent: number = DEFAULT_MAX_DISCOUNT_PERCENT
+): number {
   if (raw == null || String(raw).trim() === "") return 0;
-
   const parsed = Number(String(raw).replace(",", "."));
-
   if (!Number.isFinite(parsed)) return 0;
-
-  return Math.min(100, Math.max(0, parsed));
-
+  const cap = clampMaxDiscountPercent(maxPercent);
+  return Math.min(cap, Math.max(0, parsed));
 }
 
+export async function getSchoolMaxDiscountPercent(schoolId: string): Promise<number> {
+  const res = await queryDb<{ max_discount_percent: string | number | null }>(
+    `SELECT max_discount_percent::text AS max_discount_percent
+     FROM schools
+     WHERE id = $1
+     LIMIT 1`,
+    [schoolId]
+  );
+  return clampMaxDiscountPercent(res.rows[0]?.max_discount_percent);
+}
 
+export async function setSchoolMaxDiscountPercent(
+  schoolId: string,
+  raw: unknown
+): Promise<number> {
+  const value = clampMaxDiscountPercent(raw);
+  await queryDb(
+    `UPDATE schools SET max_discount_percent = $2 WHERE id = $1`,
+    [schoolId, value]
+  );
+  return value;
+}
 
 export async function getSchoolDiscountSettings(
-
   schoolId: string
-
 ): Promise<SchoolDiscountSettings> {
+  const [maxPercent, res] = await Promise.all([
+    getSchoolMaxDiscountPercent(schoolId),
+    queryDb<{ discount_key: string; percent: string }>(
+      `SELECT discount_key, percent::text
+       FROM school_discount_settings
+       WHERE school_id = $1`,
+      [schoolId]
+    ),
+  ]);
 
-  const res = await queryDb<{ discount_key: string; percent: string }>(
-
-    `SELECT discount_key, percent::text
-
-     FROM school_discount_settings
-
-     WHERE school_id = $1`,
-
-    [schoolId]
-
-  );
-
-  const settings: SchoolDiscountSettings = { ...DEFAULT_SETTINGS };
+  const settings: SchoolDiscountSettings = {
+    ...DEFAULT_SETTINGS,
+    maxPercent,
+  };
 
   for (const row of res.rows) {
-
     const key = parseDiscountKey(row.discount_key);
-
-    if (key) settings[key] = parseDiscountPercent(row.percent);
-
+    if (key) settings[key] = parseDiscountPercent(row.percent, maxPercent);
   }
 
   return settings;
-
 }
 
-
-
 export async function upsertSchoolDiscountSettings(
-
   schoolId: string,
-
   settings: Partial<SchoolDiscountSettings>
-
 ): Promise<SchoolDiscountSettings> {
+  let maxPercent = await getSchoolMaxDiscountPercent(schoolId);
+  if (settings.maxPercent != null) {
+    maxPercent = await setSchoolMaxDiscountPercent(schoolId, settings.maxPercent);
+  }
 
   for (const key of ALL_DISCOUNT_KEYS) {
-
     if (settings[key] == null) continue;
-
-    const percent = parseDiscountPercent(settings[key]);
-
+    const percent = parseDiscountPercent(settings[key], maxPercent);
     await queryDb(
-
       `INSERT INTO school_discount_settings (school_id, discount_key, percent, updated_at)
-
        VALUES ($1, $2, $3, NOW())
-
        ON CONFLICT (school_id, discount_key)
-
        DO UPDATE SET percent = EXCLUDED.percent, updated_at = NOW()`,
-
       [schoolId, key, percent]
-
     );
-
   }
 
   return getSchoolDiscountSettings(schoolId);
-
 }
 
 
@@ -468,35 +468,22 @@ export async function listComplimentaryCandidates(
 
 
 export async function addComplimentaryParent(
-
   schoolId: string,
-
   input: { parentId?: string | null; parentEmail?: string | null }
-
 ): Promise<void> {
-
   const parentId = String(input.parentId ?? "").trim();
-
   const parentEmail = normalizeEmail(input.parentEmail);
 
-
-
   if (parentId) {
-
     const userRes = await queryDb<{ id: string; role: string; email: string }>(
-
       `SELECT id, role, email FROM users WHERE id = $1 AND school_id = $2 LIMIT 1`,
-
       [parentId, schoolId]
-
     );
 
     const user = userRes.rows[0];
 
     if (!user || String(user.role).toUpperCase() !== "PARENT") {
-
       throw new Error("Wybrany użytkownik nie jest rodzicem tej szkoły");
-
     }
 
     await queryDb(
@@ -509,43 +496,50 @@ export async function addComplimentaryParent(
       [schoolId, parentId]
     );
 
+    const userEmail = normalizeEmail(user.email);
+    if (userEmail) {
+      await queryDb(
+        `DELETE FROM school_complimentary_parents
+         WHERE school_id = $1
+           AND LOWER(BTRIM(COALESCE(parent_email, ''))) = $2`,
+        [schoolId, userEmail]
+      );
+    }
+
     return;
-
   }
-
-
 
   if (!parentEmail) {
-
     throw new Error("Wybierz rodzica lub podaj e-mail ze zgłoszenia");
-
   }
 
-
+  const existingUserRes = await queryDb<{ id: string }>(
+    `SELECT id FROM users
+     WHERE school_id = $1
+       AND UPPER(role) = 'PARENT'
+       AND active = TRUE
+       AND LOWER(BTRIM(email::text)) = $2
+     LIMIT 1`,
+    [schoolId, parentEmail]
+  );
+  const existingUserId = existingUserRes.rows[0]?.id;
+  if (existingUserId) {
+    await addComplimentaryParent(schoolId, { parentId: existingUserId });
+    return;
+  }
 
   const enrollmentRes = await queryDb<{ exists: boolean }>(
-
     `SELECT EXISTS (
-
        SELECT 1 FROM enrollment_requests
-
        WHERE school_id = $1
-
          AND LOWER(BTRIM(parent_email::text)) = $2
-
      ) AS exists`,
-
     [schoolId, parentEmail]
-
   );
 
   if (!enrollmentRes.rows[0]?.exists) {
-
     throw new Error("Brak zgłoszenia z tym adresem e-mail");
-
   }
-
-
 
   await queryDb(
     `INSERT INTO school_complimentary_parents (school_id, parent_email)
@@ -557,73 +551,63 @@ export async function addComplimentaryParent(
      )`,
     [schoolId, parentEmail]
   );
-
 }
 
 
 
 export async function removeComplimentaryParent(
-
   schoolId: string,
-
   input: { id?: string | null; parentId?: string | null; parentEmail?: string | null }
-
 ): Promise<void> {
-
   const id = String(input.id ?? "").trim();
-
   const parentId = String(input.parentId ?? "").trim();
-
   const parentEmail = normalizeEmail(input.parentEmail);
 
-
-
   if (id) {
-
     await queryDb(
-
       `DELETE FROM school_complimentary_parents WHERE school_id = $1 AND id = $2`,
-
       [schoolId, id]
-
     );
-
     return;
-
   }
-
-
 
   if (parentId) {
-
     await queryDb(
-
       `DELETE FROM school_complimentary_parents WHERE school_id = $1 AND parent_id = $2`,
-
       [schoolId, parentId]
-
     );
-
+    await queryDb(
+      `DELETE FROM school_complimentary_parents scp
+       WHERE scp.school_id = $1
+         AND BTRIM(COALESCE(scp.parent_email, '')) <> ''
+         AND EXISTS (
+           SELECT 1 FROM users u
+           WHERE u.id = $2
+             AND LOWER(BTRIM(u.email::text)) = LOWER(BTRIM(scp.parent_email))
+         )`,
+      [schoolId, parentId]
+    );
     return;
-
   }
-
-
 
   if (parentEmail) {
-
     await queryDb(
-
       `DELETE FROM school_complimentary_parents
-
        WHERE school_id = $1 AND LOWER(BTRIM(parent_email::text)) = $2`,
-
       [schoolId, parentEmail]
-
     );
-
+    await queryDb(
+      `DELETE FROM school_complimentary_parents scp
+       WHERE scp.school_id = $1
+         AND scp.parent_id IS NOT NULL
+         AND EXISTS (
+           SELECT 1 FROM users u
+           WHERE u.id = scp.parent_id
+             AND LOWER(BTRIM(u.email::text)) = $2
+         )`,
+      [schoolId, parentEmail]
+    );
   }
-
 }
 
 

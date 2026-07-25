@@ -55,7 +55,7 @@ function monthEndYmd(periodMonth: string): string {
   return `${last.getFullYear()}-${mm}-${dd}`;
 }
 
-/** Zajęcia COMPLETED: lektor × grupa × lokalizacja × miesiąc + liczba uczniów zapisanych na koniec miesiąca. */
+/** Zajęcia COMPLETED: lektor × grupa × lokalizacja × miesiąc + średnia liczba uczniów zapisanych w dniu zajęć. */
 export async function fetchTeacherSettlement(
   year: SchoolYearScope,
   periodMonth?: string
@@ -82,6 +82,7 @@ export async function fetchTeacherSettlement(
     location_name: string;
     period_month: string;
     lessons_count: number;
+    students_count: number;
     total_duration_min: number;
   }>(
     `SELECT
@@ -94,11 +95,21 @@ export async function fetchTeacherSettlement(
        loc.name AS location_name,
        to_char(date_trunc('month', l.scheduled_at), 'YYYY-MM') AS period_month,
        COUNT(*)::int AS lessons_count,
+       ROUND(AVG(day_students.cnt))::int AS students_count,
        COALESCE(SUM(l.duration_min), 0)::int AS total_duration_min
      FROM lessons l
      JOIN groups g ON g.id = l.group_id
      JOIN users u ON u.id = l.teacher_id
      JOIN locations loc ON loc.id = l.location_id
+     CROSS JOIN LATERAL (
+       SELECT COUNT(DISTINCT gs.child_id)::float AS cnt
+       FROM group_students gs
+       WHERE gs.group_id = l.group_id
+         AND gs.school_id = $1
+         AND gs.school_year_id = $2
+         AND gs.enrolled_at <= l.scheduled_at::date
+         AND (gs.left_at IS NULL OR gs.left_at > l.scheduled_at::date)
+     ) day_students
      WHERE g.school_id = $1
        AND l.school_year_id = $2
        AND l.status = 'COMPLETED'
@@ -111,15 +122,6 @@ export async function fetchTeacherSettlement(
     params
   );
 
-  if (lessons.rows.length === 0) return [];
-
-  const months = [...new Set(lessons.rows.map((r) => r.period_month))];
-  const studentCounts = await fetchGroupStudentCountsByMonth(
-    year.school_id,
-    year.id,
-    months
-  );
-
   return lessons.rows.map((row) => ({
     teacher_id: row.teacher_id,
     teacher_name: `${row.teacher_first_name} ${row.teacher_last_name}`.trim(),
@@ -129,35 +131,9 @@ export async function fetchTeacherSettlement(
     location_name: row.location_name,
     period_month: row.period_month,
     lessons_count: row.lessons_count,
-    students_count: studentCounts.get(`${row.group_id}:${row.period_month}`) ?? 0,
+    students_count: row.students_count,
     total_duration_min: row.total_duration_min,
   }));
-}
-
-/** Uczniowie zapisani do grupy na ostatni dzień miesiąca (w ramach roku szkolnego). */
-async function fetchGroupStudentCountsByMonth(
-  schoolId: string,
-  schoolYearId: string,
-  periodMonths: string[]
-): Promise<Map<string, number>> {
-  const map = new Map<string, number>();
-  for (const pm of periodMonths) {
-    const monthEnd = monthEndYmd(pm);
-    const res = await queryDb<{ group_id: string; students_count: number }>(
-      `SELECT gs.group_id, COUNT(DISTINCT gs.child_id)::int AS students_count
-       FROM group_students gs
-       WHERE gs.school_id = $1
-         AND gs.school_year_id = $2
-         AND gs.enrolled_at <= $3::date
-         AND (gs.left_at IS NULL OR gs.left_at > $3::date)
-       GROUP BY gs.group_id`,
-      [schoolId, schoolYearId, monthEnd]
-    );
-    for (const row of res.rows) {
-      map.set(`${row.group_id}:${pm}`, row.students_count);
-    }
-  }
-  return map;
 }
 
 /** Zajęcia COMPLETED per lokalizacja × lektor × miesiąc. */

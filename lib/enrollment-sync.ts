@@ -1,12 +1,14 @@
 import { randomUUID } from "crypto";
 import type { EnrollmentStatus } from "@/lib/enrollment-status";
-import { queryDb } from "@/lib/db";
+import { getActiveSchoolYear, queryDb } from "@/lib/db";
 import { parsePriceDecimal } from "@/lib/lesson-pricing";
 
 export type GroupStudentPriceOverrides = {
   lessonUnitPrice?: string | number | null;
   monthlyUnitPrice?: string | number | null;
   yearlyUnitPrice?: string | number | null;
+  /** Rok członkostwa; domyślnie aktywny rok szkoły grupy. */
+  schoolYearId?: string | null;
 };
 
 /** Ustawia `users.access_level` rodzica: ACTIVE gdy ma aktywne dziecko SIGNED/COMPLETED, inaczej PENDING. */
@@ -41,7 +43,7 @@ export async function syncChildrenAccessLevelForEnrollment(
   );
 }
 
-/** Dodaje dziecko do grupy (`group_students`), jeśli nie jest już aktywnie przypisane. */
+/** Dodaje dziecko do grupy (`group_students`) w danym roku, jeśli nie jest już aktywnie przypisane. */
 export async function enrollChildInGroup(
   childId: string,
   groupId: string,
@@ -49,26 +51,36 @@ export async function enrollChildInGroup(
 ): Promise<boolean> {
   if (!groupId) return false;
 
-  const active = await queryDb<{ id: string }>(
-    `SELECT id FROM group_students
-     WHERE group_id = $1 AND child_id = $2 AND left_at IS NULL
-     LIMIT 1`,
-    [groupId, childId]
-  );
-  if (active.rows[0]) return false;
-
-  const groupRow = await queryDb<{ school_id: string; school_year_id: string | null }>(
-    `SELECT school_id, school_year_id FROM groups WHERE id = $1 LIMIT 1`,
+  const groupRow = await queryDb<{ school_id: string }>(
+    `SELECT school_id FROM groups WHERE id = $1 LIMIT 1`,
     [groupId]
   );
   if (!groupRow.rows[0]) return false;
-  const { school_id: schoolId, school_year_id: schoolYearId } = groupRow.rows[0];
+  const schoolId = groupRow.rows[0].school_id;
+
+  let schoolYearId = options?.schoolYearId ?? null;
+  if (!schoolYearId) {
+    const activeYear = await getActiveSchoolYear(schoolId);
+    schoolYearId = typeof activeYear?.id === "string" ? activeYear.id : null;
+  }
+
+  const active = await queryDb<{ id: string }>(
+    `SELECT id FROM group_students
+     WHERE group_id = $1
+       AND child_id = $2
+       AND school_year_id IS NOT DISTINCT FROM $3
+       AND left_at IS NULL
+     LIMIT 1`,
+    [groupId, childId, schoolYearId]
+  );
+  if (active.rows[0]) return false;
+
   const lessonUnitPrice = parsePriceDecimal(options?.lessonUnitPrice);
   const monthlyUnitPrice = parsePriceDecimal(options?.monthlyUnitPrice);
   const yearlyUnitPrice = parsePriceDecimal(options?.yearlyUnitPrice);
 
-  const prior = await queryDb<{ id: string; school_year_id: string | null; left_at: string | null }>(
-    `SELECT id, school_year_id, left_at::text FROM group_students
+  const prior = await queryDb<{ id: string; left_at: string | null }>(
+    `SELECT id, left_at::text FROM group_students
      WHERE group_id = $1 AND child_id = $2 AND school_year_id IS NOT DISTINCT FROM $3
      LIMIT 1`,
     [groupId, childId, schoolYearId]
@@ -115,7 +127,8 @@ export async function enrollChildInGroup(
 
 /** Przypisuje wszystkie dzieci ze zgłoszenia do proponowanej grupy. */
 export async function enrollChildrenForEnrollmentRequest(
-  enrollmentRequestId: string
+  enrollmentRequestId: string,
+  schoolYearId?: string | null
 ): Promise<void> {
   const res = await queryDb<{ child_id: string; group_id: string | null }>(
     `SELECT c.id AS child_id, er.proposed_group_id AS group_id
@@ -126,7 +139,7 @@ export async function enrollChildrenForEnrollmentRequest(
   );
   for (const row of res.rows) {
     if (row.group_id) {
-      await enrollChildInGroup(row.child_id, row.group_id);
+      await enrollChildInGroup(row.child_id, row.group_id, { schoolYearId });
     }
   }
 }

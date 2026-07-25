@@ -28,9 +28,11 @@ Aplikacja do zarządzania szkołą językową (zapisy, umowy, grupy, zajęcia, o
 
 ## Architektura danych (skrót)
 
-- Historia roku szkolnego przez `school_year_id` (grupy, zajęcia, umowy, członkostwa)
-- `group_students` — unikalność `(group_id, child_id, school_year_id)` — jeden wiersz na rok
-- Zamknięcie roku: `DELETE /api/admin/school-years/[id]` z `{ "action": "close" }`
+- Historia roku szkolnego przez `school_year_id` (zajęcia, umowy, członkostwa `group_students`)
+- Grupy (`groups`) należą do **szkoły** — bez `school_year_id`; żyją latami
+- `group_students` — unikalność `(group_id, child_id, school_year_id)` — jeden wiersz na rok; historia zmian grup przez `enrolled_at`/`left_at`
+- Zamknięcie roku: `DELETE /api/admin/school-years/[id]` z `{ "action": "close" }` — nie dezaktywuje grup; zamyka członkostwa roku i otwiera je na kolejny rok na tym samym `group_id`
+- Odnowienia: propozycja grupy z listy aktywnych grup szkoły; domyślnie aktualna grupa dziecka
 - Historia admina: `GET /api/admin/school-years/[id]/history`
 - Statystyki lektorów: `school_year_teacher_stats`
 - Log zamknięcia: `school_year_close_logs`

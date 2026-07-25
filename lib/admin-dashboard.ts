@@ -146,7 +146,7 @@ export async function fetchDashboardLessons(
        u.last_name AS teacher_last
      FROM lessons l
      JOIN groups g ON g.id = l.group_id AND g.school_id = $1
-     JOIN school_years sy ON sy.id = COALESCE(l.school_year_id, g.school_year_id)
+     JOIN school_years sy ON sy.id = l.school_year_id
        AND sy.school_id = $1 AND sy.active = TRUE
      LEFT JOIN locations loc ON loc.id = l.location_id
      JOIN users u ON u.id = l.teacher_id
@@ -474,7 +474,7 @@ export async function fetchMissingAttendanceAlerts(
      FROM lessons l
      JOIN groups g ON g.id = l.group_id AND g.school_id = $1
      JOIN users u ON u.id = l.teacher_id
-     JOIN school_years sy ON sy.id = g.school_year_id AND sy.active = TRUE
+     JOIN school_years sy ON sy.id = l.school_year_id AND sy.active = TRUE
      LEFT JOIN LATERAL (
        SELECT COUNT(*)::int AS cnt
        FROM group_students gs
@@ -583,7 +583,7 @@ export async function fetchStudentPipeline(
        SELECT g.name
        FROM group_students gs
        JOIN groups g ON g.id = gs.group_id AND g.school_id = c.school_id
-       JOIN school_years sy ON sy.id = g.school_year_id AND sy.active = TRUE
+       JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
        WHERE gs.child_id = c.id AND gs.left_at IS NULL
        ORDER BY gs.enrolled_at DESC NULLS LAST
        LIMIT 1
@@ -758,11 +758,11 @@ export async function fetchGroupOccupancy(schoolId: string): Promise<OccupancyRo
        COALESCE(stu.cnt, 0)::text AS current_students,
        COALESCE(pend.cnt, 0)::text AS pending_requests
      FROM groups g
-     JOIN school_years sy ON sy.id = g.school_year_id AND sy.active = TRUE
      LEFT JOIN locations loc ON loc.id = g.location_id
      LEFT JOIN LATERAL (
        SELECT COUNT(*)::int AS cnt
        FROM group_students gs
+       JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
        WHERE gs.group_id = g.id AND gs.left_at IS NULL
      ) stu ON TRUE
      LEFT JOIN LATERAL (

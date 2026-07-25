@@ -159,7 +159,6 @@ export async function PUT(
       teacherId,
       maxStudents,
       active,
-      schoolYearId,
       locationId,
       priceMonthly,
       priceYearly,
@@ -173,13 +172,12 @@ export async function PUT(
            teacher_id = $4,
            max_students = COALESCE($5, max_students),
            active = COALESCE($6, active),
-           school_year_id = $7,
-           location_id = $8,
-           price_monthly = $9,
-           price_yearly = $10,
-           price_per_lesson = $11,
-           teacher_pickup_consent = COALESCE($12, teacher_pickup_consent)
-       WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $13" : ""}`,
+           location_id = $7,
+           price_monthly = $8,
+           price_yearly = $9,
+           price_per_lesson = $10,
+           teacher_pickup_consent = COALESCE($11, teacher_pickup_consent)
+       WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $12" : ""}`,
       tenant.role === "MANAGER"
         ? [
             id,
@@ -188,7 +186,6 @@ export async function PUT(
             teacherId ?? null,
             maxStudents ?? null,
             active ?? null,
-            schoolYearId ?? null,
             locationId ?? null,
             priceMonthly != null && priceMonthly !== "" ? Number(priceMonthly) : null,
             priceYearly != null && priceYearly !== "" ? Number(priceYearly) : null,
@@ -203,7 +200,6 @@ export async function PUT(
             teacherId ?? null,
             maxStudents ?? null,
             active ?? null,
-            schoolYearId ?? null,
             locationId ?? null,
             priceMonthly != null && priceMonthly !== "" ? Number(priceMonthly) : null,
             priceYearly != null && priceYearly !== "" ? Number(priceYearly) : null,

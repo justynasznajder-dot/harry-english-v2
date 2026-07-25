@@ -155,13 +155,11 @@ export async function submitEnrollmentProposal(
     name: string;
     location_name: string;
     schedule: string;
-    school_year_id: string | null;
     price_monthly: string | null;
     price_yearly: string | null;
   }>(
     `SELECT g.id,
             g.name,
-            g.school_year_id,
             g.price_monthly::text,
             g.price_yearly::text,
             COALESCE(MAX(l.name), 'Do ustalenia') AS location_name,
@@ -173,10 +171,10 @@ export async function submitEnrollmentProposal(
               'Do ustalenia'
             ) AS schedule
      FROM groups g
-     LEFT JOIN schedule_templates st ON st.group_id = g.id
+     LEFT JOIN schedule_templates st ON st.group_id = g.id AND st.active = TRUE
      LEFT JOIN locations l ON l.id = st.location_id
      WHERE g.id = $1 AND g.school_id = $2
-     GROUP BY g.id, g.name, g.school_year_id, g.price_monthly, g.price_yearly`,
+     GROUP BY g.id, g.name, g.price_monthly, g.price_yearly`,
     [groupId, parentSchoolId]
   );
   const group = groupRes.rows[0];

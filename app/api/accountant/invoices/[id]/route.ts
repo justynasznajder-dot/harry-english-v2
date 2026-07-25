@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAccountantSchoolContext } from "@/lib/accountant-school-context";
 import { queryDb } from "@/lib/db";
-import { invoicesSupportCorrectiveDocuments } from "@/lib/invoice-schema";
+import {
+  invoicesSupportCorrectiveDocuments,
+  invoicesSupportInvoiceItems,
+} from "@/lib/invoice-schema";
 import { getR2ObjectBuffer } from "@/lib/r2-storage";
 
 export async function GET(
@@ -110,6 +113,61 @@ export async function GET(
       return NextResponse.json({ message: "Nie znaleziono faktury" }, { status: 404 });
     }
 
+    let items: Array<{
+      lp: number;
+      name: string;
+      qty: string;
+      discount: string;
+      unitPrice: number;
+      value: number;
+      childId: string | null;
+      contractId: string | null;
+    }> = [];
+
+    if (await invoicesSupportInvoiceItems()) {
+      const itemsRes = await queryDb<{
+        lp: number;
+        name: string;
+        qty: string;
+        discount: string;
+        unit_price: string;
+        value: string;
+        child_id: string | null;
+        contract_id: string | null;
+      }>(
+        `SELECT lp, name, qty, discount, unit_price::text, value::text, child_id, contract_id
+         FROM invoice_items
+         WHERE invoice_id = $1
+         ORDER BY lp ASC`,
+        [invoice.id]
+      );
+      items = itemsRes.rows.map((row) => ({
+        lp: Number(row.lp),
+        name: row.name,
+        qty: row.qty,
+        discount: row.discount,
+        unitPrice: Number(row.unit_price),
+        value: Number(row.value),
+        childId: row.child_id,
+        contractId: row.contract_id,
+      }));
+    }
+
+    if (items.length === 0) {
+      items = [
+        {
+          lp: 1,
+          name: invoice.item_name,
+          qty: invoice.item_qty,
+          discount: invoice.item_discount,
+          unitPrice: Number(invoice.item_unit_price),
+          value: Number(invoice.item_value),
+          childId: null,
+          contractId: null,
+        },
+      ];
+    }
+
     if (format === "pdf") {
       if (!invoice.pdf_key) {
         return NextResponse.json({ message: "Brak pliku faktury" }, { status: 404 });
@@ -159,6 +217,7 @@ export async function GET(
         paymentStatus: invoice.payment_status,
         hasPdf: Boolean(invoice.pdf_key),
         contentHtml: invoice.content_html,
+        items,
       },
     });
   } catch (error) {

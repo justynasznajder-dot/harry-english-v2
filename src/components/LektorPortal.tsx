@@ -4,9 +4,11 @@ import { useCallback, useEffect, useState } from 'react';
 import MessagesPanel from '@/src/components/messages/MessagesPanel';
 import MessagesTabLabel from '@/src/components/messages/MessagesTabLabel';
 import { useUnreadMessagesCount } from '@/src/components/messages/useUnreadMessagesCount';
+import TeacherAttendanceTab from '@/src/components/teacher/TeacherAttendanceTab';
+import TeacherWeekTab from '@/src/components/teacher/TeacherWeekTab';
 import { formatSchoolDateTimeMedium } from '@/lib/school-timezone';
 
-type LektorTab = 'materials' | 'groups' | 'messages';
+type LektorTab = 'week' | 'attendance' | 'materials' | 'groups' | 'messages';
 
 type TeacherGroup = {
   id: string;
@@ -28,7 +30,8 @@ type AttendanceRow = {
   childId: string;
   firstName: string;
   lastName: string;
-  status: string;
+  billedPerLesson?: boolean;
+  status: string | null;
   note: string | null;
 };
 
@@ -40,8 +43,10 @@ const ATTENDANCE_OPTIONS = [
 ] as const;
 
 const tabs: Array<{ key: LektorTab; label: string }> = [
-  { key: 'materials', label: 'Materiały' },
+  { key: 'week', label: 'Plan tygodnia' },
+  { key: 'attendance', label: 'Obecność' },
   { key: 'groups', label: 'Moje grupy' },
+  { key: 'materials', label: 'Materiały' },
   { key: 'messages', label: 'Wiadomości' },
 ];
 
@@ -50,7 +55,7 @@ function formatLessonDate(value: string): string {
 }
 
 export default function LektorPortal() {
-  const [activeTab, setActiveTab] = useState<LektorTab>('messages');
+  const [activeTab, setActiveTab] = useState<LektorTab>('week');
   const [messagesListResetToken, setMessagesListResetToken] = useState(0);
   const { unreadCount: messagesUnreadCount, refresh: refreshMessagesUnreadCount } =
     useUnreadMessagesCount(messagesListResetToken);
@@ -132,7 +137,13 @@ export default function LektorPortal() {
         setAttendance([]);
         return;
       }
-      setAttendance(data.attendance ?? []);
+      setAttendance(
+        (data.attendance ?? []).map((row) => ({
+          ...row,
+          billedPerLesson: Boolean(row.billedPerLesson),
+          status: row.billedPerLesson ? (row.status ?? 'PRESENT') : row.status,
+        })),
+      );
     } catch {
       setStatusMessage('Błąd wczytywania obecności');
     } finally {
@@ -162,6 +173,11 @@ export default function LektorPortal() {
 
   const saveAttendance = async () => {
     if (!selectedLessonId) return;
+    const billable = attendance.filter((row) => row.billedPerLesson);
+    if (billable.length === 0) {
+      setStatusMessage('Brak dzieci z rozliczeniem za pojedyncze zajęcia do zapisania');
+      return;
+    }
     setSavingAttendance(true);
     setStatusMessage(null);
     try {
@@ -169,9 +185,9 @@ export default function LektorPortal() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          attendance: attendance.map((row) => ({
+          attendance: billable.map((row) => ({
             childId: row.childId,
-            status: row.status,
+            status: row.status ?? 'PRESENT',
             note: row.note,
           })),
         }),
@@ -222,6 +238,10 @@ export default function LektorPortal() {
           ))}
         </div>
       </nav>
+
+      {activeTab === 'week' && <TeacherWeekTab />}
+
+      {activeTab === 'attendance' && <TeacherAttendanceTab />}
 
       {activeTab === 'messages' && (
         <MessagesPanel
@@ -310,6 +330,10 @@ export default function LektorPortal() {
 
               <div className="space-y-3 rounded-2xl border border-emerald-100 bg-white p-4">
                 <p className="text-sm font-semibold text-zinc-800">Obecności</p>
+                <p className="text-xs text-zinc-500">
+                  Obecność oznaczasz tylko u dzieci z rozliczeniem za pojedyncze zajęcia. Pełny
+                  widok tygodnia: zakładka „Obecność”.
+                </p>
                 {!selectedLessonId ? (
                   <p className="text-sm text-zinc-500">Wybierz lekcję.</p>
                 ) : attendanceLoading ? (
@@ -322,38 +346,57 @@ export default function LektorPortal() {
                       {attendance.map((row) => (
                         <div
                           key={row.childId}
-                          className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-200 px-3 py-2"
+                          className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 ${
+                            row.billedPerLesson
+                              ? 'border-zinc-200'
+                              : 'border-zinc-100 bg-zinc-50'
+                          }`}
                         >
-                          <span className="text-sm font-medium text-zinc-900">
-                            {row.firstName} {row.lastName}
-                          </span>
-                          <select
-                            className="rounded-lg border border-zinc-300 px-2 py-1 text-sm"
-                            value={row.status}
-                            onChange={(e) =>
-                              setAttendance((prev) =>
-                                prev.map((item) =>
-                                  item.childId === row.childId
-                                    ? { ...item, status: e.target.value }
-                                    : item,
-                                ),
-                              )
-                            }
-                          >
-                            {ATTENDANCE_OPTIONS.map((opt) => (
-                              <option key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </option>
-                            ))}
-                          </select>
+                          <div>
+                            <span className="text-sm font-medium text-zinc-900">
+                              {row.firstName} {row.lastName}
+                            </span>
+                            {!row.billedPerLesson && (
+                              <span className="mt-0.5 block text-xs text-zinc-500">
+                                Bez oznaczania — inny typ rozliczenia
+                              </span>
+                            )}
+                          </div>
+                          {row.billedPerLesson ? (
+                            <select
+                              className="rounded-lg border border-zinc-300 px-2 py-1 text-sm"
+                              value={row.status ?? 'PRESENT'}
+                              onChange={(e) =>
+                                setAttendance((prev) =>
+                                  prev.map((item) =>
+                                    item.childId === row.childId
+                                      ? { ...item, status: e.target.value }
+                                      : item,
+                                  ),
+                                )
+                              }
+                            >
+                              {ATTENDANCE_OPTIONS.map((opt) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <span className="rounded-lg bg-zinc-100 px-2 py-1 text-xs text-zinc-500">
+                              —
+                            </span>
+                          )}
                         </div>
                       ))}
                     </div>
                     <button
                       type="button"
-                      disabled={savingAttendance}
+                      disabled={
+                        savingAttendance || !attendance.some((row) => row.billedPerLesson)
+                      }
                       onClick={() => void saveAttendance()}
-                      className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                      className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {savingAttendance ? 'Zapisywanie…' : 'Zapisz obecności'}
                     </button>

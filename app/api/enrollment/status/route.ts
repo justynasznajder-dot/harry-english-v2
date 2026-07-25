@@ -307,6 +307,7 @@ export async function GET(request: NextRequest) {
         discountSettings: {
           LARGE_FAMILY_CARD: discountSettings.LARGE_FAMILY_CARD,
           SIBLING: discountSettings.SIBLING,
+          maxPercent: discountSettings.maxPercent,
         },
       },
 

@@ -152,6 +152,9 @@ export type InvoiceHtmlPlaceholders = {
   buyer_name: string;
   buyer_address: string;
   buyer_nip_line: string;
+  /** Wiersze tabeli pozycji (już jako HTML <tr>…). */
+  items_rows: string;
+  /** Legacy: pierwsza pozycja (kompatybilność). */
   item_lp: string;
   item_name: string;
   item_qty: string;
@@ -167,6 +170,47 @@ export type InvoiceHtmlPlaceholders = {
   vat_exemption: string;
   issuer_name: string;
 };
+
+export type InvoiceHtmlItemInput = {
+  name: string;
+  qty?: string;
+  discount?: string;
+  unitPrice: string | number;
+  value: string | number;
+};
+
+export function buildInvoiceItemRowsHtml(items: InvoiceHtmlItemInput[]): string {
+  return items
+    .map((item, index) => {
+      const lp = index + 1;
+      const qty = item.qty?.trim() || "1 szt";
+      const discount = item.discount?.trim() || "0 %";
+      const price = formatContractAmount(item.unitPrice);
+      const value = formatContractAmount(item.value);
+      const name = String(item.name ?? "").trim() || "—";
+      return `<tr>
+        <td class="num">${lp}</td>
+        <td>${name}</td>
+        <td class="qty">${qty}</td>
+        <td class="disc">${discount}</td>
+        <td class="money">${price}</td>
+        <td class="money">${value}</td>
+      </tr>`;
+    })
+    .join("\n");
+}
+
+export function sumInvoiceItemValues(items: InvoiceHtmlItemInput[]): number {
+  let total = 0;
+  for (const item of items) {
+    const n =
+      typeof item.value === "number"
+        ? item.value
+        : Number(String(item.value).replace(",", "."));
+    if (Number.isFinite(n)) total += n;
+  }
+  return Math.round(total * 100) / 100;
+}
 
 export const INVOICE_HTML_TEMPLATE = `<!DOCTYPE html>
 <html lang="pl">
@@ -333,14 +377,7 @@ export const INVOICE_HTML_TEMPLATE = `<!DOCTYPE html>
       </tr>
     </thead>
     <tbody>
-      <tr>
-        <td class="num">{{item_lp}}</td>
-        <td>{{item_name}}</td>
-        <td class="qty">{{item_qty}}</td>
-        <td class="disc">{{item_discount}}</td>
-        <td class="money">{{item_price}}</td>
-        <td class="money">{{item_value}}</td>
-      </tr>
+      {{items_rows}}
     </tbody>
   </table>
 
@@ -403,8 +440,10 @@ export function buildInvoicePlaceholders(params: {
   buyerName: string;
   buyerAddress: string;
   buyerNip: string | null;
-  itemName: string;
-  amount: string | number;
+  /** Preferowane: wiele pozycji. Gdy brak — używane itemName + amount. */
+  items?: InvoiceHtmlItemInput[];
+  itemName?: string;
+  amount?: string | number;
   bankLabel: string;
   bankAccount: string;
   vatExemption: string;
@@ -417,9 +456,23 @@ export function buildInvoicePlaceholders(params: {
   originalInvoiceNumber?: string | null;
   correctionReason?: string | null;
 }): InvoiceHtmlPlaceholders {
-  const amountLabel = formatContractAmount(params.amount);
-  const unitPriceLabel = formatContractAmount(params.itemUnitPrice ?? params.amount);
-  const itemValueLabel = formatContractAmount(params.itemValue ?? params.amount);
+  const items: InvoiceHtmlItemInput[] =
+    params.items && params.items.length > 0
+      ? params.items
+      : [
+          {
+            name: String(params.itemName ?? "").trim() || "Kurs języka angielskiego",
+            qty: params.itemQty,
+            discount: params.itemDiscount,
+            unitPrice: params.itemUnitPrice ?? params.amount ?? 0,
+            value: params.itemValue ?? params.amount ?? 0,
+          },
+        ];
+  const totalAmount = sumInvoiceItemValues(items);
+  const first = items[0]!;
+  const amountLabel = formatContractAmount(totalAmount);
+  const unitPriceLabel = formatContractAmount(first.unitPrice);
+  const itemValueLabel = formatContractAmount(first.value);
   const buyerNip = String(params.buyerNip ?? "").trim();
   const isCorrective = Boolean(params.originalInvoiceNumber || params.correctionReason);
   const documentTitle = params.documentTitle?.trim() || (isCorrective ? "Faktura korygująca" : "Faktura");
@@ -448,14 +501,15 @@ export function buildInvoicePlaceholders(params: {
     buyer_name: params.buyerName,
     buyer_address: params.buyerAddress,
     buyer_nip_line: buyerNip ? `NIP: ${buyerNip}` : "",
+    items_rows: buildInvoiceItemRowsHtml(items),
     item_lp: "1",
-    item_name: params.itemName,
-    item_qty: params.itemQty?.trim() || "1 szt",
-    item_discount: params.itemDiscount?.trim() || "0 %",
+    item_name: String(first.name ?? "").trim(),
+    item_qty: first.qty?.trim() || "1 szt",
+    item_discount: first.discount?.trim() || "0 %",
     item_price: unitPriceLabel,
     item_value: itemValueLabel,
     total_amount: amountLabel,
-    total_in_words: amountInWordsPln(params.amount),
+    total_in_words: amountInWordsPln(totalAmount),
     payment_method: "Przelew",
     due_date: formatInvoiceDatePl(params.dueDate),
     bank_label: params.bankLabel,

@@ -113,11 +113,7 @@ export function buildContractAmountBreakdown(input: {
   const final_total =
     base_total == null
       ? null
-      : applyDiscountsToAmount(
-          base_total,
-          input.discountKeys,
-          Object.fromEntries(discounts.map((d) => [d.key, d.percent])) as SchoolDiscountSettings
-        );
+      : applyDiscountsToAmount(base_total, input.discountKeys, input.discountSettings);
 
   return {
     payment_type: input.paymentType,
@@ -163,9 +159,9 @@ export function recomputeFinalTotalFromBreakdown(
   }
   if (!hasAny) return null;
 
-  const settings = Object.fromEntries(
-    breakdown.discounts.map((d) => [d.key, d.percent])
-  ) as SchoolDiscountSettings;
+  const settings = {
+    ...Object.fromEntries(breakdown.discounts.map((d) => [d.key, d.percent])),
+  } as SchoolDiscountSettings;
   const keys = breakdown.discounts.map((d) => d.key);
   return applyDiscountsToAmount(roundMoney(baseTotal), keys, settings);
 }

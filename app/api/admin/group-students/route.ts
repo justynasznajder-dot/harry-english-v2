@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { queryDb } from "@/lib/db";
+import { getActiveSchoolYear, queryDb } from "@/lib/db";
 import {
   assertChildInSchool,
   assertGroupInSchool,
@@ -40,10 +40,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const activeYear = await getActiveSchoolYear(ctx.schoolId);
     await queryDb(
       `INSERT INTO group_students (id, school_id, group_id, child_id, enrolled_at, school_year_id)
        VALUES ($1, $2, $3, $4, NOW(), $5)`,
-      [randomUUID(), ctx.schoolId, groupId, childId, group.schoolYearId]
+      [randomUUID(), ctx.schoolId, groupId, childId, activeYear?.id ?? null]
     );
     return NextResponse.json({ message: "Uczeń został dodany do grupy" });
   } catch (error) {

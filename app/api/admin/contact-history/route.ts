@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
              SELECT g.name
              FROM group_students gs
              JOIN groups g ON g.id = gs.group_id
-             JOIN school_years sy ON sy.id = g.school_year_id AND sy.active = TRUE
+             JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
              WHERE gs.child_id = c.id AND gs.left_at IS NULL
              LIMIT 1
            ) AS group_name
@@ -185,7 +185,7 @@ export async function GET(request: NextRequest) {
              SELECT g.name
              FROM group_students gs
              JOIN groups g ON g.id = gs.group_id
-             JOIN school_years sy ON sy.id = g.school_year_id AND sy.active = TRUE
+             JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
              WHERE gs.child_id = c.id AND gs.left_at IS NULL
              LIMIT 1
            ) AS group_name,

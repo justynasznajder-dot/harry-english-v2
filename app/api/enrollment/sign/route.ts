@@ -27,10 +27,7 @@ import {
   findNextQueuedChildWithoutContract,
 } from "@/lib/parent-contract";
 import { storeSignedContractPdfsInR2 } from "@/lib/r2-storage";
-import {
-  createContractMonthlyInvoice,
-  createContractYearlyInvoice,
-} from "@/lib/invoicing";
+import { createContractYearlyInvoice } from "@/lib/invoicing";
 
 /** PDF (Chromium) + R2 + mail — wymaga więcej czasu niż domyślne 10 s na Vercel. */
 export const maxDuration = 60;
@@ -307,6 +304,7 @@ export async function POST(request: NextRequest) {
           lessonUnitPrice: row.lesson_unit_price,
           monthlyUnitPrice: row.monthly_unit_price,
           yearlyUnitPrice: row.yearly_unit_price,
+          schoolYearId: contract.school_year_id,
         });
       }
 
@@ -333,6 +331,8 @@ export async function POST(request: NextRequest) {
 
 
 
+    // Faktura przy podpisaniu tylko dla płatności jednorazowej (YEARLY).
+    // Ratalne (MONTHLY) — wyłącznie ręcznie w panelu managera (aż do odwołania).
     if (contract.payment_type === "YEARLY") {
       try {
         const yearly = await createContractYearlyInvoice(contract.id);
@@ -341,15 +341,6 @@ export async function POST(request: NextRequest) {
         }
       } catch (invoiceErr) {
         console.error("Yearly invoice on sign error:", invoiceErr);
-      }
-    } else if (contract.payment_type === "MONTHLY") {
-      try {
-        const monthly = await createContractMonthlyInvoice(contract.id, signedAt);
-        if (!monthly.ok) {
-          console.error("Monthly invoice on sign failed:", monthly.message);
-        }
-      } catch (invoiceErr) {
-        console.error("Monthly invoice on sign error:", invoiceErr);
       }
     }
 

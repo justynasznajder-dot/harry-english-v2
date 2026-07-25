@@ -53,8 +53,8 @@ export async function GET(request: NextRequest, context: RouteCtx) {
       contracts_count: number;
     }>(
       `SELECT
-         (SELECT COUNT(*)::int FROM groups g
-          WHERE g.school_id = $1 AND g.school_year_id = $2) AS groups_count,
+         (SELECT COUNT(DISTINCT gs.group_id)::int FROM group_students gs
+          WHERE gs.school_id = $1 AND gs.school_year_id = $2) AS groups_count,
          (SELECT COUNT(DISTINCT gs.child_id)::int FROM group_students gs
           WHERE gs.school_id = $1 AND gs.school_year_id = $2) AS students_count,
          (SELECT COUNT(*)::int FROM lessons l
@@ -116,9 +116,9 @@ export async function GET(request: NextRequest, context: RouteCtx) {
          COUNT(gs.id)::int AS students_count
        FROM groups g
        JOIN users u ON u.id = g.teacher_id
-       LEFT JOIN group_students gs
+       INNER JOIN group_students gs
          ON gs.group_id = g.id AND gs.school_year_id = $2
-       WHERE g.school_id = $1 AND g.school_year_id = $2
+       WHERE g.school_id = $1
        GROUP BY g.id, g.name, g.level, g.teacher_id, u.first_name, u.last_name, g.active
        ORDER BY g.name`,
       [year.school_id, yearId]

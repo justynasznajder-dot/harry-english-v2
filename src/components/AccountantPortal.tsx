@@ -93,6 +93,27 @@ function money(value: number | null | undefined): string {
   return value.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' zł';
 }
 
+/** Parsuje rabat z pól typu "5", "5%", "5 %". */
+function parseDiscountPercent(raw: string): number | null {
+  const cleaned = String(raw ?? '')
+    .replace(/%/g, '')
+    .replace(',', '.')
+    .trim();
+  if (cleaned === '') return 0;
+  const n = Number(cleaned);
+  if (!Number.isFinite(n) || n < 0 || n > 100) return null;
+  return n;
+}
+
+function applyDiscount(basePrice: number, discountPercent: number): number {
+  return Math.round(basePrice * (1 - discountPercent / 100) * 100) / 100;
+}
+
+function formatAmountInput(value: number): string {
+  if (!Number.isFinite(value)) return '';
+  return Number.isInteger(value) ? String(value) : value.toFixed(2);
+}
+
 export default function AccountantPortal() {
   const [tab, setTab] = useState<Tab>('clients');
   const [years, setYears] = useState<SchoolYear[]>([]);
@@ -102,11 +123,22 @@ export default function AccountantPortal() {
   const [billingFilter, setBillingFilter] = useState<BillingFilter>('all');
   const [loading, setLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [invoiceMonth, setInvoiceMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const [eppDownloading, setEppDownloading] = useState(false);
 
   const [correctiveOpen, setCorrectiveOpen] = useState(false);
   const [correctiveSourceId, setCorrectiveSourceId] = useState('');
   const [correctiveLoading, setCorrectiveLoading] = useState(false);
   const [correctiveSaving, setCorrectiveSaving] = useState(false);
+  const [correctivePreviewLoading, setCorrectivePreviewLoading] = useState(false);
+  const [correctivePreviewHtml, setCorrectivePreviewHtml] = useState<string | null>(null);
+  const [correctivePreviewNumber, setCorrectivePreviewNumber] = useState<string | null>(null);
+  /** Po udanym podglądzie — dopiero wtedy wolno wystawić korektę. */
+  const [correctivePreviewReady, setCorrectivePreviewReady] = useState(false);
+  const [correctiveFormError, setCorrectiveFormError] = useState<string | null>(null);
   const [correctiveForm, setCorrectiveForm] = useState({
     itemName: '',
     itemQty: '1 szt',
@@ -116,6 +148,8 @@ export default function AccountantPortal() {
     amount: '',
     correctionReason: '',
   });
+  /** Cena z faktury źródłowej — baza do wyliczenia rabatu. */
+  const [correctiveBasePrice, setCorrectiveBasePrice] = useState<number | null>(null);
 
   const loadYears = useCallback(async () => {
     try {
@@ -164,32 +198,39 @@ export default function AccountantPortal() {
     }
   }, []);
 
-  const loadInvoices = useCallback(async (yearId: string, billing: BillingFilter) => {
-    if (!yearId) return;
-    setLoading(true);
-    setStatusMessage(null);
-    try {
-      const res = await fetch(
-        `/api/accountant/invoices?schoolYearId=${encodeURIComponent(yearId)}&billingType=${billing}`,
-        { cache: 'no-store' }
-      );
-      const data = (await res.json().catch(() => ({}))) as {
-        invoices?: InvoiceRow[];
-        message?: string;
-      };
-      if (!res.ok) {
-        setStatusMessage(data.message ?? 'Nie udało się wczytać faktur');
+  const loadInvoices = useCallback(
+    async (yearId: string, billing: BillingFilter, yearMonth: string) => {
+      if (!yearId) return;
+      setLoading(true);
+      setStatusMessage(null);
+      try {
+        const params = new URLSearchParams({
+          schoolYearId: yearId,
+          billingType: billing,
+        });
+        if (yearMonth) params.set('yearMonth', yearMonth);
+        const res = await fetch(`/api/accountant/invoices?${params.toString()}`, {
+          cache: 'no-store',
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          invoices?: InvoiceRow[];
+          message?: string;
+        };
+        if (!res.ok) {
+          setStatusMessage(data.message ?? 'Nie udało się wczytać faktur');
+          setInvoices([]);
+          return;
+        }
+        setInvoices(data.invoices ?? []);
+      } catch {
+        setStatusMessage('Błąd wczytywania faktur');
         setInvoices([]);
-        return;
+      } finally {
+        setLoading(false);
       }
-      setInvoices(data.invoices ?? []);
-    } catch {
-      setStatusMessage('Błąd wczytywania faktur');
-      setInvoices([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    },
+    []
+  );
 
   useEffect(() => {
     loadYears();
@@ -198,13 +239,76 @@ export default function AccountantPortal() {
   useEffect(() => {
     if (!schoolYearId) return;
     if (tab === 'clients') loadClients(schoolYearId);
-    else loadInvoices(schoolYearId, billingFilter);
-  }, [schoolYearId, tab, billingFilter, loadClients, loadInvoices]);
+    else loadInvoices(schoolYearId, billingFilter, invoiceMonth);
+  }, [schoolYearId, tab, billingFilter, invoiceMonth, loadClients, loadInvoices]);
+
+  const downloadEpp = async () => {
+    if (!schoolYearId) {
+      setStatusMessage('Wybierz rok szkolny');
+      return;
+    }
+    if (!/^\d{4}-\d{2}$/.test(invoiceMonth)) {
+      setStatusMessage('Wybierz miesiąc eksportu EPP');
+      return;
+    }
+    setEppDownloading(true);
+    setStatusMessage(null);
+    try {
+      const params = new URLSearchParams({
+        yearMonth: invoiceMonth,
+        schoolYearId,
+        billingType: billingFilter,
+      });
+      const res = await fetch(`/api/accountant/invoices/epp?${params.toString()}`, {
+        cache: 'no-store',
+        credentials: 'same-origin',
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { message?: string };
+        setStatusMessage(data.message ?? 'Nie udało się wygenerować pliku EPP');
+        return;
+      }
+      const bytes = await res.arrayBuffer();
+      const disposition = res.headers.get('Content-Disposition') ?? '';
+      const match = /filename="([^"]+)"/i.exec(disposition);
+      const filename = match?.[1] ?? `dokumenty_${invoiceMonth}.epp`;
+
+      const blob = new Blob([bytes], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.rel = 'noopener';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      window.setTimeout(() => {
+        a.remove();
+        URL.revokeObjectURL(url);
+      }, 2000);
+
+      const count = res.headers.get('X-Invoice-Count');
+      setStatusMessage(
+        count
+          ? `Pobrano plik EPP (${count} faktur) za ${invoiceMonth}`
+          : `Pobrano plik EPP za ${invoiceMonth}`
+      );
+    } catch {
+      setStatusMessage('Błąd generowania pliku EPP');
+    } finally {
+      setEppDownloading(false);
+    }
+  };
 
   const [saleOptions, setSaleOptions] = useState<InvoiceRow[]>([]);
 
   const openCorrective = async (invoiceId?: string) => {
     setCorrectiveOpen(true);
+    setCorrectiveFormError(null);
+    setCorrectivePreviewReady(false);
+    setCorrectivePreviewHtml(null);
+    setCorrectivePreviewNumber(null);
+    setCorrectiveBasePrice(null);
     setCorrectiveForm({
       itemName: '',
       itemQty: '1 szt',
@@ -247,6 +351,8 @@ export default function AccountantPortal() {
         return;
       }
       const inv = detailData.invoice;
+      const base = Number(inv.itemUnitPrice);
+      setCorrectiveBasePrice(Number.isFinite(base) ? base : Number(inv.amount));
       setCorrectiveForm({
         itemName: inv.itemName,
         itemQty: inv.itemQty || '1 szt',
@@ -265,6 +371,8 @@ export default function AccountantPortal() {
 
   const onChangeCorrectiveSource = async (id: string) => {
     setCorrectiveSourceId(id);
+    setCorrectiveFormError(null);
+    resetCorrectivePreviewGate();
     if (!id) return;
     setCorrectiveLoading(true);
     try {
@@ -274,6 +382,8 @@ export default function AccountantPortal() {
       const data = (await res.json().catch(() => ({}))) as { invoice?: InvoiceDetail };
       if (res.ok && data.invoice) {
         const inv = data.invoice;
+        const base = Number(inv.itemUnitPrice);
+        setCorrectiveBasePrice(Number.isFinite(base) ? base : Number(inv.amount));
         setCorrectiveForm((prev) => ({
           ...prev,
           itemName: inv.itemName,
@@ -289,46 +399,131 @@ export default function AccountantPortal() {
     }
   };
 
-  const submitCorrective = async () => {
-    if (!correctiveSourceId) {
-      setStatusMessage('Wybierz fakturę źródłową');
-      return;
+  const resetCorrectivePreviewGate = () => {
+    setCorrectivePreviewReady(false);
+    setCorrectivePreviewHtml(null);
+    setCorrectivePreviewNumber(null);
+  };
+
+  const updateCorrectiveForm = (
+    patch:
+      | Partial<typeof correctiveForm>
+      | ((prev: typeof correctiveForm) => typeof correctiveForm)
+  ) => {
+    resetCorrectivePreviewGate();
+    setCorrectiveFormError(null);
+    setCorrectiveForm((prev) =>
+      typeof patch === 'function' ? patch(prev) : { ...prev, ...patch }
+    );
+  };
+
+  const getCorrectiveMissingFields = (): string[] => {
+    const missing: string[] = [];
+    if (!correctiveSourceId) missing.push('faktura źródłowa');
+    if (!correctiveForm.itemName.trim()) missing.push('nazwa pozycji');
+    if (!correctiveForm.itemQty.trim()) missing.push('ilość');
+    const unit = Number(correctiveForm.itemUnitPrice);
+    const value = Number(correctiveForm.itemValue);
+    const amount = Number(correctiveForm.amount);
+    if (!Number.isFinite(unit) || correctiveForm.itemUnitPrice.trim() === '') {
+      missing.push('cena jednostkowa');
     }
-    if (!correctiveForm.correctionReason.trim()) {
-      setStatusMessage('Podaj powód korekty');
+    if (
+      !Number.isFinite(value) ||
+      !Number.isFinite(amount) ||
+      correctiveForm.amount.trim() === ''
+    ) {
+      missing.push('wartość / do zapłaty');
+    }
+    if (!correctiveForm.correctionReason.trim()) missing.push('powód korekty');
+    return missing;
+  };
+
+  const validateCorrectiveForm = (): boolean => {
+    const missing = getCorrectiveMissingFields();
+    if (missing.length > 0) {
+      setCorrectiveFormError(`Uzupełnij wymagane pola: ${missing.join(', ')}.`);
+      return false;
+    }
+    setCorrectiveFormError(null);
+    return true;
+  };
+
+  const correctivePayload = () => ({
+    originalInvoiceId: correctiveSourceId,
+    correctionReason: correctiveForm.correctionReason,
+    itemName: correctiveForm.itemName,
+    itemQty: correctiveForm.itemQty,
+    itemDiscount: correctiveForm.itemDiscount,
+    itemUnitPrice: Number(correctiveForm.itemUnitPrice),
+    itemValue: Number(correctiveForm.itemValue),
+    amount: Number(correctiveForm.amount),
+  });
+
+  const previewCorrective = async () => {
+    if (!validateCorrectiveForm()) return;
+    setCorrectivePreviewLoading(true);
+    setCorrectiveFormError(null);
+    setStatusMessage(null);
+    try {
+      const res = await fetch('/api/accountant/invoices/corrective/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(correctivePayload()),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        html?: string;
+        invoiceNumber?: string;
+        message?: string;
+      };
+      if (!res.ok || !data.html) {
+        setCorrectiveFormError(data.message ?? 'Nie udało się przygotować podglądu');
+        setCorrectivePreviewReady(false);
+        return;
+      }
+      setCorrectivePreviewHtml(data.html);
+      setCorrectivePreviewNumber(data.invoiceNumber ?? null);
+      setCorrectivePreviewReady(true);
+    } catch {
+      setCorrectiveFormError('Błąd podglądu faktury korygującej');
+      setCorrectivePreviewReady(false);
+    } finally {
+      setCorrectivePreviewLoading(false);
+    }
+  };
+
+  const submitCorrective = async () => {
+    if (!validateCorrectiveForm()) return;
+    if (!correctivePreviewReady) {
+      setCorrectiveFormError('Najpierw otwórz podgląd korekty, dopiero potem wystaw fakturę.');
       return;
     }
     setCorrectiveSaving(true);
+    setCorrectiveFormError(null);
     setStatusMessage(null);
     try {
       const res = await fetch('/api/accountant/invoices/corrective', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          originalInvoiceId: correctiveSourceId,
-          correctionReason: correctiveForm.correctionReason,
-          itemName: correctiveForm.itemName,
-          itemQty: correctiveForm.itemQty,
-          itemDiscount: correctiveForm.itemDiscount,
-          itemUnitPrice: Number(correctiveForm.itemUnitPrice),
-          itemValue: Number(correctiveForm.itemValue),
-          amount: Number(correctiveForm.amount),
-        }),
+        body: JSON.stringify(correctivePayload()),
       });
       const data = (await res.json().catch(() => ({}))) as {
         invoiceNumber?: string;
         message?: string;
       };
       if (!res.ok) {
-        setStatusMessage(data.message ?? 'Nie udało się wystawić korekty');
+        setCorrectiveFormError(data.message ?? 'Nie udało się wystawić korekty');
         return;
       }
+      setCorrectivePreviewHtml(null);
+      setCorrectivePreviewNumber(null);
+      setCorrectivePreviewReady(false);
       setCorrectiveOpen(false);
       setStatusMessage(`Wystawiono fakturę korygującą ${data.invoiceNumber ?? ''}`);
       setTab('invoices');
-      await loadInvoices(schoolYearId, billingFilter);
+      await loadInvoices(schoolYearId, billingFilter, invoiceMonth);
     } catch {
-      setStatusMessage('Błąd wystawiania faktury korygującej');
+      setCorrectiveFormError('Błąd wystawiania faktury korygującej');
     } finally {
       setCorrectiveSaving(false);
     }
@@ -342,7 +537,8 @@ export default function AccountantPortal() {
         <div>
           <h2 className="text-xl font-bold text-[#1e3a4c]">Panel księgowej</h2>
           <p className="mt-1 text-sm text-zinc-600">
-            Umowy podpisane, faktury i korekty w wybranym roku szkolnym.
+            Umowy podpisane, faktury i korekty w wybranym roku szkolnym i miesiącu.
+            EPP obejmuje dokładnie te same filtry co lista.
           </p>
         </div>
         <label className="block text-sm">
@@ -397,27 +593,50 @@ export default function AccountantPortal() {
       </div>
 
       {tab === 'invoices' && (
-        <div className="mb-4 flex flex-wrap gap-2">
-          {(
-            [
-              ['all', 'Wszystkie'],
-              ['company', 'Na firmę'],
-              ['private', 'Osoby prywatne'],
-            ] as const
-          ).map(([key, label]) => (
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
+          <div className="flex flex-wrap gap-2">
+            {(
+              [
+                ['all', 'Wszystkie'],
+                ['company', 'Na firmę'],
+                ['private', 'Osoby prywatne'],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setBillingFilter(key)}
+                className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                  billingFilter === key
+                    ? 'bg-[#1e3a4c] text-white'
+                    : 'border border-zinc-300 bg-white text-zinc-700'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="block text-sm">
+              <span className="mb-1 block text-xs font-medium text-zinc-600">
+                Miesiąc wystawienia
+              </span>
+              <input
+                type="month"
+                value={invoiceMonth}
+                onChange={(e) => setInvoiceMonth(e.target.value)}
+                className="rounded-xl border border-zinc-300 bg-white px-3 py-1.5 text-sm"
+              />
+            </label>
             <button
-              key={key}
               type="button"
-              onClick={() => setBillingFilter(key)}
-              className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-                billingFilter === key
-                  ? 'bg-[#1e3a4c] text-white'
-                  : 'border border-zinc-300 bg-white text-zinc-700'
-              }`}
+              disabled={eppDownloading || !invoiceMonth || !schoolYearId}
+              onClick={downloadEpp}
+              className="rounded-full bg-[#1e3a4c] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
             >
-              {label}
+              {eppDownloading ? 'Generowanie…' : 'Generuj EPP'}
             </button>
-          ))}
+          </div>
         </div>
       )}
 
@@ -504,7 +723,8 @@ export default function AccountantPortal() {
               {invoices.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-2 py-6 text-center text-zinc-500">
-                    Brak faktur dla wybranego filtra.
+                    Brak faktur dla wybranego roku szkolnego i miesiąca
+                    {invoiceMonth ? ` (${invoiceMonth})` : ''}.
                   </td>
                 </tr>
               ) : (
@@ -566,10 +786,17 @@ export default function AccountantPortal() {
             <h3 className="text-lg font-bold text-[#1e3a4c]">Faktura korygująca</h3>
             <p className="mt-1 text-sm text-zinc-600">
               Wybierz fakturę sprzedaży i podaj skorygowane pozycje oraz powód.
+              Przed wystawieniem obowiązkowy jest podgląd.
             </p>
 
+            {correctiveFormError && (
+              <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                {correctiveFormError}
+              </p>
+            )}
+
             <label className="mt-4 block text-sm">
-              <span className="mb-1 block font-medium">Faktura źródłowa</span>
+              <span className="mb-1 block font-medium">Faktura źródłowa *</span>
               <select
                 value={correctiveSourceId}
                 onChange={(e) => onChangeCorrectiveSource(e.target.value)}
@@ -589,69 +816,89 @@ export default function AccountantPortal() {
             ) : (
               <div className="mt-3 space-y-3">
                 <label className="block text-sm">
-                  <span className="mb-1 block font-medium">Nazwa pozycji</span>
+                  <span className="mb-1 block font-medium">Nazwa pozycji *</span>
                   <input
                     value={correctiveForm.itemName}
-                    onChange={(e) =>
-                      setCorrectiveForm((p) => ({ ...p, itemName: e.target.value }))
-                    }
+                    onChange={(e) => updateCorrectiveForm({ itemName: e.target.value })}
                     className="w-full rounded-xl border border-zinc-300 px-3 py-2"
                   />
                 </label>
                 <div className="grid grid-cols-2 gap-3">
                   <label className="block text-sm">
-                    <span className="mb-1 block font-medium">Ilość</span>
+                    <span className="mb-1 block font-medium">Ilość *</span>
                     <input
                       value={correctiveForm.itemQty}
-                      onChange={(e) =>
-                        setCorrectiveForm((p) => ({ ...p, itemQty: e.target.value }))
-                      }
+                      onChange={(e) => updateCorrectiveForm({ itemQty: e.target.value })}
                       className="w-full rounded-xl border border-zinc-300 px-3 py-2"
                     />
                   </label>
                   <label className="block text-sm">
-                    <span className="mb-1 block font-medium">Rabat</span>
+                    <span className="mb-1 block font-medium">Rabat %</span>
                     <input
                       value={correctiveForm.itemDiscount}
-                      onChange={(e) =>
-                        setCorrectiveForm((p) => ({ ...p, itemDiscount: e.target.value }))
-                      }
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        const pct = parseDiscountPercent(raw);
+                        updateCorrectiveForm((p) => {
+                          if (
+                            pct == null ||
+                            correctiveBasePrice == null ||
+                            !Number.isFinite(correctiveBasePrice)
+                          ) {
+                            return { ...p, itemDiscount: raw };
+                          }
+                          const next = formatAmountInput(
+                            applyDiscount(correctiveBasePrice, pct)
+                          );
+                          return {
+                            ...p,
+                            itemDiscount: raw,
+                            itemUnitPrice: next,
+                            itemValue: next,
+                            amount: next,
+                          };
+                        });
+                      }}
+                      onBlur={() => {
+                        const pct = parseDiscountPercent(correctiveForm.itemDiscount);
+                        if (pct == null) return;
+                        updateCorrectiveForm({ itemDiscount: `${pct} %` });
+                      }}
                       className="w-full rounded-xl border border-zinc-300 px-3 py-2"
+                      placeholder="0 %"
                     />
                   </label>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <label className="block text-sm">
-                    <span className="mb-1 block font-medium">Cena jedn.</span>
+                    <span className="mb-1 block font-medium">Cena jedn. *</span>
                     <input
                       type="number"
                       step="0.01"
                       value={correctiveForm.itemUnitPrice}
                       onChange={(e) => {
                         const v = e.target.value;
-                        setCorrectiveForm((p) => ({
-                          ...p,
+                        updateCorrectiveForm({
                           itemUnitPrice: v,
                           itemValue: v,
                           amount: v,
-                        }));
+                        });
                       }}
                       className="w-full rounded-xl border border-zinc-300 px-3 py-2"
                     />
                   </label>
                   <label className="block text-sm">
-                    <span className="mb-1 block font-medium">Wartość / do zapłaty</span>
+                    <span className="mb-1 block font-medium">Wartość / do zapłaty *</span>
                     <input
                       type="number"
                       step="0.01"
                       value={correctiveForm.amount}
                       onChange={(e) => {
                         const v = e.target.value;
-                        setCorrectiveForm((p) => ({
-                          ...p,
+                        updateCorrectiveForm({
                           amount: v,
                           itemValue: v,
-                        }));
+                        });
                       }}
                       className="w-full rounded-xl border border-zinc-300 px-3 py-2"
                     />
@@ -662,7 +909,7 @@ export default function AccountantPortal() {
                   <textarea
                     value={correctiveForm.correctionReason}
                     onChange={(e) =>
-                      setCorrectiveForm((p) => ({ ...p, correctionReason: e.target.value }))
+                      updateCorrectiveForm({ correctionReason: e.target.value })
                     }
                     rows={3}
                     className="w-full rounded-xl border border-zinc-300 px-3 py-2"
@@ -672,17 +919,91 @@ export default function AccountantPortal() {
               </div>
             )}
 
-            <div className="mt-5 flex justify-end gap-2">
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setCorrectiveOpen(false)}
+                onClick={() => {
+                  setCorrectiveOpen(false);
+                  setCorrectiveFormError(null);
+                  setCorrectivePreviewReady(false);
+                  setCorrectivePreviewHtml(null);
+                  setCorrectivePreviewNumber(null);
+                }}
                 className="rounded-full border border-zinc-300 px-4 py-2 text-sm font-semibold"
               >
                 Anuluj
               </button>
               <button
                 type="button"
-                disabled={correctiveSaving || correctiveLoading}
+                disabled={correctivePreviewLoading || correctiveSaving || correctiveLoading}
+                onClick={previewCorrective}
+                className="rounded-full border border-[#0f6e56] px-4 py-2 text-sm font-semibold text-[#0f6e56] disabled:opacity-50"
+              >
+                {correctivePreviewLoading ? 'Generowanie…' : 'Podgląd'}
+              </button>
+              <button
+                type="button"
+                disabled={
+                  !correctivePreviewReady ||
+                  correctiveSaving ||
+                  correctiveLoading ||
+                  correctivePreviewLoading
+                }
+                onClick={submitCorrective}
+                title={
+                  correctivePreviewReady
+                    ? undefined
+                    : 'Najpierw otwórz podgląd korekty'
+                }
+                className="rounded-full bg-[#0f3c33] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {correctiveSaving ? 'Zapisywanie…' : 'Wystaw korektę'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {correctivePreviewHtml && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+          <div className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
+            <div className="border-b border-zinc-200 px-5 py-4">
+              <h3 className="text-lg font-bold text-[#1e3a4c]">Podgląd faktury korygującej</h3>
+              <p className="mt-1 text-sm text-zinc-600">
+                Sprawdź dokument, a następnie wystaw korektę
+                {correctivePreviewNumber ? ` · nr ${correctivePreviewNumber}` : ''}.
+              </p>
+              {correctiveFormError && (
+                <p className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  {correctiveFormError}
+                </p>
+              )}
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto bg-zinc-100 p-3">
+              <iframe
+                srcDoc={correctivePreviewHtml}
+                title="Podgląd faktury korygującej"
+                className="block w-full rounded-lg border border-zinc-200 bg-white"
+                style={{ height: 'min(70vh, 820px)' }}
+                sandbox="allow-same-origin"
+              />
+            </div>
+            <div className="flex flex-wrap justify-end gap-2 border-t border-zinc-200 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setCorrectivePreviewHtml(null);
+                  setCorrectivePreviewNumber(null);
+                  // Podgląd był otwarty — wystawianie nadal możliwe po powrocie do edycji,
+                  // dopóki nie zmienisz pól (wtedy gate się resetuje).
+                }}
+                className="rounded-full border border-zinc-300 px-4 py-2 text-sm font-semibold"
+              >
+                Wróć do edycji
+              </button>
+              <button
+                type="button"
+                disabled={correctiveSaving || !correctivePreviewReady}
                 onClick={submitCorrective}
                 className="rounded-full bg-[#0f3c33] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
               >

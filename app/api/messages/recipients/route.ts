@@ -136,7 +136,8 @@ export async function POST(request: NextRequest) {
         isTeacher
           ? `SELECT DISTINCT sy.id, sy.name
              FROM school_years sy
-             JOIN groups g ON g.school_year_id = sy.id AND g.school_id = $1 AND g.teacher_id = $2 AND g.active = TRUE
+             JOIN group_students gs ON gs.school_year_id = sy.id
+             JOIN groups g ON g.id = gs.group_id AND g.school_id = $1 AND g.teacher_id = $2 AND g.active = TRUE
              ORDER BY sy.date_from DESC`
           : `SELECT id, name FROM school_years WHERE school_id = $1 ORDER BY date_from DESC`,
         isTeacher ? [actor.user.schoolId, actor.user.id] : [actor.user.schoolId]

@@ -211,33 +211,6 @@ export default function ParentProfileSection() {
             className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
           />
         </div>
-        <div className="space-y-1 md:col-span-2">
-          <label className="text-sm font-medium text-zinc-800">Adres</label>
-          <input
-            type="text"
-            value={form.address}
-            onChange={(e) => patch({ address: e.target.value })}
-            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-          />
-        </div>
-        <div className="space-y-1">
-          <label className="text-sm font-medium text-zinc-800">Miasto</label>
-          <input
-            type="text"
-            value={form.city}
-            onChange={(e) => patch({ city: e.target.value })}
-            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-          />
-        </div>
-        <div className="space-y-1">
-          <label className="text-sm font-medium text-zinc-800">Kod pocztowy</label>
-          <input
-            type="text"
-            value={form.zipCode}
-            onChange={(e) => patch({ zipCode: e.target.value })}
-            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-          />
-        </div>
         <div className="space-y-2 md:col-span-2">
           <p className="text-sm font-medium text-zinc-800">Rozliczenie</p>
           <div className="flex flex-wrap gap-4">
@@ -259,39 +232,103 @@ export default function ParentProfileSection() {
                 onChange={() => patch({ billingType: 'company' })}
                 className="accent-[#0f6e56]"
               />
-              Firma (NIP)
+              Firma (faktura)
             </label>
           </div>
         </div>
         {form.billingType === 'private' ? (
-          <div className="space-y-1 md:col-span-2">
-            <label className="text-sm font-medium text-zinc-800">PESEL</label>
-            <input
-              type="text"
-              inputMode="numeric"
-              value={form.pesel}
-              onChange={(e) => patch({ pesel: e.target.value })}
-              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-            />
-          </div>
+          <>
+            <div className="space-y-1 md:col-span-2">
+              <label className="text-sm font-medium text-zinc-800">PESEL</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={11}
+                value={form.pesel}
+                onChange={(e) => patch({ pesel: e.target.value })}
+                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+              />
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <label className="text-sm font-medium text-zinc-800">Adres</label>
+              <input
+                type="text"
+                value={form.address}
+                onChange={(e) => patch({ address: e.target.value })}
+                placeholder="ul. Przykładowa 1"
+                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-zinc-800">Miasto</label>
+              <input
+                type="text"
+                value={form.city}
+                onChange={(e) => patch({ city: e.target.value })}
+                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-zinc-800">Kod pocztowy</label>
+              <input
+                type="text"
+                value={form.zipCode}
+                onChange={(e) => patch({ zipCode: e.target.value })}
+                placeholder="00-000"
+                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+              />
+            </div>
+          </>
         ) : (
           <>
-            <div className="space-y-1">
+            <div className="space-y-1 md:col-span-2">
               <label className="text-sm font-medium text-zinc-800">Nazwa firmy</label>
               <input
                 type="text"
                 value={form.companyName}
                 onChange={(e) => patch({ companyName: e.target.value })}
+                placeholder="Pełna nazwa firmy"
                 className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
               />
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1 md:col-span-2 max-w-sm">
               <label className="text-sm font-medium text-zinc-800">NIP</label>
               <input
                 type="text"
                 inputMode="numeric"
+                maxLength={10}
                 value={form.nip}
                 onChange={(e) => patch({ nip: e.target.value })}
+                placeholder="10 cyfr"
+                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+              />
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <label className="text-sm font-medium text-zinc-800">Adres siedziby firmy</label>
+              <input
+                type="text"
+                value={form.address}
+                onChange={(e) => patch({ address: e.target.value })}
+                placeholder="ul. Przykładowa 1"
+                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-zinc-800">Miasto</label>
+              <input
+                type="text"
+                value={form.city}
+                onChange={(e) => patch({ city: e.target.value })}
+                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-zinc-800">Kod pocztowy</label>
+              <input
+                type="text"
+                value={form.zipCode}
+                onChange={(e) => patch({ zipCode: e.target.value })}
+                placeholder="00-000"
                 className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
               />
             </div>

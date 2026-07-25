@@ -10,12 +10,19 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const schoolYearId = searchParams.get("schoolYearId")?.trim() || null;
   const billingType = (searchParams.get("billingType") || "all").toLowerCase();
+  const yearMonth = searchParams.get("yearMonth")?.trim() || "";
 
   if (!schoolYearId) {
     return NextResponse.json({ message: "Podaj schoolYearId" }, { status: 400 });
   }
   if (!["all", "company", "private"].includes(billingType)) {
     return NextResponse.json({ message: "Nieprawidłowy billingType" }, { status: 400 });
+  }
+  if (yearMonth && !/^\d{4}-\d{2}$/.test(yearMonth)) {
+    return NextResponse.json(
+      { message: "Nieprawidłowy yearMonth (YYYY-MM)" },
+      { status: 400 }
+    );
   }
 
   const billingClause =
@@ -24,6 +31,18 @@ export async function GET(request: NextRequest) {
       : billingType === "private"
         ? "AND (i.buyer_nip IS NULL OR btrim(i.buyer_nip) = '')"
         : "";
+
+  const queryParams: string[] = [ctx.schoolId, schoolYearId];
+  let monthClause = "";
+  if (yearMonth) {
+    const year = Number(yearMonth.slice(0, 4));
+    const month = Number(yearMonth.slice(5, 7));
+    const lastDay = new Date(year, month, 0).getDate();
+    const dateFrom = `${yearMonth}-01`;
+    const dateTo = `${yearMonth}-${String(lastDay).padStart(2, "0")}`;
+    monthClause = `AND i.issue_date >= $3::date AND i.issue_date <= $4::date`;
+    queryParams.push(dateFrom, dateTo);
+  }
 
   try {
     const hasCorrective = await invoicesSupportCorrectiveDocuments();
@@ -69,6 +88,7 @@ export async function GET(request: NextRequest) {
            WHERE i.school_id = $1
              AND i.school_year_id = $2
              ${billingClause}
+             ${monthClause}
            ORDER BY i.issue_date DESC, i.created_at DESC`
         : `SELECT
              i.id,
@@ -92,8 +112,9 @@ export async function GET(request: NextRequest) {
            WHERE i.school_id = $1
              AND i.school_year_id = $2
              ${billingClause}
+             ${monthClause}
            ORDER BY i.issue_date DESC, i.created_at DESC`,
-      [ctx.schoolId, schoolYearId]
+      queryParams
     );
 
     const invoices = r.rows.map((row) => ({

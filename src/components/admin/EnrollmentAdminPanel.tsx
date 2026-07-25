@@ -10,7 +10,7 @@ import {
   filterEnrollmentChildrenByStatus,
   formatEnrollmentStatusLabel,
 } from '@/lib/enrollment-status';
-import { applyDiscountsToAmount, DISCOUNT_KEYS } from '@/lib/discount-math';
+import { applyDiscountsToAmount, DISCOUNT_KEYS, hasIndividualPriceOverride } from '@/lib/discount-math';
 import { isParentInComplimentaryList } from '@/lib/complimentary-parent-list';
 import { paymentPlanLabel, paymentRateLabel } from '@/lib/payment-labels';
 import type {
@@ -51,8 +51,10 @@ function applyDiscountPreview(
   base: number | null,
   discountLargeFamily: boolean,
   discountSettings: { LARGE_FAMILY_CARD: number; SIBLING: number },
+  hasIndividualPricing: boolean,
 ): number | null {
   if (base == null || !Number.isFinite(base) || base <= 0) return base;
+  if (hasIndividualPricing) return base;
   const keys = discountLargeFamily ? [DISCOUNT_KEYS.LARGE_FAMILY_CARD] : [];
   return applyDiscountsToAmount(base, keys, discountSettings);
 }
@@ -73,6 +75,7 @@ export type EnrollmentAdminPanelProps = {
   complimentaryParents: ComplimentaryParentRow[];
   discountSettings: { LARGE_FAMILY_CARD: number; SIBLING: number };
   onRefresh: () => Promise<void>;
+  onComplimentaryParentsChange?: (parents: ComplimentaryParentRow[]) => void;
 };
 
 export default function EnrollmentAdminPanel({
@@ -82,6 +85,7 @@ export default function EnrollmentAdminPanel({
   complimentaryParents,
   discountSettings,
   onRefresh,
+  onComplimentaryParentsChange,
 }: EnrollmentAdminPanelProps) {
   const [enrollmentStatusFilter, setEnrollmentStatusFilter] = useState('');
   const [proposalModalParentId, setProposalModalParentId] = useState<string | null>(null);
@@ -92,6 +96,7 @@ export default function EnrollmentAdminPanel({
   const [submittingBatchProposals, setSubmittingBatchProposals] = useState(false);
   const [proposalDrafts, setProposalDrafts] = useState<Record<string, ProposalDraft>>({});
   const [savingParentDiscountId, setSavingParentDiscountId] = useState<string | null>(null);
+  const [savingComplimentaryKey, setSavingComplimentaryKey] = useState<string | null>(null);
 
   const saveParentLargeFamilyCard = useCallback(
     async (
@@ -135,6 +140,91 @@ export default function EnrollmentAdminPanel({
     [onRefresh, pushToast],
   );
 
+  const saveParentComplimentary = useCallback(
+    async (
+      parent: {
+        id: string;
+        parentUserId?: string | null;
+        email: string;
+      },
+      checked: boolean,
+    ) => {
+      const email = (parent.email ?? '').trim();
+      const parentUserId = (parent.parentUserId ?? '').trim();
+      const saveKey = parentUserId || parent.id;
+      if (checked && !email && !parentUserId) {
+        pushToast('error', 'Brak e-maila rodzica — nie można oznaczyć trybu bez opłat');
+        return;
+      }
+
+      setSavingComplimentaryKey(saveKey);
+      try {
+        if (checked) {
+          const res = await fetch('/api/admin/discounts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(
+              parentUserId
+                ? { parentId: parentUserId }
+                : { parentEmail: email },
+            ),
+          });
+          const data = (await res.json().catch(() => ({}))) as {
+            message?: string;
+            complimentaryParents?: ComplimentaryParentRow[];
+          };
+          if (!res.ok) {
+            pushToast('error', data.message ?? 'Nie udało się włączyć trybu bez opłat');
+            return;
+          }
+          if (Array.isArray(data.complimentaryParents)) {
+            onComplimentaryParentsChange?.(data.complimentaryParents);
+          }
+          pushToast('success', 'Włączono tryb bez opłat');
+        } else {
+          const existing = complimentaryParents.find((row) => {
+            if (parentUserId && row.parentId === parentUserId) return true;
+            if (!email) return false;
+            const rowEmail = row.email.trim().toLowerCase();
+            const rowParentEmail = (row.parentEmail ?? '').trim().toLowerCase();
+            return rowEmail === email.toLowerCase() || rowParentEmail === email.toLowerCase();
+          });
+          const res = await fetch('/api/admin/discounts', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(
+              existing
+                ? { id: existing.id }
+                : parentUserId
+                  ? { parentId: parentUserId }
+                  : { parentEmail: email },
+            ),
+          });
+          const data = (await res.json().catch(() => ({}))) as {
+            message?: string;
+            complimentaryParents?: ComplimentaryParentRow[];
+          };
+          if (!res.ok) {
+            pushToast('error', data.message ?? 'Nie udało się wyłączyć trybu bez opłat');
+            return;
+          }
+          if (Array.isArray(data.complimentaryParents)) {
+            onComplimentaryParentsChange?.(data.complimentaryParents);
+          }
+          pushToast('success', 'Wyłączono tryb bez opłat');
+        }
+      } catch (err) {
+        pushToast(
+          'error',
+          err instanceof Error ? err.message : 'Błąd zapisu trybu bez opłat',
+        );
+      } finally {
+        setSavingComplimentaryKey(null);
+      }
+    },
+    [complimentaryParents, onComplimentaryParentsChange, pushToast],
+  );
+
   const proposalParent =
     proposalModalParentId == null
       ? null
@@ -164,6 +254,16 @@ export default function EnrollmentAdminPanel({
     [proposalParent, complimentaryParents],
   );
 
+  const enrollmentStatusCounts = useMemo(() => {
+    const children = parents.flatMap((parent) => parent.children);
+    const counts: Record<string, number> = { '': children.length };
+    for (const filter of ENROLLMENT_LIST_FILTERS) {
+      if (!filter.value) continue;
+      counts[filter.value] = filterEnrollmentChildrenByStatus(children, filter.value).length;
+    }
+    return counts;
+  }, [parents]);
+
   const renderList = () => {
     const isPipeline = enrollmentStatusFilter === 'pipeline';
     const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
@@ -190,7 +290,7 @@ export default function EnrollmentAdminPanel({
                   : 'border-emerald-200 bg-white text-zinc-700'
               }`}
             >
-              {filter.label}
+              {filter.label} ({enrollmentStatusCounts[filter.value] ?? 0})
             </button>
           ))}
           <button
@@ -247,6 +347,9 @@ export default function EnrollmentAdminPanel({
                     {parent.firstName} {parent.lastName}
                   </p>
                   <p className="text-sm text-zinc-600">{parent.email}</p>
+                  {parentIsComplimentary && (
+                    <p className="mt-1 text-xs font-medium text-sky-800">Tryb bez opłat</p>
+                  )}
                   {!parentIsComplimentary && (
                     <label className="mt-2 inline-flex items-center gap-2 text-sm text-zinc-800">
                       <input
@@ -353,42 +456,64 @@ export default function EnrollmentAdminPanel({
                     {proposalParent.firstName} {proposalParent.lastName}
                   </p>
                   <p className="mt-1 break-all text-sm text-zinc-600">{proposalParent.email}</p>
-                  {!proposalParentIsComplimentary && (
-                    <div className="mt-3 rounded-xl border border-emerald-100 bg-white p-3">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                        Zniżki
-                      </p>
-                      <label className="mt-2 inline-flex items-center gap-2 text-sm text-zinc-800">
-                        <input
-                          type="checkbox"
-                          checked={Boolean(proposalParent.discountLargeFamily)}
-                          disabled={
-                            !Boolean((proposalParent.parentUserId ?? '').trim()) ||
-                            savingParentDiscountId ===
-                              (proposalParent.parentUserId ?? proposalParent.id)
-                          }
-                          title={
-                            (proposalParent.parentUserId ?? '').trim()
-                              ? undefined
-                              : 'Dostępne po utworzeniu konta rodzica (np. po pierwszej propozycji)'
-                          }
-                          onChange={(e) => {
-                            void saveParentLargeFamilyCard(proposalParent, e.target.checked);
-                          }}
-                        />
-                        Karta Dużej Rodziny ({discountSettings.LARGE_FAMILY_CARD}%)
-                      </label>
-                      {!(proposalParent.parentUserId ?? '').trim() && (
-                        <p className="mt-1 text-xs text-zinc-500">
-                          Oznaczenie KDR będzie możliwe po utworzeniu konta rodzica.
-                        </p>
-                      )}
-                    </div>
-                  )}
+                  <div className="mt-3 rounded-xl border border-emerald-100 bg-white p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                      Rozliczenia
+                    </p>
+                    <label className="mt-2 inline-flex items-center gap-2 text-sm text-zinc-800">
+                      <input
+                        type="checkbox"
+                        checked={proposalParentIsComplimentary}
+                        disabled={
+                          savingComplimentaryKey ===
+                            (proposalParent.parentUserId ?? proposalParent.id) ||
+                          (!(proposalParent.email ?? '').trim() &&
+                            !(proposalParent.parentUserId ?? '').trim())
+                        }
+                        onChange={(e) => {
+                          void saveParentComplimentary(proposalParent, e.target.checked);
+                        }}
+                      />
+                      Tryb bez opłat
+                    </label>
+                    <p className="mt-1 text-xs text-zinc-500">
+                      Po akceptacji grupy zapis kończy się bez umowy, faktur i płatności. Działa
+                      też przed utworzeniem konta (po e-mailu zgłoszenia).
+                    </p>
+                    {!proposalParentIsComplimentary && (
+                      <>
+                        <label className="mt-3 inline-flex items-center gap-2 text-sm text-zinc-800">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(proposalParent.discountLargeFamily)}
+                            disabled={
+                              !Boolean((proposalParent.parentUserId ?? '').trim()) ||
+                              savingParentDiscountId ===
+                                (proposalParent.parentUserId ?? proposalParent.id)
+                            }
+                            title={
+                              (proposalParent.parentUserId ?? '').trim()
+                                ? undefined
+                                : 'Dostępne po utworzeniu konta rodzica (np. po pierwszej propozycji)'
+                            }
+                            onChange={(e) => {
+                              void saveParentLargeFamilyCard(proposalParent, e.target.checked);
+                            }}
+                          />
+                          Karta Dużej Rodziny ({discountSettings.LARGE_FAMILY_CARD}%)
+                        </label>
+                        {!(proposalParent.parentUserId ?? '').trim() && (
+                          <p className="mt-1 text-xs text-zinc-500">
+                            Oznaczenie KDR będzie możliwe po utworzeniu konta rodzica.
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </div>
                   {proposalParentIsComplimentary && (
                     <p className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
-                      Rodzic jest w trybie bez opłat — po akceptacji grupy zapis kończy się bez
-                      umowy, faktur i płatności.
+                      Rodzic jest w trybie bez opłat — wyślij propozycję grupy; rodzic tylko
+                      zatwierdzi grupę po zalogowaniu (bez umowy).
                     </p>
                   )}
                 </div>
@@ -588,6 +713,12 @@ export default function EnrollmentAdminPanel({
                                           {formatPlnFromDb(selectedGroup.price_per_lesson)}
                                         </p>
                                       </div>
+                                      {proposalParentIsComplimentary ? (
+                                        <p className="mt-3 text-xs text-sky-800">
+                                          Tryb bez opłat — indywidualne stawki nie są używane.
+                                        </p>
+                                      ) : (
+                                      <>
                                       <label className="mt-3 block text-xs font-medium text-zinc-600">
                                         {paymentRateLabel('monthly', { individualOptional: true })}
                                         <input
@@ -663,6 +794,8 @@ export default function EnrollmentAdminPanel({
                                           }
                                         />
                                       </label>
+                                      </>
+                                      )}
                                     </div>
                                   </>
                                 );
@@ -676,6 +809,12 @@ export default function EnrollmentAdminPanel({
                                 if (!selectedGroup || proposalParentIsComplimentary) return null;
                                 const monthlyBaseRaw = draft?.monthlyUnitPrice?.trim();
                                 const yearlyBaseRaw = draft?.yearlyUnitPrice?.trim();
+                                const lessonBaseRaw = draft?.lessonUnitPrice?.trim();
+                                const hasIndividualPricing = hasIndividualPriceOverride({
+                                  lesson_unit_price: lessonBaseRaw || null,
+                                  monthly_unit_price: monthlyBaseRaw || null,
+                                  yearly_unit_price: yearlyBaseRaw || null,
+                                });
                                 const monthlyBase =
                                   monthlyBaseRaw && Number.isFinite(Number(monthlyBaseRaw.replace(',', '.')))
                                     ? Number(monthlyBaseRaw.replace(',', '.'))
@@ -692,19 +831,29 @@ export default function EnrollmentAdminPanel({
                                   monthlyBase,
                                   Boolean(proposalParent?.discountLargeFamily),
                                   discountSettings,
+                                  hasIndividualPricing,
                                 );
                                 const yearlyAfter = applyDiscountPreview(
                                   yearlyBase,
                                   Boolean(proposalParent?.discountLargeFamily),
                                   discountSettings,
+                                  hasIndividualPricing,
                                 );
+                                if (hasIndividualPricing) {
+                                  return (
+                                    <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                                      Cena indywidualna — zniżki procentowe (KDR / rodzeństwo) nie
+                                      obowiązują.
+                                    </p>
+                                  );
+                                }
                                 if (
                                   proposalParent?.discountLargeFamily &&
                                   (monthlyAfter != null || yearlyAfter != null)
                                 ) {
                                   return (
                                     <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
-                                      Kwota po zniżkach:{' '}
+                                      Kwota po zniżce KDR:{' '}
                                       {monthlyAfter != null
                                         ? `ratalnie ${formatPlnFromDb(monthlyAfter)}`
                                         : ''}

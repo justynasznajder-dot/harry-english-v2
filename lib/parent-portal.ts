@@ -153,7 +153,7 @@ export async function fetchParentGroups(
      FROM children c
      JOIN group_students gs ON gs.child_id = c.id AND gs.left_at IS NULL
      JOIN groups g ON g.id = gs.group_id AND g.active = TRUE
-     JOIN school_years sy ON sy.id = g.school_year_id AND sy.active = TRUE
+     JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
      LEFT JOIN schedule_templates st ON st.group_id = g.id AND st.active = TRUE
      LEFT JOIN locations l ON l.id = st.location_id
      LEFT JOIN users t ON t.id = g.teacher_id
@@ -259,7 +259,7 @@ export async function fetchParentAttendance(
      FROM children c
      JOIN group_students gs ON gs.child_id = c.id AND gs.left_at IS NULL
      JOIN groups g ON g.id = gs.group_id
-     JOIN school_years sy ON sy.id = g.school_year_id AND sy.active = TRUE
+     JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
      JOIN lessons l ON l.group_id = g.id
      LEFT JOIN attendance a ON a.lesson_id = l.id AND a.child_id = c.id
      LEFT JOIN locations loc ON loc.id = l.location_id
@@ -527,7 +527,7 @@ export async function fetchParentCalendar(
        FROM children c
        JOIN group_students gs ON gs.child_id = c.id AND gs.left_at IS NULL
        JOIN groups g ON g.id = gs.group_id
-       JOIN school_years sy ON sy.id = g.school_year_id AND sy.active = TRUE
+       JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
        JOIN lessons l ON l.group_id = g.id
        LEFT JOIN locations loc ON loc.id = l.location_id
        WHERE c.parent_id = $1

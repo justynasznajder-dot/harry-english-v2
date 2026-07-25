@@ -134,15 +134,14 @@ export async function assertGroupInSchool(
   groupId: string,
   schoolId: string
 ): Promise<
-  | { ok: true; schoolId: string; schoolYearId: string | null; teacherId: string | null }
+  | { ok: true; schoolId: string; teacherId: string | null }
   | { ok: false }
 > {
   const r = await queryDb<{
     school_id: string;
-    school_year_id: string | null;
     teacher_id: string | null;
   }>(
-    `SELECT school_id, school_year_id, teacher_id
+    `SELECT school_id, teacher_id
      FROM groups
      WHERE id = $1 AND school_id = $2
      LIMIT 1`,
@@ -152,7 +151,6 @@ export async function assertGroupInSchool(
   return {
     ok: true,
     schoolId: r.rows[0].school_id,
-    schoolYearId: r.rows[0].school_year_id,
     teacherId: r.rows[0].teacher_id,
   };
 }

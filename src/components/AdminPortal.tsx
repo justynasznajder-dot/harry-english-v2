@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import Link from 'next/link';
 import { normalizePolishPhone } from '@/lib/phone';
 import ClassesCalendarPanel from '@/src/components/admin/ClassesCalendarPanel';
@@ -19,24 +19,23 @@ import { usePendingEnrollmentsCount } from '@/src/components/admin/usePendingEnr
 type TabKey =
   | 'dashboard'
   | 'organization'
-  | 'users'
   | 'classes'
-  | 'enrollment'
-  | 'renewals'
-  | 'resignations'
+  | 'enrollments'
   | 'announcements'
-  | 'payments';
+  | 'billing'
+  | 'settlements';
 type MobileTab = 'organization' | 'users' | 'more';
 type UsersSubTab = 'parents' | 'children' | 'teachers' | 'managers' | 'add';
 type OrganizationSubTab =
   | 'schoolYear'
   | 'teachers'
   | 'locations'
-  | 'billing'
   | 'discounts'
   | 'groups'
-  | 'history'
-  | 'settlements';
+  | 'users'
+  | 'history';
+type EnrollmentFlowSubTab = 'enrollment' | 'renewals' | 'resignations';
+type BillingSubTab = 'summary' | 'invoices' | 'payments' | 'settings';
 type TeacherOrgSubTab = 'list' | 'add';
 type LocationOrgSubTab = 'list' | 'add' | 'edit';
 type GroupsSubTab = 'list' | 'add' | 'organize';
@@ -87,7 +86,6 @@ interface GroupRow {
   teacher_name: string | null;
   location_name: string | null;
   location_id: string | null;
-  school_year_id: string | null;
   schedule: string | null;
   students_count: string;
   active: boolean;
@@ -163,7 +161,6 @@ interface GroupDetail {
   group: {
     id: string;
     school_id?: string | null;
-    school_year_id?: string | null;
     location_id?: string | null;
     created_at?: string | null;
     name: string;
@@ -313,12 +310,10 @@ const topTabs: Array<{ key: TabKey; label: string }> = [
   { key: 'dashboard', label: 'Pulpit' },
   { key: 'organization', label: 'Organizacja szkoły' },
   { key: 'classes', label: 'Zajęcia' },
-  { key: 'enrollment', label: 'Zgłoszenia' },
-  { key: 'renewals', label: 'Odnowienia' },
-  { key: 'resignations', label: 'Rezygnacje' },
-  { key: 'users', label: 'Użytkownicy' },
+  { key: 'enrollments', label: 'Zapisy / rezygnacje' },
   { key: 'announcements', label: 'Wiadomości' },
-  { key: 'payments', label: 'Płatności' },
+  { key: 'billing', label: 'Rozliczenia' },
+  { key: 'settlements', label: 'Podsumowanie miesiąca' },
 ];
 
 const mobileTabs: Array<{ key: MobileTab; label: string }> = [
@@ -331,11 +326,23 @@ const organizationTabs: Array<{ key: OrganizationSubTab; label: string }> = [
   { key: 'schoolYear', label: 'Rok szkolny' },
   { key: 'teachers', label: 'Nauczyciele' },
   { key: 'locations', label: 'Lokalizacje' },
-  { key: 'billing', label: 'Rozliczenia' },
   { key: 'discounts', label: 'Zniżki' },
   { key: 'groups', label: 'Grupy' },
+  { key: 'users', label: 'Użytkownicy' },
   { key: 'history', label: 'Historia' },
-  { key: 'settlements', label: 'Podsumowanie miesiąca' },
+];
+
+const enrollmentFlowTabs: Array<{ key: EnrollmentFlowSubTab; label: string }> = [
+  { key: 'enrollment', label: 'Zgłoszenia' },
+  { key: 'renewals', label: 'Odnowienia' },
+  { key: 'resignations', label: 'Rezygnacje' },
+];
+
+const billingTabs: Array<{ key: BillingSubTab; label: string }> = [
+  { key: 'summary', label: 'Zestawienie' },
+  { key: 'invoices', label: 'Faktury' },
+  { key: 'payments', label: 'Płatności' },
+  { key: 'settings', label: 'Ustawienia' },
 ];
 
 const teacherOrgSubTabs: Array<{ key: TeacherOrgSubTab; label: string }> = [
@@ -435,6 +442,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [organizationSubTab, setOrganizationSubTab] = useState<OrganizationSubTab>(
     initialGroupId ? 'groups' : 'schoolYear',
   );
+  const [enrollmentFlowSubTab, setEnrollmentFlowSubTab] =
+    useState<EnrollmentFlowSubTab>('enrollment');
+  const [billingSubTab, setBillingSubTab] = useState<BillingSubTab>('summary');
   const [teacherOrgSubTab, setTeacherOrgSubTab] = useState<TeacherOrgSubTab>('list');
   const [locationOrgSubTab, setLocationOrgSubTab] = useState<LocationOrgSubTab>('list');
   const [groupsSubTab, setGroupsSubTab] = useState<GroupsSubTab>('list');
@@ -495,10 +505,64 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [discountSettings, setDiscountSettings] = useState({
     LARGE_FAMILY_CARD: 0,
     SIBLING: 0,
+    maxPercent: 10,
   });
+  const [maxDiscountPercentDraft, setMaxDiscountPercentDraft] = useState('10');
   const [invoiceGenerationDayDraft, setInvoiceGenerationDayDraft] = useState('10');
   const [invoiceGenerationDay, setInvoiceGenerationDay] = useState(10);
+  const [invoiceAutoGeneration, setInvoiceAutoGeneration] = useState(false);
+  const [invoiceAutoGenerationDraft, setInvoiceAutoGenerationDraft] = useState(false);
   const [monthlyInvoicesGenerating, setMonthlyInvoicesGenerating] = useState(false);
+  const [monthlyInvoiceMonth, setMonthlyInvoiceMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const [monthlyInvoicePreviewLoading, setMonthlyInvoicePreviewLoading] = useState(false);
+  const [monthlyInvoicePreview, setMonthlyInvoicePreview] = useState<{
+    periodMonth: string;
+    dueDate: string;
+    parents: Array<{
+      parentId: string;
+      parentFirstName: string;
+      parentLastName: string;
+      parentEmail: string;
+      totalAmount: number;
+      alreadyInvoiced: boolean;
+      lines: Array<{
+        contractId: string;
+        childId: string | null;
+        childName: string;
+        amount: number;
+        alreadyInvoiced: boolean;
+        signedAt: string | null;
+      }>;
+    }>;
+    totals: {
+      parents: number;
+      lines: number;
+      amount: number;
+      pendingAmount: number;
+      alreadyInvoicedLines: number;
+    };
+  } | null>(null);
+  const [issuedInvoicesLoading, setIssuedInvoicesLoading] = useState(false);
+  const [issuedInvoices, setIssuedInvoices] = useState<
+    Array<{
+      id: string;
+      invoiceNumber: string;
+      documentType: string;
+      issueDate: string;
+      dueDate: string;
+      buyerName: string;
+      buyerNip: string | null;
+      amount: number;
+      paymentStatus: string | null;
+      kind: string;
+      hasPdf: boolean;
+      parentEmail: string | null;
+      parentName: string;
+    }>
+  >([]);
   const [complimentaryParents, setComplimentaryParents] = useState<ComplimentaryParentRow[]>([]);
   const [complimentaryCandidates, setComplimentaryCandidates] = useState<
     Array<{
@@ -512,14 +576,12 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     }>
   >([]);
   const [selectedComplimentaryCandidateKey, setSelectedComplimentaryCandidateKey] = useState('');
-  const [complimentaryFilterFirstName, setComplimentaryFilterFirstName] = useState('');
-  const [complimentaryFilterLastName, setComplimentaryFilterLastName] = useState('');
+  const [complimentarySearch, setComplimentarySearch] = useState('');
   const [groups, setGroups] = useState<GroupRow[]>([]);
   const [groupSaving, setGroupSaving] = useState(false);
   const [groupForm, setGroupForm] = useState({
     id: '',
     schoolId: '',
-    schoolYearId: '',
     locationId: '',
     name: '',
     level: '',
@@ -704,10 +766,16 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       if (dRes.ok) {
         const dJson = (await dRes.json()) as {
           discounts?: Array<{ key: string; percent: number }>;
+          maxDiscountPercent?: number;
           invoiceGenerationDay?: number;
+          invoiceAutoGeneration?: boolean;
           complimentaryParents?: ComplimentaryParentRow[];
         };
-        const nextSettings = { LARGE_FAMILY_CARD: 0, SIBLING: 0 };
+        const nextSettings = {
+          LARGE_FAMILY_CARD: 0,
+          SIBLING: 0,
+          maxPercent: Math.min(100, Math.max(0, Number(dJson.maxDiscountPercent) || 10)),
+        };
         for (const item of dJson.discounts ?? []) {
           if (item.key === 'LARGE_FAMILY_CARD' || item.key === 'SIBLING') {
             nextSettings[item.key] = Number(item.percent) || 0;
@@ -718,9 +786,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           LARGE_FAMILY_CARD: String(nextSettings.LARGE_FAMILY_CARD),
           SIBLING: String(nextSettings.SIBLING),
         });
+        setMaxDiscountPercentDraft(String(nextSettings.maxPercent));
         const genDay = Math.min(28, Math.max(1, Number(dJson.invoiceGenerationDay) || 10));
         setInvoiceGenerationDay(genDay);
         setInvoiceGenerationDayDraft(String(genDay));
+        const autoGen = Boolean(dJson.invoiceAutoGeneration);
+        setInvoiceAutoGeneration(autoGen);
+        setInvoiceAutoGenerationDraft(autoGen);
         setComplimentaryParents(
           Array.isArray(dJson.complimentaryParents) ? dJson.complimentaryParents : [],
         );
@@ -789,16 +861,16 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   }, [lessonBillingMonth, pushToast]);
 
   useEffect(() => {
-    if (activeTab === 'payments') {
+    if (activeTab === 'billing' && billingSubTab === 'payments') {
       void loadLessonBilling();
     }
-  }, [activeTab, loadLessonBilling]);
+  }, [activeTab, billingSubTab, loadLessonBilling]);
 
   useEffect(() => {
-    if (activeTab === 'enrollment') {
+    if (activeTab === 'enrollments' && enrollmentFlowSubTab === 'enrollment') {
       void loadEnrollmentData();
     }
-  }, [activeTab, loadEnrollmentData]);
+  }, [activeTab, enrollmentFlowSubTab, loadEnrollmentData]);
 
   const loadSchoolYearData = useCallback(async () => {
     setSchoolYearLoading(true);
@@ -988,7 +1060,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       const res = await fetch('/api/admin/discounts');
       const data = (await res.json().catch(() => ({}))) as {
         discounts?: Array<{ key: string; label: string; percent: number }>;
+        maxDiscountPercent?: number;
         invoiceGenerationDay?: number;
+        invoiceAutoGeneration?: boolean;
         complimentaryParents?: typeof complimentaryParents;
         complimentaryCandidates?: typeof complimentaryCandidates;
         message?: string;
@@ -997,7 +1071,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         pushToast('error', data.message ?? 'Nie udało się pobrać ustawień zniżek');
         return;
       }
-      const nextSettings = { LARGE_FAMILY_CARD: 0, SIBLING: 0 };
+      const nextSettings = {
+        LARGE_FAMILY_CARD: 0,
+        SIBLING: 0,
+        maxPercent: Math.min(100, Math.max(0, Number(data.maxDiscountPercent) || 10)),
+      };
       for (const item of data.discounts ?? []) {
         if (item.key === 'LARGE_FAMILY_CARD' || item.key === 'SIBLING') {
           nextSettings[item.key] = Number(item.percent) || 0;
@@ -1008,9 +1086,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         LARGE_FAMILY_CARD: String(nextSettings.LARGE_FAMILY_CARD),
         SIBLING: String(nextSettings.SIBLING),
       });
+      setMaxDiscountPercentDraft(String(nextSettings.maxPercent));
       const genDay = Math.min(28, Math.max(1, Number(data.invoiceGenerationDay) || 10));
       setInvoiceGenerationDay(genDay);
       setInvoiceGenerationDayDraft(String(genDay));
+      const autoGen = Boolean(data.invoiceAutoGeneration);
+      setInvoiceAutoGeneration(autoGen);
+      setInvoiceAutoGenerationDraft(autoGen);
       setComplimentaryParents(
         Array.isArray(data.complimentaryParents) ? data.complimentaryParents : [],
       );
@@ -1028,13 +1110,17 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   useEffect(() => {
     if (
       activeTab === 'organization' &&
-      (organizationSubTab === 'schoolYear' ||
-        organizationSubTab === 'history' ||
-        organizationSubTab === 'settlements')
+      (organizationSubTab === 'schoolYear' || organizationSubTab === 'history')
     ) {
       void loadSchoolYearData();
     }
   }, [activeTab, organizationSubTab, loadSchoolYearData]);
+
+  useEffect(() => {
+    if (activeTab === 'settlements') {
+      void loadSchoolYearData();
+    }
+  }, [activeTab, loadSchoolYearData]);
 
   useEffect(() => {
     if (activeTab !== 'organization' || organizationSubTab !== 'history') return;
@@ -1060,7 +1146,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   }, [activeTab, organizationSubTab, historyYearId, loadHistoryData]);
 
   useEffect(() => {
-    if (activeTab !== 'organization' || organizationSubTab !== 'settlements') return;
+    if (activeTab !== 'settlements') return;
     const selectable = schoolYears
       .slice()
       .sort((a, b) => String(b.date_from).localeCompare(String(a.date_from), 'pl'));
@@ -1073,54 +1159,149 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         selectable.find((y) => y.isActive ?? y.active) ?? selectable[0];
       setSettlementYearId(preferred.id);
     }
-  }, [activeTab, organizationSubTab, schoolYears, settlementYearId]);
+  }, [activeTab, schoolYears, settlementYearId]);
 
   useEffect(() => {
-    if (activeTab === 'organization' && organizationSubTab === 'settlements' && settlementYearId) {
+    if (activeTab === 'settlements' && settlementYearId) {
       void loadSettlementData(settlementYearId, settlementMonth);
     }
-  }, [activeTab, organizationSubTab, settlementYearId, settlementMonth, loadSettlementData]);
+  }, [activeTab, settlementYearId, settlementMonth, loadSettlementData]);
 
   useEffect(() => {
-    if (activeTab === 'organization' && organizationSubTab === 'locations') {
-      void loadLocations();
-    }
-  }, [activeTab, organizationSubTab, loadLocations]);
-
-  useEffect(() => {
-    if (
-      activeTab === 'organization' &&
-      (organizationSubTab === 'discounts' || organizationSubTab === 'billing')
-    ) {
+    if (activeTab === 'organization' && organizationSubTab === 'discounts') {
       void loadDiscounts();
     }
   }, [activeTab, organizationSubTab, loadDiscounts]);
 
   useEffect(() => {
-    if (activeTab === 'renewals' || activeTab === 'enrollment') {
+    if (activeTab === 'billing') {
       void loadDiscounts();
     }
   }, [activeTab, loadDiscounts]);
 
-  useEffect(() => {
-    if (activeTab === 'classes') void loadLocations();
-  }, [activeTab, loadLocations]);
+  const loadMonthlyInvoicePreview = useCallback(async () => {
+    setMonthlyInvoicePreviewLoading(true);
+    try {
+      const res = await fetch(
+        `/api/admin/invoices/monthly-preview?periodMonth=${encodeURIComponent(monthlyInvoiceMonth)}`,
+        { cache: 'no-store' },
+      );
+      const data = (await res.json().catch(() => ({}))) as {
+        message?: string;
+        periodMonth?: string;
+        dueDate?: string;
+        parents?: Array<{
+          parentId: string;
+          parentFirstName: string;
+          parentLastName: string;
+          parentEmail: string;
+          totalAmount: number;
+          alreadyInvoiced: boolean;
+          lines: Array<{
+            contractId: string;
+            childId: string | null;
+            childName: string;
+            amount: number;
+            alreadyInvoiced: boolean;
+            signedAt: string | null;
+          }>;
+        }>;
+        totals?: {
+          parents: number;
+          lines: number;
+          amount: number;
+          pendingAmount: number;
+          alreadyInvoicedLines: number;
+        };
+      };
+      if (!res.ok) {
+        pushToast('error', data.message ?? 'Nie udało się pobrać podglądu faktur');
+        setMonthlyInvoicePreview(null);
+        return;
+      }
+      setMonthlyInvoicePreview({
+        periodMonth: data.periodMonth ?? `${monthlyInvoiceMonth}-01`,
+        dueDate: data.dueDate ?? '',
+        parents: data.parents ?? [],
+        totals: data.totals ?? {
+          parents: 0,
+          lines: 0,
+          amount: 0,
+          pendingAmount: 0,
+          alreadyInvoicedLines: 0,
+        },
+      });
+    } catch {
+      pushToast('error', 'Błąd podglądu faktur ratalnych');
+      setMonthlyInvoicePreview(null);
+    } finally {
+      setMonthlyInvoicePreviewLoading(false);
+    }
+  }, [monthlyInvoiceMonth, pushToast]);
+
+  const loadIssuedInvoices = useCallback(async () => {
+    setIssuedInvoicesLoading(true);
+    try {
+      const res = await fetch(
+        `/api/admin/invoices?periodMonth=${encodeURIComponent(monthlyInvoiceMonth)}`,
+        { cache: 'no-store' },
+      );
+      const data = (await res.json().catch(() => ({}))) as {
+        message?: string;
+        invoices?: typeof issuedInvoices;
+      };
+      if (!res.ok) {
+        pushToast('error', data.message ?? 'Nie udało się pobrać faktur');
+        setIssuedInvoices([]);
+        return;
+      }
+      setIssuedInvoices(data.invoices ?? []);
+    } catch {
+      pushToast('error', 'Błąd pobierania faktur');
+      setIssuedInvoices([]);
+    } finally {
+      setIssuedInvoicesLoading(false);
+    }
+  }, [monthlyInvoiceMonth, pushToast]);
 
   useEffect(() => {
-    if (activeTab === 'users' && usersSubTab === 'add') {
-      void loadLocations();
+    if (activeTab === 'billing' && billingSubTab === 'summary') {
+      void loadMonthlyInvoicePreview();
     }
-  }, [activeTab, usersSubTab, loadLocations]);
+  }, [activeTab, billingSubTab, loadMonthlyInvoicePreview]);
 
   useEffect(() => {
-    if (childModalOpen) {
-      void loadLocations();
+    if (activeTab === 'billing' && billingSubTab === 'invoices') {
+      void loadIssuedInvoices();
     }
-  }, [childModalOpen, loadLocations]);
+  }, [activeTab, billingSubTab, loadIssuedInvoices]);
+
+  useEffect(() => {
+    if (
+      activeTab === 'enrollments' &&
+      (enrollmentFlowSubTab === 'enrollment' || enrollmentFlowSubTab === 'renewals')
+    ) {
+      void loadDiscounts();
+    }
+  }, [activeTab, enrollmentFlowSubTab, loadDiscounts]);
+
+  useEffect(() => {
+    const needLocations =
+      childModalOpen ||
+      activeTab === 'classes' ||
+      (activeTab === 'organization' && organizationSubTab === 'locations') ||
+      (activeTab === 'organization' &&
+        organizationSubTab === 'users' &&
+        usersSubTab === 'add');
+    if (needLocations) void loadLocations();
+  }, [activeTab, organizationSubTab, usersSubTab, childModalOpen, loadLocations]);
 
   useEffect(() => {
     if (mobileTab === 'organization') setActiveTab('organization');
-    if (mobileTab === 'users') setActiveTab('users');
+    if (mobileTab === 'users') {
+      setActiveTab('organization');
+      setOrganizationSubTab('users');
+    }
   }, [mobileTab]);
 
   const filteredUsers = useMemo(() => {
@@ -1159,35 +1340,41 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     [users, childForm.parentSearch]
   );
 
-  const matchesComplimentaryNameFilters = useCallback(
-    (firstName: string, lastName: string) => {
-      const firstNameQuery = complimentaryFilterFirstName.trim().toLocaleLowerCase('pl');
-      const lastNameQuery = complimentaryFilterLastName.trim().toLocaleLowerCase('pl');
-      if (firstNameQuery && !firstName.toLocaleLowerCase('pl').includes(firstNameQuery)) {
-        return false;
-      }
-      if (lastNameQuery && !lastName.toLocaleLowerCase('pl').includes(lastNameQuery)) {
-        return false;
-      }
-      return true;
+  const matchesComplimentarySearch = useCallback(
+    (firstName: string, lastName: string, email: string) => {
+      const query = complimentarySearch.trim().toLocaleLowerCase('pl');
+      if (!query) return true;
+      const haystack = [
+        firstName,
+        lastName,
+        `${firstName} ${lastName}`,
+        `${lastName} ${firstName}`,
+        email,
+      ]
+        .join(' ')
+        .toLocaleLowerCase('pl');
+      return query
+        .split(/\s+/)
+        .filter(Boolean)
+        .every((token) => haystack.includes(token));
     },
-    [complimentaryFilterFirstName, complimentaryFilterLastName],
+    [complimentarySearch],
   );
 
   const filteredComplimentaryCandidates = useMemo(
     () =>
       complimentaryCandidates.filter((candidate) =>
-        matchesComplimentaryNameFilters(candidate.firstName, candidate.lastName),
+        matchesComplimentarySearch(candidate.firstName, candidate.lastName, candidate.email),
       ),
-    [complimentaryCandidates, matchesComplimentaryNameFilters],
+    [complimentaryCandidates, matchesComplimentarySearch],
   );
 
   const filteredComplimentaryParents = useMemo(
     () =>
       complimentaryParents.filter((parent) =>
-        matchesComplimentaryNameFilters(parent.firstName, parent.lastName),
+        matchesComplimentarySearch(parent.firstName, parent.lastName, parent.email),
       ),
-    [complimentaryParents, matchesComplimentaryNameFilters],
+    [complimentaryParents, matchesComplimentarySearch],
   );
 
   useEffect(() => {
@@ -1303,7 +1490,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       setGroupForm({
         id: g.id,
         schoolId: g.school_id ?? sessionSchoolId ?? '',
-        schoolYearId: g.school_year_id ?? '',
         locationId: g.location_id ?? '',
         name: g.name,
         level: g.level ?? '',
@@ -1374,7 +1560,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           maxStudents: groupForm.maxStudents,
           active: groupForm.active,
           schoolId: groupForm.schoolId || null,
-          schoolYearId: groupForm.schoolYearId || null,
           locationId: groupForm.locationId || null,
           priceMonthly: groupForm.priceMonthly.trim() ? Number(groupForm.priceMonthly) : null,
           priceYearly: groupForm.priceYearly.trim() ? Number(groupForm.priceYearly) : null,
@@ -1553,9 +1738,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           data.message ??
             `Utworzono konto rodzica i ${data.enrollmentCount ?? newParentChildren.length} zgłoszeń`,
         );
-        setActiveTab('enrollment');
+        setEnrollmentFlowSubTab('enrollment');
+        setActiveTab('enrollments');
       } else {
         pushToast('success', 'Dodano użytkownika');
+        setOrganizationSubTab('users');
         setUsersSubTab('parents');
       }
 
@@ -1824,8 +2011,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 if (user.role === 'PARENT') {
                   const showHistory = contactHistoryParentId === user.id;
                   return (
-                    <>
-                    <tr key={user.id} className="border-t border-emerald-50">
+                    <Fragment key={user.id}>
+                    <tr className="border-t border-emerald-50">
                       <td className="px-4 py-3 font-mono text-xs text-zinc-600">
                         {user.client_number ?? '—'}
                       </td>
@@ -1873,13 +2060,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       </td>
                     </tr>
                     {showHistory && (
-                      <tr key={`${user.id}-history`}>
+                      <tr>
                         <td colSpan={6} className="px-4 pb-4">
                           <ContactHistoryPanel parentId={user.id} />
                         </td>
                       </tr>
                     )}
-                    </>
+                    </Fragment>
                   );
                 }
 
@@ -1993,8 +2180,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               {children.map((child) => {
                 const showHistory = contactHistoryChildId === child.child_id;
                 return (
-                  <>
-                  <tr key={child.child_id} className="border-t border-emerald-50">
+                  <Fragment key={child.child_id}>
+                  <tr className="border-t border-emerald-50">
                     <td className="px-4 py-3 font-mono text-xs text-zinc-600">
                       {child.client_number ?? '—'}
                     </td>
@@ -2031,13 +2218,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     </td>
                   </tr>
                   {showHistory && (
-                    <tr key={`${child.child_id}-history`}>
+                    <tr>
                       <td colSpan={7} className="px-4 pb-4">
                         <ContactHistoryPanel childId={child.child_id} />
                       </td>
                     </tr>
                   )}
-                  </>
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -2050,6 +2237,71 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   };
 
   const orgTabLabel = organizationTabs.find((t) => t.key === organizationSubTab)?.label ?? '';
+
+  const renderEnrollmentFlow = () => {
+    const tabBtn = (active: boolean) =>
+      active
+        ? 'border-[#0f6e56] bg-[#0f6e56] text-white shadow-sm'
+        : 'border-emerald-100 bg-emerald-50/50 text-zinc-800 hover:border-emerald-200 hover:bg-emerald-50';
+
+    return (
+      <div>
+        <div className="mb-4 flex flex-wrap gap-2">
+          {enrollmentFlowTabs.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setEnrollmentFlowSubTab(t.key)}
+              className={`rounded-full border px-4 py-2.5 text-sm font-semibold transition ${tabBtn(enrollmentFlowSubTab === t.key)}`}
+            >
+              {t.key === 'enrollment' ? (
+                <MessagesTabLabel
+                  label={t.label}
+                  unreadCount={enrollmentsPendingCount}
+                  isActive={enrollmentFlowSubTab === 'enrollment'}
+                  badgeAriaLabel={(n) =>
+                    n === 1 ? '1 nowe zgłoszenie' : `${n} nowych zgłoszeń`
+                  }
+                />
+              ) : t.key === 'resignations' ? (
+                <MessagesTabLabel
+                  label={t.label}
+                  unreadCount={resignationsOpenCount}
+                  isActive={enrollmentFlowSubTab === 'resignations'}
+                  badgeAriaLabel={(n) =>
+                    n === 1
+                      ? '1 otwarte zgłoszenie rezygnacji'
+                      : `${n} otwartych zgłoszeń rezygnacji`
+                  }
+                />
+              ) : (
+                t.label
+              )}
+            </button>
+          ))}
+        </div>
+
+        {enrollmentFlowSubTab === 'enrollment' ? (
+          <EnrollmentAdminPanel
+            pushToast={pushToast}
+            parents={enrollmentParents}
+            groups={enrollmentGroups}
+            complimentaryParents={complimentaryParents}
+            discountSettings={discountSettings}
+            onRefresh={loadEnrollmentData}
+            onComplimentaryParentsChange={setComplimentaryParents}
+          />
+        ) : null}
+        {enrollmentFlowSubTab === 'renewals' ? <RenewalsPanel pushToast={pushToast} /> : null}
+        {enrollmentFlowSubTab === 'resignations' ? (
+          <ResignationsPanel
+            pushToast={pushToast}
+            onChange={refreshResignationsOpenCount}
+          />
+        ) : null}
+      </div>
+    );
+  };
 
   const renderOrganization = () => {
     const tabBtn = (active: boolean) =>
@@ -2088,6 +2340,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
 
         {organizationSubTab === 'groups' ? (
           <div className="mt-6">{renderGroups()}</div>
+        ) : organizationSubTab === 'users' ? (
+          <div className="mt-6">{renderUsers()}</div>
         ) : (
         <div className="mt-6 rounded-2xl border border-emerald-100 bg-white p-4 sm:p-5">
           <h3 className="text-lg font-bold text-[#0f6e56] sm:text-xl">{orgTabLabel}</h3>
@@ -2134,8 +2388,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             <div className="mt-4 space-y-4">
               <p className="text-sm text-zinc-600">
                 Jeden aktywny rok naraz. Możesz dodać kolejny rok z wyprzedzeniem — stanie się aktywny
-                automatycznie po zakończeniu bieżącego. Odnowienia dotyczą zawsze planowanego kolejnego
-                roku.
+                automatycznie po zakończeniu bieżącego. Grupy należą do szkoły (nie do roku); przy
+                zamknięciu dzieci zostają w tych samych grupach. Odnowienia: domyślnie proponowana jest
+                aktualna grupa dziecka.
               </p>
 
               {schoolYearLoading ? (
@@ -2847,140 +3102,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             </div>
           )}
 
-          {organizationSubTab === 'billing' && (
-            <div className="mt-4 space-y-6">
-              <p className="text-sm text-zinc-600">
-                Ustawienia faktur ratalnych: dzień automatycznego generowania oraz ręczne
-                wystawienie na testy.
-              </p>
-
-              {discountsLoading ? (
-                <div className="space-y-3">
-                  <div className="h-24 animate-pulse rounded-2xl bg-emerald-100/80" />
-                </div>
-              ) : (
-                <div className="rounded-xl border border-emerald-100 bg-white p-4">
-                  <h4 className="font-semibold text-[#0f6e56]">Faktury ratalne</h4>
-                  <p className="mt-1 text-sm text-zinc-600">
-                    Automatycznie i ręcznie generowane są wyłącznie faktury dla umów z
-                    rozliczeniem ratalnym (miesięcznym). Jednorazowe powstają przy podpisaniu
-                    umowy; za zajęcia pojedyncze — później, w osobnej sekcji.
-                  </p>
-                    <p className="mt-2 text-sm text-zinc-600">
-                      W wybranym dniu miesiąca cron wystawia faktury ratalne. Termin płatności to
-                      zawsze ostatni dzień miesiąca rozliczeniowego.
-                    </p>
-                  <div className="mt-4 flex flex-wrap items-end gap-3">
-                    <label className="block space-y-1">
-                      <span className="text-sm font-medium text-zinc-700">
-                        Dzień generowania faktur (1–28)
-                      </span>
-                      <input
-                        type="number"
-                        min={1}
-                        max={28}
-                        step={1}
-                        className="w-28 rounded-xl border border-emerald-200 px-3 py-2"
-                        value={invoiceGenerationDayDraft}
-                        onChange={(e) => setInvoiceGenerationDayDraft(e.target.value)}
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      disabled={discountsSaving || monthlyInvoicesGenerating}
-                      className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                      onClick={async () => {
-                        const day = Math.round(Number(invoiceGenerationDayDraft));
-                        if (!Number.isFinite(day) || day < 1 || day > 28) {
-                          pushToast('error', 'Podaj dzień od 1 do 28');
-                          return;
-                        }
-                        setDiscountsSaving(true);
-                        try {
-                          const res = await fetch('/api/admin/discounts', {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ invoiceGenerationDay: day }),
-                          });
-                          const data = (await res.json().catch(() => ({}))) as {
-                            message?: string;
-                            invoiceGenerationDay?: number;
-                          };
-                          if (!res.ok) {
-                            pushToast(
-                              'error',
-                              data.message ?? 'Nie udało się zapisać dnia generowania faktur',
-                            );
-                            return;
-                          }
-                          const saved = Math.min(
-                            28,
-                            Math.max(1, Number(data.invoiceGenerationDay) || day),
-                          );
-                          setInvoiceGenerationDay(saved);
-                          setInvoiceGenerationDayDraft(String(saved));
-                          pushToast('success', 'Zapisano dzień generowania faktur');
-                        } catch {
-                          pushToast('error', 'Błąd zapisu dnia generowania faktur');
-                        } finally {
-                          setDiscountsSaving(false);
-                        }
-                      }}
-                    >
-                      {discountsSaving ? 'Zapisywanie…' : 'Zapisz dzień faktur'}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={discountsSaving || monthlyInvoicesGenerating}
-                      className="rounded-xl border border-[#0f6e56] bg-white px-4 py-2 text-sm font-semibold text-[#0f6e56] disabled:opacity-60"
-                      onClick={async () => {
-                        setMonthlyInvoicesGenerating(true);
-                        try {
-                          const res = await fetch('/api/admin/invoices/generate-monthly', {
-                            method: 'POST',
-                          });
-                          const data = (await res.json().catch(() => ({}))) as {
-                            message?: string;
-                            generated?: number;
-                            skipped?: number;
-                            alreadyInvoiced?: number;
-                            errors?: Array<{ contractId: string; message: string }>;
-                          };
-                          if (!res.ok) {
-                            pushToast(
-                              'error',
-                              data.message ?? 'Nie udało się wygenerować faktur ratalnych',
-                            );
-                            return;
-                          }
-                          const errCount = data.errors?.length ?? 0;
-                          pushToast(
-                            errCount > 0 && (data.generated ?? 0) === 0 ? 'error' : 'success',
-                            data.message ??
-                              `Wygenerowano ${data.generated ?? 0}, już było ${data.alreadyInvoiced ?? 0}`,
-                          );
-                        } catch {
-                          pushToast('error', 'Błąd generowania faktur ratalnych');
-                        } finally {
-                          setMonthlyInvoicesGenerating(false);
-                        }
-                      }}
-                    >
-                      {monthlyInvoicesGenerating
-                        ? 'Generowanie…'
-                        : 'Wygeneruj faktury ratalne teraz'}
-                    </button>
-                    {invoiceGenerationDay !== Number(invoiceGenerationDayDraft) ? (
-                      <span className="text-xs text-zinc-500">
-                        Aktualnie zapisane: {invoiceGenerationDay}.
-                      </span>
-                    ) : null}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
           {organizationSubTab === 'discounts' && (
             <div className="mt-4 space-y-6">
               <p className="text-sm text-zinc-600">
@@ -2998,10 +3119,25 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-4">
                     <h4 className="font-semibold text-[#0f6e56]">Zniżki procentowe</h4>
                     <p className="mt-1 text-sm text-zinc-600">
-                      Od kwoty dodawanej do umowy odejmowany jest wybrany procent (można łączyć
-                      zniżki).
+                      KDR i rodzeństwo się nie łączą — przy KDR obowiązuje tylko KDR. Przy cenie
+                      indywidualnej zniżki procentowe nie działają. System nie zastosuje rabatu
+                      powyżej ustawionego maksimum.
                     </p>
-                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div className="mt-4 grid gap-4 sm:grid-cols-3">
+                      <label className="block space-y-1">
+                        <span className="text-sm font-medium text-zinc-700">
+                          Maksymalny poziom zniżek (%)
+                        </span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                          value={maxDiscountPercentDraft}
+                          onChange={(e) => setMaxDiscountPercentDraft(e.target.value)}
+                        />
+                      </label>
                       <label className="block space-y-1">
                         <span className="text-sm font-medium text-zinc-700">
                           Karta Dużej Rodziny (%)
@@ -3009,7 +3145,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         <input
                           type="number"
                           min="0"
-                          max="100"
+                          max={Number(maxDiscountPercentDraft) || 100}
                           step="0.01"
                           className="w-full rounded-xl border border-emerald-200 px-3 py-2"
                           value={discountPercentsDraft.LARGE_FAMILY_CARD}
@@ -3026,7 +3162,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         <input
                           type="number"
                           min="0"
-                          max="100"
+                          max={Number(maxDiscountPercentDraft) || 100}
                           step="0.01"
                           className="w-full rounded-xl border border-emerald-200 px-3 py-2"
                           value={discountPercentsDraft.SIBLING}
@@ -3050,6 +3186,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                             method: 'PUT',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
+                              maxDiscountPercent: Number(maxDiscountPercentDraft) || 0,
                               discounts: [
                                 {
                                   key: 'LARGE_FAMILY_CARD',
@@ -3065,18 +3202,31 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                           const data = (await res.json().catch(() => ({}))) as {
                             message?: string;
                             discounts?: Array<{ key: string; percent: number }>;
+                            maxDiscountPercent?: number;
                           };
                           if (!res.ok) {
                             pushToast('error', data.message ?? 'Nie udało się zapisać zniżek');
                             return;
                           }
-                          const nextSettings = { LARGE_FAMILY_CARD: 0, SIBLING: 0 };
+                          const nextSettings = {
+                            LARGE_FAMILY_CARD: 0,
+                            SIBLING: 0,
+                            maxPercent: Math.min(
+                              100,
+                              Math.max(0, Number(data.maxDiscountPercent) || 10),
+                            ),
+                          };
                           for (const item of data.discounts ?? []) {
                             if (item.key === 'LARGE_FAMILY_CARD' || item.key === 'SIBLING') {
                               nextSettings[item.key] = Number(item.percent) || 0;
                             }
                           }
                           setDiscountSettings(nextSettings);
+                          setDiscountPercentsDraft({
+                            LARGE_FAMILY_CARD: String(nextSettings.LARGE_FAMILY_CARD),
+                            SIBLING: String(nextSettings.SIBLING),
+                          });
+                          setMaxDiscountPercentDraft(String(nextSettings.maxPercent));
                           pushToast('success', 'Zapisano ustawienia zniżek');
                         } catch {
                           pushToast('error', 'Błąd zapisu zniżek');
@@ -3095,76 +3245,102 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       Rodzice z tej listy kończą zapis po akceptacji grupy — bez umowy, faktur i
                       płatności. Możesz dodać konto rodzica lub zgłoszenie z rejestracji (e-mail).
                     </p>
-                    <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                      <div className="space-y-1">
-                        <label
-                          htmlFor="complimentary-filter-first-name"
-                          className="block text-xs font-medium text-zinc-600"
-                        >
-                          Imię
-                        </label>
-                        <input
-                          id="complimentary-filter-first-name"
-                          type="text"
-                          className="w-full rounded-xl border border-emerald-200 px-3 py-2 text-sm"
-                          placeholder="Filtruj po imieniu…"
-                          value={complimentaryFilterFirstName}
-                          onChange={(e) => setComplimentaryFilterFirstName(e.target.value)}
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label
-                          htmlFor="complimentary-filter-last-name"
-                          className="block text-xs font-medium text-zinc-600"
-                        >
-                          Nazwisko
-                        </label>
-                        <input
-                          id="complimentary-filter-last-name"
-                          type="text"
-                          className="w-full rounded-xl border border-emerald-200 px-3 py-2 text-sm"
-                          placeholder="Filtruj po nazwisku…"
-                          value={complimentaryFilterLastName}
-                          onChange={(e) => setComplimentaryFilterLastName(e.target.value)}
-                        />
-                      </div>
-                    </div>
-                    <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                      <select
-                        className="min-w-0 flex-1 rounded-xl border border-emerald-200 px-3 py-2"
-                        value={selectedComplimentaryCandidateKey}
-                        onChange={(e) => setSelectedComplimentaryCandidateKey(e.target.value)}
+                    <div className="mt-4 space-y-1">
+                      <label
+                        htmlFor="complimentary-search"
+                        className="block text-xs font-medium text-zinc-600"
                       >
-                        <option value="">
-                          {complimentaryCandidates.length === 0
-                            ? 'Brak kandydatów do dodania'
-                            : filteredComplimentaryCandidates.length === 0
-                              ? 'Brak wyników — zmień filtry'
-                              : 'Wybierz rodzica…'}
-                        </option>
-                        {filteredComplimentaryCandidates.some((c) => c.source === 'USER') && (
-                          <optgroup label="Konta rodziców">
-                            {filteredComplimentaryCandidates
-                              .filter((c) => c.source === 'USER')
-                              .map((c) => (
-                                <option key={c.key} value={c.key}>
-                                  {c.lastName} {c.firstName} · {c.email}
-                                </option>
-                              ))}
-                          </optgroup>
+                        Szukaj rodzica
+                      </label>
+                      <input
+                        id="complimentary-search"
+                        type="search"
+                        autoComplete="off"
+                        className="w-full rounded-xl border border-emerald-200 px-3 py-2 text-sm"
+                        placeholder="Imię, nazwisko lub e-mail…"
+                        value={complimentarySearch}
+                        onChange={(e) => setComplimentarySearch(e.target.value)}
+                      />
+                    </div>
+                    <p className="mt-2 text-xs text-zinc-500">
+                      {complimentarySearch.trim()
+                        ? `Wyniki: ${filteredComplimentaryCandidates.length} z ${complimentaryCandidates.length} kandydatów`
+                        : `Kandydaci: ${complimentaryCandidates.length} (konta rodziców + zgłoszenia bez konta)`}
+                      {complimentarySearch.trim()
+                        ? ` · ${filteredComplimentaryParents.length} na liście`
+                        : complimentaryParents.length > 0
+                          ? ` · ${complimentaryParents.length} na liście`
+                          : ''}
+                    </p>
+                    <div className="mt-3 space-y-2">
+                      <div className="max-h-56 overflow-y-auto rounded-xl border border-emerald-200">
+                        {complimentaryCandidates.length === 0 ? (
+                          <p className="px-3 py-4 text-sm text-zinc-600">
+                            Brak kandydatów do dodania.
+                          </p>
+                        ) : filteredComplimentaryCandidates.length === 0 ? (
+                          <p className="px-3 py-4 text-sm text-zinc-600">
+                            Brak wyników — wpisz inne imię, nazwisko lub e-mail.
+                          </p>
+                        ) : (
+                          <>
+                            {filteredComplimentaryCandidates.some((c) => c.source === 'USER') && (
+                              <div>
+                                <p className="sticky top-0 bg-emerald-50 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                                  Konta rodziców
+                                </p>
+                                {filteredComplimentaryCandidates
+                                  .filter((c) => c.source === 'USER')
+                                  .map((c) => (
+                                    <button
+                                      key={c.key}
+                                      type="button"
+                                      onClick={() => setSelectedComplimentaryCandidateKey(c.key)}
+                                      className={`flex w-full flex-col items-start border-t border-emerald-50 px-3 py-2 text-left text-sm hover:bg-emerald-50/80 ${
+                                        selectedComplimentaryCandidateKey === c.key
+                                          ? 'bg-emerald-100'
+                                          : 'bg-white'
+                                      }`}
+                                    >
+                                      <span className="font-medium text-zinc-900">
+                                        {c.lastName} {c.firstName}
+                                      </span>
+                                      <span className="text-xs text-zinc-600">{c.email}</span>
+                                    </button>
+                                  ))}
+                              </div>
+                            )}
+                            {filteredComplimentaryCandidates.some(
+                              (c) => c.source === 'ENROLLMENT',
+                            ) && (
+                              <div>
+                                <p className="sticky top-0 bg-emerald-50 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                                  Zgłoszenia (bez konta rodzica)
+                                </p>
+                                {filteredComplimentaryCandidates
+                                  .filter((c) => c.source === 'ENROLLMENT')
+                                  .map((c) => (
+                                    <button
+                                      key={c.key}
+                                      type="button"
+                                      onClick={() => setSelectedComplimentaryCandidateKey(c.key)}
+                                      className={`flex w-full flex-col items-start border-t border-emerald-50 px-3 py-2 text-left text-sm hover:bg-emerald-50/80 ${
+                                        selectedComplimentaryCandidateKey === c.key
+                                          ? 'bg-emerald-100'
+                                          : 'bg-white'
+                                      }`}
+                                    >
+                                      <span className="font-medium text-zinc-900">
+                                        {c.lastName} {c.firstName}
+                                      </span>
+                                      <span className="text-xs text-zinc-600">{c.email}</span>
+                                    </button>
+                                  ))}
+                              </div>
+                            )}
+                          </>
                         )}
-                        {filteredComplimentaryCandidates.some((c) => c.source === 'ENROLLMENT') && (
-                          <optgroup label="Zgłoszenia (enrollment)">
-                            {filteredComplimentaryCandidates
-                              .filter((c) => c.source === 'ENROLLMENT')
-                              .map((c) => (
-                                <option key={c.key} value={c.key}>
-                                  {c.lastName} {c.firstName} · {c.email}
-                                </option>
-                              ))}
-                          </optgroup>
-                        )}
-                      </select>
+                      </div>
                       <button
                         type="button"
                         disabled={!selectedComplimentaryCandidateKey || discountsSaving}
@@ -3183,6 +3359,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                             const data = (await res.json().catch(() => ({}))) as {
                               message?: string;
                               complimentaryParents?: typeof complimentaryParents;
+                              complimentaryCandidates?: typeof complimentaryCandidates;
                             };
                             if (!res.ok) {
                               pushToast('error', data.message ?? 'Nie udało się dodać rodzica');
@@ -3193,6 +3370,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                 ? data.complimentaryParents
                                 : [],
                             );
+                            if (Array.isArray(data.complimentaryCandidates)) {
+                              setComplimentaryCandidates(data.complimentaryCandidates);
+                            } else {
+                              setComplimentaryCandidates((prev) =>
+                                prev.filter((c) => c.key !== selectedComplimentaryCandidateKey),
+                              );
+                            }
                             setSelectedComplimentaryCandidateKey('');
                             pushToast('success', 'Dodano rodzica do trybu bez opłat');
                           } catch {
@@ -3202,15 +3386,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                           }
                         }}
                       >
-                        Dodaj
+                        Dodaj wybranego
                       </button>
                     </div>
-                    {(complimentaryFilterFirstName.trim() || complimentaryFilterLastName.trim()) && (
-                      <p className="mt-2 text-xs text-zinc-500">
-                        Wyniki: {filteredComplimentaryCandidates.length} kandydatów ·{' '}
-                        {filteredComplimentaryParents.length} na liście
-                      </p>
-                    )}
                     <div className="mt-4 max-h-64 space-y-2 overflow-y-auto">
                       {complimentaryParents.length === 0 ? (
                         <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
@@ -3218,7 +3396,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         </p>
                       ) : filteredComplimentaryParents.length === 0 ? (
                         <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
-                          Brak wyników dla podanych filtrów.
+                          Brak wyników dla podanego wyszukiwania.
                         </p>
                       ) : (
                         filteredComplimentaryParents.map((parent) => (
@@ -3251,6 +3429,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                   const data = (await res.json().catch(() => ({}))) as {
                                     message?: string;
                                     complimentaryParents?: typeof complimentaryParents;
+                                    complimentaryCandidates?: typeof complimentaryCandidates;
                                   };
                                   if (!res.ok) {
                                     pushToast('error', data.message ?? 'Nie udało się usunąć');
@@ -3261,6 +3440,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                       ? data.complimentaryParents
                                       : [],
                                   );
+                                  if (Array.isArray(data.complimentaryCandidates)) {
+                                    setComplimentaryCandidates(data.complimentaryCandidates);
+                                  }
                                   pushToast('success', 'Usunięto z trybu bez opłat');
                                 } catch {
                                   pushToast('error', 'Błąd usuwania rodzica');
@@ -3506,154 +3688,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               )}
             </div>
           )}
-
-          {organizationSubTab === 'settlements' && (
-            <div className="mt-4 space-y-4">
-              <p className="text-sm text-zinc-600">
-                Podsumowanie do weryfikacji faktur — liczone są wyłącznie zajęcia ze statusem
-                COMPLETED. Uczniowie: liczba zapisanych do grupy na koniec miesiąca.
-              </p>
-
-              <div className="flex flex-wrap items-end gap-3">
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-zinc-700">Rok szkolny</label>
-                  <select
-                    value={settlementYearId}
-                    onChange={(e) => {
-                      setSettlementYearId(e.target.value);
-                      setSettlementMonth('');
-                    }}
-                    className="min-w-[220px] rounded-xl border border-emerald-200 px-3 py-2 text-sm"
-                    disabled={schoolYearLoading || schoolYears.length === 0}
-                  >
-                    {schoolYears.map((y) => (
-                      <option key={y.id} value={y.id}>
-                        {y.name}
-                        {y.isActive ?? y.active ? ' (bieżący)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-zinc-700">Miesiąc</label>
-                  <select
-                    value={settlementMonth}
-                    onChange={(e) => setSettlementMonth(e.target.value)}
-                    className="min-w-[200px] rounded-xl border border-emerald-200 px-3 py-2 text-sm"
-                  >
-                    <option value="">Wszystkie miesiące</option>
-                    {settlementMonthOptions.map((m) => (
-                      <option key={m} value={m}>
-                        {new Date(`${m}-01T12:00:00`).toLocaleDateString('pl-PL', {
-                          month: 'long',
-                          year: 'numeric',
-                        })}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {settlementLoading || schoolYearLoading ? (
-                <div className="space-y-2">
-                  <div className="h-24 animate-pulse rounded-xl bg-emerald-100/80" />
-                  <div className="h-32 animate-pulse rounded-xl bg-emerald-100/60" />
-                </div>
-              ) : (
-                <>
-                  <section className="overflow-hidden rounded-2xl border border-emerald-100 bg-white">
-                    <div className="border-b border-emerald-50 px-4 py-3">
-                      <h3 className="font-semibold text-[#0f6e56]">Lektorzy — zajęcia per grupa</h3>
-                    </div>
-                    <div className="overflow-x-auto">
-                      <table className="w-full min-w-[1000px] text-sm">
-                        <thead className="bg-emerald-50 text-zinc-700">
-                          <tr>
-                            <th className="px-4 py-3 text-left">Lektor</th>
-                            <th className="px-4 py-3 text-left">Miesiąc</th>
-                            <th className="px-4 py-3 text-left">Grupa</th>
-                            <th className="px-4 py-3 text-left">Lokalizacja</th>
-                            <th className="px-4 py-3 text-left">Zajęć</th>
-                            <th className="px-4 py-3 text-left">Uczniów</th>
-                            <th className="px-4 py-3 text-left">Godziny</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {teacherSettlementRows.length === 0 ? (
-                            <tr>
-                              <td colSpan={7} className="px-4 py-6 text-center text-zinc-500">
-                                Brak zajęć COMPLETED w wybranym okresie.
-                              </td>
-                            </tr>
-                          ) : (
-                            teacherSettlementRows.map((row) => (
-                              <tr
-                                key={`${row.teacher_id}-${row.group_id}-${row.location_id}-${row.period_month}`}
-                                className="border-t border-emerald-50"
-                              >
-                                <td className="px-4 py-3 font-medium">{row.teacher_name}</td>
-                                <td className="px-4 py-3">{formatSettlementMonthPl(row.period_month)}</td>
-                                <td className="px-4 py-3">{row.group_name}</td>
-                                <td className="px-4 py-3">{row.location_name}</td>
-                                <td className="px-4 py-3">{row.lessons_count}</td>
-                                <td className="px-4 py-3">{row.students_count}</td>
-                                <td className="px-4 py-3">
-                                  {(row.total_duration_min / 60).toFixed(1)} h
-                                </td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </section>
-
-                  <section className="overflow-hidden rounded-2xl border border-emerald-100 bg-white">
-                    <div className="border-b border-emerald-50 px-4 py-3">
-                      <h3 className="font-semibold text-[#0f6e56]">Lokalizacje — zajęcia odbyte</h3>
-                    </div>
-                    <div className="overflow-x-auto">
-                      <table className="w-full min-w-[760px] text-sm">
-                        <thead className="bg-emerald-50 text-zinc-700">
-                          <tr>
-                            <th className="px-4 py-3 text-left">Lokalizacja</th>
-                            <th className="px-4 py-3 text-left">Lektor</th>
-                            <th className="px-4 py-3 text-left">Miesiąc</th>
-                            <th className="px-4 py-3 text-left">Zajęć</th>
-                            <th className="px-4 py-3 text-left">Godziny</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {locationSettlementRows.length === 0 ? (
-                            <tr>
-                              <td colSpan={5} className="px-4 py-6 text-center text-zinc-500">
-                                Brak zajęć COMPLETED w wybranym okresie.
-                              </td>
-                            </tr>
-                          ) : (
-                            locationSettlementRows.map((row) => (
-                              <tr
-                                key={`${row.location_id}-${row.teacher_id}-${row.period_month}`}
-                                className="border-t border-emerald-50"
-                              >
-                                <td className="px-4 py-3 font-medium">{row.location_name}</td>
-                                <td className="px-4 py-3">{row.teacher_name}</td>
-                                <td className="px-4 py-3">{formatSettlementMonthPl(row.period_month)}</td>
-                                <td className="px-4 py-3">{row.lessons_count}</td>
-                                <td className="px-4 py-3">
-                                  {(row.total_duration_min / 60).toFixed(1)} h
-                                </td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </section>
-                </>
-              )}
-            </div>
-          )}
         </div>
         )}
       </section>
@@ -3711,21 +3745,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           </div>
         </div>
         <div className="grid gap-4 md:grid-cols-2">
-          <div className="space-y-1 md:col-span-2">
-            <label className="block text-sm font-medium text-zinc-700">Rok szkolny</label>
-            <select
-              className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-              value={groupForm.schoolYearId}
-              onChange={(e) => setGroupForm((p) => ({ ...p, schoolYearId: e.target.value }))}
-            >
-              <option value="">Brak roku szkolnego</option>
-              {schoolYears.map((year) => (
-                <option key={year.id} value={year.id}>
-                  {year.name}{(year.isActive ?? year.active) ? ' (aktywny)' : ''}
-                </option>
-              ))}
-            </select>
-          </div>
           <div className="space-y-1">
             <label className="block text-sm font-medium text-zinc-700">Nazwa grupy</label>
             <input
@@ -4187,7 +4206,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               setGroupForm({
                 id: '',
                 schoolId: sessionSchoolId ?? '',
-                schoolYearId: schoolYears.find((y) => y.isActive ?? y.active)?.id ?? '',
                 locationId: '',
                 name: '',
                 level: '',
@@ -4336,21 +4354,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             <div className="space-y-3 rounded-2xl border border-emerald-100 bg-white p-4">
               <h3 className="text-lg font-semibold">{groupForm.id ? 'Edycja grupy' : 'Nowa grupa'}</h3>
               <div className="space-y-1">
-                <label className="block text-sm font-medium text-zinc-700">Rok szkolny</label>
-                <select
-                  className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-                  value={groupForm.schoolYearId}
-                  onChange={(e) => setGroupForm((p) => ({ ...p, schoolYearId: e.target.value }))}
-                >
-                  <option value="">Brak roku szkolnego</option>
-                  {schoolYears.map((year) => (
-                    <option key={year.id} value={year.id}>
-                      {year.name}{(year.isActive ?? year.active) ? ' (aktywny)' : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-1">
                 <label className="block text-sm font-medium text-zinc-700">Nazwa grupy</label>
                 <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" placeholder="Nazwa grupy" value={groupForm.name} onChange={(e) => setGroupForm((p) => ({ ...p, name: e.target.value }))} />
               </div>
@@ -4487,7 +4490,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                           maxStudents: groupForm.maxStudents,
                           active: groupForm.active,
                           schoolId: groupForm.schoolId || null,
-                          schoolYearId: groupForm.schoolYearId || null,
                           locationId: groupForm.locationId || null,
                           priceMonthly: groupForm.priceMonthly.trim() ? Number(groupForm.priceMonthly) : null,
                           priceYearly: groupForm.priceYearly.trim() ? Number(groupForm.priceYearly) : null,
@@ -4613,12 +4615,595 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     );
   };
 
-  const renderLessonBilling = () => (
+  const renderSettlements = () => (
     <section className="space-y-4 rounded-2xl border border-emerald-100 bg-white p-4 md:p-5">
+      <div>
+        <h2 className="text-lg font-semibold text-zinc-900">Podsumowanie miesiąca</h2>
+        <p className="text-sm text-zinc-600">
+          Podsumowanie do weryfikacji faktur — liczone są wyłącznie zajęcia ze statusem COMPLETED.
+          Uczniowie: średnia liczba zapisanych do grupy w dniu zajęć.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <label className="mb-1 block text-sm font-medium text-zinc-700">Rok szkolny</label>
+          <select
+            value={settlementYearId}
+            onChange={(e) => {
+              setSettlementYearId(e.target.value);
+              setSettlementMonth('');
+            }}
+            className="min-w-[220px] rounded-xl border border-emerald-200 px-3 py-2 text-sm"
+            disabled={schoolYearLoading || schoolYears.length === 0}
+          >
+            {schoolYears.map((y) => (
+              <option key={y.id} value={y.id}>
+                {y.name}
+                {y.isActive ?? y.active ? ' (bieżący)' : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium text-zinc-700">Miesiąc</label>
+          <select
+            value={settlementMonth}
+            onChange={(e) => setSettlementMonth(e.target.value)}
+            className="min-w-[200px] rounded-xl border border-emerald-200 px-3 py-2 text-sm"
+          >
+            <option value="">Wszystkie miesiące</option>
+            {settlementMonthOptions.map((m) => (
+              <option key={m} value={m}>
+                {new Date(`${m}-01T12:00:00`).toLocaleDateString('pl-PL', {
+                  month: 'long',
+                  year: 'numeric',
+                })}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {settlementLoading || schoolYearLoading ? (
+        <div className="space-y-2">
+          <div className="h-24 animate-pulse rounded-xl bg-emerald-100/80" />
+          <div className="h-32 animate-pulse rounded-xl bg-emerald-100/60" />
+        </div>
+      ) : (
+        <>
+          <section className="overflow-hidden rounded-2xl border border-emerald-100 bg-white">
+            <div className="border-b border-emerald-50 px-4 py-3">
+              <h3 className="font-semibold text-[#0f6e56]">Lektorzy — zajęcia per grupa</h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1000px] text-sm">
+                <thead className="bg-emerald-50 text-zinc-700">
+                  <tr>
+                    <th className="px-4 py-3 text-left">Lektor</th>
+                    <th className="px-4 py-3 text-left">Miesiąc</th>
+                    <th className="px-4 py-3 text-left">Grupa</th>
+                    <th className="px-4 py-3 text-left">Lokalizacja</th>
+                    <th className="px-4 py-3 text-left">Zajęć</th>
+                    <th className="px-4 py-3 text-left">Uczniów</th>
+                    <th className="px-4 py-3 text-left">Godziny</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {teacherSettlementRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-6 text-center text-zinc-500">
+                        Brak zajęć COMPLETED w wybranym okresie.
+                      </td>
+                    </tr>
+                  ) : (
+                    teacherSettlementRows.map((row) => (
+                      <tr
+                        key={`${row.teacher_id}-${row.group_id}-${row.location_id}-${row.period_month}`}
+                        className="border-t border-emerald-50"
+                      >
+                        <td className="px-4 py-3 font-medium">{row.teacher_name}</td>
+                        <td className="px-4 py-3">{formatSettlementMonthPl(row.period_month)}</td>
+                        <td className="px-4 py-3">{row.group_name}</td>
+                        <td className="px-4 py-3">{row.location_name}</td>
+                        <td className="px-4 py-3">{row.lessons_count}</td>
+                        <td className="px-4 py-3">{row.students_count}</td>
+                        <td className="px-4 py-3">
+                          {(row.total_duration_min / 60).toFixed(1)} h
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="overflow-hidden rounded-2xl border border-emerald-100 bg-white">
+            <div className="border-b border-emerald-50 px-4 py-3">
+              <h3 className="font-semibold text-[#0f6e56]">Lokalizacje — zajęcia odbyte</h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[760px] text-sm">
+                <thead className="bg-emerald-50 text-zinc-700">
+                  <tr>
+                    <th className="px-4 py-3 text-left">Lokalizacja</th>
+                    <th className="px-4 py-3 text-left">Lektor</th>
+                    <th className="px-4 py-3 text-left">Miesiąc</th>
+                    <th className="px-4 py-3 text-left">Zajęć</th>
+                    <th className="px-4 py-3 text-left">Godziny</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {locationSettlementRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="px-4 py-6 text-center text-zinc-500">
+                        Brak zajęć COMPLETED w wybranym okresie.
+                      </td>
+                    </tr>
+                  ) : (
+                    locationSettlementRows.map((row) => (
+                      <tr
+                        key={`${row.location_id}-${row.teacher_id}-${row.period_month}`}
+                        className="border-t border-emerald-50"
+                      >
+                        <td className="px-4 py-3 font-medium">{row.location_name}</td>
+                        <td className="px-4 py-3">{row.teacher_name}</td>
+                        <td className="px-4 py-3">{formatSettlementMonthPl(row.period_month)}</td>
+                        <td className="px-4 py-3">{row.lessons_count}</td>
+                        <td className="px-4 py-3">
+                          {(row.total_duration_min / 60).toFixed(1)} h
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </>
+      )}
+    </section>
+  );
+
+  const renderBilling = () => {
+    const tabBtn = (active: boolean) =>
+      active
+        ? 'border-[#0f6e56] bg-[#0f6e56] text-white shadow-sm'
+        : 'border-emerald-100 bg-emerald-50/50 text-zinc-800 hover:border-emerald-200 hover:bg-emerald-50';
+
+    const formatPln = (n: number) =>
+      `${n.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} PLN`;
+
+    const paymentStatusLabel = (status: string | null) => {
+      const s = String(status ?? '').toUpperCase();
+      if (s === 'PAID') return 'Opłacona';
+      if (s === 'PENDING' || s === 'UNPAID') return 'Oczekuje';
+      if (s === 'CANCELLED') return 'Anulowana';
+      return status || '—';
+    };
+
+    const invoiceKindLabel = (kind: string) => {
+      if (kind === 'MONTHLY') return 'Ratalna';
+      if (kind === 'YEARLY') return 'Jednorazowa';
+      if (kind === 'PER_LESSON') return 'Za zajęcia';
+      return 'Inna';
+    };
+
+    const renderMonthPicker = () => (
+      <label className="text-sm text-zinc-700">
+        Miesiąc
+        <input
+          type="month"
+          className="ml-2 rounded-lg border border-emerald-200 px-3 py-2"
+          value={monthlyInvoiceMonth}
+          onChange={(e) => setMonthlyInvoiceMonth(e.target.value)}
+        />
+      </label>
+    );
+
+    const renderPreviewTable = (
+      parents: NonNullable<typeof monthlyInvoicePreview>['parents'],
+      emptyMessage: string,
+    ) => {
+      if (monthlyInvoicePreviewLoading) {
+        return <p className="text-sm text-zinc-600">Wczytywanie…</p>;
+      }
+      if (parents.length === 0) {
+        return (
+          <p className="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-8 text-center text-sm text-zinc-600">
+            {emptyMessage}
+          </p>
+        );
+      }
+      return (
+        <div className="overflow-x-auto rounded-xl border border-emerald-100">
+          <table className="min-w-full text-sm">
+            <thead className="bg-emerald-50 text-zinc-700">
+              <tr>
+                <th className="px-3 py-2 text-left">Rodzic</th>
+                <th className="px-3 py-2 text-left">Email</th>
+                <th className="px-3 py-2 text-left">Dziecko</th>
+                <th className="px-3 py-2 text-left">Kwota</th>
+                <th className="px-3 py-2 text-left">Suma rodzica</th>
+                <th className="px-3 py-2 text-left">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {parents.flatMap((parent) =>
+                parent.lines.map((line, idx) => (
+                  <tr key={line.contractId} className="border-t border-emerald-50">
+                    <td className="px-3 py-2 font-medium">
+                      {idx === 0
+                        ? `${parent.parentFirstName} ${parent.parentLastName}`.trim()
+                        : ''}
+                    </td>
+                    <td className="px-3 py-2 text-zinc-600">
+                      {idx === 0 ? parent.parentEmail : ''}
+                    </td>
+                    <td className="px-3 py-2">{line.childName}</td>
+                    <td className="px-3 py-2">{formatPln(line.amount)}</td>
+                    <td className="px-3 py-2">
+                      {idx === 0 ? formatPln(parent.totalAmount) : ''}
+                    </td>
+                    <td className="px-3 py-2">
+                      {line.alreadyInvoiced ? (
+                        <span className="text-emerald-700">Wystawiona</span>
+                      ) : (
+                        <span className="text-amber-700">Do wystawienia</span>
+                      )}
+                    </td>
+                  </tr>
+                )),
+              )}
+            </tbody>
+          </table>
+        </div>
+      );
+    };
+
+    return (
+      <section className="space-y-4 rounded-2xl border border-emerald-100 bg-white p-4 md:p-5">
+        <div>
+          <h2 className="text-lg font-semibold text-zinc-900">Rozliczenia</h2>
+          <p className="text-sm text-zinc-600">
+            Zestawienie planowanych kwot, wystawione faktury, płatności za zajęcia oraz ustawienia
+            generowania.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {billingTabs.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setBillingSubTab(t.key)}
+              className={`rounded-full border px-4 py-2.5 text-sm font-semibold transition ${tabBtn(billingSubTab === t.key)}`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {billingSubTab === 'summary' ? (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h4 className="font-semibold text-[#0f6e56]">Zestawienie planowanych kwot</h4>
+                <p className="mt-1 text-sm text-zinc-600">
+                  Podpisane umowy miesięczne (bez trybu bez opłat). Kwoty z umów — tak trafią na
+                  fakturę.
+                  {monthlyInvoicePreview?.dueDate
+                    ? ` Termin płatności: ${monthlyInvoicePreview.dueDate}.`
+                    : ''}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-end gap-3">
+                {renderMonthPicker()}
+                <button
+                  type="button"
+                  disabled={monthlyInvoicesGenerating || monthlyInvoicePreviewLoading}
+                  className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                  onClick={async () => {
+                    setMonthlyInvoicesGenerating(true);
+                    try {
+                      const res = await fetch('/api/admin/invoices/generate-monthly', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ periodMonth: monthlyInvoiceMonth }),
+                      });
+                      const data = (await res.json().catch(() => ({}))) as {
+                        message?: string;
+                        generated?: number;
+                        alreadyInvoiced?: number;
+                        errors?: unknown[];
+                      };
+                      if (!res.ok) {
+                        pushToast(
+                          'error',
+                          data.message ?? 'Nie udało się wygenerować faktur ratalnych',
+                        );
+                        return;
+                      }
+                      const errCount = data.errors?.length ?? 0;
+                      pushToast(
+                        errCount > 0 && (data.generated ?? 0) === 0 ? 'error' : 'success',
+                        data.message ??
+                          `Wygenerowano ${data.generated ?? 0}, już było ${data.alreadyInvoiced ?? 0}`,
+                      );
+                      await loadMonthlyInvoicePreview();
+                      await loadIssuedInvoices();
+                    } catch {
+                      pushToast('error', 'Błąd generowania faktur ratalnych');
+                    } finally {
+                      setMonthlyInvoicesGenerating(false);
+                    }
+                  }}
+                >
+                  {monthlyInvoicesGenerating ? 'Generowanie…' : 'Wygeneruj faktury'}
+                </button>
+              </div>
+            </div>
+
+            {monthlyInvoicePreview && !monthlyInvoicePreviewLoading ? (
+              <p className="text-sm text-zinc-600">
+                Rodzice: {monthlyInvoicePreview.totals.parents}, pozycje:{' '}
+                {monthlyInvoicePreview.totals.lines}, suma:{' '}
+                {formatPln(monthlyInvoicePreview.totals.amount)}
+                {monthlyInvoicePreview.totals.pendingAmount > 0
+                  ? ` (do wystawienia: ${formatPln(monthlyInvoicePreview.totals.pendingAmount)})`
+                  : ''}
+              </p>
+            ) : null}
+
+            {renderPreviewTable(
+              monthlyInvoicePreview?.parents ?? [],
+              'Brak podpisanych umów ratalnych do faktury w wybranym miesiącu.',
+            )}
+          </div>
+        ) : billingSubTab === 'invoices' ? (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h4 className="font-semibold text-[#0f6e56]">Wystawione faktury</h4>
+                <p className="mt-1 text-sm text-zinc-600">
+                  Faktury zapisane w systemie dla wybranego miesiąca rozliczeniowego — z możliwością
+                  pobrania PDF.
+                </p>
+              </div>
+              {renderMonthPicker()}
+            </div>
+
+            {issuedInvoicesLoading ? (
+              <p className="text-sm text-zinc-600">Wczytywanie…</p>
+            ) : issuedInvoices.length === 0 ? (
+              <p className="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-8 text-center text-sm text-zinc-600">
+                Brak wystawionych faktur w wybranym miesiącu.
+              </p>
+            ) : (
+              <div className="overflow-x-auto rounded-xl border border-emerald-100">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-emerald-50 text-zinc-700">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Numer</th>
+                      <th className="px-3 py-2 text-left">Typ</th>
+                      <th className="px-3 py-2 text-left">Data wystawienia</th>
+                      <th className="px-3 py-2 text-left">Nabywca</th>
+                      <th className="px-3 py-2 text-left">Kwota</th>
+                      <th className="px-3 py-2 text-left">Płatność</th>
+                      <th className="px-3 py-2 text-left">PDF</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {issuedInvoices.map((inv) => (
+                      <tr key={inv.id} className="border-t border-emerald-50">
+                        <td className="px-3 py-2 font-medium">{inv.invoiceNumber}</td>
+                        <td className="px-3 py-2">
+                          {inv.documentType === 'CORRECTIVE'
+                            ? 'Korekta'
+                            : invoiceKindLabel(inv.kind)}
+                        </td>
+                        <td className="px-3 py-2 whitespace-nowrap">{inv.issueDate}</td>
+                        <td className="px-3 py-2">
+                          <div>{inv.buyerName}</div>
+                          {inv.parentEmail ? (
+                            <div className="text-xs text-zinc-500">{inv.parentEmail}</div>
+                          ) : null}
+                          {inv.buyerNip ? (
+                            <div className="text-xs text-zinc-500">NIP {inv.buyerNip}</div>
+                          ) : null}
+                        </td>
+                        <td className="px-3 py-2 whitespace-nowrap">{formatPln(inv.amount)}</td>
+                        <td className="px-3 py-2">{paymentStatusLabel(inv.paymentStatus)}</td>
+                        <td className="px-3 py-2">
+                          {inv.hasPdf ? (
+                            <a
+                              href={`/api/admin/invoices/${encodeURIComponent(inv.id)}?format=pdf`}
+                              className="font-semibold text-[#0f6e56] hover:underline"
+                            >
+                              Pobierz PDF
+                            </a>
+                          ) : (
+                            <span className="text-zinc-400">Brak pliku</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        ) : billingSubTab === 'payments' ? (
+          renderLessonBilling()
+        ) : discountsLoading ? (
+          <div className="space-y-3">
+            <div className="h-24 animate-pulse rounded-2xl bg-emerald-100/80" />
+          </div>
+        ) : (
+          <div className="rounded-xl border border-emerald-100 bg-white p-4 space-y-5">
+            <div>
+              <h4 className="font-semibold text-[#0f6e56]">Generowanie faktur ratalnych</h4>
+              <p className="mt-1 text-sm text-zinc-600">
+                Wybierz tryb: ręczne (tylko przycisk w Zestawieniu) albo automatyczne (cron w
+                wybranym dniu miesiąca). Termin płatności na fakturze to zawsze ostatni dzień
+                miesiąca rozliczeniowego.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setInvoiceAutoGenerationDraft(false)}
+                className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                  !invoiceAutoGenerationDraft
+                    ? 'border-[#0f6e56] bg-[#0f6e56] text-white shadow-sm'
+                    : 'border-emerald-100 bg-emerald-50/50 text-zinc-800 hover:border-emerald-200'
+                }`}
+              >
+                Ręczne generowanie
+              </button>
+              <button
+                type="button"
+                onClick={() => setInvoiceAutoGenerationDraft(true)}
+                className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                  invoiceAutoGenerationDraft
+                    ? 'border-[#0f6e56] bg-[#0f6e56] text-white shadow-sm'
+                    : 'border-emerald-100 bg-emerald-50/50 text-zinc-800 hover:border-emerald-200'
+                }`}
+              >
+                Automatyczne generowanie
+              </button>
+            </div>
+
+            <div
+              className={`rounded-xl border p-4 transition ${
+                invoiceAutoGenerationDraft
+                  ? 'border-emerald-200 bg-white'
+                  : 'border-zinc-100 bg-zinc-50/80 opacity-60'
+              }`}
+            >
+              <label className="block space-y-1">
+                <span
+                  className={`text-sm font-medium ${
+                    invoiceAutoGenerationDraft ? 'text-zinc-700' : 'text-zinc-400'
+                  }`}
+                >
+                  Dzień generowania faktur (1–28)
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  max={28}
+                  step={1}
+                  disabled={!invoiceAutoGenerationDraft}
+                  className={`w-28 rounded-xl border px-3 py-2 ${
+                    invoiceAutoGenerationDraft
+                      ? 'border-emerald-200 bg-white text-zinc-900'
+                      : 'cursor-not-allowed border-zinc-200 bg-zinc-100 text-zinc-400'
+                  }`}
+                  value={invoiceGenerationDayDraft}
+                  onChange={(e) => setInvoiceGenerationDayDraft(e.target.value)}
+                />
+              </label>
+              {!invoiceAutoGenerationDraft ? (
+                <p className="mt-2 text-xs text-zinc-400">
+                  Pole aktywne tylko przy automatycznym generowaniu.
+                </p>
+              ) : (
+                <p className="mt-2 text-xs text-zinc-500">
+                  Cron wystawi faktury ratalne w tym dniu każdego miesiąca (strefa Europe/Warsaw).
+                </p>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                disabled={discountsSaving}
+                className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                onClick={async () => {
+                  const day = Math.round(Number(invoiceGenerationDayDraft));
+                  if (
+                    invoiceAutoGenerationDraft &&
+                    (!Number.isFinite(day) || day < 1 || day > 28)
+                  ) {
+                    pushToast('error', 'Podaj dzień od 1 do 28');
+                    return;
+                  }
+                  setDiscountsSaving(true);
+                  try {
+                    const payload: {
+                      invoiceAutoGeneration: boolean;
+                      invoiceGenerationDay?: number;
+                    } = {
+                      invoiceAutoGeneration: invoiceAutoGenerationDraft,
+                    };
+                    if (invoiceAutoGenerationDraft) {
+                      payload.invoiceGenerationDay = day;
+                    }
+                    const res = await fetch('/api/admin/discounts', {
+                      method: 'PUT',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(payload),
+                    });
+                    const data = (await res.json().catch(() => ({}))) as {
+                      message?: string;
+                      invoiceGenerationDay?: number;
+                      invoiceAutoGeneration?: boolean;
+                    };
+                    if (!res.ok) {
+                      pushToast(
+                        'error',
+                        data.message ?? 'Nie udało się zapisać ustawień faktur',
+                      );
+                      return;
+                    }
+                    const savedAuto = Boolean(data.invoiceAutoGeneration);
+                    setInvoiceAutoGeneration(savedAuto);
+                    setInvoiceAutoGenerationDraft(savedAuto);
+                    if (data.invoiceGenerationDay != null) {
+                      const saved = Math.min(
+                        28,
+                        Math.max(1, Number(data.invoiceGenerationDay) || day),
+                      );
+                      setInvoiceGenerationDay(saved);
+                      setInvoiceGenerationDayDraft(String(saved));
+                    }
+                    pushToast('success', 'Zapisano ustawienia generowania faktur');
+                  } catch {
+                    pushToast('error', 'Błąd zapisu ustawień faktur');
+                  } finally {
+                    setDiscountsSaving(false);
+                  }
+                }}
+              >
+                {discountsSaving ? 'Zapisywanie…' : 'Zapisz ustawienia'}
+              </button>
+              {invoiceAutoGeneration !== invoiceAutoGenerationDraft ||
+              (invoiceAutoGenerationDraft &&
+                invoiceGenerationDay !== Number(invoiceGenerationDayDraft)) ? (
+                <span className="text-xs text-zinc-500">
+                  Niezapisane zmiany
+                  {invoiceAutoGeneration
+                    ? ` (zapisane: automatyczne, dzień ${invoiceGenerationDay})`
+                    : ' (zapisane: ręczne)'}
+                  .
+                </span>
+              ) : null}
+            </div>
+          </div>
+        )}
+      </section>
+    );
+  };
+
+  const renderLessonBilling = () => (
+    <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-zinc-900">Płatności za pojedyncze zajęcia</h2>
-          <p className="text-sm text-zinc-600">
+          <h4 className="font-semibold text-[#0f6e56]">Płatności za pojedyncze zajęcia</h4>
+          <p className="mt-1 text-sm text-zinc-600">
             Rozliczenie umów za pojedyncze zajęcia — obecności są informacyjne.
           </p>
         </div>
@@ -4788,7 +5373,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           </table>
         </div>
       )}
-    </section>
+    </div>
   );
 
   const renderContent = () => {
@@ -4806,7 +5391,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       return <ManagerDashboardPanel />;
     }
     if (activeTab === 'organization') return renderOrganization();
-    if (activeTab === 'users') return renderUsers();
     if (activeTab === 'classes') {
       return (
         <ClassesCalendarPanel
@@ -4819,29 +5403,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         />
       );
     }
-    if (activeTab === 'payments') return renderLessonBilling();
-    if (activeTab === 'renewals') {
-      return <RenewalsPanel pushToast={pushToast} />;
-    }
-    if (activeTab === 'resignations') {
-      return (
-        <ResignationsPanel
-          pushToast={pushToast}
-          onChange={refreshResignationsOpenCount}
-        />
-      );
-    }
-    if (activeTab === 'enrollment') {
-      return (
-        <EnrollmentAdminPanel
-          pushToast={pushToast}
-          parents={enrollmentParents}
-          groups={enrollmentGroups}
-          complimentaryParents={complimentaryParents}
-          discountSettings={discountSettings}
-          onRefresh={loadEnrollmentData}
-        />
-      );
+    if (activeTab === 'billing') return renderBilling();
+    if (activeTab === 'settlements') return renderSettlements();
+    if (activeTab === 'enrollments') {
+      return renderEnrollmentFlow();
     }
     if (activeTab === 'announcements') {
       return (
@@ -4881,22 +5446,15 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   unreadCount={messagesUnreadCount}
                   isActive={activeTab === 'announcements'}
                 />
-              ) : tab.key === 'enrollment' ? (
+              ) : tab.key === 'enrollments' ? (
                 <MessagesTabLabel
                   label={tab.label}
-                  unreadCount={enrollmentsPendingCount}
-                  isActive={activeTab === 'enrollment'}
+                  unreadCount={enrollmentsPendingCount + resignationsOpenCount}
+                  isActive={activeTab === 'enrollments'}
                   badgeAriaLabel={(n) =>
-                    n === 1 ? '1 nowe zgłoszenie' : `${n} nowych zgłoszeń`
-                  }
-                />
-              ) : tab.key === 'resignations' ? (
-                <MessagesTabLabel
-                  label={tab.label}
-                  unreadCount={resignationsOpenCount}
-                  isActive={activeTab === 'resignations'}
-                  badgeAriaLabel={(n) =>
-                    n === 1 ? '1 otwarte zgłoszenie rezygnacji' : `${n} otwartych zgłoszeń rezygnacji`
+                    n === 1
+                      ? '1 oczekujące zgłoszenie lub rezygnacja'
+                      : `${n} oczekujących zgłoszeń lub rezygnacji`
                   }
                 />
               ) : (
@@ -4946,7 +5504,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             <h3 className="text-lg font-semibold text-zinc-900">Zakończenie roku szkolnego</h3>
             <p className="mt-3 text-sm text-zinc-600">
               Czy na pewno chcesz zakończyć rok szkolny <strong>{closeYearModal.name}</strong>? Spowoduje to
-              anulowanie wszystkich zaplanowanych zajęć, zamknięcie grup i wygaśnięcie subskrypcji.
+              anulowanie zaplanowanych zajęć i wygaśnięcie subskrypcji. Grupy szkoły pozostaną aktywne, a
+              dzieci zostaną przypisane do tych samych grup w kolejnym roku (jeśli jest zaplanowany).
             </p>
             <div className="mt-5 flex justify-end gap-2">
               <button
@@ -4970,13 +5529,17 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     });
                     const data = await res.json().catch(() => ({}));
                     if (!res.ok) throw new Error(data.message ?? 'Błąd zamykania roku');
+                    const carried = data.membershipsCarried ?? 0;
                     pushToast(
                       'success',
                       (data.activatedNextYear?.name
                         ? `Rok zamknięty. Aktywowano ${data.activatedNextYear.name}. `
                         : 'Rok zamknięty. ') +
                         `Anulowano ${data.lessonsCancelled ?? 0} zajęć, ` +
-                        `zamknięto ${data.groupsClosed ?? 0} grup, wygaszono ${data.subscriptionsExpired ?? 0} subskrypcji.`,
+                        `wygaszono ${data.subscriptionsExpired ?? 0} subskrypcji.` +
+                        (data.activatedNextYear
+                          ? ` Przeniesiono ${carried} przypisań uczniów do nowego roku.`
+                          : ''),
                     );
                     setCloseYearModal(null);
                     await loadSchoolYearData();
@@ -5639,7 +6202,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       parentSearch: '',
                     });
                     setChildModalOpen(false);
-                    setActiveTab('enrollment');
+                    setEnrollmentFlowSubTab('enrollment');
+                    setActiveTab('enrollments');
                     await loadData();
                   }}
                 >

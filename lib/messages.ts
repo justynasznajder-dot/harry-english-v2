@@ -389,7 +389,7 @@ export async function canMessageRecipient(params: {
        JOIN children c ON c.parent_id = u.id AND c.school_id = $2 AND c.active = TRUE
        JOIN group_students gs ON gs.child_id = c.id AND gs.left_at IS NULL
        JOIN groups g ON g.id = gs.group_id AND g.teacher_id = $1 AND g.school_id = $2
-       JOIN school_years sy ON sy.id = g.school_year_id AND sy.active = TRUE
+       JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
        WHERE u.id = $3 AND u.role = 'PARENT'
        LIMIT 1`,
       [params.senderId, params.schoolId, params.recipientId]
@@ -496,7 +496,7 @@ async function queryTeacherParents(
      JOIN children c ON c.parent_id = u.id AND c.school_id = $2 AND c.active = TRUE
      JOIN group_students gs ON gs.child_id = c.id AND gs.left_at IS NULL
      JOIN groups g ON g.id = gs.group_id AND g.teacher_id = $1 AND g.school_id = $2
-     JOIN school_years sy ON sy.id = g.school_year_id AND sy.active = TRUE
+     JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
      WHERE u.role = 'PARENT' AND u.school_id = $2
        ${searchSql}
      GROUP BY u.id, u.first_name, u.last_name, u.email, u.role, u.access_level
@@ -602,7 +602,7 @@ async function queryFilteredParents(
     idx++;
   }
   if (filters.schoolYearId) {
-    conditions.push(`g.school_year_id = $${idx++}`);
+    conditions.push(`gs.school_year_id = $${idx++}`);
     values.push(filters.schoolYearId);
   }
   if (filters.teacherId && !scopeTeacherId) {
@@ -634,7 +634,7 @@ async function queryFilteredParents(
   }
 
   const schoolYearJoin = scopeTeacherId
-    ? "JOIN school_years sy ON sy.id = g.school_year_id"
+    ? "JOIN school_years sy ON sy.id = gs.school_year_id"
     : "";
 
   const childNamesSelect = scopeTeacherId
@@ -690,7 +690,7 @@ async function queryParentTeachers(
      FROM children c
      JOIN group_students gs ON gs.child_id = c.id AND gs.left_at IS NULL
      JOIN groups g ON g.id = gs.group_id AND g.school_id = $2
-     JOIN school_years sy ON sy.id = g.school_year_id AND sy.active = TRUE
+     JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
      JOIN users t ON t.id = g.teacher_id AND t.active = TRUE
      WHERE c.parent_id = $1 AND c.school_id = $2 AND c.active = TRUE
        AND t.id IS NOT NULL

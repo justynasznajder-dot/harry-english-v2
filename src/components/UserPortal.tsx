@@ -5,7 +5,6 @@ import EnrollmentParentFlow, { type UserInfo } from '@/src/components/enrollment
 import MessagesPanel from '@/src/components/messages/MessagesPanel';
 import MessagesTabLabel from '@/src/components/messages/MessagesTabLabel';
 import { useUnreadMessagesCount } from '@/src/components/messages/useUnreadMessagesCount';
-import ParentAttendanceTab from '@/src/components/parent/ParentAttendanceTab';
 import ParentCalendarTab from '@/src/components/parent/ParentCalendarTab';
 import ParentDocumentsTab from '@/src/components/parent/ParentDocumentsTab';
 import ParentGroupTab from '@/src/components/parent/ParentGroupTab';
@@ -23,7 +22,6 @@ type PortalTab =
   | 'enrollment'
   | 'messages'
   | 'group'
-  | 'attendance'
   | 'payments'
   | 'calendar'
   | 'documents'
@@ -33,7 +31,6 @@ const topTabs: Array<{ key: PortalTab; label: string }> = [
   { key: 'enrollment', label: 'Proces zapisu' },
   { key: 'messages', label: 'Wiadomości' },
   { key: 'group', label: 'Moja grupa' },
-  { key: 'attendance', label: 'Obecności' },
   { key: 'calendar', label: 'Kalendarz' },
   { key: 'payments', label: 'Płatności' },
   { key: 'documents', label: 'Dokumenty' },
@@ -72,7 +69,6 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
     }
     if (activeTab === 'messages') return renderMessagesTab();
     if (activeTab === 'group') return <ParentGroupTab />;
-    if (activeTab === 'attendance') return <ParentAttendanceTab userInfo={userInfo} />;
     if (activeTab === 'calendar') return <ParentCalendarTab userInfo={userInfo} />;
     if (activeTab === 'payments') {
       return <ParentPaymentsTab complimentaryAccess={userInfo.complimentaryAccess} />;

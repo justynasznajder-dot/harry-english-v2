@@ -111,7 +111,25 @@ export async function DELETE(request: NextRequest, context: RouteCtx) {
       const yearSchoolId = y.rows[0].school_id;
       const dateTo = String(y.rows[0].date_to).slice(0, 10);
 
-      const closeCounts = await runSchoolYearCloseSteps(c, yearSchoolId, yearId, dateTo);
+      const nextYear = await c.query<{ id: string; name: string }>(
+        `SELECT id, name FROM school_years
+         WHERE school_id = $1
+           AND active = FALSE
+           AND closed_at IS NULL
+           AND date_from > $2::date
+         ORDER BY date_from ASC
+         LIMIT 1`,
+        [yearSchoolId, dateTo]
+      );
+      const nextYearId = nextYear.rows[0]?.id ?? null;
+
+      const closeCounts = await runSchoolYearCloseSteps(
+        c,
+        yearSchoolId,
+        yearId,
+        dateTo,
+        nextYearId
+      );
 
       const closedYear = await c.query(
         ctx.tenant.role === "MANAGER"
@@ -149,16 +167,6 @@ export async function DELETE(request: NextRequest, context: RouteCtx) {
         ]
       );
 
-      const nextYear = await c.query<{ id: string; name: string }>(
-        `SELECT id, name FROM school_years
-         WHERE school_id = $1
-           AND active = FALSE
-           AND closed_at IS NULL
-           AND date_from > $2::date
-         ORDER BY date_from ASC
-         LIMIT 1`,
-        [yearSchoolId, dateTo]
-      );
       let activatedNextYear: { id: string; name: string } | null = null;
       if (nextYear.rows[0]) {
         const activated = await c.query<{ id: string; name: string }>(
@@ -190,6 +198,7 @@ export async function DELETE(request: NextRequest, context: RouteCtx) {
       lessonsCompleted: result.lessonsCompleted,
       groupsClosed: result.groupsClosed,
       membershipsClosed: result.membershipsClosed,
+      membershipsCarried: result.membershipsCarried,
       subscriptionsExpired: result.subscriptionsExpired,
       scheduleTemplatesDeactivated: result.scheduleTemplatesDeactivated,
       activatedNextYear: result.activatedNextYear ?? null,

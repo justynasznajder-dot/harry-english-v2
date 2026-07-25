@@ -4,10 +4,12 @@ import {
   applyDiscountsToAmount,
   DISCOUNT_KEYS,
   getSchoolDiscountSettings,
+  hasIndividualPriceOverride,
   isComplimentaryForParent,
   type DiscountKey,
   type SchoolDiscountSettings,
 } from "@/lib/school-discounts";
+import { resolveContractDiscountKeys } from "@/lib/contract-pricing-preview";
 import { getActiveSchoolYear, queryDb, runPgTransaction } from "@/lib/db";
 import { sumChildrenBaseAmounts } from "@/lib/enrollment-pricing";
 import { getParentLargeFamilyCard } from "@/lib/parent-profile-discount";
@@ -600,14 +602,16 @@ export async function generateParentContract(
     parentEmail: user.email,
   });
   const discountSettings = await getSchoolDiscountSettings(schoolId);
-  const discountKeys: DiscountKey[] = [];
-  if (!billingExempt && (await parentHasSiblingDiscount(parentId, schoolId))) {
-    discountKeys.push(DISCOUNT_KEYS.SIBLING);
-  }
   const hasLargeFamilyCard = await getParentLargeFamilyCard(parentId);
-  if (!billingExempt && hasLargeFamilyCard) {
-    discountKeys.push(DISCOUNT_KEYS.LARGE_FAMILY_CARD);
-  }
+  const discountKeys = resolveContractDiscountKeys(
+    await parentHasSiblingDiscount(parentId, schoolId),
+    {
+      billingExempt,
+      discountLargeFamily: hasLargeFamilyCard,
+      discountSettings,
+      hasIndividualPricing: hasIndividualPriceOverride(child),
+    }
+  );
 
   const childRates = buildChildRateSnapshots([child]);
   const amountBreakdown = buildContractAmountBreakdown({
@@ -1076,9 +1080,11 @@ export async function finalizeContractPricingAtSign(
 
   if (existing && existing.discounts.length > 0) {
     discountKeys = existing.discounts.map((d) => d.key);
+    const schoolSettings = await getSchoolDiscountSettings(contract.school_id);
     discountSettings = {
       LARGE_FAMILY_CARD: 0,
       SIBLING: 0,
+      maxPercent: schoolSettings.maxPercent,
       ...Object.fromEntries(existing.discounts.map((d) => [d.key, d.percent])),
     };
   } else {

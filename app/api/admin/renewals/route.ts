@@ -59,6 +59,8 @@ export async function GET(request: NextRequest) {
       proposed_group_name: string | null;
       proposed_location_name: string | null;
       proposed_schedule: string | null;
+      current_group_id: string | null;
+      current_group_name: string | null;
       proposal_count: string;
       has_pending_proposal: boolean;
     }>(
@@ -85,6 +87,28 @@ export async function GET(request: NextRequest) {
            ),
            'Do ustalenia'
          ) AS proposed_schedule,
+         (
+           SELECT gs.group_id
+           FROM group_students gs
+           JOIN groups cg ON cg.id = gs.group_id AND cg.active = TRUE
+           JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
+           WHERE gs.child_id = c.id
+             AND gs.left_at IS NULL
+             AND cg.school_id = r.school_id
+           ORDER BY gs.enrolled_at DESC
+           LIMIT 1
+         ) AS current_group_id,
+         (
+           SELECT cg.name
+           FROM group_students gs
+           JOIN groups cg ON cg.id = gs.group_id AND cg.active = TRUE
+           JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
+           WHERE gs.child_id = c.id
+             AND gs.left_at IS NULL
+             AND cg.school_id = r.school_id
+           ORDER BY gs.enrolled_at DESC
+           LIMIT 1
+         ) AS current_group_name,
          (SELECT COUNT(*)::text FROM renewal_proposals rp WHERE rp.renewal_id = r.id) AS proposal_count,
          EXISTS (
            SELECT 1 FROM renewal_proposals rp2
@@ -95,13 +119,13 @@ export async function GET(request: NextRequest) {
        JOIN children c ON c.id = r.child_id
        JOIN users u ON u.id = r.parent_id
        LEFT JOIN groups g ON g.id = r.proposed_group_id
-       LEFT JOIN schedule_templates st ON st.group_id = g.id
+       LEFT JOIN schedule_templates st ON st.group_id = g.id AND st.active = TRUE
        LEFT JOIN locations l ON l.id = st.location_id
        WHERE r.school_id = $1
          ${extraWhere}
        GROUP BY
          r.id, r.season, r.status, r.initiated_at, r.confirmed_at, r.proposed_group_id,
-         c.id, c.first_name, c.last_name,
+         r.school_id, c.id, c.first_name, c.last_name,
          u.id, u.first_name, u.last_name, u.email, g.name
        ORDER BY
          CASE UPPER(BTRIM(COALESCE(r.status::text, '')))
@@ -120,13 +144,6 @@ export async function GET(request: NextRequest) {
       params
     );
 
-    const groupsParams: unknown[] = [schoolId];
-    let groupsYearFilter = "";
-    if (plannedNextYear?.id) {
-      groupsParams.push(plannedNextYear.id);
-      groupsYearFilter = ` AND g.school_year_id = $${groupsParams.length}`;
-    }
-
     const groupsRes = await queryDb<{
       id: string;
       name: string;
@@ -144,12 +161,12 @@ export async function GET(request: NextRequest) {
                 'Do ustalenia'
               ) AS schedule
        FROM groups g
-       LEFT JOIN schedule_templates st ON st.group_id = g.id
+       LEFT JOIN schedule_templates st ON st.group_id = g.id AND st.active = TRUE
        LEFT JOIN locations l ON l.id = st.location_id
-       WHERE g.active = TRUE AND g.school_id = $1${groupsYearFilter}
+       WHERE g.active = TRUE AND g.school_id = $1
        GROUP BY g.id, g.name
        ORDER BY g.name`,
-      groupsParams
+      [schoolId]
     );
 
     return NextResponse.json({
@@ -167,6 +184,8 @@ export async function GET(request: NextRequest) {
         proposedGroupName: row.proposed_group_name,
         proposedLocationName: row.proposed_location_name,
         proposedSchedule: row.proposed_schedule,
+        currentGroupId: row.current_group_id,
+        currentGroupName: row.current_group_name,
         childId: row.child_id,
         childFirstName: row.child_first_name,
         childLastName: row.child_last_name,

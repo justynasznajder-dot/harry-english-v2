@@ -5,6 +5,7 @@ import ContractPortal from '@/src/components/ContractPortal';
 import ParentAddChildSection from '@/src/components/parent/ParentAddChildSection';
 import RenewalParentFlowSection from '@/src/components/parent/RenewalParentFlowSection';
 import { computeContractPreviewAmount, type ContractPricingContext } from '@/lib/contract-pricing-preview';
+import { hasIndividualPriceOverride } from '@/lib/discount-math';
 import { resolveChildBaseAmount, sumChildrenBaseAmounts } from '@/lib/enrollment-pricing';
 import { resolveLessonUnitPrice } from '@/lib/lesson-pricing';
 import { paymentTypePeriodLabel, paymentTypeShortLabel } from '@/lib/payment-labels';
@@ -249,21 +250,12 @@ interface Flash {
   message: string;
 }
 
-type PortalTab = 'enrollment' | 'messages' | 'group' | 'attendance' | 'payments';
 type EnrollmentStepKey = 'pending' | 'proposed' | 'contractSent' | 'active';
 
 interface EnrollmentStep {
   key: EnrollmentStepKey;
   label: string;
 }
-
-const topTabs: Array<{ key: PortalTab; label: string }> = [
-  { key: 'enrollment', label: 'Proces zapisu' },
-  { key: 'messages', label: 'Wiadomości' },
-  { key: 'group', label: 'Moja grupa' },
-  { key: 'attendance', label: 'Obecności' },
-  { key: 'payments', label: 'Płatności' },
-];
 
 const enrollmentSteps: EnrollmentStep[] = [
   { key: 'pending', label: 'Zgłoszenie' },
@@ -333,6 +325,13 @@ export default function EnrollmentParentFlow({
   const [profileComplete, setProfileComplete] = useState(false);
   const [profileLocked, setProfileLocked] = useState(false);
   const [savingContractProfile, setSavingContractProfile] = useState(false);
+  /** Po zapisie pola są zablokowane — odblokowanie tylko przez „Edytuj dane”. */
+  const [isEditingContractProfile, setIsEditingContractProfile] = useState(true);
+  /**
+   * Po wygenerowaniu (SENT) przycisk generowania jest nieaktywny, aż rodzic
+   * ponownie zapisze dane (lub zmieni kolejkę / sposób rozliczeń).
+   */
+  const [allowContractRegenerate, setAllowContractRegenerate] = useState(false);
   /** Rodzic musi zapisać dane i potwierdzić ich aktualność przed generowaniem umowy. */
   const [dataConfirmed, setDataConfirmed] = useState(false);
   const [schoolYearName, setSchoolYearName] = useState<string | null>(null);
@@ -497,7 +496,10 @@ export default function EnrollmentParentFlow({
       setProfileLocked(Boolean(data.profileLocked));
       if (!p) {
         setProfileComplete(false);
-        setProfileLoaded(true);
+        setProfileLoaded((loaded) => {
+          if (!loaded) setIsEditingContractProfile(true);
+          return true;
+        });
         return;
       }
       setContractProfile((prev) => ({
@@ -512,8 +514,12 @@ export default function EnrollmentParentFlow({
         companyName: p.companyName ?? prev.companyName,
         nip: p.nip ?? prev.nip,
       }));
-      setProfileComplete(Boolean(p.complete));
-      setProfileLoaded(true);
+      const complete = Boolean(p.complete);
+      setProfileComplete(complete);
+      setProfileLoaded((loaded) => {
+        if (!loaded) setIsEditingContractProfile(!complete);
+        return true;
+      });
     } catch (err) {
       console.error('Nie udało się pobrać profilu rodzica', err);
       setProfileLoaded(true);
@@ -578,6 +584,8 @@ export default function EnrollmentParentFlow({
       }
       setProfileComplete(Boolean(data.profile?.complete));
       setProfileLocked(Boolean(data.profileLocked));
+      setIsEditingContractProfile(false);
+      setAllowContractRegenerate(true);
       if (data.user) {
         onUserInfoUpdate({
           ...userInfoRef.current,
@@ -676,11 +684,12 @@ export default function EnrollmentParentFlow({
       }
       const next = (data as { nextChildToContract?: { first_name?: string; last_name?: string } | null })
         .nextChildToContract;
+      setAllowContractRegenerate(false);
       setFlash({
         kind: 'success',
         message: next
           ? `Umowa wygenerowana dla jednego dziecka. Podpisz ją, a potem wygenerujesz umowę dla: ${next.first_name ?? ''} ${next.last_name ?? ''}`.trim()
-          : 'Umowa wygenerowana. Zapoznaj się z dokumentami i podpisz. Do momentu podpisu możesz poprawić dane i wygenerować umowę jeszcze raz.',
+          : 'Umowa wygenerowana. Zapoznaj się z dokumentami i podpisz. Aby wygenerować ponownie przed podpisem: Edytuj dane → Zapisz dane.',
       });
       await Promise.all([loadProposals(), loadParentProfile()]);
     } catch {
@@ -1245,7 +1254,12 @@ export default function EnrollmentParentFlow({
         const preview = computeContractPreviewAmount(
           paymentType === 'PER_LESSON' ? null : base,
           siblingEligible,
-          contractPricing,
+          contractPricing
+            ? {
+                ...contractPricing,
+                hasIndividualPricing: hasIndividualPriceOverride(p),
+              }
+            : null,
         );
         return {
           requestId: p.request_id,
@@ -1257,11 +1271,37 @@ export default function EnrollmentParentFlow({
         };
       });
       const baseTotal = sumIncludedProposalAmounts(proposals, includedRequestIds, paymentType);
-      const pricingPreview = computeContractPreviewAmount(
-        paymentType === 'PER_LESSON' ? null : baseTotal,
-        siblingEligible,
-        contractPricing,
-      );
+      const pricingPreview = (() => {
+        if (paymentType === 'PER_LESSON' || baseTotal == null || !contractPricing) {
+          return computeContractPreviewAmount(
+            paymentType === 'PER_LESSON' ? null : baseTotal,
+            siblingEligible,
+            contractPricing,
+          );
+        }
+        // Zniżki per dziecko (cena indywidualna wyłącza rabat tylko dla tego dziecka).
+        let finalTotal = 0;
+        const labels = new Set<string>();
+        const keys: string[] = [];
+        for (const p of includedProposals) {
+          const base = resolveChildBaseAmount(p, paymentType);
+          if (base == null) continue;
+          const preview = computeContractPreviewAmount(base, siblingEligible, {
+            ...(contractPricing as ContractPricingContext),
+            hasIndividualPricing: hasIndividualPriceOverride(p),
+          });
+          if (preview.finalTotal != null) finalTotal += preview.finalTotal;
+          for (const label of preview.discountLabels) labels.add(label);
+          for (const key of preview.discountKeys) {
+            if (!keys.includes(key)) keys.push(key);
+          }
+        }
+        return {
+          finalTotal: Math.round(finalTotal * 100) / 100,
+          discountKeys: keys as ReturnType<typeof computeContractPreviewAmount>['discountKeys'],
+          discountLabels: [...labels],
+        };
+      })();
       const paymentTypeLabel = paymentTypePeriodLabel(paymentType);
       const canGenerateContract =
         paymentType === 'PER_LESSON' ? baseTotal != null : baseTotal != null;
@@ -1283,8 +1323,13 @@ export default function EnrollmentParentFlow({
             }
           : null;
       const isContractSigned = parentContract?.status === 'SIGNED';
+      const hasUnsignedGeneratedContract = parentContract?.status === 'SENT';
+      const profileFieldsLocked =
+        profileLocked || isReadOnlyPreview || isContractSigned || !isEditingContractProfile;
       const commonProfileLocked = profileLocked || isReadOnlyPreview || isContractSigned;
       const formLocked = isReadOnlyPreview || isContractSigned || !contractReadiness.canPrepareContract;
+      const generateDisabledByExistingContract =
+        hasUnsignedGeneratedContract && !allowContractRegenerate;
 
       return (
         <section className="space-y-4">
@@ -1347,7 +1392,8 @@ export default function EnrollmentParentFlow({
                     {!profileLocked && !isContractSigned && (
                       <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
                         1) Sprawdź i zapisz dane. 2) Potwierdź, że są aktualne. 3) Dopiero potem
-                        wygenerujesz umowę. Po zmianie pól trzeba zapisać i potwierdzić ponownie.
+                        wygenerujesz umowę. Po zapisie możesz użyć „Edytuj dane”, żeby zmienić dane
+                        i zapisać ponownie — wtedy generowanie umowy znów będzie dostępne.
                       </div>
                     )}
                     <div className="grid gap-4 md:grid-cols-2">
@@ -1355,7 +1401,7 @@ export default function EnrollmentParentFlow({
                         <label className="text-sm font-medium text-zinc-800">Imię</label>
                         <input
                           type="text"
-                          disabled={commonProfileLocked}
+                          disabled={profileFieldsLocked}
                           value={contractProfile.firstName}
                           onChange={(e) => patchContractProfile({ firstName: e.target.value })}
                           className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
@@ -1365,7 +1411,7 @@ export default function EnrollmentParentFlow({
                         <label className="text-sm font-medium text-zinc-800">Nazwisko</label>
                         <input
                           type="text"
-                          disabled={commonProfileLocked}
+                          disabled={profileFieldsLocked}
                           value={contractProfile.lastName}
                           onChange={(e) => patchContractProfile({ lastName: e.target.value })}
                           className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
@@ -1384,39 +1430,9 @@ export default function EnrollmentParentFlow({
                         <label className="text-sm font-medium text-zinc-800">Telefon</label>
                         <input
                           type="text"
-                          disabled={commonProfileLocked}
+                          disabled={profileFieldsLocked}
                           value={contractProfile.phone}
                           onChange={(e) => patchContractProfile({ phone: e.target.value })}
-                          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
-                        />
-                      </div>
-                      <div className="space-y-1 md:col-span-2">
-                        <label className="text-sm font-medium text-zinc-800">Adres</label>
-                        <input
-                          type="text"
-                          disabled={commonProfileLocked}
-                          value={contractProfile.address}
-                          onChange={(e) => patchContractProfile({ address: e.target.value })}
-                          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-sm font-medium text-zinc-800">Miasto</label>
-                        <input
-                          type="text"
-                          disabled={commonProfileLocked}
-                          value={contractProfile.city}
-                          onChange={(e) => patchContractProfile({ city: e.target.value })}
-                          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-sm font-medium text-zinc-800">Kod pocztowy</label>
-                        <input
-                          type="text"
-                          disabled={commonProfileLocked}
-                          value={contractProfile.zipCode}
-                          onChange={(e) => patchContractProfile({ zipCode: e.target.value })}
                           className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
                         />
                       </div>
@@ -1430,7 +1446,7 @@ export default function EnrollmentParentFlow({
                             type="radio"
                             name="billingType-shared"
                             className="accent-[#0f6e56]"
-                            disabled={commonProfileLocked}
+                            disabled={profileFieldsLocked}
                             checked={contractProfile.billingType === 'private'}
                             onChange={() => patchContractProfile({ billingType: 'private' })}
                           />
@@ -1441,7 +1457,7 @@ export default function EnrollmentParentFlow({
                             type="radio"
                             name="billingType-shared"
                             className="accent-[#0f6e56]"
-                            disabled={commonProfileLocked}
+                            disabled={profileFieldsLocked}
                             checked={contractProfile.billingType === 'company'}
                             onChange={() => patchContractProfile({ billingType: 'company' })}
                           />
@@ -1451,38 +1467,113 @@ export default function EnrollmentParentFlow({
                     </div>
 
                     {contractProfile.billingType === 'private' ? (
-                      <div className="space-y-1 max-w-sm">
-                        <label className="text-sm font-medium text-zinc-800">PESEL</label>
-                        <input
-                          type="text"
-                          maxLength={11}
-                          disabled={commonProfileLocked}
-                          value={contractProfile.pesel}
-                          onChange={(e) => patchContractProfile({ pesel: e.target.value })}
-                          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
-                        />
-                      </div>
-                    ) : (
                       <div className="grid gap-4 md:grid-cols-2">
-                        <div className="space-y-1">
-                          <label className="text-sm font-medium text-zinc-800">Nazwa firmy</label>
+                        <div className="space-y-1 md:col-span-2 max-w-sm">
+                          <label className="text-sm font-medium text-zinc-800">PESEL</label>
                           <input
                             type="text"
-                            disabled={commonProfileLocked}
-                            value={contractProfile.companyName}
-                            onChange={(e) => patchContractProfile({ companyName: e.target.value })}
+                            maxLength={11}
+                            disabled={profileFieldsLocked}
+                            value={contractProfile.pesel}
+                            onChange={(e) => patchContractProfile({ pesel: e.target.value })}
+                            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                          />
+                        </div>
+                        <div className="space-y-1 md:col-span-2">
+                          <label className="text-sm font-medium text-zinc-800">Adres</label>
+                          <input
+                            type="text"
+                            disabled={profileFieldsLocked}
+                            value={contractProfile.address}
+                            onChange={(e) => patchContractProfile({ address: e.target.value })}
+                            placeholder="ul. Przykładowa 1"
                             className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
                           />
                         </div>
                         <div className="space-y-1">
-                          <label className="text-sm font-medium text-zinc-800">NIP</label>
+                          <label className="text-sm font-medium text-zinc-800">Miasto</label>
                           <input
                             type="text"
-                            disabled={commonProfileLocked}
-                            value={contractProfile.nip}
-                            onChange={(e) => patchContractProfile({ nip: e.target.value })}
+                            disabled={profileFieldsLocked}
+                            value={contractProfile.city}
+                            onChange={(e) => patchContractProfile({ city: e.target.value })}
                             className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
                           />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-sm font-medium text-zinc-800">Kod pocztowy</label>
+                          <input
+                            type="text"
+                            disabled={profileFieldsLocked}
+                            value={contractProfile.zipCode}
+                            onChange={(e) => patchContractProfile({ zipCode: e.target.value })}
+                            placeholder="00-000"
+                            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-4 rounded-xl border border-emerald-100 bg-emerald-50/40 p-4">
+                        <p className="text-sm font-semibold text-zinc-900">Dane firmy do faktury</p>
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <div className="space-y-1 md:col-span-2">
+                            <label className="text-sm font-medium text-zinc-800">Nazwa firmy</label>
+                            <input
+                              type="text"
+                              disabled={profileFieldsLocked}
+                              value={contractProfile.companyName}
+                              onChange={(e) => patchContractProfile({ companyName: e.target.value })}
+                              placeholder="Pełna nazwa firmy"
+                              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                            />
+                          </div>
+                          <div className="space-y-1 md:col-span-2 max-w-sm">
+                            <label className="text-sm font-medium text-zinc-800">NIP</label>
+                            <input
+                              type="text"
+                              maxLength={10}
+                              inputMode="numeric"
+                              disabled={profileFieldsLocked}
+                              value={contractProfile.nip}
+                              onChange={(e) => patchContractProfile({ nip: e.target.value })}
+                              placeholder="10 cyfr"
+                              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                            />
+                          </div>
+                          <div className="space-y-1 md:col-span-2">
+                            <label className="text-sm font-medium text-zinc-800">
+                              Adres siedziby firmy
+                            </label>
+                            <input
+                              type="text"
+                              disabled={profileFieldsLocked}
+                              value={contractProfile.address}
+                              onChange={(e) => patchContractProfile({ address: e.target.value })}
+                              placeholder="ul. Przykładowa 1"
+                              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-sm font-medium text-zinc-800">Miasto</label>
+                            <input
+                              type="text"
+                              disabled={profileFieldsLocked}
+                              value={contractProfile.city}
+                              onChange={(e) => patchContractProfile({ city: e.target.value })}
+                              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-sm font-medium text-zinc-800">Kod pocztowy</label>
+                            <input
+                              type="text"
+                              disabled={profileFieldsLocked}
+                              value={contractProfile.zipCode}
+                              onChange={(e) => patchContractProfile({ zipCode: e.target.value })}
+                              placeholder="00-000"
+                              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                            />
+                          </div>
                         </div>
                       </div>
                     )}
@@ -1500,6 +1591,7 @@ export default function EnrollmentParentFlow({
                             type="checkbox"
                             className={`mt-0.5 ${dataConfirmed ? 'accent-zinc-400' : 'accent-[#0f6e56]'}`}
                             checked={dataConfirmed}
+                            disabled={!isEditingContractProfile && dataConfirmed}
                             onChange={(e) => setDataConfirmed(e.target.checked)}
                           />
                           <span>
@@ -1510,14 +1602,30 @@ export default function EnrollmentParentFlow({
                             . Dopiero po tym potwierdzeniu mogę wygenerować umowę.
                           </span>
                         </label>
-                        <button
-                          type="button"
-                          disabled={savingContractProfile}
-                          onClick={() => void handleSaveContractProfile()}
-                          className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {savingContractProfile ? 'Zapisywanie…' : 'Zapisz dane do umowy'}
-                        </button>
+                        <div className="flex flex-wrap items-center gap-3">
+                          <button
+                            type="button"
+                            disabled={
+                              savingContractProfile || !isEditingContractProfile || profileLocked
+                            }
+                            onClick={() => void handleSaveContractProfile()}
+                            className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {savingContractProfile ? 'Zapisywanie…' : 'Zapisz dane do umowy'}
+                          </button>
+                          {!isEditingContractProfile && profileComplete ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsEditingContractProfile(true);
+                                setDataConfirmed(false);
+                              }}
+                              className="rounded-full border border-[#0f6e56] bg-white px-5 py-2.5 text-sm font-semibold text-[#0f6e56] transition hover:bg-emerald-50"
+                            >
+                              Edytuj dane
+                            </button>
+                          ) : null}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1551,12 +1659,13 @@ export default function EnrollmentParentFlow({
                                 className="mt-1 accent-[#0f6e56]"
                                 disabled={formLocked || !isAccepted}
                                 checked={isAccepted && included}
-                                onChange={(e) =>
+                                onChange={(e) => {
+                                  setAllowContractRegenerate(true);
                                   setIncludedInContract((prev) => ({
                                     ...prev,
                                     [p.request_id]: e.target.checked,
-                                  }))
-                                }
+                                  }));
+                                }}
                               />
                               <span className="min-w-0 flex-1">
                                 <span className="font-semibold text-zinc-900">
@@ -1601,7 +1710,10 @@ export default function EnrollmentParentFlow({
                                 className="accent-[#0f6e56]"
                                 disabled={formLocked}
                                 checked={paymentType === 'MONTHLY'}
-                                onChange={() => setPaymentType('MONTHLY')}
+                                onChange={() => {
+                                  setAllowContractRegenerate(true);
+                                  setPaymentType('MONTHLY');
+                                }}
                               />
                               {paymentTypeShortLabel('MONTHLY')}
                             </label>
@@ -1612,7 +1724,10 @@ export default function EnrollmentParentFlow({
                                 className="accent-[#0f6e56]"
                                 disabled={formLocked}
                                 checked={paymentType === 'YEARLY'}
-                                onChange={() => setPaymentType('YEARLY')}
+                                onChange={() => {
+                                  setAllowContractRegenerate(true);
+                                  setPaymentType('YEARLY');
+                                }}
                               />
                               {paymentTypeShortLabel('YEARLY')}
                             </label>
@@ -1623,7 +1738,10 @@ export default function EnrollmentParentFlow({
                                 className="accent-[#0f6e56]"
                                 disabled={formLocked}
                                 checked={paymentType === 'PER_LESSON'}
-                                onChange={() => setPaymentType('PER_LESSON')}
+                                onChange={() => {
+                                  setAllowContractRegenerate(true);
+                                  setPaymentType('PER_LESSON');
+                                }}
                               />
                               {paymentTypeShortLabel('PER_LESSON')}
                             </label>
@@ -1713,6 +1831,12 @@ export default function EnrollmentParentFlow({
                                 powyżej.
                               </p>
                             )}
+                            {generateDisabledByExistingContract && dataConfirmed && (
+                              <p className="text-sm text-zinc-600">
+                                Umowa jest już wygenerowana. Aby wygenerować ponownie ze zmienionymi
+                                danymi: Edytuj dane → Zapisz dane.
+                              </p>
+                            )}
                             <button
                               type="button"
                               disabled={
@@ -1721,7 +1845,9 @@ export default function EnrollmentParentFlow({
                                 !profileComplete ||
                                 !dataConfirmed ||
                                 includedProposals.length === 0 ||
-                                !canGenerateContract
+                                !canGenerateContract ||
+                                generateDisabledByExistingContract ||
+                                isEditingContractProfile
                               }
                               onClick={() => void handleGenerateParentContract()}
                               className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"

@@ -27,6 +27,17 @@ export async function GET(request: NextRequest) {
     );
     const parentsParams = parentsSchoolId ? [parentsSchoolId] : [];
 
+    // Klucz karty: konto rodzica, inaczej e-mail + imię/nazwisko (żeby wspólny
+    // placeholder e-mail nie sklejał różnych rodzin w jedną kartę).
+    const parentGroupKeySql = `COALESCE(
+         NULLIF(BTRIM(er.user_id), ''),
+         LOWER(BTRIM(er.parent_email::text))
+           || E'\\x1f'
+           || LOWER(BTRIM(er.parent_first_name::text))
+           || E'\\x1f'
+           || LOWER(BTRIM(er.parent_last_name::text))
+       )`;
+
     const parentsRes = await queryDb<{
       id: string;
       parent_user_id: string;
@@ -38,7 +49,7 @@ export async function GET(request: NextRequest) {
       children_json: string;
     }>(
       `SELECT
-         COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id, er.parent_email) AS id,
+         ${parentGroupKeySql} AS id,
          MAX(COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id, '')) AS parent_user_id,
          COALESCE(
            MAX(NULLIF(BTRIM(er.parent_first_name), '')),
@@ -117,7 +128,7 @@ export async function GET(request: NextRequest) {
            OR NULLIF(BTRIM(COALESCE(er.parent_email::text, '')), '') IS NOT NULL
          )
          ${parentsSchoolClause}
-      GROUP BY COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id, er.parent_email)
+       GROUP BY ${parentGroupKeySql}
        ORDER BY MAX(er.created_at) DESC`,
       parentsParams
     );

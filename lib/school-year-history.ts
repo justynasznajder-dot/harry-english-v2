@@ -9,6 +9,7 @@ export type SchoolYearCloseCounts = {
   lessonsCompleted: number;
   groupsClosed: number;
   membershipsClosed: number;
+  membershipsCarried: number;
   subscriptionsExpired: number;
   scheduleTemplatesDeactivated: number;
 };
@@ -24,7 +25,8 @@ export async function computeSchoolYearTeacherStats(
      FROM (
        SELECT g.teacher_id
        FROM groups g
-       WHERE g.school_id = $1 AND g.school_year_id = $2
+       JOIN group_students gs ON gs.group_id = g.id AND gs.school_year_id = $2
+       WHERE g.school_id = $1
        UNION
        SELECT l.teacher_id
        FROM lessons l
@@ -46,8 +48,10 @@ export async function computeSchoolYearTeacherStats(
       attendance_marked_count: number;
     }>(
       `SELECT
-         (SELECT COUNT(*)::int FROM groups g
-          WHERE g.school_id = $1 AND g.school_year_id = $2 AND g.teacher_id = $3) AS groups_count,
+         (SELECT COUNT(DISTINCT g.id)::int
+          FROM groups g
+          JOIN group_students gs ON gs.group_id = g.id AND gs.school_year_id = $2
+          WHERE g.school_id = $1 AND g.teacher_id = $3) AS groups_count,
          (SELECT COUNT(DISTINCT gs.child_id)::int
           FROM group_students gs
           JOIN groups g ON g.id = gs.group_id
@@ -113,14 +117,27 @@ export async function computeSchoolYearTeacherStats(
   return upserted;
 }
 
-/** Kroki zamknięcia roku szkolnego (bez dezaktywacji school_years). */
+/**
+ * Kroki zamknięcia roku szkolnego (bez dezaktywacji school_years).
+ * Grupy szkoły pozostają aktywne. Członkostwa zamykanego roku dostają left_at;
+ * jeśli podano nextYearId — tworzone są otwarte członkostwa na ten sam group_id
+ * (pomijane, gdy dziecko ma już zapis na kolejny rok, np. z odnowienia).
+ */
 export async function runSchoolYearCloseSteps(
   client: DbLike,
   schoolId: string,
   yearId: string,
-  dateTo: string
+  dateTo: string,
+  nextYearId?: string | null
 ): Promise<SchoolYearCloseCounts> {
-  const memberships = await client.query(
+  const memberships = await client.query<{
+    id: string;
+    group_id: string;
+    child_id: string;
+    lesson_unit_price: string | null;
+    monthly_unit_price: string | null;
+    yearly_unit_price: string | null;
+  }>(
     `UPDATE group_students gs
      SET left_at = $3::date
      FROM groups g
@@ -128,7 +145,8 @@ export async function runSchoolYearCloseSteps(
        AND g.school_id = $1
        AND gs.school_year_id = $2
        AND gs.left_at IS NULL
-     RETURNING gs.id`,
+     RETURNING gs.id, gs.group_id, gs.child_id,
+               gs.lesson_unit_price::text, gs.monthly_unit_price::text, gs.yearly_unit_price::text`,
     [schoolId, yearId, dateTo]
   );
 
@@ -138,7 +156,7 @@ export async function runSchoolYearCloseSteps(
      FROM groups g
      WHERE l.group_id = g.id
        AND g.school_id = $1
-       AND g.school_year_id = $2
+       AND l.school_year_id = $2
        AND l.status = 'SCHEDULED'
        AND (${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} + (l.duration_min * interval '1 minute')) <= NOW()
      RETURNING l.id`,
@@ -151,54 +169,94 @@ export async function runSchoolYearCloseSteps(
      FROM groups g
      WHERE l.group_id = g.id
        AND g.school_id = $1
-       AND g.school_year_id = $2
+       AND l.school_year_id = $2
        AND l.status = 'SCHEDULED'
        AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} > NOW()
      RETURNING l.id`,
     [schoolId, yearId]
   );
 
-  const scheduleTemplates = await client.query(
-    `UPDATE schedule_templates st
-     SET active = FALSE
-     FROM groups g
-     WHERE st.group_id = g.id
-       AND g.school_id = $1
-       AND g.school_year_id = $2
-       AND st.active = TRUE
-     RETURNING st.id`,
-    [schoolId, yearId]
-  );
-
-  const groups = await client.query(
-    `UPDATE groups
-     SET active = FALSE
-     WHERE school_id = $1 AND school_year_id = $2
-     RETURNING id`,
-    [schoolId, yearId]
-  );
+  // Harmonogramy należą do grupy szkoły — nie dezaktywujemy ich przy zamknięciu roku.
 
   const subs = await client.query(
     `UPDATE subscriptions s
      SET status = 'EXPIRED'
      WHERE s.school_id = $1
        AND s.status IN ('ACTIVE', 'PAUSED')
-       AND (
-         s.school_year_id = $2
-         OR s.group_id IN (SELECT id FROM groups WHERE school_id = $1 AND school_year_id = $2)
-       )
+       AND s.school_year_id = $2
      RETURNING s.id`,
     [schoolId, yearId]
   );
+
+  let membershipsCarried = 0;
+  if (nextYearId) {
+    for (const m of memberships.rows) {
+      const already = await client.query<{ id: string }>(
+        `SELECT id FROM group_students
+         WHERE child_id = $1
+           AND school_year_id = $2
+           AND left_at IS NULL
+         LIMIT 1`,
+        [m.child_id, nextYearId]
+      );
+      if (already.rows[0]) continue;
+
+      const prior = await client.query<{ id: string; left_at: string | null }>(
+        `SELECT id, left_at::text FROM group_students
+         WHERE group_id = $1 AND child_id = $2 AND school_year_id IS NOT DISTINCT FROM $3
+         LIMIT 1`,
+        [m.group_id, m.child_id, nextYearId]
+      );
+      if (prior.rows[0]) {
+        if (prior.rows[0].left_at == null) continue;
+        await client.query(
+          `UPDATE group_students
+           SET left_at = NULL,
+               enrolled_at = CURRENT_DATE,
+               school_id = $2,
+               lesson_unit_price = $3,
+               monthly_unit_price = $4,
+               yearly_unit_price = $5
+           WHERE id = $1`,
+          [
+            prior.rows[0].id,
+            schoolId,
+            m.lesson_unit_price,
+            m.monthly_unit_price,
+            m.yearly_unit_price,
+          ]
+        );
+      } else {
+        await client.query(
+          `INSERT INTO group_students (
+             id, school_id, group_id, child_id, enrolled_at, school_year_id,
+             lesson_unit_price, monthly_unit_price, yearly_unit_price
+           ) VALUES ($1, $2, $3, $4, CURRENT_DATE, $5, $6, $7, $8)`,
+          [
+            randomUUID(),
+            schoolId,
+            m.group_id,
+            m.child_id,
+            nextYearId,
+            m.lesson_unit_price,
+            m.monthly_unit_price,
+            m.yearly_unit_price,
+          ]
+        );
+      }
+      membershipsCarried += 1;
+    }
+  }
 
   await computeSchoolYearTeacherStats(client, schoolId, yearId);
 
   return {
     lessonsCancelled: lessons.rowCount ?? 0,
     lessonsCompleted: completedLessons.rowCount ?? 0,
-    groupsClosed: groups.rowCount ?? 0,
+    groupsClosed: 0,
     membershipsClosed: memberships.rowCount ?? 0,
+    membershipsCarried,
     subscriptionsExpired: subs.rowCount ?? 0,
-    scheduleTemplatesDeactivated: scheduleTemplates.rowCount ?? 0,
+    scheduleTemplatesDeactivated: 0,
   };
 }

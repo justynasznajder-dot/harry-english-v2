@@ -4,7 +4,7 @@ import {
   resolveContractDiscountKeys,
 } from "@/lib/contract-pricing-preview";
 import { buildContractAmountBreakdown } from "@/lib/contract-amount-breakdown";
-import { DISCOUNT_KEYS } from "@/lib/school-discounts";
+import { applyDiscountsToAmount, DISCOUNT_KEYS, MAX_DISCOUNT_PERCENT } from "@/lib/school-discounts";
 import { validateSingleChildForContract } from "@/lib/parent-contract";
 
 describe("umowa per dziecko — sibling i walidacja", () => {
@@ -26,9 +26,41 @@ describe("umowa per dziecko — sibling i walidacja", () => {
     expect(preview.discountKeys).not.toContain(DISCOUNT_KEYS.SIBLING);
   });
 
-  it("resolveContractDiscountKeys używa flagi boolean", () => {
+  it("resolveContractDiscountKeys: KDR wyłącza rodzeństwo", () => {
     expect(resolveContractDiscountKeys(true, pricing)).toEqual([DISCOUNT_KEYS.SIBLING]);
     expect(resolveContractDiscountKeys(false, pricing)).toEqual([]);
+    expect(
+      resolveContractDiscountKeys(true, { ...pricing, discountLargeFamily: true })
+    ).toEqual([DISCOUNT_KEYS.LARGE_FAMILY_CARD]);
+  });
+
+  it("resolveContractDiscountKeys: cena indywidualna wyłącza zniżki", () => {
+    expect(
+      resolveContractDiscountKeys(true, {
+        ...pricing,
+        discountLargeFamily: true,
+        hasIndividualPricing: true,
+      })
+    ).toEqual([]);
+  });
+
+  it("applyDiscountsToAmount nie przekracza limitu szkoły (maxPercent)", () => {
+    const amount = applyDiscountsToAmount(
+      100,
+      [DISCOUNT_KEYS.SIBLING, DISCOUNT_KEYS.LARGE_FAMILY_CARD],
+      { SIBLING: 5, LARGE_FAMILY_CARD: 10, maxPercent: 10 }
+    );
+    expect(MAX_DISCOUNT_PERCENT).toBe(10);
+    expect(amount).toBe(90);
+  });
+
+  it("applyDiscountsToAmount respektuje wyższy maxPercent szkoły", () => {
+    const amount = applyDiscountsToAmount(100, [DISCOUNT_KEYS.LARGE_FAMILY_CARD], {
+      SIBLING: 0,
+      LARGE_FAMILY_CARD: 15,
+      maxPercent: 20,
+    });
+    expect(amount).toBe(85);
   });
 
   it("breakdown jednej umowy = jedno dziecko z rabatem sibling", () => {
