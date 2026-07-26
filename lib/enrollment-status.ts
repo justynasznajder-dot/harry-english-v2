@@ -43,24 +43,30 @@ export function formatEnrollmentStatusLabel(status: string | null | undefined): 
   return status?.trim() || "—";
 }
 
-/** Filtry listy zgłoszeń w panelu admina (jak w odnowieniach). */
+/** Filtry listy zgłoszeń w panelu admina. SIGNED/COMPLETED nie wchodzą na listę (proces zakończony). */
 export const ENROLLMENT_LIST_FILTERS = [
   { value: "", label: "Wszystkie" },
   { value: "NEW", label: "Nowe" },
   { value: "PROPOSED", label: "Zaproponowane" },
   { value: "NEGOTIATING", label: "Negocjacje" },
   { value: "ACCEPTED", label: "Zaakceptowane" },
-  { value: "SIGNED", label: "Podpisane" },
   { value: "REJECTED", label: "Odrzucone" },
 ] as const;
+
+/** Statusy ukończone — nie pokazujemy ich w widoku Zgłoszeń. */
+const ENROLLMENT_LIST_HIDDEN_STATUSES: ReadonlySet<EnrollmentStatus> = new Set([
+  "SIGNED",
+  "COMPLETED",
+]);
 
 export function filterEnrollmentChildrenByStatus<T extends { status: EnrollmentStatus }>(
   children: T[],
   filter: string,
 ): T[] {
-  if (!filter) return children;
+  const visible = children.filter((child) => !ENROLLMENT_LIST_HIDDEN_STATUSES.has(child.status));
+  if (!filter) return visible;
   const status = filter as EnrollmentStatus;
-  return children.filter((child) => child.status === status);
+  return visible.filter((child) => child.status === status);
 }
 
 export function enrollmentMatchesStatusFilter(

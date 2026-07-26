@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import EnrollmentParentFlow, { type UserInfo } from '@/src/components/enrollment/EnrollmentParentFlow';
 import MessagesPanel from '@/src/components/messages/MessagesPanel';
 import MessagesTabLabel from '@/src/components/messages/MessagesTabLabel';
@@ -27,7 +27,7 @@ type PortalTab =
   | 'documents'
   | 'profile';
 
-const topTabs: Array<{ key: PortalTab; label: string }> = [
+const ALL_TOP_TABS: Array<{ key: PortalTab; label: string }> = [
   { key: 'enrollment', label: 'Proces zapisu' },
   { key: 'messages', label: 'Wiadomości' },
   { key: 'group', label: 'Moja grupa' },
@@ -38,10 +38,21 @@ const topTabs: Array<{ key: PortalTab; label: string }> = [
 ];
 
 export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalProps) {
+  const complimentaryAccess = userInfo.complimentaryAccess === true;
+  const topTabs = complimentaryAccess
+    ? ALL_TOP_TABS.filter((tab) => tab.key !== 'payments')
+    : ALL_TOP_TABS;
+
   const [activeTab, setActiveTab] = useState<PortalTab>('enrollment');
   const [messagesListResetToken, setMessagesListResetToken] = useState(0);
   const { unreadCount: messagesUnreadCount, refresh: refreshMessagesUnreadCount } =
     useUnreadMessagesCount(messagesListResetToken);
+
+  useEffect(() => {
+    if (complimentaryAccess && activeTab === 'payments') {
+      setActiveTab('enrollment');
+    }
+  }, [complimentaryAccess, activeTab]);
 
   const activeChildren = (userInfo.children ?? [])
     .filter((c) => c.active !== false && c.childId)
@@ -64,18 +75,30 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
   const renderContent = () => {
     if (activeTab === 'enrollment') {
       return (
-        <EnrollmentParentFlow userInfo={userInfo} onUserInfoUpdate={onUserInfoUpdate} />
+        <EnrollmentParentFlow
+          userInfo={userInfo}
+          onUserInfoUpdate={onUserInfoUpdate}
+          onNavigateToDocuments={() => setActiveTab('documents')}
+        />
       );
     }
     if (activeTab === 'messages') return renderMessagesTab();
     if (activeTab === 'group') return <ParentGroupTab />;
     if (activeTab === 'calendar') return <ParentCalendarTab userInfo={userInfo} />;
     if (activeTab === 'payments') {
-      return <ParentPaymentsTab complimentaryAccess={userInfo.complimentaryAccess} />;
+      if (complimentaryAccess) return null;
+      return <ParentPaymentsTab complimentaryAccess={false} />;
     }
-    if (activeTab === 'documents') return <ParentDocumentsTab />;
+    if (activeTab === 'documents') {
+      return <ParentDocumentsTab complimentaryAccess={complimentaryAccess} />;
+    }
     if (activeTab === 'profile') {
-      return <ParentProfileSection />;
+      return (
+        <ParentProfileSection
+          complimentaryAccess={complimentaryAccess}
+          children={userInfo.children ?? []}
+        />
+      );
     }
     return null;
   };

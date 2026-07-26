@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { formatEnrollmentStatusLabel } from '@/lib/enrollment-status';
 import { validateParentContractProfileInput } from '@/lib/parent-contract-profile';
 
 type BillingType = 'private' | 'company';
@@ -20,6 +21,16 @@ type ProfileForm = {
 
 type Flash = { kind: 'success' | 'error'; message: string };
 
+type ProfileChild = {
+  childId?: string;
+  firstName: string;
+  lastName: string;
+  birthDate?: string;
+  active?: boolean;
+  accessLevel?: string | null;
+  resignationRequested?: boolean;
+};
+
 const emptyForm = (): ProfileForm => ({
   firstName: '',
   lastName: '',
@@ -33,7 +44,40 @@ const emptyForm = (): ProfileForm => ({
   pesel: '',
 });
 
-export default function ParentProfileSection() {
+function childActivityLabel(child: ProfileChild): { label: string; className: string } {
+  if (child.resignationRequested) {
+    return { label: 'Rezygnacja zgłoszona', className: 'bg-amber-100 text-amber-900' };
+  }
+  if (child.active === false) {
+    return { label: 'Nieaktywne', className: 'bg-zinc-200 text-zinc-700' };
+  }
+  const level = String(child.accessLevel ?? '')
+    .trim()
+    .toUpperCase();
+  if (level === 'SIGNED' || level === 'COMPLETED') {
+    return { label: 'Aktywne', className: 'bg-emerald-100 text-emerald-800' };
+  }
+  if (level === 'REJECTED') {
+    return { label: 'Odrzucone', className: 'bg-rose-100 text-rose-800' };
+  }
+  if (level) {
+    return {
+      label: formatEnrollmentStatusLabel(level),
+      className: 'bg-sky-100 text-sky-800',
+    };
+  }
+  return child.active === true
+    ? { label: 'Aktywne', className: 'bg-emerald-100 text-emerald-800' }
+    : { label: 'Nieaktywne', className: 'bg-zinc-200 text-zinc-700' };
+}
+
+export default function ParentProfileSection({
+  complimentaryAccess = false,
+  children: profileChildren = [],
+}: {
+  complimentaryAccess?: boolean;
+  children?: ProfileChild[];
+}) {
   const [form, setForm] = useState<ProfileForm>(emptyForm);
   const [hasProfile, setHasProfile] = useState(false);
   const [clientNumber, setClientNumber] = useState<string | null>(null);
@@ -150,212 +194,262 @@ export default function ParentProfileSection() {
 
   if (loading) {
     return (
-      <section className="space-y-4 rounded-3xl border border-emerald-100 bg-white p-5 md:p-6">
-        <h2 className="text-xl font-bold text-zinc-900 md:text-2xl">Profil i dane do faktury</h2>
-        <p className="text-sm text-zinc-600">Ładowanie…</p>
-      </section>
+      <div className="space-y-4">
+        <section className="rounded-3xl border border-emerald-100 bg-white p-5 md:p-6">
+          <h2 className="text-xl font-bold text-zinc-900 md:text-2xl">Profil</h2>
+          <p className="mt-2 text-sm text-zinc-600">Ładowanie…</p>
+        </section>
+      </div>
     );
   }
 
   return (
-    <section className="space-y-4 rounded-3xl border border-emerald-100 bg-white p-5 md:p-6">
-      <header>
-        <h2 className="text-xl font-bold text-zinc-900 md:text-2xl">Profil i dane do faktury</h2>
-        <p className="mt-1 text-sm text-zinc-600">
-          Dane używane przy generowaniu umów i faktur.
-        </p>
-      </header>
+    <div className="space-y-4">
+      <section className="space-y-4 rounded-3xl border border-emerald-100 bg-white p-5 md:p-6">
+        <header>
+          <h2 className="text-xl font-bold text-zinc-900 md:text-2xl">Zgłoszone dzieci</h2>
+          <p className="mt-1 text-sm text-zinc-600">
+            Status aktywności dzieci powiązanych z Twoim kontem.
+          </p>
+        </header>
 
-      <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
-        Zmiana danych obowiązuje <strong>na przyszłość</strong> (kolejne umowy i faktury). Treść już
-        podpisanych umów się nie zmienia.
-      </div>
-
-      {clientNumber ? (
-        <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-800">
-          Numer klienta: <span className="font-mono font-semibold">{clientNumber}</span>
-        </div>
-      ) : null}
-
-      {!hasProfile ? (
-        <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-700">
-          Nie masz jeszcze zapisanych danych do umowy — uzupełnij formularz poniżej.
-        </div>
-      ) : null}
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="space-y-1">
-          <label className="text-sm font-medium text-zinc-800">Imię</label>
-          <input
-            type="text"
-            value={form.firstName}
-            onChange={(e) => patch({ firstName: e.target.value })}
-            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-          />
-        </div>
-        <div className="space-y-1">
-          <label className="text-sm font-medium text-zinc-800">Nazwisko</label>
-          <input
-            type="text"
-            value={form.lastName}
-            onChange={(e) => patch({ lastName: e.target.value })}
-            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-          />
-        </div>
-        <div className="space-y-1 md:col-span-2">
-          <label className="text-sm font-medium text-zinc-800">Telefon</label>
-          <input
-            type="text"
-            value={form.phone}
-            onChange={(e) => patch({ phone: e.target.value })}
-            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-          />
-        </div>
-        <div className="space-y-2 md:col-span-2">
-          <p className="text-sm font-medium text-zinc-800">Rozliczenie</p>
-          <div className="flex flex-wrap gap-4">
-            <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
-              <input
-                type="radio"
-                name="billingType"
-                checked={form.billingType === 'private'}
-                onChange={() => patch({ billingType: 'private' })}
-                className="accent-[#0f6e56]"
-              />
-              Osoba prywatna (PESEL)
-            </label>
-            <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
-              <input
-                type="radio"
-                name="billingType"
-                checked={form.billingType === 'company'}
-                onChange={() => patch({ billingType: 'company' })}
-                className="accent-[#0f6e56]"
-              />
-              Firma (faktura)
-            </label>
+        {profileChildren.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-8 text-center text-sm text-zinc-600">
+            Brak zgłoszonych dzieci.
           </div>
-        </div>
-        {form.billingType === 'private' ? (
-          <>
-            <div className="space-y-1 md:col-span-2">
-              <label className="text-sm font-medium text-zinc-800">PESEL</label>
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={11}
-                value={form.pesel}
-                onChange={(e) => patch({ pesel: e.target.value })}
-                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-              />
-            </div>
-            <div className="space-y-1 md:col-span-2">
-              <label className="text-sm font-medium text-zinc-800">Adres</label>
-              <input
-                type="text"
-                value={form.address}
-                onChange={(e) => patch({ address: e.target.value })}
-                placeholder="ul. Przykładowa 1"
-                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-sm font-medium text-zinc-800">Miasto</label>
-              <input
-                type="text"
-                value={form.city}
-                onChange={(e) => patch({ city: e.target.value })}
-                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-sm font-medium text-zinc-800">Kod pocztowy</label>
-              <input
-                type="text"
-                value={form.zipCode}
-                onChange={(e) => patch({ zipCode: e.target.value })}
-                placeholder="00-000"
-                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-              />
-            </div>
-          </>
         ) : (
-          <>
-            <div className="space-y-1 md:col-span-2">
-              <label className="text-sm font-medium text-zinc-800">Nazwa firmy</label>
-              <input
-                type="text"
-                value={form.companyName}
-                onChange={(e) => patch({ companyName: e.target.value })}
-                placeholder="Pełna nazwa firmy"
-                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-              />
-            </div>
-            <div className="space-y-1 md:col-span-2 max-w-sm">
-              <label className="text-sm font-medium text-zinc-800">NIP</label>
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={10}
-                value={form.nip}
-                onChange={(e) => patch({ nip: e.target.value })}
-                placeholder="10 cyfr"
-                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-              />
-            </div>
-            <div className="space-y-1 md:col-span-2">
-              <label className="text-sm font-medium text-zinc-800">Adres siedziby firmy</label>
-              <input
-                type="text"
-                value={form.address}
-                onChange={(e) => patch({ address: e.target.value })}
-                placeholder="ul. Przykładowa 1"
-                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-sm font-medium text-zinc-800">Miasto</label>
-              <input
-                type="text"
-                value={form.city}
-                onChange={(e) => patch({ city: e.target.value })}
-                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-sm font-medium text-zinc-800">Kod pocztowy</label>
-              <input
-                type="text"
-                value={form.zipCode}
-                onChange={(e) => patch({ zipCode: e.target.value })}
-                placeholder="00-000"
-                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
-              />
-            </div>
-          </>
+          <ul className="space-y-2">
+            {profileChildren.map((child, index) => {
+              const status = childActivityLabel(child);
+              const key = child.childId ?? `${child.firstName}-${child.lastName}-${index}`;
+              return (
+                <li
+                  key={key}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-100 bg-emerald-50/40 px-4 py-3"
+                >
+                  <div>
+                    <p className="font-semibold text-zinc-900">
+                      {child.firstName} {child.lastName}
+                    </p>
+                    {child.birthDate ? (
+                      <p className="text-xs text-zinc-500">
+                        Ur. {String(child.birthDate).slice(0, 10)}
+                      </p>
+                    ) : null}
+                  </div>
+                  <span
+                    className={`rounded-full px-2.5 py-1 text-xs font-semibold ${status.className}`}
+                  >
+                    {status.label}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
         )}
-      </div>
+      </section>
 
-      <button
-        type="button"
-        disabled={saving}
-        onClick={() => void handleSave()}
-        className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
-      >
-        {saving ? 'Zapisywanie…' : 'Zapisz dane'}
-      </button>
+      {!complimentaryAccess ? (
+        <section className="space-y-4 rounded-3xl border border-emerald-100 bg-white p-5 md:p-6">
+          <header>
+            <h2 className="text-xl font-bold text-zinc-900 md:text-2xl">Dane do faktury</h2>
+            <p className="mt-1 text-sm text-zinc-600">
+              Dane używane przy generowaniu umów i faktur.
+            </p>
+          </header>
 
-      {flash ? (
-        <div
-          className={`rounded-xl border px-4 py-3 text-sm ${
-            flash.kind === 'success'
-              ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-              : 'border-rose-200 bg-rose-50 text-rose-900'
-          }`}
-        >
-          {flash.message}
-        </div>
+          <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
+            Zmiana danych obowiązuje <strong>na przyszłość</strong> (kolejne umowy i faktury). Treść już
+            podpisanych umów się nie zmienia.
+          </div>
+
+          {clientNumber ? (
+            <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-800">
+              Numer klienta: <span className="font-mono font-semibold">{clientNumber}</span>
+            </div>
+          ) : null}
+
+          {!hasProfile ? (
+            <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-700">
+              Nie masz jeszcze zapisanych danych do umowy — uzupełnij formularz poniżej.
+            </div>
+          ) : null}
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-zinc-800">Imię</label>
+              <input
+                type="text"
+                value={form.firstName}
+                onChange={(e) => patch({ firstName: e.target.value })}
+                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-zinc-800">Nazwisko</label>
+              <input
+                type="text"
+                value={form.lastName}
+                onChange={(e) => patch({ lastName: e.target.value })}
+                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+              />
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <label className="text-sm font-medium text-zinc-800">Telefon</label>
+              <input
+                type="text"
+                value={form.phone}
+                onChange={(e) => patch({ phone: e.target.value })}
+                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+              />
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <p className="text-sm font-medium text-zinc-800">Rozliczenie</p>
+              <div className="flex flex-wrap gap-4">
+                <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
+                  <input
+                    type="radio"
+                    name="billingType"
+                    checked={form.billingType === 'private'}
+                    onChange={() => patch({ billingType: 'private' })}
+                    className="accent-[#0f6e56]"
+                  />
+                  Osoba prywatna (PESEL)
+                </label>
+                <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
+                  <input
+                    type="radio"
+                    name="billingType"
+                    checked={form.billingType === 'company'}
+                    onChange={() => patch({ billingType: 'company' })}
+                    className="accent-[#0f6e56]"
+                  />
+                  Firma (faktura)
+                </label>
+              </div>
+            </div>
+            {form.billingType === 'private' ? (
+              <>
+                <div className="space-y-1 md:col-span-2">
+                  <label className="text-sm font-medium text-zinc-800">PESEL</label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={11}
+                    value={form.pesel}
+                    onChange={(e) => patch({ pesel: e.target.value })}
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                  />
+                </div>
+                <div className="space-y-1 md:col-span-2">
+                  <label className="text-sm font-medium text-zinc-800">Adres</label>
+                  <input
+                    type="text"
+                    value={form.address}
+                    onChange={(e) => patch({ address: e.target.value })}
+                    placeholder="ul. Przykładowa 1"
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-zinc-800">Miasto</label>
+                  <input
+                    type="text"
+                    value={form.city}
+                    onChange={(e) => patch({ city: e.target.value })}
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-zinc-800">Kod pocztowy</label>
+                  <input
+                    type="text"
+                    value={form.zipCode}
+                    onChange={(e) => patch({ zipCode: e.target.value })}
+                    placeholder="00-000"
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="space-y-1 md:col-span-2">
+                  <label className="text-sm font-medium text-zinc-800">Nazwa firmy</label>
+                  <input
+                    type="text"
+                    value={form.companyName}
+                    onChange={(e) => patch({ companyName: e.target.value })}
+                    placeholder="Pełna nazwa firmy"
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                  />
+                </div>
+                <div className="space-y-1 md:col-span-2 max-w-sm">
+                  <label className="text-sm font-medium text-zinc-800">NIP</label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={10}
+                    value={form.nip}
+                    onChange={(e) => patch({ nip: e.target.value })}
+                    placeholder="10 cyfr"
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                  />
+                </div>
+                <div className="space-y-1 md:col-span-2">
+                  <label className="text-sm font-medium text-zinc-800">Adres siedziby firmy</label>
+                  <input
+                    type="text"
+                    value={form.address}
+                    onChange={(e) => patch({ address: e.target.value })}
+                    placeholder="ul. Przykładowa 1"
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-zinc-800">Miasto</label>
+                  <input
+                    type="text"
+                    value={form.city}
+                    onChange={(e) => patch({ city: e.target.value })}
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-zinc-800">Kod pocztowy</label>
+                  <input
+                    type="text"
+                    value={form.zipCode}
+                    onChange={(e) => patch({ zipCode: e.target.value })}
+                    placeholder="00-000"
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                  />
+                </div>
+              </>
+            )}
+          </div>
+
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void handleSave()}
+            className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {saving ? 'Zapisywanie…' : 'Zapisz dane'}
+          </button>
+
+          {flash ? (
+            <div
+              className={`rounded-xl border px-4 py-3 text-sm ${
+                flash.kind === 'success'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                  : 'border-rose-200 bg-rose-50 text-rose-900'
+              }`}
+            >
+              {flash.message}
+            </div>
+          ) : null}
+        </section>
       ) : null}
-    </section>
+    </div>
   );
 }

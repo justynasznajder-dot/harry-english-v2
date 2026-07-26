@@ -18,6 +18,7 @@ import {
   allocateChildClientNumber,
   ensureChildClientNumber,
 } from "@/lib/client-numbers";
+import { promotePendingLargeFamilyCardToParent } from "@/lib/parent-profile-discount";
 
 export type EnrollmentRow = {
   id: string;
@@ -271,6 +272,12 @@ export async function submitEnrollmentProposal(
        AND LOWER(parent_email::text) = LOWER($3::text)`,
     [parentUserId, parentSchoolId, parentEmail]
   );
+
+  await promotePendingLargeFamilyCardToParent({
+    schoolId: parentSchoolId,
+    parentUserId,
+    parentEmail,
+  });
 
   await queryDb(
     `UPDATE enrollment_requests

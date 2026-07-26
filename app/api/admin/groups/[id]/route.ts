@@ -82,9 +82,9 @@ export async function GET(
          gs.id,
          gs.enrolled_at,
          gs.left_at,
-         gs.lesson_unit_price::text AS lesson_unit_price,
-         gs.monthly_unit_price::text AS monthly_unit_price,
-         gs.yearly_unit_price::text AS yearly_unit_price,
+         c.lesson_unit_price::text AS lesson_unit_price,
+         c.monthly_unit_price::text AS monthly_unit_price,
+         c.yearly_unit_price::text AS yearly_unit_price,
          c.id AS child_id,
          c.first_name,
          c.last_name,
@@ -97,21 +97,6 @@ export async function GET(
        ORDER BY gs.enrolled_at DESC`,
       [id]
     );
-    const nearestLessons = await queryDb<{
-      id: string;
-      scheduled_at: Date | string;
-      status: string;
-      [key: string]: unknown;
-    }>(
-      `SELECT
-         l.*,
-         ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at_utc
-       FROM lessons l
-       WHERE l.group_id = $1
-       ORDER BY l.scheduled_at ASC
-       LIMIT 20`,
-      [id]
-    );
     const locations = await queryDb(
       tenant.role === "MANAGER"
         ? `SELECT id, name FROM locations WHERE school_id = $1 AND active = TRUE ORDER BY name`
@@ -119,22 +104,72 @@ export async function GET(
       tenant.role === "MANAGER" ? [ctx.schoolId] : []
     );
 
+    const activeYear = await queryDb<{ id: string; name: string }>(
+      `SELECT id, name FROM school_years
+       WHERE school_id = $1 AND active = TRUE
+       LIMIT 1`,
+      [ctx.schoolId],
+    );
+    const activeYearId = activeYear.rows[0]?.id ?? null;
+    const activeYearName = activeYear.rows[0]?.name ?? null;
+
+    const schoolYearLessonsRes = activeYearId
+      ? await queryDb<{
+          id: string;
+          scheduled_at: Date | string;
+          status: string;
+          duration_min: number;
+        }>(
+          `SELECT
+             l.id,
+             ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at,
+             l.status,
+             l.duration_min
+           FROM lessons l
+           WHERE l.group_id = $1
+             AND l.school_year_id = $2
+             AND l.status IN ('SCHEDULED', 'COMPLETED')
+           ORDER BY l.scheduled_at ASC`,
+          [id, activeYearId],
+        )
+      : { rows: [] as Array<{ id: string; scheduled_at: Date | string; status: string; duration_min: number }> };
+
+    const schoolYearLessons = schoolYearLessonsRes.rows.map((row) => ({
+      id: row.id,
+      scheduled_at: toIsoUtc(row.scheduled_at),
+      status: row.status,
+      duration_min: row.duration_min,
+    }));
+
+    const scheduleConfirmedForActiveYear =
+      Boolean(activeYearId) &&
+      scheduleTemplates.length > 0 &&
+      scheduleTemplates.every(
+        (st) => String((st as { school_year_id?: string | null }).school_year_id ?? "") === activeYearId,
+      );
+    const scheduleNeedsConfirmation =
+      Boolean(activeYearId) &&
+      scheduleTemplates.length > 0 &&
+      scheduleTemplates.some(
+        (st) => String((st as { school_year_id?: string | null }).school_year_id ?? "") !== activeYearId,
+      );
+
     return NextResponse.json({
       group: group.rows[0],
       scheduleTemplates,
       students: students.rows,
-      nearestLessons: nearestLessons.rows.map((row) => {
-        const { scheduled_at_utc, ...rest } = row;
-        return {
-          ...rest,
-          scheduled_at: toIsoUtc(scheduled_at_utc as Date | string),
-        };
-      }),
+      schoolYearLessons,
       locations: locations.rows,
       generatedLessons: {
         futureCount: futureLessonsTotal.rows[0]?.cnt ?? 0,
         completedCount: completedLessonsTotal.rows[0]?.cnt ?? 0,
+        schoolYearCount: schoolYearLessons.length,
       },
+      activeSchoolYear: activeYearId
+        ? { id: activeYearId, name: activeYearName }
+        : null,
+      scheduleConfirmedForActiveYear,
+      scheduleNeedsConfirmation,
     });
   } catch (error) {
     console.error("GET group detail error:", error);

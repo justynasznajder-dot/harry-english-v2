@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isPickupConsentPdfFilename } from "@/lib/pickup-consent-notice";
+import { getUserById } from "@/lib/db";
 import { fetchParentSignedContracts } from "@/lib/parent-portal";
 import { requireParentContext } from "@/lib/parent-portal-auth";
 import { listSignedContractPdfsForParent } from "@/lib/r2-storage";
+import { isComplimentaryForParent } from "@/lib/school-discounts";
 
 export async function GET(request: NextRequest) {
   const auth = await requireParentContext(request);
@@ -10,7 +13,15 @@ export async function GET(request: NextRequest) {
   const { parentId, schoolId } = auth.ctx;
 
   try {
-    const contracts = await fetchParentSignedContracts(parentId, schoolId);
+    const parentUser = await getUserById(parentId);
+    const complimentaryAccess = await isComplimentaryForParent(schoolId, {
+      parentId,
+      parentEmail: parentUser?.email,
+    });
+
+    const contracts = complimentaryAccess
+      ? []
+      : await fetchParentSignedContracts(parentId, schoolId);
 
     let pdfFiles: Array<{
       key: string;
@@ -20,10 +31,13 @@ export async function GET(request: NextRequest) {
     }> = [];
 
     try {
-      pdfFiles = await listSignedContractPdfsForParent({
+      const allPdfs = await listSignedContractPdfsForParent({
         parentUserId: parentId,
         source: "parent.documents.list",
       });
+      pdfFiles = complimentaryAccess
+        ? allPdfs.filter((f) => isPickupConsentPdfFilename(f.filename))
+        : allPdfs;
     } catch (r2Error) {
       console.warn("R2 list for parent documents failed:", r2Error);
     }
@@ -47,6 +61,7 @@ export async function GET(request: NextRequest) {
     );
 
     return NextResponse.json({
+      complimentaryAccess,
       schoolYears,
       contracts: contracts.map((c) => ({
         id: c.id,

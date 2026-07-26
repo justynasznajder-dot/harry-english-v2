@@ -12,7 +12,7 @@ type TemplateKind = "CONTRACT" | "ATTACHMENT_1" | "ATTACHMENT_2";
 const TEMPLATE_FILES: Array<{ kind: TemplateKind; file: string; namePrefix: string }> = [
   { kind: "CONTRACT", file: "umowa_harry_english_template.html", namePrefix: "Umowa HarryEnglish" },
   { kind: "ATTACHMENT_1", file: "zalacznik_1_wizerunek_template.html", namePrefix: "Załącznik 1 — wizerunek" },
-  { kind: "ATTACHMENT_2", file: "zalacznik_2_odbior_template.html", namePrefix: "Załącznik 2 — odbiór lektora" },
+  { kind: "ATTACHMENT_2", file: "zalacznik_2_odbior_template.html", namePrefix: "Zgoda na odebranie dziecka przez lektora" },
 ];
 
 async function main() {

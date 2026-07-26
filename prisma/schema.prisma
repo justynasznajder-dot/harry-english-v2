@@ -79,6 +79,10 @@ model children {
   confirmed             Boolean              @default(false)
   enrollment_request_id String?
   access_level          String               @default("NEW")
+  /// Indywidualne nadpisanie stawek (null = cennik grupy / zapis)
+  lesson_unit_price     Decimal?             @db.Decimal(10, 2)
+  monthly_unit_price    Decimal?             @db.Decimal(10, 2)
+  yearly_unit_price     Decimal?             @db.Decimal(10, 2)
   attendance            attendance[]
   child_auth            child_auth?
   child_rewards         child_rewards[]
@@ -213,6 +217,8 @@ model enrollment_requests {
   lesson_unit_price  Decimal?            @db.Decimal(10, 2)
   monthly_unit_price Decimal?            @db.Decimal(10, 2)
   yearly_unit_price  Decimal?            @db.Decimal(10, 2)
+  /// Staging KDR przed kontem rodzica; po utworzeniu konta kopiowane do parent_profiles
+  discount_large_family Boolean          @default(false)
   children           children[]
   contract_children  contract_children[]
   groups             groups?             @relation(fields: [proposed_group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)

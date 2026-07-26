@@ -30,7 +30,8 @@ function yearFromIso(value: string | null | undefined): number | null {
 }
 
 function yearFromPdf(file: PdfFile): number | null {
-  const fromPath = file.key.match(/\/umowa\/(\d{4})\//);
+  const fromPath =
+    file.key.match(/\/(\d{4})\/(?:umowy|umowa)\//) ?? file.key.match(/\/(\d{4})\//);
   if (fromPath) return Number(fromPath[1]);
   return yearFromIso(file.lastModified);
 }
@@ -58,7 +59,11 @@ function pdfMatchesContracts(file: PdfFile, contracts: ContractDoc[]): boolean {
   return fileYear != null && calendarYears.has(fileYear);
 }
 
-export default function ParentDocumentsTab() {
+export default function ParentDocumentsTab({
+  complimentaryAccess = false,
+}: {
+  complimentaryAccess?: boolean;
+}) {
   const [contracts, setContracts] = useState<ContractDoc[]>([]);
   const [pdfFiles, setPdfFiles] = useState<PdfFile[]>([]);
   const [selectedYear, setSelectedYear] = useState(ALL_YEARS);
@@ -164,7 +169,7 @@ export default function ParentDocumentsTab() {
         <div>
           <h2 className="text-xl font-bold text-zinc-900 md:text-2xl">Moje dokumenty</h2>
           <p className="mt-1 text-sm text-zinc-600">
-            Podpisane umowy i pliki PDF wysłane na e-mail po podpisaniu.
+            Tutaj znajdziesz wszystkie dokumenty w formacie pdf.
           </p>
         </div>
         {showYearSelector && !loading && !error ? (
@@ -193,7 +198,9 @@ export default function ParentDocumentsTab() {
         </div>
       ) : contracts.length === 0 && pdfFiles.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-10 text-center text-sm text-zinc-600">
-          Brak podpisanych dokumentów. Po podpisaniu umowy pojawi się tutaj podsumowanie i pliki PDF.
+          {complimentaryAccess
+            ? 'Brak dokumentów do wyświetlenia.'
+            : 'Brak podpisanych dokumentów. Po podpisaniu umowy pojawi się tutaj podsumowanie i pliki PDF.'}
         </div>
       ) : emptyForYear ? (
         <div className="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-10 text-center text-sm text-zinc-600">

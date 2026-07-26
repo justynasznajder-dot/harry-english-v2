@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryDb } from "@/lib/db";
 import { requireAdminSchoolContext, tenantNotFoundResponse } from "@/lib/admin-school-context";
+import { updateChildPriceOverrides } from "@/lib/enrollment-sync";
 import { parsePriceDecimal } from "@/lib/lesson-pricing";
 
 function parseOptionalPrice(
@@ -44,34 +45,35 @@ export async function PATCH(
       return NextResponse.json({ message: "Brak pól do aktualizacji" }, { status: 400 });
     }
 
-    const sets: string[] = [];
-    const values: unknown[] = [id, ctx.schoolId];
-    let idx = 3;
-    if (body.lessonUnitPrice !== undefined) {
-      sets.push(`gs.lesson_unit_price = $${idx++}`);
-      values.push(lessonParsed.value);
-    }
-    if (body.monthlyUnitPrice !== undefined) {
-      sets.push(`gs.monthly_unit_price = $${idx++}`);
-      values.push(monthlyParsed.value);
-    }
-    if (body.yearlyUnitPrice !== undefined) {
-      sets.push(`gs.yearly_unit_price = $${idx++}`);
-      values.push(yearlyParsed.value);
-    }
-
-    const res = await queryDb<{ id: string }>(
-      `UPDATE group_students gs
-       SET ${sets.join(", ")}
-       FROM groups g
+    const membership = await queryDb<{ child_id: string }>(
+      `SELECT gs.child_id
+       FROM group_students gs
+       JOIN groups g ON g.id = gs.group_id
        WHERE gs.id = $1
-         AND gs.group_id = g.id
          AND g.school_id = $2
          AND gs.left_at IS NULL
-       RETURNING gs.id`,
-      values
+       LIMIT 1`,
+      [id, ctx.schoolId]
     );
-    if (!res.rows[0]) {
+    if (!membership.rows[0]) {
+      return tenantNotFoundResponse("Nie znaleziono aktywnego ucznia w grupie");
+    }
+
+    const prices: {
+      lessonUnitPrice?: number | null;
+      monthlyUnitPrice?: number | null;
+      yearlyUnitPrice?: number | null;
+    } = {};
+    if (body.lessonUnitPrice !== undefined) prices.lessonUnitPrice = lessonParsed.value;
+    if (body.monthlyUnitPrice !== undefined) prices.monthlyUnitPrice = monthlyParsed.value;
+    if (body.yearlyUnitPrice !== undefined) prices.yearlyUnitPrice = yearlyParsed.value;
+
+    const ok = await updateChildPriceOverrides(
+      membership.rows[0].child_id,
+      ctx.schoolId,
+      prices
+    );
+    if (!ok) {
       return tenantNotFoundResponse("Nie znaleziono aktywnego ucznia w grupie");
     }
     return NextResponse.json({ message: "Stawki zaktualizowane" });

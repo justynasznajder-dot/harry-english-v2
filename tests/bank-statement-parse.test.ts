@@ -6,6 +6,7 @@ import {
   parseIngDate,
   titleContainsClientNumber,
   titleContainsInvoiceNumber,
+  titleHasClientOrDocumentRef,
 } from "@/lib/bank-statement-parse";
 
 const SAMPLE = `Lista transakcji;;;;;ING Bank
@@ -37,6 +38,13 @@ describe("parseIngBankStatementCsv", () => {
     expect(titleContainsClientNumber("klient 00007", "00007")).toBe(true);
     expect(titleContainsClientNumber("00012/7/2026/1", "00012")).toBe(true);
     expect(titleContainsClientNumber("rachunek 0000712345", "00007")).toBe(false);
+  });
+
+  it("detects missing client/document refs", () => {
+    expect(titleHasClientOrDocumentRef("przelew za zajęcia")).toBe(false);
+    expect(titleHasClientOrDocumentRef("klient 00007")).toBe(true);
+    expect(titleHasClientOrDocumentRef("00012/7/2026/1")).toBe(true);
+    expect(titleHasClientOrDocumentRef("00012/1/2026")).toBe(true);
   });
 
   it("parses dates and amounts", () => {

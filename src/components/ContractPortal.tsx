@@ -101,7 +101,7 @@ function ChildAttachmentDocuments({
             ) : null}
             {child.attachment_2_html ? (
               <DocumentPreview
-                title={`Załącznik nr 2 — Upoważnienie lektora do odbioru dziecka (${name})`}
+                title={`Zgoda na odebranie dziecka przez lektora (${name})`}
                 subtitle={readOnlySubtitle}
                 html={child.attachment_2_html}
               />
@@ -201,15 +201,31 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
     );
   }
 
+  const hasImageConsent = attachmentItems.some((item) => item.type === 1);
+  const hasPickupConsent = attachmentItems.some((item) => item.type === 2);
+
   const attachmentTitle = (type: 1 | 2, childName: string) =>
     type === 1
       ? `Załącznik nr 1 — Zgoda na wykorzystanie wizerunku (${childName})`
-      : `Załącznik nr 2 — Upoważnienie lektora do odbioru dziecka (${childName})`;
+      : `Zgoda na odebranie dziecka przez lektora (${childName})`;
 
   const attachmentSubtitle = (type: 1 | 2) =>
     type === 1
       ? 'Dobrowolny dokument — brak podpisu nie wpływa na ważność umowy.'
-      : 'Przekaż podpisany dokument w szkole/przedszkolu oraz lektorowi na pierwszych zajęciach.';
+      : 'Tej zgody nie podpisuje się elektronicznie. Pobierz PDF z Dokumentów, wydrukuj i przynieś z podpisem ręcznym na pierwsze zajęcia. Jeśli nie możesz wydrukować — nauczyciel będzie miał druki na zajęciach.';
+
+  const nextDocsLabel = () => {
+    if (hasImageConsent && hasPickupConsent) return 'Przejdź do kolejnych dokumentów';
+    if (hasPickupConsent) return 'Przejdź do zgody na odebranie';
+    if (hasImageConsent) return 'Przejdź do załączników';
+    return 'Przejdź do podpisu';
+  };
+
+  const signButtonLabel = () => {
+    if (busy) return 'Podpisywanie…';
+    if (hasImageConsent) return 'Podpisuję umowę i załączniki';
+    return 'Podpisuję umowę';
+  };
 
   return (
     <div className="space-y-4">
@@ -238,7 +254,7 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
               onClick={() => setPhase(attachmentItems.length > 0 ? 'attachments' : 'sign')}
               className="mt-4 rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {attachmentItems.length > 0 ? 'Przejdź do załączników' : 'Przejdź do podpisu'}
+              {attachmentItems.length > 0 ? nextDocsLabel() : 'Przejdź do podpisu'}
             </button>
           </div>
         </>
@@ -247,9 +263,8 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
       {phase === 'attachments' ? (
         <>
           <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-            Umowa zaakceptowana. Zapoznaj się z załącznikami
-            {childAttachments.length > 1 ? ' dla każdego dziecka' : ''} i potwierdź zgodę na każdy
-            dokument osobno.
+            Umowa zaakceptowana. Zapoznaj się z pozostałymi dokumentami
+            {childAttachments.length > 1 ? ' dla każdego dziecka' : ''} i potwierdź każdy osobno.
           </div>
 
           {attachmentItems.map((item) => (
@@ -273,8 +288,9 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
                     }
                   />
                   <span className="text-sm text-zinc-800">
-                    Zapoznałem/am się z treścią tego załącznika ({item.childName}) i akceptuję jego
-                    warunki.
+                    {item.type === 2
+                      ? `Zapoznałem/am się z treścią zgody na odebranie (${item.childName}). Wiem, że dokument trzeba wydrukować i podpisać ręcznie — nie podpisuję go elektronicznie.`
+                      : `Zapoznałem/am się z treścią tego załącznika (${item.childName}) i akceptuję jego warunki.`}
                   </span>
                 </label>
               </div>
@@ -305,7 +321,7 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
         <>
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
             Wszystkie dokumenty zostały zaakceptowane. Kliknij poniżej, aby podpisać umowę
-            {attachmentItems.length > 0 ? ' i załączniki' : ''}. Po podpisie wygenerujemy pliki PDF
+            {hasImageConsent ? ' i załącznik o wizerunku' : ''}. Po podpisie wygenerujemy pliki PDF
             i zapiszemy dokumenty w systemie.
           </div>
           <div className="rounded-xl border border-zinc-200 bg-white px-4 py-4">
@@ -333,7 +349,7 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
                 disabled={!contractAccepted || !allAttachmentsAccepted || busy}
                 className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {busy ? 'Podpisywanie…' : 'Podpisuję umowę i załączniki'}
+                {signButtonLabel()}
               </button>
             </div>
           </div>

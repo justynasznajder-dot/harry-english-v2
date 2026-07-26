@@ -7,6 +7,7 @@ import {
   requireAdminSchoolContext,
   tenantNotFoundResponse,
 } from "@/lib/admin-school-context";
+import { ensureLessonsThroughActiveSchoolYear } from "@/lib/lesson-generation";
 
 export async function POST(request: NextRequest) {
   const ctx = await requireAdminSchoolContext(request);
@@ -81,7 +82,27 @@ export async function POST(request: NextRequest) {
       ]
     );
 
-    return NextResponse.json({ message: "Termin został dodany" });
+    const lessons = await ensureLessonsThroughActiveSchoolYear({
+      schoolId: ctx.schoolId,
+      groupId: String(groupId),
+      teacherId: group.teacherId,
+    });
+
+    if (!lessons.ok) {
+      return NextResponse.json({
+        message: `Termin został dodany. Zajęcia nie zostały wygenerowane automatycznie: ${lessons.message}`,
+        lessonsCreated: 0,
+        lessonsWarning: lessons.message,
+      });
+    }
+
+    return NextResponse.json({
+      message:
+        lessons.created > 0
+          ? `Termin został dodany. Automatycznie wygenerowano ${lessons.created} zajęć do końca roku szkolnego.`
+          : "Termin został dodany. Kalendarz zajęć jest już kompletny w zakresie roku szkolnego.",
+      lessonsCreated: lessons.created,
+    });
   } catch (error) {
     console.error("POST schedule template error:", error);
     return NextResponse.json({ message: "Błąd dodawania terminu" }, { status: 500 });

@@ -3,6 +3,7 @@ import { queryDb, resolveAdminUsersSchoolScope } from "@/lib/db";
 import { requireAdminSchoolContext } from "@/lib/admin-school-context";
 import {
   resolveParentUserIdForEnrollment,
+  setEnrollmentPendingLargeFamilyCard,
   setParentLargeFamilyCard,
 } from "@/lib/parent-profile-discount";
 
@@ -28,33 +29,62 @@ export async function PATCH(request: NextRequest) {
       parentUserId: parentUserId || null,
       parentEmail: parentEmail || null,
     });
-    if (!resolvedParentId) {
+
+    if (resolvedParentId) {
+      const parentSchoolRes = await queryDb<{ school_id: string }>(
+        `SELECT school_id FROM users WHERE id = $1 LIMIT 1`,
+        [resolvedParentId]
+      );
+      const parentSchoolId = parentSchoolRes.rows[0]?.school_id ?? schoolScope;
+
+      await setParentLargeFamilyCard({
+        schoolId: parentSchoolId,
+        parentUserId: resolvedParentId,
+        discountLargeFamily,
+      });
+
+      // Utrzymaj spójność stagingu na zgłoszeniach (gdy jest e-mail).
+      if (parentEmail) {
+        await setEnrollmentPendingLargeFamilyCard({
+          schoolId: parentSchoolId,
+          parentEmail,
+          discountLargeFamily,
+        });
+      }
+
+      return NextResponse.json({
+        message: discountLargeFamily
+          ? "Oznaczono Kartę Dużej Rodziny"
+          : "Usunięto oznaczenie Karty Dużej Rodziny",
+        parentUserId: resolvedParentId,
+        discountLargeFamily,
+      });
+    }
+
+    if (!parentEmail) {
       return NextResponse.json(
-        {
-          message:
-            "Karta Dużej Rodziny można oznaczyć dopiero po utworzeniu konta rodzica (np. po wysłaniu pierwszej propozycji).",
-        },
-        { status: 409 }
+        { message: "Podaj e-mail rodzica, aby oznaczyć Kartę Dużej Rodziny." },
+        { status: 400 }
       );
     }
 
-    const parentSchoolRes = await queryDb<{ school_id: string }>(
-      `SELECT school_id FROM users WHERE id = $1 LIMIT 1`,
-      [resolvedParentId]
-    );
-    const parentSchoolId = parentSchoolRes.rows[0]?.school_id ?? schoolScope;
-
-    await setParentLargeFamilyCard({
-      schoolId: parentSchoolId,
-      parentUserId: resolvedParentId,
+    const updated = await setEnrollmentPendingLargeFamilyCard({
+      schoolId: schoolScope,
+      parentEmail,
       discountLargeFamily,
     });
+    if (updated === 0) {
+      return NextResponse.json(
+        { message: "Nie znaleziono aktywnych zgłoszeń dla tego e-maila." },
+        { status: 404 }
+      );
+    }
 
     return NextResponse.json({
       message: discountLargeFamily
-        ? "Oznaczono Kartę Dużej Rodziny"
-        : "Usunięto oznaczenie Karty Dużej Rodziny",
-      parentUserId: resolvedParentId,
+        ? "Oznaczono Kartę Dużej Rodziny na zgłoszeniu (konto rodzica jeszcze nie istnieje)"
+        : "Usunięto oznaczenie Karty Dużej Rodziny ze zgłoszenia",
+      parentUserId: null,
       discountLargeFamily,
     });
   } catch (error) {

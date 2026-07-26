@@ -75,7 +75,10 @@ export async function GET(request: NextRequest) {
            WHEN BOOL_OR(UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'SIGNED') THEN 'SIGNED'
            ELSE 'NEW'
          END AS access_level,
-         BOOL_OR(COALESCE(pp.discount_large_family, FALSE)) AS discount_large_family,
+         BOOL_OR(
+           COALESCE(pp.discount_large_family, FALSE)
+           OR COALESCE(er.discount_large_family, FALSE)
+         ) AS discount_large_family,
          COALESCE(
            JSON_AGG(
              DISTINCT JSONB_BUILD_OBJECT(
@@ -122,7 +125,7 @@ export async function GET(request: NextRequest) {
         AND c.last_name = er.child_last_name
        LEFT JOIN parent_profiles pp
          ON pp.user_id = COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id)
-       WHERE UPPER(BTRIM(COALESCE(er.status::text, ''))) <> 'COMPLETED'
+       WHERE UPPER(BTRIM(COALESCE(er.status::text, ''))) NOT IN ('COMPLETED', 'SIGNED')
          AND (
            COALESCE(u.id, NULLIF(BTRIM(er.user_id), '')) IS NOT NULL
            OR NULLIF(BTRIM(COALESCE(er.parent_email::text, '')), '') IS NOT NULL

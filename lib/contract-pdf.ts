@@ -1,4 +1,5 @@
 import { extractContractNumber } from "@/lib/contract-html";
+import { buildPickupConsentPdfFilename } from "@/lib/pickup-consent-notice";
 
 export type ContractPdfFile = {
   filename: string;
@@ -115,10 +116,7 @@ export async function buildSignedContractPdfFiles(params: {
       }
       if (child.attachment2Html) {
         files.push({
-          filename: buildContractPdfFilename(
-            childSlug ? `Zalacznik-2-odbior-${childSlug}` : "Zalacznik-2-odbior-dziecka",
-            contractNumber
-          ),
+          filename: buildPickupConsentPdfFilename(child.childName || "dziecko"),
           content: await renderHtmlToPdfWithBrowser(browser, child.attachment2Html),
         });
       }

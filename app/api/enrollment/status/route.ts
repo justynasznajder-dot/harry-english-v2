@@ -107,6 +107,8 @@ export async function GET(request: NextRequest) {
 
          g.price_per_lesson,
 
+         COALESCE(g.teacher_pickup_consent, FALSE) AS teacher_pickup_consent,
+
          er.lesson_unit_price,
 
          er.monthly_unit_price,
@@ -139,7 +141,7 @@ export async function GET(request: NextRequest) {
        GROUP BY c.id, c.enrollment_request_id, ${accessLevelExpr}, c.first_name, c.last_name,
 
                 g.name, er.proposed_at, er.created_at, c.created_at, g.price_monthly, g.price_yearly,
-                g.price_per_lesson, er.lesson_unit_price,
+                g.price_per_lesson, g.teacher_pickup_consent, er.lesson_unit_price,
                 er.monthly_unit_price, er.yearly_unit_price
 
        ORDER BY er.created_at ASC, c.created_at ASC, c.id ASC`,

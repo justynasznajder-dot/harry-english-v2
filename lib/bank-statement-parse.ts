@@ -214,3 +214,17 @@ export function titleContainsClientNumber(title: string, clientNumber: string): 
   const re = new RegExp(`(?<!\\d)${cn}(?!\\d)`);
   return re.test(t);
 }
+
+/**
+ * Czy tytuł wygląda na zawierający nr klienta / faktury / umowy
+ * (5 cyfr lub wzorzec 00012/… ) — bez znajomości konkretnego klienta.
+ */
+export function titleHasClientOrDocumentRef(title: string): boolean {
+  const t = title.trim();
+  if (!t) return false;
+  // Faktura: 00012/7/2026/1, umowa/dziecko: 00012/1, 00012/1/2026
+  if (/\b\d{5}\/\d+/.test(t)) return true;
+  // Samodzielny nr klienta: 00012 / klient 00012
+  if (/(?<!\d)\d{5}(?!\d)/.test(t)) return true;
+  return false;
+}

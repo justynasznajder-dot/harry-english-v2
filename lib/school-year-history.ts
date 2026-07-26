@@ -206,13 +206,16 @@ export async function attachOpenMembershipsToYear(
   const memberships = await client.query<MembershipCarryRow>(
     `UPDATE group_students gs
      SET left_at = $2::date
-     FROM groups g
+     FROM groups g, children c
      WHERE gs.group_id = g.id
+       AND c.id = gs.child_id
        AND g.school_id = $1
        AND gs.left_at IS NULL
        AND gs.school_year_id IS DISTINCT FROM $3
      RETURNING gs.id, gs.group_id, gs.child_id,
-               gs.lesson_unit_price::text, gs.monthly_unit_price::text, gs.yearly_unit_price::text`,
+               COALESCE(c.lesson_unit_price, gs.lesson_unit_price)::text AS lesson_unit_price,
+               COALESCE(c.monthly_unit_price, gs.monthly_unit_price)::text AS monthly_unit_price,
+               COALESCE(c.yearly_unit_price, gs.yearly_unit_price)::text AS yearly_unit_price`,
     [schoolId, leftAtDate, nextYearId]
   );
   const membershipsCarried = await carryMembershipRowsToYear(
@@ -248,13 +251,16 @@ export async function runSchoolYearCloseSteps(
     const memberships = await client.query<MembershipCarryRow>(
       `UPDATE group_students gs
        SET left_at = $3::date
-       FROM groups g
+       FROM groups g, children c
        WHERE gs.group_id = g.id
+         AND c.id = gs.child_id
          AND g.school_id = $1
          AND gs.school_year_id = $2
          AND gs.left_at IS NULL
        RETURNING gs.id, gs.group_id, gs.child_id,
-                 gs.lesson_unit_price::text, gs.monthly_unit_price::text, gs.yearly_unit_price::text`,
+                 COALESCE(c.lesson_unit_price, gs.lesson_unit_price)::text AS lesson_unit_price,
+                 COALESCE(c.monthly_unit_price, gs.monthly_unit_price)::text AS monthly_unit_price,
+                 COALESCE(c.yearly_unit_price, gs.yearly_unit_price)::text AS yearly_unit_price`,
       [schoolId, yearId, dateTo]
     );
     membershipsClosed = memberships.rowCount ?? 0;
@@ -293,6 +299,8 @@ export async function runSchoolYearCloseSteps(
   );
 
   // Harmonogramy należą do grupy szkoły — nie dezaktywujemy ich przy zamknięciu roku.
+  // school_year_id zostaje przy starym roku → cron nie generuje zajęć, aż manager
+  // potwierdzi harmonogram na nowy rok (po uzupełnieniu dni wolnych).
 
   const subs = await client.query(
     `UPDATE subscriptions s

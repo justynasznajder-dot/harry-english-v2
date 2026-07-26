@@ -677,15 +677,113 @@ export async function fetchGroupsRoster(schoolId: string): Promise<GroupRosterRo
   return Array.from(byGroup.values());
 }
 
+export type DashboardWarning = {
+  type: "unconfirmed_schedule" | "missing_lessons";
+  message: string;
+  groupIds: string[];
+  groupNames: string[];
+};
+
+/** Ostrzeżenia operacyjne na pulpit (niepotwierdzony harmonogram / brak zajęć). */
+export async function fetchDashboardWarnings(schoolId: string): Promise<DashboardWarning[]> {
+  const activeYear = await queryDb<{ id: string; name: string }>(
+    `SELECT id, name FROM school_years WHERE school_id = $1 AND active = TRUE LIMIT 1`,
+    [schoolId],
+  );
+  const activeYearId = activeYear.rows[0]?.id ?? null;
+  const activeYearName = activeYear.rows[0]?.name ?? "aktywny rok";
+
+  const warnings: DashboardWarning[] = [];
+
+  if (activeYearId) {
+    const unconfirmed = await queryDb<{ id: string; name: string }>(
+      `SELECT g.id, g.name
+       FROM groups g
+       WHERE g.school_id = $1
+         AND g.active = TRUE
+         AND EXISTS (
+           SELECT 1 FROM schedule_templates st
+           WHERE st.group_id = g.id AND st.active = TRUE
+         )
+         AND EXISTS (
+           SELECT 1 FROM schedule_templates st
+           WHERE st.group_id = g.id
+             AND st.active = TRUE
+             AND st.school_year_id IS DISTINCT FROM $2
+         )
+       ORDER BY g.name ASC`,
+      [schoolId, activeYearId],
+    );
+
+    if (unconfirmed.rows.length > 0) {
+      const groupNames = unconfirmed.rows.map((r) => r.name);
+      const groupIds = unconfirmed.rows.map((r) => r.id);
+      warnings.push({
+        type: "unconfirmed_schedule",
+        message:
+          groupNames.length === 1
+            ? `Niepotwierdzony harmonogram na rok ${activeYearName} — grupa ${groupNames[0]} (cron nie generuje zajęć, aż potwierdzisz)`
+            : `Niepotwierdzony harmonogram na rok ${activeYearName} — ${groupNames.length} grup (cron nie generuje zajęć, aż potwierdzisz)`,
+        groupIds,
+        groupNames,
+      });
+    }
+
+    const missingLessons = await queryDb<{ id: string; name: string }>(
+      `SELECT g.id, g.name
+       FROM groups g
+       WHERE g.school_id = $1
+         AND g.active = TRUE
+         AND EXISTS (
+           SELECT 1 FROM schedule_templates st
+           WHERE st.group_id = g.id
+             AND st.active = TRUE
+             AND st.school_year_id = $2
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM schedule_templates st
+           WHERE st.group_id = g.id
+             AND st.active = TRUE
+             AND st.school_year_id IS DISTINCT FROM $2
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM lessons l
+           WHERE l.group_id = g.id
+             AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} > NOW()
+             AND l.status = 'SCHEDULED'
+         )
+       ORDER BY g.name ASC`,
+      [schoolId, activeYearId],
+    );
+
+    if (missingLessons.rows.length > 0) {
+      const groupNames = missingLessons.rows.map((r) => r.name);
+      const groupIds = missingLessons.rows.map((r) => r.id);
+      warnings.push({
+        type: "missing_lessons",
+        message:
+          groupNames.length === 1
+            ? `Brak wygenerowanych zajęć dla grupy ${groupNames[0]}`
+            : `Brak wygenerowanych zajęć dla ${groupNames.length} grup`,
+        groupIds,
+        groupNames,
+      });
+    }
+  }
+
+  return warnings;
+}
+
 export async function fetchFullDashboard(schoolId: string) {
   const today = todayYmdWarsaw();
   const weekEnd = weekEndYmd(today);
 
-  const [counters, lessonsToday, lessonsThisWeek, billing] = await Promise.all([
+  const [counters, lessonsToday, lessonsThisWeek, billing, warnings] = await Promise.all([
     fetchDashboardCounters(schoolId),
     fetchDashboardLessonsMerged(schoolId, today, today),
     fetchDashboardLessonsMerged(schoolId, today, weekEnd),
     fetchDashboardBillingSummary(schoolId),
+    fetchDashboardWarnings(schoolId),
   ]);
 
   return {
@@ -693,5 +791,6 @@ export async function fetchFullDashboard(schoolId: string) {
     lessonsToday,
     lessonsThisWeek,
     billing,
+    warnings,
   };
 }

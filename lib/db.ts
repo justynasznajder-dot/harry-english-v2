@@ -166,6 +166,10 @@ export interface Child {
   resignation_reason: string | null;
   resignation_date: Date | null;
   created_at: Date;
+  /** Indywidualne nadpisanie stawek (null = cennik grupy / zapis) */
+  lesson_unit_price: string | null;
+  monthly_unit_price: string | null;
+  yearly_unit_price: string | null;
 }
 
 type UserRow = QueryResultRow & {
@@ -258,6 +262,9 @@ type ChildRow = QueryResultRow & {
   resignation_reason: string | null;
   resignation_date: Date | null;
   created_at: Date;
+  lesson_unit_price?: string | number | null;
+  monthly_unit_price?: string | number | null;
+  yearly_unit_price?: string | number | null;
 };
 
 function mapUserRow(row: QueryResultRow): User {
@@ -298,6 +305,11 @@ function birthDateToIso(d: Date | string): string {
   return pgDateToYmd(d) ?? String(d).slice(0, 10);
 }
 
+function priceFieldToText(value: string | number | null | undefined): string | null {
+  if (value == null || value === "") return null;
+  return String(value);
+}
+
 function mapChildRow(row: ChildRow): Child {
   return {
     id: row.id,
@@ -320,6 +332,9 @@ function mapChildRow(row: ChildRow): Child {
     resignation_reason: row.resignation_reason,
     resignation_date: row.resignation_date,
     created_at: row.created_at,
+    lesson_unit_price: priceFieldToText(row.lesson_unit_price),
+    monthly_unit_price: priceFieldToText(row.monthly_unit_price),
+    yearly_unit_price: priceFieldToText(row.yearly_unit_price),
   };
 }
 
@@ -474,7 +489,7 @@ export async function createUser(data: {
       ]
     );
     if (role === "PARENT" && insertSchoolId != null) {
-      await insertParentProfileInTx(client, id, insertSchoolId);
+      await insertParentProfileInTx(client, id, insertSchoolId, data.email);
     }
     if (mustChangePassword) {
       await client.query(
@@ -848,12 +863,32 @@ async function ensureDefaultSchoolRow(
 async function insertParentProfileInTx(
   client: PoolClient,
   userId: string,
-  schoolId: string
+  schoolId: string,
+  parentEmail?: string | null
 ): Promise<void> {
   await client.query(
     `INSERT INTO parent_profiles (id, user_id, school_id, created_at, updated_at)
      VALUES (gen_random_uuid()::text, $1, $2, NOW(), NOW())`,
     [userId, schoolId]
+  );
+
+  const email = String(parentEmail ?? "").trim().toLowerCase();
+  if (!email) return;
+
+  // Staging KDR ze zgłoszeń → profil przy tworzeniu konta.
+  await client.query(
+    `UPDATE parent_profiles pp
+     SET discount_large_family = TRUE,
+         updated_at = NOW()
+     WHERE pp.user_id = $1
+       AND EXISTS (
+         SELECT 1
+         FROM enrollment_requests er
+         WHERE er.school_id = $2
+           AND er.discount_large_family = TRUE
+           AND LOWER(BTRIM(er.parent_email::text)) = $3
+       )`,
+    [userId, schoolId, email]
   );
 }
 
@@ -1291,7 +1326,7 @@ export async function createParentUserWithEnrollmentRequests(data: {
       ]
     );
 
-    await insertParentProfileInTx(client, userId, schoolId);
+    await insertParentProfileInTx(client, userId, schoolId, parentEmail);
 
     const enrollmentCount = await insertEnrollmentRequestsInTx(client, {
       schoolId,
@@ -1418,6 +1453,9 @@ export async function updateChild(
     resignation_requested: boolean;
     resignation_reason: string | null;
     resignation_date: Date | string | null;
+    lesson_unit_price: number | null;
+    monthly_unit_price: number | null;
+    yearly_unit_price: number | null;
   }>
 ): Promise<boolean> {
   const sets: string[] = [];
@@ -1473,6 +1511,18 @@ export async function updateChild(
           ? data.resignation_date
           : data.resignation_date.toISOString()
     );
+  }
+  if (data.lesson_unit_price !== undefined) {
+    sets.push(`lesson_unit_price = $${i++}`);
+    vals.push(data.lesson_unit_price);
+  }
+  if (data.monthly_unit_price !== undefined) {
+    sets.push(`monthly_unit_price = $${i++}`);
+    vals.push(data.monthly_unit_price);
+  }
+  if (data.yearly_unit_price !== undefined) {
+    sets.push(`yearly_unit_price = $${i++}`);
+    vals.push(data.yearly_unit_price);
   }
 
   if (sets.length === 0) return false;

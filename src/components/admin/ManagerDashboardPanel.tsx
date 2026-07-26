@@ -27,6 +27,12 @@ type DashboardData = {
       amount: string | null;
     }>;
   };
+  warnings?: Array<{
+    type: string;
+    message: string;
+    groupIds?: string[];
+    groupNames?: string[];
+  }>;
 };
 
 type LessonRow = {
@@ -198,14 +204,41 @@ export default function ManagerDashboardPanel() {
 
   if (!dashboard) return null;
 
+  const warnings = dashboard.warnings ?? [];
+
   return (
     <div className="space-y-6">
-      <header className="rounded-2xl border border-emerald-100 bg-white p-4 sm:p-5">
-        <h2 className="text-xl font-bold text-[#0f6e56] sm:text-2xl">Pulpit operacyjny</h2>
-        <p className="mt-1 text-sm text-zinc-600">
-          Szybki podgląd zgłoszeń, zajęć i płatności.
-        </p>
-      </header>
+      {warnings.length > 0 ? (
+        <header className="rounded-2xl border border-red-300 bg-red-50 p-4 sm:p-5">
+          <h2 className="text-xl font-bold text-red-800 sm:text-2xl">Uwagi operacyjne</h2>
+          <ul className="mt-3 space-y-2">
+            {warnings.map((w) => (
+              <li
+                key={`${w.type}-${(w.groupIds ?? []).join(',') || w.message}`}
+                className="rounded-xl border border-red-200 bg-white/70 px-3 py-2.5 text-sm font-medium text-red-800"
+              >
+                {w.message}
+                {(w.type === 'missing_lessons' || w.type === 'unconfirmed_schedule') &&
+                w.groupNames &&
+                w.groupNames.length > 1 ? (
+                  <ul className="mt-2 list-disc space-y-0.5 pl-5 text-sm font-normal text-red-700">
+                    {w.groupNames.map((name) => (
+                      <li key={name}>{name}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </header>
+      ) : (
+        <header className="rounded-2xl border border-emerald-100 bg-white p-4 sm:p-5">
+          <h2 className="text-xl font-bold text-[#0f6e56] sm:text-2xl">Pulpit operacyjny</h2>
+          <p className="mt-1 text-sm text-zinc-600">
+            Szybki podgląd zgłoszeń, zajęć i płatności.
+          </p>
+        </header>
+      )}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <CounterCard

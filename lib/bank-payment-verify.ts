@@ -5,6 +5,7 @@ import {
   parseIngBankStatementCsv,
   titleContainsClientNumber,
   titleContainsInvoiceNumber,
+  titleHasClientOrDocumentRef,
 } from "@/lib/bank-statement-parse";
 import { queryDb, runPgTransaction, withPgAdvisoryLock } from "@/lib/db";
 import {
@@ -416,5 +417,173 @@ export async function verifyInvoicePaymentsFromBank(
       alreadyPaid: match.alreadyPaid,
       unmatchedPending: match.unmatchedPending,
     };
+  });
+}
+
+export type UnmatchedTransferWithoutRef = {
+  id: string;
+  transactionDate: string;
+  bookingDate: string;
+  counterparty: string;
+  title: string;
+  amount: number;
+  currency: string;
+  bankTransactionId: string | null;
+};
+
+/** Przelewy bez nr klienta/umowy/faktury w tytule i jeszcze nieprzypisane. */
+export async function listUnmatchedTransfersWithoutClientRef(
+  schoolId: string
+): Promise<UnmatchedTransferWithoutRef[]> {
+  const r = await queryDb<{
+    id: string;
+    transaction_date: string;
+    booking_date: string;
+    counterparty: string;
+    title: string;
+    amount: string;
+    currency: string;
+    bank_transaction_id: string | null;
+  }>(
+    `SELECT
+       id,
+       transaction_date::text,
+       booking_date::text,
+       counterparty,
+       title,
+       amount::text,
+       currency,
+       bank_transaction_id
+     FROM bank_transfers
+     WHERE school_id = $1
+       AND matched_payment_id IS NULL
+     ORDER BY transaction_date DESC, created_at DESC`,
+    [schoolId]
+  );
+
+  return r.rows
+    .filter((row) => !titleHasClientOrDocumentRef(row.title))
+    .map((row) => ({
+      id: row.id,
+      transactionDate: String(row.transaction_date).slice(0, 10),
+      bookingDate: String(row.booking_date).slice(0, 10),
+      counterparty: row.counterparty,
+      title: row.title,
+      amount: Number(row.amount),
+      currency: row.currency,
+      bankTransactionId: row.bank_transaction_id,
+    }));
+}
+
+export type PendingInvoiceOption = {
+  invoiceId: string;
+  paymentId: string;
+  invoiceNumber: string;
+  buyerName: string;
+  amount: number;
+  periodMonth: string | null;
+  issueDate: string;
+};
+
+/** Faktury SALE oczekujące na płatność — do ręcznego przypisania. */
+export async function listPendingInvoicesForManualMatch(
+  schoolId: string
+): Promise<PendingInvoiceOption[]> {
+  const r = await queryDb<{
+    invoice_id: string;
+    payment_id: string;
+    invoice_number: string;
+    buyer_name: string;
+    amount: string;
+    period_month: string | null;
+    issue_date: string;
+  }>(
+    `SELECT
+       i.id AS invoice_id,
+       p.id AS payment_id,
+       i.invoice_number,
+       i.buyer_name,
+       i.amount::text AS amount,
+       p.period_month::text AS period_month,
+       i.issue_date::text AS issue_date
+     FROM payments p
+     JOIN invoices i ON i.payment_id = p.id
+     WHERE p.school_id = $1
+       AND COALESCE(i.document_type, 'SALE') = 'SALE'
+       AND UPPER(COALESCE(p.status, 'PENDING')) IN ('PENDING', 'UNPAID', 'OVERDUE')
+     ORDER BY i.issue_date DESC, i.created_at DESC
+     LIMIT 500`,
+    [schoolId]
+  );
+
+  return r.rows.map((row) => ({
+    invoiceId: row.invoice_id,
+    paymentId: row.payment_id,
+    invoiceNumber: row.invoice_number,
+    buyerName: row.buyer_name,
+    amount: Number(row.amount),
+    periodMonth: row.period_month ? String(row.period_month).slice(0, 7) : null,
+    issueDate: String(row.issue_date).slice(0, 10),
+  }));
+}
+
+/**
+ * Ręczne powiązanie przelewu z fakturą → płatność PAID.
+ * Przelew znika z listy „bez numeru klienta”.
+ */
+export async function manualMatchTransferToPayment(params: {
+  schoolId: string;
+  transferId: string;
+  paymentId: string;
+}): Promise<{ invoiceNumber: string; amount: number }> {
+  const { schoolId, transferId, paymentId } = params;
+
+  return withPgAdvisoryLock("bank-payment-verify", schoolId, async () => {
+    const transfer = await queryDb<{
+      id: string;
+      amount: string;
+      transaction_date: string;
+      matched_payment_id: string | null;
+    }>(
+      `SELECT id, amount::text, transaction_date::text, matched_payment_id
+       FROM bank_transfers
+       WHERE id = $1 AND school_id = $2
+       LIMIT 1`,
+      [transferId, schoolId]
+    );
+    const t = transfer.rows[0];
+    if (!t) throw new Error("Nie znaleziono przelewu.");
+    if (t.matched_payment_id) throw new Error("Ten przelew jest już przypisany do płatności.");
+
+    const payment = await queryDb<{
+      id: string;
+      status: string | null;
+      invoice_number: string;
+      amount: string;
+    }>(
+      `SELECT p.id, p.status, i.invoice_number, i.amount::text AS amount
+       FROM payments p
+       JOIN invoices i ON i.payment_id = p.id
+       WHERE p.id = $1 AND p.school_id = $2
+         AND COALESCE(i.document_type, 'SALE') = 'SALE'
+       LIMIT 1`,
+      [paymentId, schoolId]
+    );
+    const p = payment.rows[0];
+    if (!p) throw new Error("Nie znaleziono faktury / płatności.");
+    const status = String(p.status ?? "").toUpperCase();
+    if (status === "PAID") throw new Error("Ta faktura jest już opłacona.");
+    if (status === "CANCELLED") throw new Error("Nie można przypisać do anulowanej płatności.");
+
+    const paidAt = `${String(t.transaction_date).slice(0, 10)}T12:00:00+02:00`;
+    await runPgTransaction((client) =>
+      markPaymentPaid(client, {
+        paymentId: p.id,
+        transferId: t.id,
+        paidAt,
+      })
+    );
+
+    return { invoiceNumber: p.invoice_number, amount: Number(p.amount) };
   });
 }

@@ -54,7 +54,7 @@ export async function GET(request: NextRequest) {
          ch.first_name,
          ch.last_name,
          u.email AS parent_email,
-         cc.lesson_unit_price::text AS lesson_unit_price,
+         COALESCE(ch.lesson_unit_price, cc.lesson_unit_price)::text AS lesson_unit_price,
          g.price_per_lesson::text AS group_price_per_lesson,
          lbp.id AS billing_id,
          lbp.status AS billing_status,

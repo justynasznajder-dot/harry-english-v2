@@ -40,6 +40,7 @@ import {
   type ContractAmountBreakdown,
 } from "@/lib/contract-amount-breakdown";
 import { resolveLessonUnitPrice, resolveMonthlyUnitPrice, resolveYearlyUnitPrice, type PaymentType } from "@/lib/lesson-pricing";
+import { normalizePickupConsentDocumentHtml } from "@/lib/pickup-consent-notice";
 
 function parsePaymentType(raw: string | null | undefined): PaymentType {
   const value = String(raw ?? "").trim().toUpperCase();
@@ -77,7 +78,7 @@ export type ParentContractChildRow = {
   teacher_pickup_consent: boolean;
 };
 
-/** Załącznik nr 2 jest wymagany, gdy co najmniej jedna grupa dziecka ma włączoną zgodę na odbiór przez lektora. */
+/** Zgoda na odebranie przez lektora jest wymagana, gdy grupa ma włączoną tę opcję. */
 export function resolveIncludeAttachment2FromGroups(
   included: Pick<ParentContractChildRow, "teacher_pickup_consent">[]
 ): boolean {
@@ -854,16 +855,17 @@ export async function generateParentContract(
   let childAttachment2: string | null = null;
   if (includeAttachment2) {
     if (!attachment2Template) {
-      throw new Error("Brak szablonu Załącznika nr 2 — skontaktuj się ze szkołą");
+      throw new Error(
+        "Brak szablonu zgody na odebranie dziecka przez lektora — skontaktuj się ze szkołą"
+      );
     }
     if (!teacherFullName) {
       throw new Error(
-        `Grupa dziecka ${child.first_name} ${child.last_name} nie ma przypisanego lektora — nie można wygenerować Załącznika nr 2`
+        `Grupa dziecka ${child.first_name} ${child.last_name} nie ma przypisanego lektora — nie można wygenerować zgody na odebranie`
       );
     }
-    childAttachment2 = generateContractHtml(
-      attachment2Template.content_html,
-      childPlaceholders
+    childAttachment2 = normalizePickupConsentDocumentHtml(
+      generateContractHtml(attachment2Template.content_html, childPlaceholders)
     );
   }
 

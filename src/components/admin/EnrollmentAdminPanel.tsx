@@ -329,9 +329,6 @@ export default function EnrollmentAdminPanel({
                   child.status === 'NEGOTIATING' || child.childAccessLevel === 'NEGOTIATING',
               );
             const parentIsComplimentary = isParentInComplimentaryList(parent, complimentaryParents);
-            const parentAccountReady = Boolean((parent.parentUserId ?? '').trim());
-            const parentDiscountSaving =
-              savingParentDiscountId === (parent.parentUserId ?? parent.id);
             return (
             <div
               key={parent.id}
@@ -349,29 +346,6 @@ export default function EnrollmentAdminPanel({
                   <p className="text-sm text-zinc-600">{parent.email}</p>
                   {parentIsComplimentary && (
                     <p className="mt-1 text-xs font-medium text-sky-800">Tryb bez opłat</p>
-                  )}
-                  {!parentIsComplimentary && (
-                    <label className="mt-2 inline-flex items-center gap-2 text-sm text-zinc-800">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(parent.discountLargeFamily)}
-                        disabled={!parentAccountReady || parentDiscountSaving}
-                        title={
-                          parentAccountReady
-                            ? undefined
-                            : 'Dostępne po utworzeniu konta rodzica (np. po pierwszej propozycji)'
-                        }
-                        onChange={(e) => {
-                          void saveParentLargeFamilyCard(parent, e.target.checked);
-                        }}
-                      />
-                      Karta Dużej Rodziny ({discountSettings.LARGE_FAMILY_CARD}%)
-                    </label>
-                  )}
-                  {!parentIsComplimentary && !parentAccountReady && (
-                    <p className="mt-1 text-xs text-zinc-500">
-                      KDR: dostępne po utworzeniu konta rodzica.
-                    </p>
                   )}
                 </div>
                 <button
@@ -487,14 +461,18 @@ export default function EnrollmentAdminPanel({
                             type="checkbox"
                             checked={Boolean(proposalParent.discountLargeFamily)}
                             disabled={
-                              !Boolean((proposalParent.parentUserId ?? '').trim()) ||
+                              !(
+                                (proposalParent.parentUserId ?? '').trim() ||
+                                (proposalParent.email ?? '').trim()
+                              ) ||
                               savingParentDiscountId ===
                                 (proposalParent.parentUserId ?? proposalParent.id)
                             }
                             title={
-                              (proposalParent.parentUserId ?? '').trim()
+                              (proposalParent.parentUserId ?? '').trim() ||
+                              (proposalParent.email ?? '').trim()
                                 ? undefined
-                                : 'Dostępne po utworzeniu konta rodzica (np. po pierwszej propozycji)'
+                                : 'Podaj e-mail zgłoszenia, aby oznaczyć KDR'
                             }
                             onChange={(e) => {
                               void saveParentLargeFamilyCard(proposalParent, e.target.checked);
@@ -502,9 +480,11 @@ export default function EnrollmentAdminPanel({
                           />
                           Karta Dużej Rodziny ({discountSettings.LARGE_FAMILY_CARD}%)
                         </label>
-                        {!(proposalParent.parentUserId ?? '').trim() && (
+                        {!(proposalParent.parentUserId ?? '').trim() &&
+                          Boolean((proposalParent.email ?? '').trim()) && (
                           <p className="mt-1 text-xs text-zinc-500">
-                            Oznaczenie KDR będzie możliwe po utworzeniu konta rodzica.
+                            KDR zapisze się na zgłoszeniu; po utworzeniu konta trafi na profil
+                            rodzica.
                           </p>
                         )}
                       </>

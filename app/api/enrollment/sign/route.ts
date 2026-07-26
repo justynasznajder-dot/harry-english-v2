@@ -17,9 +17,8 @@ import {
 } from "@/lib/contract-html";
 
 import { buildSignedContractPdfFiles } from "@/lib/contract-pdf";
-
 import { formatPersonName } from "@/lib/format-person-name";
-
+import { normalizePickupConsentDocumentHtml } from "@/lib/pickup-consent-notice";
 import { enrollChildInGroup, syncParentUserAccessLevel } from "@/lib/enrollment-sync";
 import {
   fetchParentEnrollmentChildren,
@@ -222,7 +221,9 @@ export async function POST(request: NextRequest) {
         : null;
       const signedAttachment2 = row.attachment_2_html
         ? applyContractSignaturesToDocumentHtml(
-            applySchoolYearToDocumentHtml(row.attachment_2_html, signedAt),
+            normalizePickupConsentDocumentHtml(
+              applySchoolYearToDocumentHtml(row.attachment_2_html, signedAt)
+            ),
             { signedAt, parentFullName }
           )
         : null;

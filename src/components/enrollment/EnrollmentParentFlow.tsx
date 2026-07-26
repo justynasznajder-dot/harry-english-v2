@@ -10,6 +10,7 @@ import { resolveChildBaseAmount, sumChildrenBaseAmounts } from '@/lib/enrollment
 import { resolveLessonUnitPrice } from '@/lib/lesson-pricing';
 import { paymentTypePeriodLabel, paymentTypeShortLabel } from '@/lib/payment-labels';
 import { validateParentContractProfileInput } from '@/lib/parent-contract-profile';
+import { PICKUP_CONSENT_PRINT_INSTRUCTIONS } from '@/lib/pickup-consent-notice';
 
 type ChildEnrollmentLevel = 'NEW' | 'PROPOSED' | 'NEGOTIATING' | 'ACCEPTED' | 'SIGNED' | 'COMPLETED' | 'REJECTED';
 
@@ -48,6 +49,7 @@ interface EnrollmentProposal {
   lesson_unit_price?: number | null;
   monthly_unit_price?: number | null;
   yearly_unit_price?: number | null;
+  teacher_pickup_consent?: boolean;
 }
 
 interface ParentContractDocument {
@@ -185,6 +187,23 @@ function getEnrollmentStepsForUser(complimentaryAccess?: boolean): EnrollmentSte
   return enrollmentSteps;
 }
 
+function collectEnrollmentLevels(
+  proposals: EnrollmentProposal[],
+  children: UserInfo['children'],
+): ChildEnrollmentLevel[] {
+  return [
+    ...proposals.map((p) => childAccessLevel(p)),
+    ...(children ?? [])
+      .filter((c) => c.active !== false)
+      .map((c) => c.accessLevel)
+      .filter((v): v is ChildEnrollmentLevel => Boolean(v)),
+  ];
+}
+
+/**
+ * Aktywny krok procesu: niedokończone zgłoszenia/propozycje mają pierwszeństwo
+ * przed kontem ACTIVE / rodzeństwem COMPLETED (kolejne dziecko po zakończonym zapisie).
+ */
 function deriveEnrollmentStepIndex(
   proposals: EnrollmentProposal[],
   children: UserInfo['children'],
@@ -195,14 +214,7 @@ function deriveEnrollmentStepIndex(
     'hasPendingDecisions' | 'allDecisionsResolved' | 'canPrepareContract'
   >
 ): number {
-  const levels = [
-    ...proposals.map((p) => childAccessLevel(p)),
-    ...(children ?? [])
-      .filter((c) => c.active !== false)
-      .map((c) => c.accessLevel)
-      .filter((v): v is ChildEnrollmentLevel => Boolean(v)),
-  ];
-
+  const levels = collectEnrollmentLevels(proposals, children);
   const steps = getEnrollmentStepsForUser(complimentaryAccess);
   const summaryIndex = steps.length - 1;
   const proposedIndex = steps.findIndex((s) => s.key === 'proposed');
@@ -212,36 +224,68 @@ function deriveEnrollmentStepIndex(
     contractReadiness?.hasPendingDecisions ??
     levels.some((s) => s === 'PROPOSED' || s === 'NEGOTIATING' || s === 'NEW');
 
-  if (levels.some((s) => s === 'COMPLETED') || accountAccessLevel === 'ACTIVE') {
-    return summaryIndex;
-  }
+  const hasActionableProposal = levels.some(
+    (s) => s === 'PROPOSED' || s === 'NEGOTIATING',
+  );
 
+  const hasFinishedChild =
+    levels.some((s) => s === 'COMPLETED' || s === 'SIGNED') || accountAccessLevel === 'ACTIVE';
+
+  // 1) Otwarty proces (kolejne dziecko / nowa propozycja) — zawsze przed podsumowaniem.
   if (complimentaryAccess) {
-    if (hasPendingDecisions) {
+    if (hasActionableProposal) {
       return proposedIndex >= 0 ? proposedIndex : 0;
     }
-    if (levels.some((s) => s === 'COMPLETED')) {
+    if (hasPendingDecisions) {
+      // NEW bez children/propozycji — pokaż zgłoszenie (w tym kolejne dziecko).
+      return 0;
+    }
+    if (hasFinishedChild || levels.some((s) => s === 'COMPLETED')) {
       return summaryIndex;
     }
     return proposedIndex >= 0 ? proposedIndex : 0;
+  }
+
+  if (hasActionableProposal) {
+    return proposedIndex >= 0 ? proposedIndex : 0;
+  }
+
+  if (hasPendingDecisions) {
+    return 0;
+  }
+
+  if (contractReadiness?.canPrepareContract || levels.some((s) => s === 'ACCEPTED')) {
+    return contractIndex >= 0 ? contractIndex : summaryIndex;
   }
 
   if (levels.some((s) => s === 'SIGNED')) {
     return contractIndex >= 0 ? contractIndex : summaryIndex;
   }
 
-  if (contractReadiness?.canPrepareContract) {
-    return contractIndex >= 0 ? contractIndex : summaryIndex;
-  }
-
-  if (
-    hasPendingDecisions ||
-    levels.some((s) => s === 'PROPOSED' || s === 'NEGOTIATING' || s === 'ACCEPTED')
-  ) {
-    return proposedIndex >= 0 ? proposedIndex : 0;
+  if (hasFinishedChild) {
+    return summaryIndex;
   }
 
   return 0;
+}
+
+/** Najdalszy osiągalny krok — zachowuje dostęp do Podsumowania przy równoległym nowym zapisie. */
+function deriveEnrollmentMaxReachableIndex(
+  activeStepIndex: number,
+  proposals: EnrollmentProposal[],
+  children: UserInfo['children'],
+  accountAccessLevel: UserInfo['accessLevel'],
+  complimentaryAccess?: boolean,
+): number {
+  const levels = collectEnrollmentLevels(proposals, children);
+  const steps = getEnrollmentStepsForUser(complimentaryAccess);
+  const summaryIndex = steps.length - 1;
+  const hasFinishedChild =
+    levels.some((s) => s === 'COMPLETED' || s === 'SIGNED') || accountAccessLevel === 'ACTIVE';
+  if (hasFinishedChild) {
+    return Math.max(activeStepIndex, summaryIndex);
+  }
+  return activeStepIndex;
 }
 
 type FlashKind = 'success' | 'error' | 'info';
@@ -274,11 +318,13 @@ function EmptyState({ message }: { message: string }) {
 export interface EnrollmentParentFlowProps {
   userInfo: UserInfo;
   onUserInfoUpdate: (updated: UserInfo) => void;
+  onNavigateToDocuments?: () => void;
 }
 
 export default function EnrollmentParentFlow({
   userInfo,
   onUserInfoUpdate,
+  onNavigateToDocuments,
 }: EnrollmentParentFlowProps) {
   const [contactOpenFor, setContactOpenFor] = useState<Record<string, boolean>>({});
   const [contactSubjects, setContactSubjects] = useState<Record<string, string>>({});
@@ -297,6 +343,11 @@ export default function EnrollmentParentFlow({
   const userInfoRef = useRef(userInfo);
   userInfoRef.current = userInfo;
   const [flash, setFlash] = useState<Flash | null>(null);
+  const [pickupConsentModal, setPickupConsentModal] = useState<{
+    previewHtml: string;
+    childName: string;
+    downloadUrl: string | null;
+  } | null>(null);
   const [contractProfile, setContractProfile] = useState<ParentProfileForm>({
     firstName: userInfo.firstName ?? '',
     lastName: userInfo.lastName ?? '',
@@ -345,6 +396,13 @@ export default function EnrollmentParentFlow({
     userInfo.complimentaryAccess,
     contractReadiness
   );
+  const maxReachableStepIndex = deriveEnrollmentMaxReachableIndex(
+    currentStepIndex,
+    proposals,
+    userInfo.children,
+    userInfo.accessLevel,
+    userInfo.complimentaryAccess
+  );
   const [selectedStepIndex, setSelectedStepIndex] = useState(currentStepIndex);
   const [manualStepSelection, setManualStepSelection] = useState(false);
 
@@ -353,8 +411,8 @@ export default function EnrollmentParentFlow({
       setSelectedStepIndex(currentStepIndex);
       return;
     }
-    setSelectedStepIndex((prev) => Math.min(prev, currentStepIndex));
-  }, [currentStepIndex, manualStepSelection]);
+    setSelectedStepIndex((prev) => Math.min(prev, maxReachableStepIndex));
+  }, [currentStepIndex, maxReachableStepIndex, manualStepSelection]);
 
   const refreshUserAccessLevel = useCallback(async () => {
     try {
@@ -787,10 +845,21 @@ export default function EnrollmentParentFlow({
           message?: string;
           remainingProposed?: number;
           complimentaryEnrollment?: boolean;
+          pickupConsentGenerated?: boolean;
+          pickupConsentPreviewHtml?: string | null;
+          pickupConsentChildName?: string | null;
+          pickupConsentDownloadUrl?: string | null;
         };
         if (!r.ok) {
           setFlash({ kind: 'error', message: data?.message ?? 'Nie udało się zaakceptować propozycji.' });
           return;
+        }
+        if (data.pickupConsentGenerated && data.pickupConsentPreviewHtml) {
+          setPickupConsentModal({
+            previewHtml: data.pickupConsentPreviewHtml,
+            childName: data.pickupConsentChildName?.trim() || 'dziecko',
+            downloadUrl: data.pickupConsentDownloadUrl?.trim() || null,
+          });
         }
         setFlash({
           kind: 'success',
@@ -969,14 +1038,49 @@ export default function EnrollmentParentFlow({
       const level = childAccessLevel(p);
       return level === 'PROPOSED' || level === 'NEGOTIATING';
     });
+    const pendingProposalCount = proposals.filter((p) => {
+      const level = childAccessLevel(p);
+      return level === 'PROPOSED' || level === 'NEGOTIATING';
+    }).length;
+    const finishedProposalCount = proposals.filter((p) => {
+      const level = childAccessLevel(p);
+      return level === 'COMPLETED' || level === 'SIGNED';
+    }).length;
     const isReadOnlyPreview =
       selectedStepIndex < currentStepIndex &&
       !(currentStep.key === 'proposed' && hasPendingProposalDecisions);
 
     if (currentStep.key === 'pending') {
+      const openRequestIds = new Set(
+        proposals
+          .filter((p) => {
+            const level = childAccessLevel(p);
+            return level === 'PROPOSED' || level === 'NEGOTIATING' || level === 'ACCEPTED';
+          })
+          .map((p) => p.request_id),
+      );
+      const finishedRequestIds = new Set(
+        proposals
+          .filter((p) => {
+            const level = childAccessLevel(p);
+            return level === 'COMPLETED' || level === 'SIGNED';
+          })
+          .map((p) => p.request_id),
+      );
+      const hasWaitingNewChild =
+        contractReadiness.hasPendingDecisions &&
+        (enrollmentRequestSummary?.children.some((c) => !finishedRequestIds.has(c.requestId)) ??
+          false);
+
       return (
         <section className="space-y-4">
           <h3 className="text-lg font-semibold text-zinc-900">Zgłoszenie</h3>
+          {hasWaitingNewChild ? (
+            <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+              Masz otwarte zgłoszenie kolejnego dziecka. Po stronie szkoły trwa dobór grupy — gdy
+              propozycja będzie gotowa, automatycznie przejdziesz do kroku „Propozycja grupy”.
+            </div>
+          ) : null}
           {enrollmentRequestSummary ? (
             <div className="space-y-4">
               <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
@@ -995,9 +1099,29 @@ export default function EnrollmentParentFlow({
 
               <div className="space-y-3">
                 <p className="text-base font-semibold text-zinc-900">Lista dzieci</p>
-                {enrollmentRequestSummary.children.map((child, index) => (
+                {enrollmentRequestSummary.children.map((child, index) => {
+                  const isFinished = finishedRequestIds.has(child.requestId);
+                  const isInProposal = openRequestIds.has(child.requestId);
+                  const isAwaitingProposal =
+                    !isFinished && !isInProposal && contractReadiness.hasPendingDecisions;
+                  return (
                   <div key={child.requestId} className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
-                    <p className="text-base font-semibold text-zinc-900">Dziecko {index + 1}</p>
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                      <p className="text-base font-semibold text-zinc-900">Dziecko {index + 1}</p>
+                      {isFinished ? (
+                        <span className="inline-block rounded-full bg-emerald-200 px-2 py-0.5 text-xs font-semibold text-emerald-900">
+                          Zapis zakończony
+                        </span>
+                      ) : isInProposal ? (
+                        <span className="inline-block rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-800">
+                          W trakcie procesu
+                        </span>
+                      ) : isAwaitingProposal ? (
+                        <span className="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-900">
+                          Oczekuje na propozycję
+                        </span>
+                      ) : null}
+                    </div>
                     <div className="mt-2 grid gap-1.5 text-sm text-zinc-800 sm:grid-cols-[max-content_1fr]">
                       <span className="font-semibold text-zinc-900">Imię:</span>
                       <span>{child.firstName}</span>
@@ -1015,7 +1139,8 @@ export default function EnrollmentParentFlow({
                       <span>{child.preferredLocation}</span>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ) : (
@@ -1045,14 +1170,24 @@ export default function EnrollmentParentFlow({
             <div className="space-y-4">
               {proposals.length > 1 && (
                 <p className="text-sm text-zinc-600">
-                  Mamy propozycje dla {proposals.length} dzieci. Każde dziecko ma jedną przypisaną
-                  grupę — zaakceptuj propozycję, aby przejść dalej w procesie zapisu.
+                  {pendingProposalCount > 0 && finishedProposalCount > 0
+                    ? `Trwa zapis kolejnego dziecka (${pendingProposalCount}). Wcześniej zakończone zapisy (${finishedProposalCount}) pozostają widoczne poniżej — zaakceptuj nową propozycję, aby kontynuować.`
+                    : `Mamy propozycje dla ${proposals.length} dzieci. Każde dziecko ma jedną przypisaną grupę — zaakceptuj propozycję, aby przejść dalej w procesie zapisu.`}
                 </p>
               )}
                   {proposals.some((p) => childAccessLevel(p) === 'PROPOSED') && (
                 <p className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-                  Szkoła przygotowała propozycję grupy dla{' '}
-                  {proposals.length > 1 ? 'każdego dziecka' : 'Twojego dziecka'}. Zaakceptuj ją, aby
+                  Szkoła przygotowała{' '}
+                  {pendingProposalCount > 1
+                    ? 'propozycje grup'
+                    : 'propozycję grupy'}
+                  {finishedProposalCount > 0 && pendingProposalCount > 0
+                    ? ' dla kolejnego dziecka'
+                    : proposals.length > 1 && pendingProposalCount === proposals.length
+                      ? ' dla każdego dziecka'
+                      : ' dla Twojego dziecka'}
+                  . Zaakceptuj{' '}
+                  {pendingProposalCount > 1 ? 'je' : 'ją'}, aby
                   {userInfo.complimentaryAccess
                     ? ' zakończyć zapis (tryb bez opłat — bez umowy).'
                     : ' przejść dalej w procesie zapisu.'}
@@ -1062,7 +1197,7 @@ export default function EnrollmentParentFlow({
                       <>
                         {' '}
                         Część dzieci ma już zaakceptowaną propozycję — krok „Umowa” odblokuje się,
-                        gdy wszystkie dzieci będą zaakceptowane.
+                        gdy wszystkie otwarte zgłoszenia będą zaakceptowane.
                       </>
                     )}
                 </p>
@@ -1136,6 +1271,17 @@ export default function EnrollmentParentFlow({
                       <span className="font-semibold text-zinc-900">Termin:</span>
                       <span>{p.schedule}</span>
                     </div>
+
+                    {Boolean(p.teacher_pickup_consent) ? (
+                      <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950">
+                        <p className="font-semibold">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.required}</p>
+                        <p className="mt-1 text-amber-900">
+                          Po akceptacji otrzymasz zgodę do pobrania w Dokumentach. Nie podpisuje się
+                          jej elektronicznie — trzeba przynieść wydruk z podpisem ręcznym na pierwsze
+                          zajęcia.
+                        </p>
+                      </div>
+                    ) : null}
 
                     {isActionable && (
                       <div className="mt-4 flex flex-wrap gap-3">
@@ -1911,7 +2057,7 @@ export default function EnrollmentParentFlow({
                         {contractPreview && !isContractSigned ? (
                           <div className="space-y-4 border-t border-emerald-200 pt-4">
                             <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-                              Umowa dotyczy jednego dziecka. Zaakceptuj umowę i załączniki, a
+                              Umowa dotyczy jednego dziecka. Zaakceptuj umowę i pozostałe dokumenty, a
                               następnie podpisz. Jeśli w kolejce są kolejne dzieci — po podpisie
                               wygenerujesz następną umowę.
                             </div>
@@ -1949,19 +2095,53 @@ export default function EnrollmentParentFlow({
       const level = childAccessLevel(p);
       return level === 'COMPLETED' || level === 'SIGNED';
     });
+    const hasOpenEnrollment =
+      contractReadiness.hasPendingDecisions ||
+      proposals.some((p) => {
+        const level = childAccessLevel(p);
+        return level === 'PROPOSED' || level === 'NEGOTIATING' || level === 'ACCEPTED';
+      });
 
     return (
       <section className="space-y-4">
         <h3 className="text-lg font-semibold text-zinc-900">Podsumowanie</h3>
+        {hasOpenEnrollment ? (
+          <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+            Trwa zapis kolejnego dziecka. Zakończone zapisy poniżej pozostają bez zmian — wróć do
+            kroku „Propozycja grupy” (lub „Umowa”), aby kontynuować nowy proces.
+          </div>
+        ) : null}
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-900">
           {userInfo.complimentaryAccess
-            ? `Zapis został zakończony (tryb bez opłat). Dziecko jest aktywnym uczestnikiem zajęć${
+            ? `Zapis został zakończony (tryb bez opłat). ${
+                enrolledChildren.length > 1 ? 'Dzieci są aktywnymi uczestnikami' : 'Dziecko jest aktywnym uczestnikiem'
+              } zajęć${
                 schoolYearName ? ` w roku szkolnym ${schoolYearName}` : ''
               } — umowa nie była wymagana.`
-            : `Zapis został zakończony i dziecko jest aktywnym uczestnikiem zajęć${
+            : `Zapis został zakończony i ${
+                enrolledChildren.length > 1 ? 'dzieci są aktywnymi uczestnikami' : 'dziecko jest aktywnym uczestnikiem'
+              } zajęć${
                 schoolYearName ? ` w roku szkolnym ${schoolYearName}` : ''
               }.`}
         </div>
+        {enrolledChildren.some((p) => p.teacher_pickup_consent) ? (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-4 text-sm text-amber-950">
+            <p className="font-semibold text-amber-950">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.title}</p>
+            <p className="mt-2">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.required}</p>
+            <p className="mt-2">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.noESign}</p>
+            <p className="mt-2">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.downloadInDocuments}</p>
+            <p className="mt-2">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.teacherBlankForms}</p>
+            {onNavigateToDocuments ? (
+              <button
+                type="button"
+                onClick={onNavigateToDocuments}
+                className="mt-3 rounded-full bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white hover:bg-[#0b5a46]"
+              >
+                Przejdź do Dokumentów
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {enrolledChildren.length > 0 ? (
           <div className="space-y-3">
             <p className="text-sm text-zinc-600">
@@ -2017,7 +2197,8 @@ export default function EnrollmentParentFlow({
         <div className="flex min-w-max items-center gap-2">
           {enrollmentStepsForUser.map((step, index) => {
             const isSelected = index === selectedStepIndex;
-            const isReachable = index <= currentStepIndex;
+            const isReachable = index <= maxReachableStepIndex;
+            const isActiveProcessStep = index === currentStepIndex;
             return (
               <div key={step.key} className="flex items-center gap-2">
                 <button
@@ -2031,9 +2212,11 @@ export default function EnrollmentParentFlow({
                   className={`rounded-full border px-4 py-2 text-xs font-semibold transition sm:text-sm ${
                     isSelected
                       ? 'border-[#ffc94a] bg-[#fff6dd] text-[#3b2a10]'
-                      : isReachable
-                        ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                        : 'border-zinc-200 bg-zinc-100 text-zinc-500'
+                      : isActiveProcessStep
+                        ? 'border-sky-300 bg-sky-50 text-sky-900'
+                        : isReachable
+                          ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                          : 'border-zinc-200 bg-zinc-100 text-zinc-500'
                   }`}
                 >
                   {step.label}
@@ -2052,5 +2235,62 @@ export default function EnrollmentParentFlow({
     </div>
   );
 
-  return renderEnrollmentTab();
+  return (
+    <>
+      {renderEnrollmentTab()}
+      {pickupConsentModal ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4">
+          <div className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
+            <div className="border-b border-amber-200 bg-amber-50 px-5 py-4">
+              <h3 className="text-lg font-semibold text-amber-950">
+                {PICKUP_CONSENT_PRINT_INSTRUCTIONS.title}
+              </h3>
+              {pickupConsentModal.childName ? (
+                <p className="mt-1 text-sm text-amber-900">Dziecko: {pickupConsentModal.childName}</p>
+              ) : null}
+            </div>
+            <div className="space-y-3 overflow-y-auto px-5 py-4 text-sm text-zinc-800">
+              <p className="font-medium text-zinc-900">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.required}</p>
+              <p>{PICKUP_CONSENT_PRINT_INSTRUCTIONS.noESign}</p>
+              <p>{PICKUP_CONSENT_PRINT_INSTRUCTIONS.downloadInDocuments}</p>
+              <p>{PICKUP_CONSENT_PRINT_INSTRUCTIONS.teacherBlankForms}</p>
+              <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
+                <div className="border-b border-zinc-200 bg-zinc-50 px-4 py-2.5">
+                  <p className="text-sm font-semibold text-zinc-800">Podgląd zgody</p>
+                  <p className="text-xs text-zinc-500">Dokument do wydruku — bez podpisu elektronicznego.</p>
+                </div>
+                <iframe
+                  srcDoc={pickupConsentModal.previewHtml}
+                  title="Podgląd zgody na odebranie dziecka"
+                  className="block w-full border-0 bg-white"
+                  style={{ height: 'min(50vh, 480px)' }}
+                  sandbox="allow-same-origin"
+                />
+              </div>
+            </div>
+            <div className="flex flex-wrap justify-end gap-2 border-t border-zinc-100 px-5 py-4">
+              <button
+                type="button"
+                className="rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50"
+                onClick={() => setPickupConsentModal(null)}
+              >
+                Zamknij
+              </button>
+              {pickupConsentModal.downloadUrl ? (
+                <a
+                  href={pickupConsentModal.downloadUrl}
+                  download
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-full bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white hover:bg-[#0b5a46]"
+                >
+                  Pobierz
+                </a>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
 }

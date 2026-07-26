@@ -1,13 +1,12 @@
 'use client';
 
-import { Fragment, useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import Link from 'next/link';
 import { normalizePolishPhone } from '@/lib/phone';
 import ClassesCalendarPanel from '@/src/components/admin/ClassesCalendarPanel';
 import RenewalsPanel from '@/src/components/admin/RenewalsPanel';
 import EnrollmentAdminPanel from '@/src/components/admin/EnrollmentAdminPanel';
 import ManagerDashboardPanel from '@/src/components/admin/ManagerDashboardPanel';
-import ContactHistoryPanel from '@/src/components/admin/ContactHistoryPanel';
 import ResignationsPanel from '@/src/components/admin/ResignationsPanel';
 import type { ComplimentaryParentRow, EnrollmentGroupRow, EnrollmentParentRow } from '@/src/components/enrollment/types';
 import MessagesPanel from '@/src/components/messages/MessagesPanel';
@@ -16,7 +15,7 @@ import { useUnreadMessagesCount } from '@/src/components/messages/useUnreadMessa
 import { useOpenResignationsCount } from '@/src/components/admin/useOpenResignationsCount';
 import { usePendingEnrollmentsCount } from '@/src/components/admin/usePendingEnrollmentsCount';
 import {
-  addMonthsYmd,
+  formatSchoolDateTime,
   periodMonthKey,
   todayYmdSchool,
 } from '@/lib/school-timezone';
@@ -101,6 +100,10 @@ interface GroupRow {
   price_monthly?: string | number | null;
   price_yearly?: string | number | null;
   price_per_lesson?: string | number | null;
+  has_schedule?: boolean;
+  future_lessons_count?: number;
+  missing_generated_lessons?: boolean;
+  schedule_needs_confirmation?: boolean;
 }
 
 function priceFieldFromDb(value: unknown): string {
@@ -150,14 +153,6 @@ function formatSettlementMonthPl(periodMonth: string): string {
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
-function todayYmdWarsaw(): string {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Warsaw' });
-}
-
-function isRetroactiveGenerateRange(dateFrom: string): boolean {
-  return dateFrom.slice(0, 10) < todayYmdWarsaw();
-}
-
 interface GroupDetail {
   group: {
     id: string;
@@ -198,9 +193,22 @@ interface GroupDetail {
     monthly_unit_price?: string | null;
     yearly_unit_price?: string | null;
   }>;
-  nearestLessons: Array<{ id: string; scheduled_at: string; status: string }>;
-  generatedLessons?: { futureCount: number; completedCount: number };
+  nearestLessons?: Array<{ id: string; scheduled_at: string; status: string }>;
+  schoolYearLessons?: Array<{
+    id: string;
+    scheduled_at: string;
+    status: string;
+    duration_min?: number;
+  }>;
+  generatedLessons?: {
+    futureCount: number;
+    completedCount: number;
+    schoolYearCount?: number;
+  };
   locations: Array<{ id: string; name: string }>;
+  activeSchoolYear?: { id: string; name: string | null } | null;
+  scheduleConfirmedForActiveYear?: boolean;
+  scheduleNeedsConfirmation?: boolean;
 }
 
 interface SchoolYearRow {
@@ -250,11 +258,50 @@ interface SchoolYearHistoryData {
   students: Array<{
     child_id: string;
     name: string;
+    birth_date?: string;
+    client_number?: string | null;
+    parent_id?: string;
+    parent_name?: string;
+    parent_client_number?: string | null;
     group_id: string;
     group_name: string;
     teacher_name: string;
     enrolled_at: string;
     left_at: string | null;
+  }>;
+  parents?: Array<{
+    parent_id: string;
+    name: string;
+    email: string;
+    phone: string | null;
+    client_number: string | null;
+    children_count: number;
+    children_names: string;
+  }>;
+  payments?: Array<{
+    id: string;
+    amount: number | null;
+    status: string | null;
+    due_date: string | null;
+    paid_at: string | null;
+    period_month: string | null;
+    description: string | null;
+    child_name: string | null;
+    parent_name: string | null;
+  }>;
+  invoices?: Array<{
+    id: string;
+    invoice_number: string;
+    issue_date: string;
+    due_date: string;
+    buyer_name: string;
+    amount: number;
+    item_name: string;
+    has_pdf: boolean;
+    payment_status: string | null;
+    period_month: string | null;
+    description: string | null;
+    parent_name: string | null;
   }>;
   close_log: {
     closed_at: string;
@@ -386,8 +433,9 @@ function GroupSubTabButtons(props: {
   setGroupsSubTab: Dispatch<SetStateAction<GroupsSubTab>>;
   onEnterAddTab: () => void;
   onOrganizeStateReset: () => void;
+  onEnterListTab?: () => void;
 }) {
-  const { active, setGroupsSubTab, onEnterAddTab, onOrganizeStateReset } = props;
+  const { active, setGroupsSubTab, onEnterAddTab, onOrganizeStateReset, onEnterListTab } = props;
   return (
     <div className="mb-4 flex flex-wrap gap-2">
       {groupsSubTabs.map((tab) => (
@@ -404,6 +452,9 @@ function GroupSubTabButtons(props: {
               }
               return next;
             });
+            if (tab.key === 'list') {
+              onEnterListTab?.();
+            }
             if (tab.key === 'add') {
               onEnterAddTab();
             }
@@ -489,9 +540,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     password: '',
     phone: '',
   });
-  const [editingUserId, setEditingUserId] = useState<string | null>(null);
-  const [contactHistoryParentId, setContactHistoryParentId] = useState<string | null>(null);
-  const [contactHistoryChildId, setContactHistoryChildId] = useState<string | null>(null);
   const [childModalOpen, setChildModalOpen] = useState(false);
   const [childForm, setChildForm] = useState({
     parentId: '',
@@ -568,6 +616,32 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [invoiceHoldBusyContractId, setInvoiceHoldBusyContractId] = useState<string | null>(null);
   const [issuedInvoicesLoading, setIssuedInvoicesLoading] = useState(false);
   const [verifyPaymentsBusy, setVerifyPaymentsBusy] = useState(false);
+  const [unmatchedTransfersLoading, setUnmatchedTransfersLoading] = useState(false);
+  const [unmatchedTransfers, setUnmatchedTransfers] = useState<
+    Array<{
+      id: string;
+      transactionDate: string;
+      bookingDate: string;
+      counterparty: string;
+      title: string;
+      amount: number;
+      currency: string;
+      bankTransactionId: string | null;
+    }>
+  >([]);
+  const [manualMatchInvoices, setManualMatchInvoices] = useState<
+    Array<{
+      invoiceId: string;
+      paymentId: string;
+      invoiceNumber: string;
+      buyerName: string;
+      amount: number;
+      periodMonth: string | null;
+      issueDate: string;
+    }>
+  >([]);
+  const [manualMatchSelection, setManualMatchSelection] = useState<Record<string, string>>({});
+  const [manualMatchBusyId, setManualMatchBusyId] = useState<string | null>(null);
   const [issuedInvoices, setIssuedInvoices] = useState<
     Array<{
       id: string;
@@ -660,26 +734,15 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [addStudentModalOpen, setAddStudentModalOpen] = useState(false);
   const [studentSearch, setStudentSearch] = useState('');
   const [selectedChildId, setSelectedChildId] = useState('');
-  const [generateModalOpen, setGenerateModalOpen] = useState(false);
-  const [generateWholeSchoolYear, setGenerateWholeSchoolYear] = useState(true);
-  const [deleteFutureLessonsModal, setDeleteFutureLessonsModal] = useState<{
-    groupId: string;
-    count: number;
-    quietReload?: boolean;
-  } | null>(null);
-  const [generateForm, setGenerateForm] = useState(() => {
-    const from = todayYmdSchool();
-    return {
-      dateFrom: from,
-      dateTo: addMonthsYmd(from, 3),
-    };
-  });
-
   const [schoolYearLoading, setSchoolYearLoading] = useState(false);
   const [schoolYears, setSchoolYears] = useState<SchoolYearRow[]>([]);
   const [historyYearId, setHistoryYearId] = useState('');
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyData, setHistoryData] = useState<SchoolYearHistoryData | null>(null);
+  const [historySection, setHistorySection] = useState<'summary' | 'details'>('summary');
+  const [historyDetailsTab, setHistoryDetailsTab] = useState<
+    'children' | 'parents' | 'payments' | 'invoices'
+  >('children');
   const [settlementYearId, setSettlementYearId] = useState('');
   const [settlementMonth, setSettlementMonth] = useState('');
   const [settlementLoading, setSettlementLoading] = useState(false);
@@ -1152,7 +1215,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
 
   useEffect(() => {
     if (activeTab !== 'organization' || organizationSubTab !== 'history') return;
+    // Historia dotyczy tylko lat zamkniętych / nieaktywnych — bez bieżącego.
     const selectable = schoolYears
+      .filter((y) => !(y.isActive ?? y.active))
       .slice()
       .sort((a, b) => String(b.date_from).localeCompare(String(a.date_from), 'pl'));
     if (selectable.length === 0) {
@@ -1161,9 +1226,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       return;
     }
     if (!historyYearId || !selectable.some((y) => y.id === historyYearId)) {
-      const preferred =
-        selectable.find((y) => !(y.isActive ?? y.active)) ?? selectable[0];
-      setHistoryYearId(preferred.id);
+      setHistoryYearId(selectable[0].id);
     }
   }, [activeTab, organizationSubTab, schoolYears, historyYearId]);
 
@@ -1325,6 +1388,32 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     }
   }, [monthlyInvoiceMonth, pushToast]);
 
+  const loadUnmatchedTransfers = useCallback(async () => {
+    setUnmatchedTransfersLoading(true);
+    try {
+      const res = await fetch('/api/admin/invoices/unmatched-transfers', { cache: 'no-store' });
+      const data = (await res.json().catch(() => ({}))) as {
+        message?: string;
+        transfers?: typeof unmatchedTransfers;
+        pendingInvoices?: typeof manualMatchInvoices;
+      };
+      if (!res.ok) {
+        pushToast('error', data.message ?? 'Nie udało się pobrać przelewów bez numeru klienta');
+        setUnmatchedTransfers([]);
+        setManualMatchInvoices([]);
+        return;
+      }
+      setUnmatchedTransfers(data.transfers ?? []);
+      setManualMatchInvoices(data.pendingInvoices ?? []);
+    } catch {
+      pushToast('error', 'Błąd pobierania przelewów bez numeru klienta');
+      setUnmatchedTransfers([]);
+      setManualMatchInvoices([]);
+    } finally {
+      setUnmatchedTransfersLoading(false);
+    }
+  }, [pushToast]);
+
   const verifyPayments = useCallback(async () => {
     setVerifyPaymentsBusy(true);
     try {
@@ -1342,13 +1431,48 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         return;
       }
       pushToast('success', data.message ?? 'Weryfikacja płatności zakończona');
-      await loadIssuedInvoices();
+      await Promise.all([loadIssuedInvoices(), loadUnmatchedTransfers()]);
     } catch {
       pushToast('error', 'Błąd weryfikacji płatności');
     } finally {
       setVerifyPaymentsBusy(false);
     }
-  }, [loadIssuedInvoices, monthlyInvoiceMonth, pushToast]);
+  }, [loadIssuedInvoices, loadUnmatchedTransfers, monthlyInvoiceMonth, pushToast]);
+
+  const manualMatchTransfer = useCallback(
+    async (transferId: string) => {
+      const paymentId = String(manualMatchSelection[transferId] ?? '').trim();
+      if (!paymentId) {
+        pushToast('error', 'Wybierz fakturę do przypisania');
+        return;
+      }
+      setManualMatchBusyId(transferId);
+      try {
+        const res = await fetch('/api/admin/invoices/manual-match', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transferId, paymentId }),
+        });
+        const data = (await res.json().catch(() => ({}))) as { message?: string };
+        if (!res.ok) {
+          pushToast('error', data.message ?? 'Nie udało się oznaczyć płatności');
+          return;
+        }
+        pushToast('success', data.message ?? 'Płatność oznaczona jako opłacona');
+        setManualMatchSelection((prev) => {
+          const next = { ...prev };
+          delete next[transferId];
+          return next;
+        });
+        await Promise.all([loadIssuedInvoices(), loadUnmatchedTransfers()]);
+      } catch {
+        pushToast('error', 'Błąd ręcznego przypisania płatności');
+      } finally {
+        setManualMatchBusyId(null);
+      }
+    },
+    [loadIssuedInvoices, loadUnmatchedTransfers, manualMatchSelection, pushToast],
+  );
 
   useEffect(() => {
     if (activeTab === 'billing' && billingSubTab === 'summary') {
@@ -1359,8 +1483,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   useEffect(() => {
     if (activeTab === 'billing' && billingSubTab === 'invoices') {
       void loadIssuedInvoices();
+      void loadUnmatchedTransfers();
     }
-  }, [activeTab, billingSubTab, loadIssuedInvoices]);
+  }, [activeTab, billingSubTab, loadIssuedInvoices, loadUnmatchedTransfers]);
 
   useEffect(() => {
     if (
@@ -1726,30 +1851,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     return months.reverse();
   }, [schoolYears, settlementYearId]);
 
-  const getSchoolYearGenerateDates = useCallback(() => {
-    if (!activeSchoolYear) return null;
-    return {
-      dateFrom: activeSchoolYear.date_from.slice(0, 10),
-      dateTo: activeSchoolYear.date_to.slice(0, 10),
-    };
-  }, [activeSchoolYear]);
-
-  const openGenerateModal = useCallback(() => {
-    const yearDates = getSchoolYearGenerateDates();
-    if (yearDates) {
-      setGenerateForm(yearDates);
-      setGenerateWholeSchoolYear(true);
-    } else {
-      const today = todayYmdSchool();
-      setGenerateForm({
-        dateFrom: today,
-        dateTo: addMonthsYmd(today, 3),
-      });
-      setGenerateWholeSchoolYear(false);
-    }
-    setGenerateModalOpen(true);
-  }, [getSchoolYearGenerateDates]);
-
   const availableChildren = useMemo(() => {
     if (!groupDetail) return [];
     const activeInGroup = new Set(groupDetail.students.filter((s) => !s.left_at).map((s) => s.child_id));
@@ -1835,32 +1936,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       await loadData();
     } catch (error) {
       pushToast('error', error instanceof Error ? error.message : 'Błąd dodawania');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const saveUser = async (user: AdminUser) => {
-    setBusy(true);
-    try {
-      const res = await fetch(`/api/admin/users/${user.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          first_name: user.first_name,
-          last_name: user.last_name,
-          email: user.email,
-          role: user.role,
-          confirmed: user.confirmed,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message ?? 'Aktualizacja nieudana');
-      pushToast('success', 'Zaktualizowano użytkownika');
-      setEditingUserId(null);
-      await loadData();
-    } catch (error) {
-      pushToast('error', error instanceof Error ? error.message : 'Błąd aktualizacji');
     } finally {
       setBusy(false);
     }
@@ -2091,82 +2166,14 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 {usersSubTab === 'parents' ? (
                   <th className="px-4 py-3 text-left">Dzieci</th>
                 ) : null}
-                <th className="px-4 py-3 text-left">Rola</th>
                 <th className="px-4 py-3 text-left">Status</th>
                 <th className="px-4 py-3 text-left">Akcje</th>
               </tr>
             </thead>
             <tbody>
               {roleScopedUsers.map((user) => {
-                const editing = editingUserId === user.id;
-
-                if (user.role === 'PARENT') {
-                  const showHistory = contactHistoryParentId === user.id;
-                  const parentColSpan = usersSubTab === 'parents' ? 7 : 6;
-                  return (
-                    <Fragment key={user.id}>
-                    <tr className="border-t border-emerald-50">
-                      <td className="px-4 py-3 font-mono text-xs text-zinc-600">
-                        {user.client_number ?? '—'}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span>{user.first_name} {user.last_name}</span>
-                      </td>
-                      <td className="px-4 py-3">{user.email}</td>
-                      {usersSubTab === 'parents' ? (
-                        <td className="px-4 py-3 tabular-nums">
-                          {user.children_count ?? 0}
-                        </td>
-                      ) : null}
-                      <td className="px-4 py-3">
-                        <span>{user.role}</span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`rounded-full px-2 py-1 text-xs font-semibold ${user.active ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-700'}`}>
-                          {user.active ? 'aktywny' : 'nieaktywny'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex flex-wrap gap-2">
-                          <Link
-                            href={`/portal/parents/${user.id}`}
-                            className="inline-flex rounded-lg bg-zinc-200 px-3 py-1 text-center text-zinc-900 hover:bg-zinc-300"
-                          >
-                            Edytuj
-                          </Link>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setContactHistoryChildId(null);
-                              setContactHistoryParentId(showHistory ? null : user.id);
-                            }}
-                            className="rounded-lg bg-emerald-100 px-3 py-1 text-[#0f6e56] hover:bg-emerald-200"
-                          >
-                            {showHistory ? 'Ukryj historię' : 'Historia'}
-                          </button>
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => toggleUserActive(user)}
-                            className={`rounded-lg px-3 py-1 text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                              user.active ? 'admin-user-toggle-danger' : 'admin-user-toggle-success'
-                            }`}
-                          >
-                            {user.active ? 'Dezaktywuj' : 'Aktywuj'}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                    {showHistory && (
-                      <tr>
-                        <td colSpan={parentColSpan} className="px-4 pb-4">
-                          <ContactHistoryPanel parentId={user.id} />
-                        </td>
-                      </tr>
-                    )}
-                    </Fragment>
-                  );
-                }
+                const profileHref =
+                  user.role === 'PARENT' ? `/portal/parents/${user.id}` : `/portal/users/${user.id}`;
 
                 return (
                   <tr key={user.id} className="border-t border-emerald-50">
@@ -2174,71 +2181,41 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       {user.client_number ?? '—'}
                     </td>
                     <td className="px-4 py-3">
-                      {editing ? (
-                        <div className="grid grid-cols-2 gap-2">
-                          <input className="rounded-lg border border-emerald-200 px-2 py-1" value={user.first_name} onChange={(e) => setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, first_name: e.target.value } : u)))} />
-                          <input className="rounded-lg border border-emerald-200 px-2 py-1" value={user.last_name} onChange={(e) => setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, last_name: e.target.value } : u)))} />
-                        </div>
-                      ) : (
-                        <span>{user.first_name} {user.last_name}</span>
-                      )}
+                      <span>
+                        {user.first_name} {user.last_name}
+                      </span>
                     </td>
+                    <td className="px-4 py-3">{user.email}</td>
+                    {usersSubTab === 'parents' ? (
+                      <td className="px-4 py-3 tabular-nums">{user.children_count ?? 0}</td>
+                    ) : null}
                     <td className="px-4 py-3">
-                      {editing ? (
-                        <input className="w-full rounded-lg border border-emerald-200 px-2 py-1" value={user.email} onChange={(e) => setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, email: e.target.value } : u)))} />
-                      ) : user.email}
-                    </td>
-                    <td className="px-4 py-3">
-                      {editing ? (
-                        <select
-                          className="rounded-lg border border-emerald-200 px-2 py-1"
-                          value={user.role ?? 'PARENT'}
-                          onChange={(e) =>
-                            setUsers((prev) =>
-                              prev.map((u) =>
-                                u.id === user.id ? { ...u, role: e.target.value as AdminPortalUserRole } : u
-                              )
-                            )
-                          }
-                        >
-                          <option value="PARENT">Rodzic</option>
-                          <option value="TEACHER">Nauczyciel</option>
-                          {!isManagerView && <option value="MANAGER">Manager</option>}
-                          <option value="ACCOUNTANT">Księgowa</option>
-                          <option value="CHILD">Uczeń</option>
-                          {!isManagerView && <option value="ADMIN">Super admin</option>}
-                        </select>
-                      ) : (
-                        <span>{user.role}</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`rounded-full px-2 py-1 text-xs font-semibold ${user.active ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-700'}`}>
+                      <span
+                        className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                          user.active ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-700'
+                        }`}
+                      >
                         {user.active ? 'aktywny' : 'nieaktywny'}
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex gap-2">
-                        {editing ? (
-                          <>
-                            <button type="button" onClick={() => setEditingUserId(null)} className="rounded-lg bg-zinc-200 px-3 py-1">Anuluj</button>
-                            <button
-                              type="button"
-                              disabled={busy}
-                              onClick={() => toggleUserActive(user)}
-                              className={`rounded-lg px-3 py-1 text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                                user.active ? 'admin-user-toggle-danger' : 'admin-user-toggle-success'
-                              }`}
-                            >
-                              {user.active ? 'Dezaktywuj' : 'Aktywuj'}
-                            </button>
-                            <button type="button" disabled={busy} onClick={() => saveUser(user)} className="rounded-lg bg-emerald-600 px-3 py-1 text-white">Zapisz</button>
-                          </>
-                        ) : (
-                          <>
-                            <button type="button" onClick={() => setEditingUserId(user.id)} className="rounded-lg bg-zinc-200 px-3 py-1">Edytuj</button>
-                          </>
-                        )}
+                      <div className="flex flex-wrap gap-2">
+                        <Link
+                          href={profileHref}
+                          className="inline-flex rounded-lg bg-zinc-200 px-3 py-1 text-center text-zinc-900 hover:bg-zinc-300"
+                        >
+                          Profil
+                        </Link>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => toggleUserActive(user)}
+                          className={`rounded-lg px-3 py-1 text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                            user.active ? 'admin-user-toggle-danger' : 'admin-user-toggle-success'
+                          }`}
+                        >
+                          {user.active ? 'Dezaktywuj' : 'Aktywuj'}
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -2262,7 +2239,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           </button>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[820px] text-sm">
+          <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-emerald-50 text-zinc-700">
               <tr>
                 <th className="px-4 py-3 text-left">ID</th>
@@ -2272,14 +2249,12 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 <th className="px-4 py-3 text-left">Rodzic</th>
                 <th className="px-4 py-3 text-left">Status</th>
                 <th className="px-4 py-3 text-left">Grupa</th>
+                <th className="px-4 py-3 text-left">Akcje</th>
               </tr>
             </thead>
             <tbody>
-              {children.map((child) => {
-                const showHistory = contactHistoryChildId === child.child_id;
-                return (
-                  <Fragment key={child.child_id}>
-                  <tr className="border-t border-emerald-50">
+              {children.map((child) => (
+                  <tr key={child.child_id} className="border-t border-emerald-50">
                     <td className="px-4 py-3 font-mono text-xs text-zinc-600">
                       {child.client_number ?? '—'}
                     </td>
@@ -2299,32 +2274,17 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         {child.confirmed ? 'potwierdzony' : 'niepotwierdzony'}
                       </span>
                     </td>
+                    <td className="px-4 py-3">{child.group_name ?? '-'}</td>
                     <td className="px-4 py-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span>{child.group_name ?? '-'}</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setContactHistoryParentId(null);
-                            setContactHistoryChildId(showHistory ? null : child.child_id);
-                          }}
-                          className="rounded-lg bg-emerald-100 px-2 py-1 text-xs font-semibold text-[#0f6e56] hover:bg-emerald-200"
-                        >
-                          {showHistory ? 'Ukryj' : 'Historia'}
-                        </button>
-                      </div>
+                      <Link
+                        href={`/portal/children/${child.child_id}`}
+                        className="inline-flex rounded-lg bg-zinc-200 px-3 py-1 text-center text-zinc-900 hover:bg-zinc-300"
+                      >
+                        Profil
+                      </Link>
                     </td>
                   </tr>
-                  {showHistory && (
-                    <tr>
-                      <td colSpan={7} className="px-4 pb-4">
-                        <ContactHistoryPanel childId={child.child_id} />
-                      </td>
-                    </tr>
-                  )}
-                  </Fragment>
-                );
-              })}
+              ))}
             </tbody>
           </table>
         </div>
@@ -2422,10 +2382,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               key={t.key}
               type="button"
               onClick={() => {
-                if (t.key === 'groups' && organizationSubTab === 'groups') {
+                setOrganizationSubTab(t.key);
+                if (t.key === 'groups') {
                   resetGroupsToList();
                 }
-                setOrganizationSubTab(t.key);
                 if (t.key === 'teachers') setTeacherOrgSubTab('list');
                 if (t.key === 'locations') setLocationOrgSubTab('list');
               }}
@@ -2672,21 +2632,12 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                               {previousYears.map((y) => (
                                 <li
                                   key={y.id}
-                                  className="flex flex-col gap-2 rounded-lg border border-emerald-100 bg-white px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+                                  className="rounded-lg border border-emerald-100 bg-white px-3 py-2"
                                 >
-                                  <div>
-                                    <p className="font-medium text-zinc-900">{y.name}</p>
-                                    <p className="text-xs text-zinc-600">
-                                      {y.date_from} — {y.date_to}
-                                    </p>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    className="text-xs font-semibold text-[#0f6e56] underline"
-                                    onClick={() => setEditYearModal(y)}
-                                  >
-                                    Edytuj
-                                  </button>
+                                  <p className="font-medium text-zinc-900">{y.name}</p>
+                                  <p className="text-xs text-zinc-600">
+                                    {y.date_from} — {y.date_to}
+                                  </p>
                                 </li>
                               ))}
                             </ul>
@@ -3570,18 +3521,21 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     value={historyYearId}
                     onChange={(e) => setHistoryYearId(e.target.value)}
                     className="min-w-[220px] rounded-xl border border-emerald-200 px-3 py-2 text-sm"
-                    disabled={schoolYearLoading || schoolYears.length === 0}
+                    disabled={
+                      schoolYearLoading ||
+                      schoolYears.filter((y) => !(y.isActive ?? y.active)).length === 0
+                    }
                   >
-                    {schoolYears.length === 0 ? (
-                      <option value="">Brak lat szkolnych</option>
+                    {schoolYears.filter((y) => !(y.isActive ?? y.active)).length === 0 ? (
+                      <option value="">Brak zamkniętych lat szkolnych</option>
                     ) : (
                       schoolYears
+                        .filter((y) => !(y.isActive ?? y.active))
                         .slice()
                         .sort((a, b) => String(b.date_from).localeCompare(String(a.date_from), 'pl'))
                         .map((y) => (
                           <option key={y.id} value={y.id}>
                             {y.name}
-                            {y.isActive ?? y.active ? ' (bieżący)' : ''}
                           </option>
                         ))
                     )}
@@ -3603,16 +3557,42 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 )}
               </div>
 
+              <div className="flex flex-wrap gap-2">
+                {(
+                  [
+                    { key: 'summary' as const, label: 'Podsumowanie' },
+                    { key: 'details' as const, label: 'Szczegóły' },
+                  ] as const
+                ).map((t) => (
+                  <button
+                    key={t.key}
+                    type="button"
+                    onClick={() => setHistorySection(t.key)}
+                    className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                      historySection === t.key
+                        ? 'border-[#0f6e56] bg-[#0f6e56] text-white shadow-sm'
+                        : 'border-emerald-100 bg-emerald-50/50 text-zinc-800 hover:border-emerald-200 hover:bg-emerald-50'
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+
               {historyLoading || schoolYearLoading ? (
                 <div className="space-y-2">
                   <div className="h-20 animate-pulse rounded-xl bg-emerald-100/80" />
                   <div className="h-32 animate-pulse rounded-xl bg-emerald-100/60" />
                 </div>
+              ) : !historyYearId ? (
+                <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
+                  Historia pokazuje tylko zamknięte lata szkolne. Bieżący rok nie jest tu dostępny.
+                </p>
               ) : !historyData ? (
                 <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
                   Wybierz rok szkolny, aby zobaczyć podsumowanie.
                 </p>
-              ) : (
+              ) : historySection === 'summary' ? (
                 <>
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                     {[
@@ -3783,6 +3763,330 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     </button>
                   </div>
                 </>
+              ) : (
+                <>
+                  <div className="flex flex-wrap gap-2">
+                    {(
+                      [
+                        { key: 'children' as const, label: 'Dzieci' },
+                        { key: 'parents' as const, label: 'Rodzice' },
+                        { key: 'payments' as const, label: 'Płatności' },
+                        { key: 'invoices' as const, label: 'Faktury' },
+                      ] as const
+                    ).map((t) => (
+                      <button
+                        key={t.key}
+                        type="button"
+                        onClick={() => setHistoryDetailsTab(t.key)}
+                        className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                          historyDetailsTab === t.key
+                            ? 'border-[#0f6e56] bg-[#0f6e56] text-white shadow-sm'
+                            : 'border-emerald-100 bg-emerald-50/50 text-zinc-800 hover:border-emerald-200 hover:bg-emerald-50'
+                        }`}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {historyDetailsTab === 'children' && (
+                    <section className="overflow-hidden rounded-2xl border border-emerald-100 bg-white">
+                      <div className="border-b border-emerald-50 px-4 py-3">
+                        <h3 className="font-semibold text-[#0f6e56]">Dzieci w tym roku</h3>
+                        <p className="text-sm text-zinc-500">
+                          Uczniowie przypisani do grup w wybranym roku szkolnym.
+                        </p>
+                      </div>
+                      <div className="max-h-[520px] overflow-x-auto overflow-y-auto">
+                        <table className="w-full min-w-[1100px] text-sm">
+                          <thead className="sticky top-0 bg-emerald-50 text-zinc-700">
+                            <tr>
+                              <th className="px-4 py-3 text-left">ID</th>
+                              <th className="px-4 py-3 text-left">Dziecko</th>
+                              <th className="px-4 py-3 text-left">Data ur.</th>
+                              <th className="px-4 py-3 text-left">Rodzic</th>
+                              <th className="px-4 py-3 text-left">Grupa</th>
+                              <th className="px-4 py-3 text-left">Lektor</th>
+                              <th className="px-4 py-3 text-left">Od</th>
+                              <th className="px-4 py-3 text-left">Do</th>
+                              <th className="px-4 py-3 text-left">Akcje</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {historyData.students.length === 0 ? (
+                              <tr>
+                                <td colSpan={9} className="px-4 py-6 text-center text-zinc-500">
+                                  Brak dzieci w tym roku.
+                                </td>
+                              </tr>
+                            ) : (
+                              historyData.students.map((s) => (
+                                <tr
+                                  key={`${s.child_id}-${s.group_id}`}
+                                  className="border-t border-emerald-50"
+                                >
+                                  <td className="px-4 py-3 font-mono text-xs text-zinc-600">
+                                    {s.client_number ?? '—'}
+                                  </td>
+                                  <td className="px-4 py-3 font-medium">{s.name}</td>
+                                  <td className="px-4 py-3">{s.birth_date ?? '—'}</td>
+                                  <td className="px-4 py-3">
+                                    {s.parent_name ?? '—'}
+                                    {s.parent_client_number ? (
+                                      <span className="ml-1 font-mono text-xs text-zinc-500">
+                                        ({s.parent_client_number})
+                                      </span>
+                                    ) : null}
+                                  </td>
+                                  <td className="px-4 py-3">{s.group_name}</td>
+                                  <td className="px-4 py-3">{s.teacher_name}</td>
+                                  <td className="px-4 py-3">{s.enrolled_at}</td>
+                                  <td className="px-4 py-3">{s.left_at ?? '—'}</td>
+                                  <td className="px-4 py-3">
+                                    <Link
+                                      href={`/portal/children/${s.child_id}`}
+                                      className="inline-flex rounded-lg bg-zinc-200 px-3 py-1 text-zinc-900 hover:bg-zinc-300"
+                                    >
+                                      Profil
+                                    </Link>
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </section>
+                  )}
+
+                  {historyDetailsTab === 'parents' && (
+                    <section className="overflow-hidden rounded-2xl border border-emerald-100 bg-white">
+                      <div className="border-b border-emerald-50 px-4 py-3">
+                        <h3 className="font-semibold text-[#0f6e56]">Rodzice w tym roku</h3>
+                        <p className="text-sm text-zinc-500">
+                          Rodzice dzieci zapisanych do grup w wybranym roku szkolnym.
+                        </p>
+                      </div>
+                      <div className="max-h-[520px] overflow-x-auto overflow-y-auto">
+                        <table className="w-full min-w-[980px] text-sm">
+                          <thead className="sticky top-0 bg-emerald-50 text-zinc-700">
+                            <tr>
+                              <th className="px-4 py-3 text-left">ID</th>
+                              <th className="px-4 py-3 text-left">Rodzic</th>
+                              <th className="px-4 py-3 text-left">Email</th>
+                              <th className="px-4 py-3 text-left">Telefon</th>
+                              <th className="px-4 py-3 text-left">Dzieci</th>
+                              <th className="px-4 py-3 text-left">Akcje</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(historyData.parents ?? []).length === 0 ? (
+                              <tr>
+                                <td colSpan={6} className="px-4 py-6 text-center text-zinc-500">
+                                  Brak rodziców w tym roku.
+                                </td>
+                              </tr>
+                            ) : (
+                              (historyData.parents ?? []).map((p) => (
+                                <tr key={p.parent_id} className="border-t border-emerald-50">
+                                  <td className="px-4 py-3 font-mono text-xs text-zinc-600">
+                                    {p.client_number ?? '—'}
+                                  </td>
+                                  <td className="px-4 py-3 font-medium">{p.name}</td>
+                                  <td className="px-4 py-3">{p.email}</td>
+                                  <td className="px-4 py-3">{p.phone ?? '—'}</td>
+                                  <td className="px-4 py-3">
+                                    <span className="tabular-nums">{p.children_count}</span>
+                                    {p.children_names ? (
+                                      <span className="mt-0.5 block text-xs text-zinc-500">
+                                        {p.children_names}
+                                      </span>
+                                    ) : null}
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <Link
+                                      href={`/portal/parents/${p.parent_id}`}
+                                      className="inline-flex rounded-lg bg-zinc-200 px-3 py-1 text-zinc-900 hover:bg-zinc-300"
+                                    >
+                                      Profil
+                                    </Link>
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </section>
+                  )}
+
+                  {historyDetailsTab === 'payments' && (
+                    <section className="overflow-hidden rounded-2xl border border-emerald-100 bg-white">
+                      <div className="border-b border-emerald-50 px-4 py-3">
+                        <h3 className="font-semibold text-[#0f6e56]">Płatności</h3>
+                        <p className="text-sm text-zinc-500">
+                          Płatności powiązane z wybranym rokiem szkolnym.
+                        </p>
+                      </div>
+                      <div className="max-h-[520px] overflow-x-auto overflow-y-auto">
+                        <table className="w-full min-w-[1100px] text-sm">
+                          <thead className="sticky top-0 bg-emerald-50 text-zinc-700">
+                            <tr>
+                              <th className="px-4 py-3 text-left">Okres</th>
+                              <th className="px-4 py-3 text-left">Opis</th>
+                              <th className="px-4 py-3 text-left">Rodzic</th>
+                              <th className="px-4 py-3 text-left">Dziecko</th>
+                              <th className="px-4 py-3 text-left">Kwota</th>
+                              <th className="px-4 py-3 text-left">Termin</th>
+                              <th className="px-4 py-3 text-left">Opłacono</th>
+                              <th className="px-4 py-3 text-left">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(historyData.payments ?? []).length === 0 ? (
+                              <tr>
+                                <td colSpan={8} className="px-4 py-6 text-center text-zinc-500">
+                                  Brak płatności w tym roku.
+                                </td>
+                              </tr>
+                            ) : (
+                              (historyData.payments ?? []).map((p) => {
+                                const s = String(p.status ?? '').toUpperCase();
+                                const statusNode =
+                                  s === 'PAID' ? (
+                                    <span className="font-medium text-emerald-700">Opłacona</span>
+                                  ) : s === 'PENDING' || s === 'UNPAID' ? (
+                                    <span className="font-medium text-red-700/80">Oczekuje</span>
+                                  ) : s === 'CANCELLED' ? (
+                                    <span className="text-zinc-500">Anulowana</span>
+                                  ) : s === 'OVERDUE' ? (
+                                    <span className="font-medium text-red-700/80">Zaległa</span>
+                                  ) : (
+                                    <span className="text-zinc-600">{p.status || '—'}</span>
+                                  );
+                                return (
+                                  <tr key={p.id} className="border-t border-emerald-50">
+                                    <td className="px-4 py-3 whitespace-nowrap">
+                                      {p.period_month ?? '—'}
+                                    </td>
+                                    <td className="px-4 py-3">{p.description ?? '—'}</td>
+                                    <td className="px-4 py-3">{p.parent_name ?? '—'}</td>
+                                    <td className="px-4 py-3">{p.child_name ?? '—'}</td>
+                                    <td className="px-4 py-3 whitespace-nowrap">
+                                      {p.amount != null
+                                        ? `${p.amount.toLocaleString('pl-PL', {
+                                            minimumFractionDigits: 2,
+                                            maximumFractionDigits: 2,
+                                          })} PLN`
+                                        : '—'}
+                                    </td>
+                                    <td className="px-4 py-3 whitespace-nowrap">
+                                      {p.due_date ?? '—'}
+                                    </td>
+                                    <td className="px-4 py-3 whitespace-nowrap">
+                                      {p.paid_at ?? '—'}
+                                    </td>
+                                    <td className="px-4 py-3">{statusNode}</td>
+                                  </tr>
+                                );
+                              })
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </section>
+                  )}
+
+                  {historyDetailsTab === 'invoices' && (
+                    <section className="overflow-hidden rounded-2xl border border-emerald-100 bg-white">
+                      <div className="border-b border-emerald-50 px-4 py-3">
+                        <h3 className="font-semibold text-[#0f6e56]">Faktury</h3>
+                        <p className="text-sm text-zinc-500">
+                          Faktury wystawione w wybranym roku szkolnym.
+                        </p>
+                      </div>
+                      <div className="max-h-[520px] overflow-x-auto overflow-y-auto">
+                        <table className="w-full min-w-[1100px] text-sm">
+                          <thead className="sticky top-0 bg-emerald-50 text-zinc-700">
+                            <tr>
+                              <th className="px-4 py-3 text-left">Numer</th>
+                              <th className="px-4 py-3 text-left">Data</th>
+                              <th className="px-4 py-3 text-left">Nabywca</th>
+                              <th className="px-4 py-3 text-left">Pozycja</th>
+                              <th className="px-4 py-3 text-left">Okres</th>
+                              <th className="px-4 py-3 text-left">Kwota</th>
+                              <th className="px-4 py-3 text-left">Status</th>
+                              <th className="px-4 py-3 text-left">PDF</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(historyData.invoices ?? []).length === 0 ? (
+                              <tr>
+                                <td colSpan={8} className="px-4 py-6 text-center text-zinc-500">
+                                  Brak faktur w tym roku.
+                                </td>
+                              </tr>
+                            ) : (
+                              (historyData.invoices ?? []).map((inv) => {
+                                const s = String(inv.payment_status ?? '').toUpperCase();
+                                const statusNode =
+                                  s === 'PAID' ? (
+                                    <span className="font-medium text-emerald-700">Opłacona</span>
+                                  ) : s === 'PENDING' || s === 'UNPAID' ? (
+                                    <span className="font-medium text-red-700/80">Oczekuje</span>
+                                  ) : s === 'CANCELLED' ? (
+                                    <span className="text-zinc-500">Anulowana</span>
+                                  ) : s === 'OVERDUE' ? (
+                                    <span className="font-medium text-red-700/80">Zaległa</span>
+                                  ) : (
+                                    <span className="text-zinc-600">
+                                      {inv.payment_status || '—'}
+                                    </span>
+                                  );
+                                return (
+                                  <tr key={inv.id} className="border-t border-emerald-50">
+                                    <td className="px-4 py-3 font-medium">{inv.invoice_number}</td>
+                                    <td className="px-4 py-3 whitespace-nowrap">{inv.issue_date}</td>
+                                    <td className="px-4 py-3">
+                                      <div>{inv.buyer_name}</div>
+                                      {inv.parent_name ? (
+                                        <div className="text-xs text-zinc-500">{inv.parent_name}</div>
+                                      ) : null}
+                                    </td>
+                                    <td className="px-4 py-3">{inv.item_name}</td>
+                                    <td className="px-4 py-3 whitespace-nowrap">
+                                      {inv.period_month ?? '—'}
+                                    </td>
+                                    <td className="px-4 py-3 whitespace-nowrap">
+                                      {inv.amount.toLocaleString('pl-PL', {
+                                        minimumFractionDigits: 2,
+                                        maximumFractionDigits: 2,
+                                      })}{' '}
+                                      PLN
+                                    </td>
+                                    <td className="px-4 py-3">{statusNode}</td>
+                                    <td className="px-4 py-3">
+                                      {inv.has_pdf ? (
+                                        <a
+                                          href={`/api/admin/invoices/${encodeURIComponent(inv.id)}?format=pdf`}
+                                          className="font-semibold text-[#0f6e56] hover:underline"
+                                        >
+                                          Pobierz PDF
+                                        </a>
+                                      ) : (
+                                        <span className="text-zinc-400">Brak</span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </section>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -3805,8 +4109,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           className="mt-0.5 accent-emerald-600"
         />
         <span>
-          Zgoda na odebranie dziecka przez lektora — przy generowaniu umowy rodzic otrzyma Załącznik
-          nr 2 do podpisania.
+          Zgoda na odebranie dziecka przez lektora — przy generowaniu umowy rodzic otrzyma ten dokument
+          do wydruku (nie jest załącznikiem do umowy).
         </span>
       </label>
     </div>
@@ -3984,9 +4288,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       ? () => loadGroupDetail(groupId, quietReload ? { quiet: true } : getGroupDetailReloadOptions(groupId))
       : () => Promise.resolve();
     const scheduleTemplates = detail?.scheduleTemplates ?? [];
+    const schoolYearLessons = detail?.schoolYearLessons ?? [];
     const futureLessonsCount = detail?.generatedLessons?.futureCount ?? 0;
     const completedLessonsCount = detail?.generatedLessons?.completedCount ?? 0;
-    const totalGeneratedLessons = futureLessonsCount + completedLessonsCount;
+    const schoolYearLessonCount =
+      detail?.generatedLessons?.schoolYearCount ?? schoolYearLessons.length;
     const dayNames: Record<number, string> = {
       1: 'Poniedziałek',
       2: 'Wtorek',
@@ -4073,57 +4379,116 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         </section>
 
         <section className="rounded-2xl border border-emerald-100 bg-white p-4 md:p-5">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <h4 className="font-semibold text-zinc-900">Generowanie zajęć</h4>
-              <p className="text-sm text-zinc-500">Wygeneruj kalendarz zajęć na podstawie harmonogramu grupy.</p>
+              <h4 className="font-semibold text-zinc-900">Zajęcia w kalendarzu</h4>
+              <p className="text-sm text-zinc-600">
+                Lista zajęć wygenerowanych z harmonogramu na aktywny rok szkolny. Zajęcia powstają
+                automatycznie po zapisie lub potwierdzeniu terminu (z pominięciem dni wolnych).
+              </p>
               {disabled && (
-                <p className="mt-1 text-xs text-amber-700">Najpierw zapisz grupę, aby wygenerować zajęcia.</p>
+                <p className="mt-1 text-xs text-amber-700">Najpierw zapisz grupę, aby zobaczyć zajęcia.</p>
               )}
-              {!disabled && totalGeneratedLessons > 0 && (
-                <p className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
-                  Zajęcia wygenerowane —{' '}
-                  {[
-                    futureLessonsCount > 0 ? `${futureLessonsCount} nadchodzących` : null,
-                    completedLessonsCount > 0 ? `${completedLessonsCount} odbytych` : null,
-                  ]
-                    .filter(Boolean)
-                    .join(', ')}{' '}
-                  w kalendarzu.
+              {!disabled && detail?.scheduleNeedsConfirmation && (
+                <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
+                  Harmonogram nie jest potwierdzony na rok{' '}
+                  {detail.activeSchoolYear?.name ?? 'aktywny'}. Cron nie będzie generował zajęć dla tej grupy,
+                  dopóki nie potwierdzisz (po uzupełnieniu dni wolnych).
                 </p>
               )}
-              {!disabled && scheduleTemplates.length > 0 && totalGeneratedLessons === 0 && (
-                <p className="mt-2 text-xs text-zinc-500">Harmonogram jest ustawiony, ale zajęcia nie zostały jeszcze wygenerowane.</p>
+              {!disabled && !detail?.scheduleNeedsConfirmation && scheduleTemplates.length > 0 && schoolYearLessonCount === 0 && (
+                <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
+                  Brak wygenerowanych zajęć dla tej grupy w aktywnym roku szkolnym.
+                </p>
+              )}
+              {!disabled && schoolYearLessonCount > 0 && (
+                <p className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
+                  W roku szkolnym{detail?.activeSchoolYear?.name ? ` ${detail.activeSchoolYear.name}` : ''}:{' '}
+                  <strong>{schoolYearLessonCount}</strong>{' '}
+                  {schoolYearLessonCount === 1 ? 'zajęcie' : schoolYearLessonCount < 5 ? 'zajęcia' : 'zajęć'}
+                  {futureLessonsCount > 0 || completedLessonsCount > 0
+                    ? ` (${[
+                        futureLessonsCount > 0 ? `${futureLessonsCount} nadchodzących` : null,
+                        completedLessonsCount > 0 ? `${completedLessonsCount} odbytych` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(', ')})`
+                    : ''}
+                  .
+                </p>
               )}
             </div>
-            <div className="flex shrink-0 flex-wrap gap-2">
+            {!disabled && detail?.scheduleNeedsConfirmation && (
               <button
                 type="button"
-                disabled={disabled}
-                className="rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
-                onClick={() => openGenerateModal()}
+                disabled={busy}
+                className="shrink-0 rounded-xl bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={async () => {
+                  if (!groupId) return;
+                  const res = await fetch(`/api/admin/groups/${groupId}/confirm-schedule`, {
+                    method: 'POST',
+                  });
+                  const data = await res.json().catch(() => ({}));
+                  if (!res.ok) {
+                    pushToast('error', data.message ?? 'Nie udało się potwierdzić harmonogramu');
+                    return;
+                  }
+                  pushToast('success', data.message ?? 'Harmonogram potwierdzony');
+                  setClassesCalRefreshSignal((s) => s + 1);
+                  await reloadDetail();
+                  const gRes = await fetch('/api/admin/groups');
+                  if (gRes.ok) {
+                    const gJson = await gRes.json();
+                    setGroups((gJson.groups ?? []) as GroupRow[]);
+                  }
+                }}
               >
-                Generuj zajęcia z harmonogramu
+                Potwierdź harmonogram
+                {detail.activeSchoolYear?.name ? ` (${detail.activeSchoolYear.name})` : ''}
               </button>
-              {futureLessonsCount > 0 && (
-                <button
-                  type="button"
-                  disabled={disabled || busy}
-                  className="rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  onClick={() => {
-                    if (!groupId) return;
-                    setDeleteFutureLessonsModal({
-                      groupId,
-                      count: futureLessonsCount,
-                      quietReload,
-                    });
-                  }}
-                >
-                  Usuń zajęcia z kalendarza
-                </button>
+            )}
+          </div>
+
+          {!disabled && (
+            <div className="mt-3">
+              {schoolYearLessons.length === 0 ? (
+                <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-600">
+                  Brak zajęć w planie na aktywny rok szkolny.
+                </p>
+              ) : (
+                <ul className="max-h-80 space-y-1.5 overflow-y-auto text-sm">
+                  {schoolYearLessons.map((lesson) => {
+                    const statusLabel =
+                      lesson.status === 'COMPLETED'
+                        ? 'odbyte'
+                        : lesson.status === 'SCHEDULED'
+                          ? 'zaplanowane'
+                          : lesson.status;
+                    const statusClass =
+                      lesson.status === 'COMPLETED'
+                        ? 'bg-zinc-100 text-zinc-700'
+                        : 'bg-emerald-100 text-emerald-800';
+                    return (
+                      <li
+                        key={lesson.id}
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-100 bg-emerald-50/40 px-3 py-2"
+                      >
+                        <span className="font-medium text-zinc-900">
+                          {formatSchoolDateTime(lesson.scheduled_at)}
+                          {lesson.duration_min ? (
+                            <span className="ml-2 font-normal text-zinc-500">· {lesson.duration_min} min</span>
+                          ) : null}
+                        </span>
+                        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusClass}`}>
+                          {statusLabel}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
               )}
             </div>
-          </div>
+          )}
         </section>
       </>
     );
@@ -4132,6 +4497,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const renderGroupManageSections = (detail: GroupDetail, groupId: string, opts?: { quietReload?: boolean }) => {
     const quietReload = opts?.quietReload === true;
     const reloadDetail = () => loadGroupDetail(groupId, quietReload ? { quiet: true } : getGroupDetailReloadOptions(groupId));
+    const activeStudents = detail.students.filter((st) => !st.left_at);
     return (
       <>
         {renderGroupScheduleAndGenerateSections(detail, groupId, { quietReload })}
@@ -4151,114 +4517,34 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             </button>
           </div>
           <div className="space-y-2 text-sm">
-            {detail.students.length === 0 ? (
+            {activeStudents.length === 0 ? (
               <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-6 text-center text-zinc-600">
                 Brak uczniów w grupie.
               </p>
             ) : (
-              detail.students.map((st) => (
+              activeStudents.map((st) => (
                 <div key={st.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-100 p-3">
                   <div>
                     <p>
                       {st.first_name} {st.last_name}
                     </p>
-                    <p className="text-zinc-600">
-                      {st.birth_date} · {st.left_at ? 'były' : 'aktywny'}
-                    </p>
-                    {!st.left_at && (
-                      <div className="mt-2 grid gap-2 sm:grid-cols-3">
-                        <label className="block text-xs text-zinc-600">
-                          Ratalna (indyw.)
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            defaultValue={st.monthly_unit_price ?? ''}
-                            placeholder="Domyślna"
-                            className="mt-1 w-full rounded-lg border border-emerald-200 px-2 py-1 text-sm"
-                            onBlur={async (e) => {
-                              const value = e.target.value.trim();
-                              const res = await fetch(`/api/admin/group-students/${st.id}`, {
-                                method: 'PATCH',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ monthlyUnitPrice: value || null }),
-                              });
-                              if (!res.ok) {
-                                pushToast('error', 'Nie udało się zapisać stawki ratalnej');
-                                return;
-                              }
-                              pushToast('success', 'Stawka ratalna zapisana');
-                              await reloadDetail();
-                            }}
-                          />
-                        </label>
-                        <label className="block text-xs text-zinc-600">
-                          Jednorazowa (indyw.)
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            defaultValue={st.yearly_unit_price ?? ''}
-                            placeholder="Domyślna"
-                            className="mt-1 w-full rounded-lg border border-emerald-200 px-2 py-1 text-sm"
-                            onBlur={async (e) => {
-                              const value = e.target.value.trim();
-                              const res = await fetch(`/api/admin/group-students/${st.id}`, {
-                                method: 'PATCH',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ yearlyUnitPrice: value || null }),
-                              });
-                              if (!res.ok) {
-                                pushToast('error', 'Nie udało się zapisać stawki jednorazowej');
-                                return;
-                              }
-                              pushToast('success', 'Stawka jednorazowa zapisana');
-                              await reloadDetail();
-                            }}
-                          />
-                        </label>
-                        <label className="block text-xs text-zinc-600">
-                          Za poj. zajęcia (indyw.)
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            defaultValue={st.lesson_unit_price ?? ''}
-                            placeholder="Domyślna"
-                            className="mt-1 w-full rounded-lg border border-emerald-200 px-2 py-1 text-sm"
-                            onBlur={async (e) => {
-                              const value = e.target.value.trim();
-                              const res = await fetch(`/api/admin/group-students/${st.id}`, {
-                                method: 'PATCH',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ lessonUnitPrice: value || null }),
-                              });
-                              if (!res.ok) {
-                                pushToast('error', 'Nie udało się zapisać stawki za pojedyncze zajęcia');
-                                return;
-                              }
-                              pushToast('success', 'Stawka za pojedyncze zajęcia zapisana');
-                              await reloadDetail();
-                            }}
-                          />
-                        </label>
-                      </div>
-                    )}
+                    <p className="text-zinc-600">{st.birth_date}</p>
                   </div>
-                  {!st.left_at && (
-                    <button
-                      type="button"
-                      className="rounded-lg bg-red-600 px-3 py-1 text-white"
-                      onClick={async () => {
-                        const res = await fetch(`/api/admin/group-students/${st.id}`, { method: 'DELETE' });
-                        if (!res.ok) {
-                          pushToast('error', 'Nie udało się usunąć ucznia z grupy');
-                          return;
-                        }
-                        pushToast('success', 'Uczeń usunięty z grupy');
-                        await reloadDetail();
-                      }}
-                    >
-                      Usuń z grupy
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    className="rounded-lg bg-red-600 px-3 py-1 text-white"
+                    onClick={async () => {
+                      const res = await fetch(`/api/admin/group-students/${st.id}`, { method: 'DELETE' });
+                      if (!res.ok) {
+                        pushToast('error', 'Nie udało się usunąć ucznia z grupy');
+                        return;
+                      }
+                      pushToast('success', 'Uczeń usunięty z grupy');
+                      await reloadDetail();
+                    }}
+                  >
+                    Usuń z grupy
+                  </button>
                 </div>
               ))
             )}
@@ -4293,6 +4579,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           <GroupSubTabButtons
             active={groupsSubTab}
             setGroupsSubTab={setGroupsSubTab}
+            onEnterListTab={() => {
+              setSelectedGroupId(null);
+              setGroupDetail(null);
+            }}
             onOrganizeStateReset={() => {
               setOrganizeExpandedGroupId(null);
               setSelectedGroupId(null);
@@ -4383,6 +4673,64 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             </div>
           )}
           {groupsSubTab === 'list' ? (
+            <div className="space-y-3">
+              {(() => {
+                const unconfirmedGroups = groups.filter(
+                  (g) => g.active && g.schedule_needs_confirmation === true,
+                );
+                const missingLessonGroups = groups.filter(
+                  (g) =>
+                    g.active &&
+                    g.missing_generated_lessons === true &&
+                    g.schedule_needs_confirmation !== true,
+                );
+                if (unconfirmedGroups.length === 0 && missingLessonGroups.length === 0) return null;
+                return (
+                  <div className="space-y-2">
+                    {unconfirmedGroups.length > 0 && (
+                      <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+                        <p className="font-semibold">
+                          Niepotwierdzony harmonogram na aktywny rok — cron nie generuje zajęć:
+                        </p>
+                        <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                          {unconfirmedGroups.map((g) => (
+                            <li key={g.id}>
+                              <button
+                                type="button"
+                                className="font-medium underline decoration-red-400 underline-offset-2 hover:text-red-950"
+                                onClick={() => void loadGroupDetail(g.id)}
+                              >
+                                {g.name}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {missingLessonGroups.length > 0 && (
+                      <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+                        <p className="font-semibold">
+                          Brak wygenerowanych zajęć dla{' '}
+                          {missingLessonGroups.length === 1 ? 'grupy' : 'grup'}:
+                        </p>
+                        <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                          {missingLessonGroups.map((g) => (
+                            <li key={g.id}>
+                              <button
+                                type="button"
+                                className="font-medium underline decoration-red-400 underline-offset-2 hover:text-red-950"
+                                onClick={() => void loadGroupDetail(g.id)}
+                              >
+                                {g.name}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             <div className="overflow-x-auto">
               <table className="w-full min-w-[1100px] text-sm">
                 <thead className="bg-emerald-50 text-zinc-700">
@@ -4407,7 +4755,18 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       className="cursor-pointer border-t border-emerald-50 hover:bg-emerald-50/40"
                       onClick={() => loadGroupDetail(g.id)}
                     >
-                      <td className="px-4 py-3">{g.name}</td>
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-zinc-900">{g.name}</div>
+                        {g.active && g.schedule_needs_confirmation ? (
+                          <p className="mt-1 text-xs font-semibold text-red-600">
+                            Niepotwierdzony harmonogram
+                          </p>
+                        ) : g.active && g.missing_generated_lessons ? (
+                          <p className="mt-1 text-xs font-semibold text-red-600">
+                            Brak wygenerowanych zajęć
+                          </p>
+                        ) : null}
+                      </td>
                       <td className="px-4 py-3">{g.level ?? '-'}</td>
                       <td className="px-4 py-3">{g.teacher_name ?? '-'}</td>
                       <td className="px-4 py-3">{g.location_name ?? '-'}</td>
@@ -4446,6 +4805,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   })}
                 </tbody>
               </table>
+            </div>
             </div>
           ) : groupsSubTab === 'add' ? (
             <div className="space-y-4">
@@ -5259,6 +5619,102 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 </div>
               </>
             )}
+
+            <div className="space-y-3 border-t border-emerald-100 pt-6">
+              <div>
+                <h4 className="font-semibold text-[#0f6e56]">Przelewy bez numeru klienta</h4>
+                <p className="mt-1 text-sm text-zinc-600">
+                  Przelewy z wyciągu bez nr klienta / umowy / faktury w tytule — jeszcze
+                  nieprzypisane. Możesz ręcznie powiązać je z fakturą i oznaczyć jako opłacone.
+                </p>
+              </div>
+
+              {unmatchedTransfersLoading ? (
+                <p className="text-sm text-zinc-600">Wczytywanie przelewów…</p>
+              ) : unmatchedTransfers.length === 0 ? (
+                <p className="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-600">
+                  Brak nieprzypisanych przelewów bez numeru klienta.
+                </p>
+              ) : (
+                <div className="overflow-x-auto rounded-xl border border-amber-100">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-amber-50/80 text-zinc-700">
+                      <tr>
+                        <th className="px-3 py-2 text-left">Data</th>
+                        <th className="px-3 py-2 text-left">Kontrahent</th>
+                        <th className="px-3 py-2 text-left">Tytuł</th>
+                        <th className="px-3 py-2 text-left">Kwota</th>
+                        <th className="px-3 py-2 text-left">Faktura</th>
+                        <th className="px-3 py-2 text-left">Akcja</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {unmatchedTransfers.map((tr) => {
+                        const sameAmount = manualMatchInvoices.filter(
+                          (inv) => Math.abs(inv.amount - tr.amount) < 0.005,
+                        );
+                        const options =
+                          sameAmount.length > 0 ? sameAmount : manualMatchInvoices;
+                        const busy = manualMatchBusyId === tr.id;
+                        return (
+                          <tr key={tr.id} className="border-t border-amber-50">
+                            <td className="px-3 py-2 whitespace-nowrap">{tr.transactionDate}</td>
+                            <td className="px-3 py-2">{tr.counterparty || '—'}</td>
+                            <td className="px-3 py-2 max-w-[16rem]">
+                              <div className="truncate" title={tr.title}>
+                                {tr.title || '—'}
+                              </div>
+                              {tr.bankTransactionId ? (
+                                <div className="text-xs text-zinc-500 font-mono">
+                                  {tr.bankTransactionId}
+                                </div>
+                              ) : null}
+                            </td>
+                            <td className="px-3 py-2 whitespace-nowrap">{formatPln(tr.amount)}</td>
+                            <td className="px-3 py-2 min-w-[14rem]">
+                              <select
+                                className="w-full rounded-lg border border-zinc-200 bg-white px-2 py-1.5 text-sm"
+                                value={manualMatchSelection[tr.id] ?? ''}
+                                disabled={busy || options.length === 0}
+                                onChange={(e) =>
+                                  setManualMatchSelection((prev) => ({
+                                    ...prev,
+                                    [tr.id]: e.target.value,
+                                  }))
+                                }
+                              >
+                                <option value="">
+                                  {options.length === 0
+                                    ? 'Brak oczekujących faktur'
+                                    : 'Wybierz fakturę…'}
+                                </option>
+                                {options.map((inv) => (
+                                  <option key={inv.paymentId} value={inv.paymentId}>
+                                    {inv.invoiceNumber} — {inv.buyerName} —{' '}
+                                    {formatPln(inv.amount)}
+                                    {inv.periodMonth ? ` (${inv.periodMonth})` : ''}
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+                            <td className="px-3 py-2 whitespace-nowrap">
+                              <button
+                                type="button"
+                                disabled={busy || !manualMatchSelection[tr.id]}
+                                onClick={() => void manualMatchTransfer(tr.id)}
+                                className="rounded-lg bg-[#0f6e56] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0c5a47] disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {busy ? 'Zapisywanie…' : 'Oznacz opłaconą'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </div>
         ) : discountsLoading ? (
           <div className="space-y-3">
@@ -6113,64 +6569,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         </div>
       )}
 
-      {deleteFutureLessonsModal && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
-            <h3 className="text-lg font-semibold text-zinc-900">Usuń zajęcia z kalendarza</h3>
-            <p className="mt-3 text-sm text-zinc-600">
-              Czy na pewno chcesz usunąć{' '}
-              <strong>{deleteFutureLessonsModal.count} nadchodzących zajęć</strong> tej grupy z kalendarza?
-            </p>
-            <p className="mt-2 text-sm text-zinc-500">
-              Zajęcia, które już się odbyły, pozostaną bez zmian. Tej operacji nie można cofnąć.
-            </p>
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                type="button"
-                className="rounded-xl bg-zinc-200 px-4 py-2 text-sm font-semibold"
-                onClick={() => setDeleteFutureLessonsModal(null)}
-              >
-                Anuluj
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                onClick={async () => {
-                  const { groupId, quietReload } = deleteFutureLessonsModal;
-                  setBusy(true);
-                  try {
-                    const res = await fetch('/api/admin/lessons/future', {
-                      method: 'DELETE',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ groupId }),
-                    });
-                    const data = await res.json();
-                    if (!res.ok) {
-                      pushToast('error', data.message ?? 'Nie udało się usunąć zajęć');
-                      return;
-                    }
-                    pushToast('success', data.message ?? 'Usunięto zajęcia');
-                    setDeleteFutureLessonsModal(null);
-                    setClassesCalRefreshSignal((s) => s + 1);
-                    await loadGroupDetail(
-                      groupId,
-                      quietReload ? { quiet: true } : getGroupDetailReloadOptions(groupId),
-                    );
-                  } catch {
-                    pushToast('error', 'Nie udało się usunąć zajęć');
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-              >
-                Usuń z kalendarza
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {scheduleModalOpen && selectedGroupId && groupDetail && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white p-5">
@@ -6212,9 +6610,15 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       pushToast('error', data.message ?? 'Konflikt harmonogramu');
                       return;
                     }
-                    pushToast('success', 'Termin dodany');
+                    pushToast('success', data.message ?? 'Termin dodany');
                     setScheduleModalOpen(false);
+                    setClassesCalRefreshSignal((s) => s + 1);
                     await loadGroupDetail(selectedGroupId, getGroupDetailReloadOptions(selectedGroupId));
+                    const gRes = await fetch('/api/admin/groups');
+                    if (gRes.ok) {
+                      const gJson = await gRes.json();
+                      setGroups((gJson.groups ?? []) as GroupRow[]);
+                    }
                   }}
                 >
                   Sprawdź konflikty i zapisz
@@ -6271,101 +6675,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   }}
                 >
                   Dodaj ucznia
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {generateModalOpen && selectedGroupId && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-5">
-            <h3 className="text-lg font-semibold">Generuj zajęcia</h3>
-            <p className="mt-2 text-sm text-zinc-600">
-              Na podstawie harmonogramu grupy system utworzy pojedyncze terminy zajęć w wybranym okresie.
-              Dni wolne z roku szkolnego są pomijane automatycznie. Wszystkie terminy — także z przeszłości —
-              trafiają do kalendarza jako zaplanowane.
-            </p>
-            <div className="mt-4 space-y-3">
-              {isRetroactiveGenerateRange(generateForm.dateFrom) && (
-                <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
-                  <span className="font-semibold">Generowanie wsteczne.</span> Data początkowa jest w
-                  przeszłości — minione terminy też pojawią się w kalendarzu (zielone, zaplanowane).
-                </p>
-              )}
-              {activeSchoolYear ? (
-                <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-emerald-200 px-3 py-2.5 text-sm text-zinc-700">
-                  <input
-                    type="checkbox"
-                    checked={generateWholeSchoolYear}
-                    onChange={(e) => {
-                      const checked = e.target.checked;
-                      setGenerateWholeSchoolYear(checked);
-                      if (checked) {
-                        const yearDates = getSchoolYearGenerateDates();
-                        if (yearDates) setGenerateForm(yearDates);
-                      }
-                    }}
-                    className="mt-0.5 accent-emerald-600"
-                  />
-                  <span>
-                    <span className="font-semibold text-zinc-900">Cały rok szkolny</span>
-                    <span className="mt-0.5 block text-xs text-zinc-500">
-                      {activeSchoolYear.name} ({activeSchoolYear.date_from.slice(0, 10)} —{' '}
-                      {activeSchoolYear.date_to.slice(0, 10)})
-                    </span>
-                  </span>
-                </label>
-              ) : (
-                <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                  Brak aktywnego roku szkolnego — ustaw daty ręcznie.
-                </p>
-              )}
-              <label className="block text-sm">
-                <span className="mb-1 block font-semibold text-zinc-700">Od — pierwsze zajęcia</span>
-                <input
-                  className="w-full rounded-xl border border-emerald-200 px-3 py-2 disabled:bg-zinc-100 disabled:text-zinc-500"
-                  type="date"
-                  value={generateForm.dateFrom}
-                  disabled={generateWholeSchoolYear}
-                  onChange={(e) => setGenerateForm((p) => ({ ...p, dateFrom: e.target.value }))}
-                />
-                <span className="mt-1 block text-xs text-zinc-500">Od tej daty system zacznie tworzyć zajęcia.</span>
-              </label>
-              <label className="block text-sm">
-                <span className="mb-1 block font-semibold text-zinc-700">Do — ostatnie zajęcia</span>
-                <input
-                  className="w-full rounded-xl border border-emerald-200 px-3 py-2 disabled:bg-zinc-100 disabled:text-zinc-500"
-                  type="date"
-                  value={generateForm.dateTo}
-                  disabled={generateWholeSchoolYear}
-                  onChange={(e) => setGenerateForm((p) => ({ ...p, dateTo: e.target.value }))}
-                />
-                <span className="mt-1 block text-xs text-zinc-500">Ostatni dzień, w którym mogą powstać zajęcia.</span>
-              </label>
-              <div className="flex justify-end gap-2">
-                <button className="rounded-xl bg-zinc-200 px-3 py-2" onClick={() => setGenerateModalOpen(false)}>Anuluj</button>
-                <button
-                  className="rounded-xl bg-emerald-600 px-3 py-2 text-white"
-                  onClick={async () => {
-                    const res = await fetch('/api/admin/lessons/generate', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ groupId: selectedGroupId, ...generateForm }),
-                    });
-                    const data = await res.json();
-                    if (!res.ok) {
-                      pushToast('error', data.message ?? 'Błąd generowania');
-                      return;
-                    }
-                    pushToast('success', data.message ?? `Wygenerowano ${data.created ?? 0} zajęć`);
-                    setGenerateModalOpen(false);
-                    setClassesCalRefreshSignal((s) => s + 1);
-                    await loadGroupDetail(selectedGroupId, getGroupDetailReloadOptions(selectedGroupId));
-                  }}
-                >
-                  Generuj
                 </button>
               </div>
             </div>

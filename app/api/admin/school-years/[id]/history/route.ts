@@ -128,6 +128,12 @@ export async function GET(request: NextRequest, context: RouteCtx) {
       child_id: string;
       first_name: string;
       last_name: string;
+      birth_date: string;
+      client_number: string | null;
+      parent_id: string;
+      parent_first_name: string;
+      parent_last_name: string;
+      parent_client_number: string | null;
       group_id: string;
       group_name: string;
       teacher_first_name: string;
@@ -139,6 +145,12 @@ export async function GET(request: NextRequest, context: RouteCtx) {
          c.id AS child_id,
          c.first_name,
          c.last_name,
+         c.birth_date::text AS birth_date,
+         c.client_number,
+         c.parent_id,
+         pu.first_name AS parent_first_name,
+         pu.last_name AS parent_last_name,
+         pu.client_number AS parent_client_number,
          g.id AS group_id,
          g.name AS group_name,
          u.first_name AS teacher_first_name,
@@ -147,10 +159,109 @@ export async function GET(request: NextRequest, context: RouteCtx) {
          gs.left_at::text
        FROM group_students gs
        JOIN children c ON c.id = gs.child_id
+       JOIN users pu ON pu.id = c.parent_id
        JOIN groups g ON g.id = gs.group_id
        JOIN users u ON u.id = g.teacher_id
        WHERE gs.school_id = $1 AND gs.school_year_id = $2
        ORDER BY c.last_name, c.first_name, g.name`,
+      [year.school_id, yearId]
+    );
+
+    const parentsRes = await queryDb<{
+      parent_id: string;
+      first_name: string;
+      last_name: string;
+      email: string;
+      phone: string | null;
+      client_number: string | null;
+      children_count: number;
+      children_names: string;
+    }>(
+      `SELECT
+         u.id AS parent_id,
+         u.first_name,
+         u.last_name,
+         u.email,
+         u.phone,
+         u.client_number,
+         COUNT(DISTINCT c.id)::int AS children_count,
+         STRING_AGG(DISTINCT CONCAT(c.first_name, ' ', c.last_name), ', ') AS children_names
+       FROM group_students gs
+       JOIN children c ON c.id = gs.child_id
+       JOIN users u ON u.id = c.parent_id
+       WHERE gs.school_id = $1 AND gs.school_year_id = $2
+       GROUP BY u.id, u.first_name, u.last_name, u.email, u.phone, u.client_number
+       ORDER BY u.last_name, u.first_name`,
+      [year.school_id, yearId]
+    );
+
+    const paymentsRes = await queryDb<{
+      id: string;
+      amount: string | null;
+      status: string | null;
+      due_date: string | null;
+      paid_at: string | null;
+      period_month: string | null;
+      description: string | null;
+      child_first_name: string | null;
+      child_last_name: string | null;
+      parent_first_name: string | null;
+      parent_last_name: string | null;
+    }>(
+      `SELECT
+         p.id,
+         p.amount::text AS amount,
+         p.status,
+         p.due_date::text AS due_date,
+         p.paid_at::text AS paid_at,
+         p.period_month::text AS period_month,
+         p.description,
+         c.first_name AS child_first_name,
+         c.last_name AS child_last_name,
+         u.first_name AS parent_first_name,
+         u.last_name AS parent_last_name
+       FROM payments p
+       LEFT JOIN children c ON c.id = p.child_id
+       LEFT JOIN users u ON u.id = p.parent_id
+       WHERE p.school_id = $1 AND p.school_year_id = $2
+       ORDER BY p.due_date DESC NULLS LAST, p.created_at DESC`,
+      [year.school_id, yearId]
+    );
+
+    const invoicesRes = await queryDb<{
+      id: string;
+      invoice_number: string;
+      issue_date: string;
+      due_date: string;
+      buyer_name: string;
+      amount: string;
+      item_name: string;
+      pdf_key: string | null;
+      payment_status: string | null;
+      period_month: string | null;
+      description: string | null;
+      parent_first_name: string | null;
+      parent_last_name: string | null;
+    }>(
+      `SELECT
+         i.id,
+         i.invoice_number,
+         i.issue_date::text AS issue_date,
+         i.due_date::text AS due_date,
+         i.buyer_name,
+         i.amount::text AS amount,
+         i.item_name,
+         i.pdf_key,
+         p.status AS payment_status,
+         p.period_month::text AS period_month,
+         p.description,
+         u.first_name AS parent_first_name,
+         u.last_name AS parent_last_name
+       FROM invoices i
+       JOIN payments p ON p.id = i.payment_id
+       LEFT JOIN users u ON u.id = i.parent_id
+       WHERE i.school_id = $1 AND i.school_year_id = $2
+       ORDER BY i.issue_date DESC, i.created_at DESC`,
       [year.school_id, yearId]
     );
 
@@ -218,11 +329,59 @@ export async function GET(request: NextRequest, context: RouteCtx) {
       students: studentsRes.rows.map((s) => ({
         child_id: s.child_id,
         name: `${s.first_name} ${s.last_name}`.trim(),
+        birth_date: String(s.birth_date).slice(0, 10),
+        client_number: s.client_number,
+        parent_id: s.parent_id,
+        parent_name: `${s.parent_first_name} ${s.parent_last_name}`.trim(),
+        parent_client_number: s.parent_client_number,
         group_id: s.group_id,
         group_name: s.group_name,
         teacher_name: `${s.teacher_first_name} ${s.teacher_last_name}`.trim(),
         enrolled_at: String(s.enrolled_at).slice(0, 10),
         left_at: s.left_at ? String(s.left_at).slice(0, 10) : null,
+      })),
+      parents: parentsRes.rows.map((p) => ({
+        parent_id: p.parent_id,
+        name: `${p.first_name} ${p.last_name}`.trim(),
+        email: p.email,
+        phone: p.phone,
+        client_number: p.client_number,
+        children_count: p.children_count,
+        children_names: p.children_names,
+      })),
+      payments: paymentsRes.rows.map((p) => ({
+        id: p.id,
+        amount: p.amount != null ? Number(p.amount) : null,
+        status: p.status,
+        due_date: p.due_date ? String(p.due_date).slice(0, 10) : null,
+        paid_at: p.paid_at ? String(p.paid_at).slice(0, 10) : null,
+        period_month: p.period_month ? String(p.period_month).slice(0, 7) : null,
+        description: p.description,
+        child_name:
+          p.child_first_name || p.child_last_name
+            ? `${p.child_first_name ?? ""} ${p.child_last_name ?? ""}`.trim()
+            : null,
+        parent_name:
+          p.parent_first_name || p.parent_last_name
+            ? `${p.parent_first_name ?? ""} ${p.parent_last_name ?? ""}`.trim()
+            : null,
+      })),
+      invoices: invoicesRes.rows.map((i) => ({
+        id: i.id,
+        invoice_number: i.invoice_number,
+        issue_date: String(i.issue_date).slice(0, 10),
+        due_date: String(i.due_date).slice(0, 10),
+        buyer_name: i.buyer_name,
+        amount: Number(i.amount),
+        item_name: i.item_name,
+        has_pdf: Boolean(i.pdf_key),
+        payment_status: i.payment_status,
+        period_month: i.period_month ? String(i.period_month).slice(0, 7) : null,
+        description: i.description,
+        parent_name:
+          i.parent_first_name || i.parent_last_name
+            ? `${i.parent_first_name ?? ""} ${i.parent_last_name ?? ""}`.trim()
+            : null,
       })),
       close_log: closeLogRes.rows[0] ?? null,
     });

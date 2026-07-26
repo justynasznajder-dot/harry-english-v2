@@ -6,6 +6,7 @@ import {
   requireAdminSchoolContext,
   resolveInsertSchoolId,
 } from "@/lib/admin-school-context";
+import { sqlSchoolTimestampAsTimestamptz } from "@/lib/school-timezone";
 
 export async function GET(request: NextRequest) {
   const ctx = await requireAdminSchoolContext(request);
@@ -34,6 +35,10 @@ export async function GET(request: NextRequest) {
       price_monthly: string | null;
       price_yearly: string | null;
       price_per_lesson: string | null;
+      has_schedule: boolean;
+      future_lessons_count: number;
+      missing_generated_lessons: boolean;
+      schedule_needs_confirmation: boolean;
     }>(
       `SELECT
          g.id,
@@ -60,7 +65,42 @@ export async function GET(request: NextRequest) {
          ) AS schedule,
          COUNT(DISTINCT gs.id) FILTER (
            WHERE gs.left_at IS NULL
-         )::text AS students_count
+         )::text AS students_count,
+         (COUNT(DISTINCT st.id) > 0) AS has_schedule,
+         COALESCE((
+           SELECT COUNT(*)::int
+           FROM lessons l
+           WHERE l.group_id = g.id
+             AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} > NOW()
+             AND l.status = 'SCHEDULED'
+         ), 0) AS future_lessons_count,
+         (
+           COUNT(DISTINCT st.id) > 0
+           AND COUNT(DISTINCT st.id) FILTER (
+             WHERE st.school_year_id IS DISTINCT FROM (
+               SELECT sy.id FROM school_years sy
+               WHERE sy.school_id = g.school_id AND sy.active = TRUE
+               LIMIT 1
+             )
+           ) = 0
+           AND COALESCE((
+             SELECT COUNT(*)::int
+             FROM lessons l
+             WHERE l.group_id = g.id
+               AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} > NOW()
+               AND l.status = 'SCHEDULED'
+           ), 0) = 0
+         ) AS missing_generated_lessons,
+         (
+           COUNT(DISTINCT st.id) > 0
+           AND COUNT(DISTINCT st.id) FILTER (
+             WHERE st.school_year_id IS DISTINCT FROM (
+               SELECT sy.id FROM school_years sy
+               WHERE sy.school_id = g.school_id AND sy.active = TRUE
+               LIMIT 1
+             )
+           ) > 0
+         ) AS schedule_needs_confirmation
        FROM groups g
        LEFT JOIN users t ON t.id = g.teacher_id
        LEFT JOIN locations gl ON gl.id = g.location_id

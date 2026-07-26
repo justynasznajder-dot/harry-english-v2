@@ -11,6 +11,7 @@ export const R2_SOURCES = [
   "invoice.corrective",
   "invoice.orphan-cleanup",
   "enrollment.sign",
+  "enrollment.complimentaryPickupConsent",
   "parent.documents.list",
   "parent.documents.download",
   "parent.payments.invoice",
