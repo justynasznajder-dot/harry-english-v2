@@ -28,6 +28,9 @@ export async function GET(
        FROM invoices i
        JOIN payments p ON p.id = i.payment_id
        WHERE i.payment_id = $1 AND p.parent_id = $2 AND p.school_id = $3
+       ORDER BY
+         CASE WHEN i.pdf_key IS NOT NULL AND BTRIM(i.pdf_key) <> '' THEN 0 ELSE 1 END,
+         i.created_at DESC NULLS LAST
        LIMIT 1`,
       [paymentId, parentId, schoolId]
     );

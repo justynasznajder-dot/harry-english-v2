@@ -380,7 +380,15 @@ export async function fetchParentPayments(
        FROM payments p
        LEFT JOIN children c ON c.id = p.child_id
        LEFT JOIN contracts ct ON ct.id = p.contract_id
-       LEFT JOIN invoices i ON i.payment_id = p.id
+       LEFT JOIN LATERAL (
+         SELECT inv.invoice_number, inv.pdf_key
+         FROM invoices inv
+         WHERE inv.payment_id = p.id
+         ORDER BY
+           CASE WHEN inv.pdf_key IS NOT NULL AND BTRIM(inv.pdf_key) <> '' THEN 0 ELSE 1 END,
+           inv.created_at DESC NULLS LAST
+         LIMIT 1
+       ) i ON TRUE
        LEFT JOIN school_years sy ON sy.id = COALESCE(p.school_year_id, ct.school_year_id)
        WHERE p.parent_id = $1 AND p.school_id = $2
        ORDER BY COALESCE(p.due_date, p.period_month, p.created_at) DESC

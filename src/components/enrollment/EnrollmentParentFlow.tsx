@@ -1582,7 +1582,7 @@ export default function EnrollmentParentFlow({
                           disabled={profileFieldsLocked}
                           value={contractProfile.firstName}
                           onChange={(e) => patchContractProfile({ firstName: e.target.value })}
-                          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100 disabled:text-zinc-900 disabled:opacity-100"
                         />
                       </div>
                       <div className="space-y-1">
@@ -1592,7 +1592,7 @@ export default function EnrollmentParentFlow({
                           disabled={profileFieldsLocked}
                           value={contractProfile.lastName}
                           onChange={(e) => patchContractProfile({ lastName: e.target.value })}
-                          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100 disabled:text-zinc-900 disabled:opacity-100"
                         />
                       </div>
                       <div className="space-y-1">
@@ -1601,7 +1601,7 @@ export default function EnrollmentParentFlow({
                           type="email"
                           readOnly
                           value={userInfo.email}
-                          className="w-full rounded-xl border border-zinc-200 bg-zinc-100 px-3 py-2.5 text-sm text-zinc-700"
+                          className="w-full rounded-xl border border-zinc-200 bg-zinc-100 px-3 py-2.5 text-sm text-zinc-900 disabled:opacity-100"
                         />
                       </div>
                       <div className="space-y-1">
@@ -1611,7 +1611,7 @@ export default function EnrollmentParentFlow({
                           disabled={profileFieldsLocked}
                           value={contractProfile.phone}
                           onChange={(e) => patchContractProfile({ phone: e.target.value })}
-                          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100 disabled:text-zinc-900 disabled:opacity-100"
                         />
                       </div>
                     </div>
@@ -1654,7 +1654,7 @@ export default function EnrollmentParentFlow({
                             disabled={profileFieldsLocked}
                             value={contractProfile.pesel}
                             onChange={(e) => patchContractProfile({ pesel: e.target.value })}
-                            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100 disabled:text-zinc-900 disabled:opacity-100"
                           />
                         </div>
                         <div className="space-y-1 md:col-span-2">
@@ -1665,7 +1665,7 @@ export default function EnrollmentParentFlow({
                             value={contractProfile.address}
                             onChange={(e) => patchContractProfile({ address: e.target.value })}
                             placeholder="ul. Przykładowa 1"
-                            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100 disabled:text-zinc-900 disabled:opacity-100"
                           />
                         </div>
                         <div className="space-y-1">
@@ -1675,7 +1675,7 @@ export default function EnrollmentParentFlow({
                             disabled={profileFieldsLocked}
                             value={contractProfile.city}
                             onChange={(e) => patchContractProfile({ city: e.target.value })}
-                            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100 disabled:text-zinc-900 disabled:opacity-100"
                           />
                         </div>
                         <div className="space-y-1">
@@ -1686,7 +1686,7 @@ export default function EnrollmentParentFlow({
                             value={contractProfile.zipCode}
                             onChange={(e) => patchContractProfile({ zipCode: e.target.value })}
                             placeholder="00-000"
-                            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100 disabled:text-zinc-900 disabled:opacity-100"
                           />
                         </div>
                       </div>
@@ -1702,7 +1702,7 @@ export default function EnrollmentParentFlow({
                               value={contractProfile.companyName}
                               onChange={(e) => patchContractProfile({ companyName: e.target.value })}
                               placeholder="Pełna nazwa firmy"
-                              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100 disabled:text-zinc-900 disabled:opacity-100"
                             />
                           </div>
                           <div className="space-y-1 md:col-span-2 max-w-sm">
@@ -1715,7 +1715,7 @@ export default function EnrollmentParentFlow({
                               value={contractProfile.nip}
                               onChange={(e) => patchContractProfile({ nip: e.target.value })}
                               placeholder="10 cyfr"
-                              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100 disabled:text-zinc-900 disabled:opacity-100"
                             />
                           </div>
                           <div className="space-y-1 md:col-span-2">
@@ -1728,7 +1728,7 @@ export default function EnrollmentParentFlow({
                               value={contractProfile.address}
                               onChange={(e) => patchContractProfile({ address: e.target.value })}
                               placeholder="ul. Przykładowa 1"
-                              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100 disabled:text-zinc-900 disabled:opacity-100"
                             />
                           </div>
                           <div className="space-y-1">
@@ -1738,7 +1738,7 @@ export default function EnrollmentParentFlow({
                               disabled={profileFieldsLocked}
                               value={contractProfile.city}
                               onChange={(e) => patchContractProfile({ city: e.target.value })}
-                              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100 disabled:text-zinc-900 disabled:opacity-100"
                             />
                           </div>
                           <div className="space-y-1">
@@ -1749,7 +1749,7 @@ export default function EnrollmentParentFlow({
                               value={contractProfile.zipCode}
                               onChange={(e) => patchContractProfile({ zipCode: e.target.value })}
                               placeholder="00-000"
-                              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100"
+                              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100 disabled:text-zinc-900 disabled:opacity-100"
                             />
                           </div>
                         </div>
@@ -1825,19 +1825,30 @@ export default function EnrollmentParentFlow({
                         const level = childAccessLevel(p);
                         const isAccepted = level === 'ACCEPTED';
                         const isPending = level === 'PROPOSED' || level === 'NEGOTIATING';
+                        const isSignedDone = level === 'SIGNED' || level === 'COMPLETED';
                         const included = includedInContract[p.request_id] !== false;
+                        const canSelect = isAccepted && !formLocked && !isSignedDone;
                         return (
                           <div
                             key={p.request_id}
-                            className="rounded-xl border border-white bg-white px-4 py-3"
+                            className={`rounded-xl border px-4 py-3 ${
+                              isSignedDone
+                                ? 'border-zinc-200 bg-zinc-100/80 opacity-80'
+                                : 'border-white bg-white'
+                            }`}
                           >
-                            <label className="flex items-start gap-3">
+                            <label
+                              className={`flex items-start gap-3 ${
+                                canSelect ? 'cursor-pointer' : 'cursor-default'
+                              }`}
+                            >
                               <input
                                 type="checkbox"
-                                className="mt-1 accent-[#0f6e56]"
-                                disabled={formLocked || !isAccepted}
-                                checked={isAccepted && included}
+                                className="mt-1 accent-[#0f6e56] disabled:opacity-60"
+                                disabled={!canSelect}
+                                checked={isSignedDone || (isAccepted && included)}
                                 onChange={(e) => {
+                                  if (!canSelect) return;
                                   setAllowContractRegenerate(true);
                                   setIncludedInContract((prev) => ({
                                     ...prev,
@@ -1846,14 +1857,27 @@ export default function EnrollmentParentFlow({
                                 }}
                               />
                               <span className="min-w-0 flex-1">
-                                <span className="font-semibold text-zinc-900">
+                                <span
+                                  className={`font-semibold ${
+                                    isSignedDone ? 'text-zinc-500' : 'text-zinc-900'
+                                  }`}
+                                >
                                   {p.child_first_name} {p.child_last_name}
                                 </span>
                                 {p.group_name ? (
-                                  <span className="mt-1 block text-sm text-zinc-600">
+                                  <span
+                                    className={`mt-1 block text-sm ${
+                                      isSignedDone ? 'text-zinc-400' : 'text-zinc-600'
+                                    }`}
+                                  >
                                     {p.group_name}
                                     {p.location_name ? ` · ${p.location_name}` : ''}
                                     {p.schedule ? ` · ${p.schedule}` : ''}
+                                  </span>
+                                ) : null}
+                                {isSignedDone ? (
+                                  <span className="mt-1 inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">
+                                    Umowa podpisana
                                   </span>
                                 ) : null}
                                 {isPending && (
@@ -1862,7 +1886,7 @@ export default function EnrollmentParentFlow({
                                     dziecka
                                   </span>
                                 )}
-                                {!isAccepted && !isPending && (
+                                {!isAccepted && !isPending && !isSignedDone && (
                                   <span className="mt-1 block text-xs text-zinc-500">
                                     Status: {level}
                                   </span>
