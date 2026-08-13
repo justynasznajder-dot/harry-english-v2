@@ -7,6 +7,7 @@ const EMAIL_IMAGES_DIR = path.join(process.cwd(), "public", "images");
 const EMAIL_CID = {
   googleBtn: "he-google-btn",
   facebookBtn: "he-facebook-btn",
+  kdrBtn: "he-kdr-btn",
   logo: "he-logo",
 } as const;
 
@@ -14,6 +15,7 @@ function buildEmailInlineAttachments(html: string): NonNullable<SendMailOptions[
   const defs: { file: string; cid: string }[] = [
     { file: "ocen_google1.png", cid: EMAIL_CID.googleBtn },
     { file: "facebook_like1.png", cid: EMAIL_CID.facebookBtn },
+    { file: "KDR.png", cid: EMAIL_CID.kdrBtn },
     { file: "2zyrafa2.png", cid: EMAIL_CID.logo },
   ];
   return defs
@@ -62,6 +64,7 @@ const GOOGLE_REVIEWS_URL = "https://g.page/r/CXQ-JVaomYm6EBM/review";
 const EMAIL_SOCIAL_BTN_HEIGHT = 52;
 const EMAIL_SOCIAL_GOOGLE_WIDTH = Math.round((EMAIL_SOCIAL_BTN_HEIGHT * 421) / 188);
 const EMAIL_SOCIAL_FACEBOOK_WIDTH = Math.round((EMAIL_SOCIAL_BTN_HEIGHT * 681) / 227);
+const EMAIL_SOCIAL_KDR_WIDTH = Math.round((EMAIL_SOCIAL_BTN_HEIGHT * 1022) / 418);
 
 /** Paleta szablonu maili (gradienty ze strony, odporne na dark mode w kliencie poczty). */
 export type EmailPalette = {
@@ -108,6 +111,7 @@ function buildEmailSocialLinksButtons(): string {
   const h = EMAIL_SOCIAL_BTN_HEIGHT;
   const googleW = EMAIL_SOCIAL_GOOGLE_WIDTH;
   const fbW = EMAIL_SOCIAL_FACEBOOK_WIDTH;
+  const kdrW = EMAIL_SOCIAL_KDR_WIDTH;
   const imgBaseStyle =
     "display:block;border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;";
   const imgSize = (w: number) =>
@@ -125,6 +129,10 @@ function buildEmailSocialLinksButtons(): string {
           <a href="${FACEBOOK_URL}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;">
             <img src="cid:${EMAIL_CID.facebookBtn}" alt="Polub nas na Facebooku" width="${fbW}" height="${h}" style="${imgSize(fbW)}" />
           </a>
+        </td>
+        <td style="width:12px;font-size:0;line-height:0;">&nbsp;</td>
+        <td align="center" valign="middle" height="${h}" style="padding:0;height:${h}px;line-height:${h}px;">
+          <img src="cid:${EMAIL_CID.kdrBtn}" alt="Karta Dużej Rodziny" width="${kdrW}" height="${h}" style="${imgSize(kdrW)}" />
         </td>
       </tr>
     </table>`;
