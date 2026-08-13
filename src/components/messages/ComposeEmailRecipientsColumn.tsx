@@ -19,7 +19,7 @@ type Props = {
   onExternalEmailBulkPasteChange?: (value: string) => void;
   onParseExternalEmailBulk?: () => void;
   /** Tylko tryb enrollment */
-  locations?: Array<{ id: string; name: string }>;
+  locations?: Array<{ id: string; name: string; newCount?: number }>;
   enrollmentLocationId?: string;
   onEnrollmentLocationIdChange?: (locationId: string) => void;
   enrollmentAddLoading?: boolean;
@@ -63,7 +63,9 @@ export default function ComposeEmailRecipientsColumn({
             <option value="">Wybierz lokalizację…</option>
             {locations.map((loc) => (
               <option key={loc.id} value={loc.id}>
-                {loc.name}
+                {typeof loc.newCount === 'number'
+                  ? `${loc.name} (${loc.newCount})`
+                  : loc.name}
               </option>
             ))}
           </select>

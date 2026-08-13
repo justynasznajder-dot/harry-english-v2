@@ -310,6 +310,7 @@ export interface ComposeMessageModalProps {
   enrollmentEmailLocationId?: string;
   onEnrollmentEmailLocationIdChange?: (locationId: string) => void;
   enrollmentEmailAddLoading?: boolean;
+  enrollmentEmailLocations?: Array<{ id: string; name: string; newCount?: number }>;
   messageTemplates?: Array<{ key: string; label: string; subject: string; content: string }>;
   onApplyTemplate?: (subject: string, content: string) => void;
   /** Aktywne dzieci rodzica — pole szablonu `dziecko` jako select. */
@@ -360,6 +361,7 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
     setSelectedTemplateKey(key);
     if (!key) {
       setTemplateFieldValues({});
+      props.onApplyTemplate?.('', '');
       return;
     }
     const tpl = props.messageTemplates?.find((t) => t.key === key);
@@ -523,7 +525,11 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
               externalEmailBulkPaste={props.externalEmailBulkPaste ?? ''}
               onExternalEmailBulkPasteChange={(v) => props.onExternalEmailBulkPasteChange?.(v)}
               onParseExternalEmailBulk={() => props.onParseExternalEmailBulk?.()}
-              locations={props.filterMeta?.locations ?? []}
+              locations={
+                isEnrollmentEmailSection
+                  ? (props.enrollmentEmailLocations ?? [])
+                  : (props.filterMeta?.locations ?? [])
+              }
               enrollmentLocationId={props.enrollmentEmailLocationId ?? ''}
               onEnrollmentLocationIdChange={(id) =>
                 props.onEnrollmentEmailLocationIdChange?.(id)

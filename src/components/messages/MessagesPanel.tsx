@@ -176,6 +176,9 @@ export default function MessagesPanel({
   const [externalEmailBulkPaste, setExternalEmailBulkPaste] = useState('');
   const [enrollmentEmailLocationId, setEnrollmentEmailLocationId] = useState('');
   const [enrollmentEmailAddLoading, setEnrollmentEmailAddLoading] = useState(false);
+  const [enrollmentEmailLocations, setEnrollmentEmailLocations] = useState<
+    Array<{ id: string; name: string; newCount: number }>
+  >([]);
   const pendingComposeMetaRef = useRef<{
     templateKey?: string;
     templateFieldValues?: Record<string, string>;
@@ -184,7 +187,7 @@ export default function MessagesPanel({
   const canPickIndividuals = mode === 'manager' || mode === 'teacher' || mode === 'parent';
   const canUseExternalEmails = mode === 'manager' || mode === 'teacher';
 
-  const resetComposeForm = useCallback(() => {
+  const clearComposeFields = useCallback((options?: { resetSection?: boolean }) => {
     setSelectedRecipientIds([]);
     setSelectedRecipientLabels({});
     setSingleRecipientId('');
@@ -195,7 +198,6 @@ export default function MessagesPanel({
     setFilterRenewalNoResponse(false);
     setSendPreviewOpen(false);
     setShowGroupFilters(false);
-    setComposeSection('parents');
     setBulkAddLoading(null);
     setComposeSubject('');
     setComposeContent('');
@@ -205,12 +207,17 @@ export default function MessagesPanel({
     setEnrollmentEmailAddLoading(false);
     pendingComposeMetaRef.current = null;
     setRecipientsReloadToken((t) => t + 1);
+
+    if (options?.resetSection) {
+      setComposeSection('parents');
+      setEnrollmentEmailLocations([]);
+    }
   }, []);
 
   const closeCompose = useCallback(() => {
     setComposeOpen(false);
-    resetComposeForm();
-  }, [resetComposeForm]);
+    clearComposeFields({ resetSection: true });
+  }, [clearComposeFields]);
 
   useEffect(() => {
     const t = setTimeout(() => setSearchDebounced(search.trim()), 300);
@@ -392,6 +399,9 @@ export default function MessagesPanel({
       setExternalEmailBulkPaste('');
       setEnrollmentEmailLocationId('');
       setEnrollmentEmailAddLoading(false);
+      if (section !== 'enrollment-email') {
+        setEnrollmentEmailLocations([]);
+      }
       return;
     }
 
@@ -399,6 +409,7 @@ export default function MessagesPanel({
     setExternalEmailBulkPaste('');
     setEnrollmentEmailLocationId('');
     setEnrollmentEmailAddLoading(false);
+    setEnrollmentEmailLocations([]);
     setSelectedRecipientIds([]);
     setSelectedRecipientLabels({});
     setFilterGroupIds([]);
@@ -407,6 +418,35 @@ export default function MessagesPanel({
     setShowGroupFilters(false);
     setRecipientsReloadToken((t) => t + 1);
   }, []);
+
+  const loadEnrollmentEmailLocations = useCallback(async () => {
+    try {
+      const res = await fetch('/api/messages/enrollment-email-recipients', { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message ?? 'Błąd lokalizacji zgłoszeń');
+      const list = (data.locations ?? []) as Array<{
+        id: string;
+        name: string;
+        newCount?: number;
+      }>;
+      setEnrollmentEmailLocations(
+        list.map((l) => ({
+          id: l.id,
+          name: l.name,
+          newCount: typeof l.newCount === 'number' ? l.newCount : 0,
+        }))
+      );
+    } catch (e) {
+      setEnrollmentEmailLocations([]);
+      setError(e instanceof Error ? e.message : 'Błąd lokalizacji zgłoszeń');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (composeOpen && composeSection === 'enrollment-email') {
+      void loadEnrollmentEmailLocations();
+    }
+  }, [composeOpen, composeSection, loadEnrollmentEmailLocations]);
 
   useEffect(() => {
     if (!composeOpen) return;
@@ -1007,7 +1047,7 @@ export default function MessagesPanel({
         onComposeContentChange={setComposeContent}
         sendingCompose={sendingCompose}
         onSend={(meta) => void handleSendCompose(meta)}
-        onClearForm={resetComposeForm}
+        onClearForm={() => clearComposeFields()}
         composeSection={composeSection}
         onComposeSectionChange={handleComposeSectionChange}
         showSectionTabs={canUseExternalEmails}
@@ -1022,6 +1062,7 @@ export default function MessagesPanel({
         enrollmentEmailLocationId={enrollmentEmailLocationId}
         onEnrollmentEmailLocationIdChange={handleEnrollmentEmailLocationChange}
         enrollmentEmailAddLoading={enrollmentEmailAddLoading}
+        enrollmentEmailLocations={enrollmentEmailLocations}
         messageTemplates={messageTemplates}
         onApplyTemplate={(subject, content) => {
           setComposeSubject(subject);

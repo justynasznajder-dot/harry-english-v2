@@ -5,8 +5,8 @@ import { getTokenFromRequest } from "@/lib/auth";
 import { requireMessageActor } from "@/lib/messages";
 
 /**
- * Odbiorcy e-mail ze zgłoszeń (enrollment_requests): status NEW, filtr preferred_location.
- * Zwraca wiersze per dziecko — ten sam rodzic może mieć kilka dzieci na różne lokalizacje.
+ * Bez locationId → lokalizacje szkoły z liczbą zgłoszeń NEW.
+ * Z locationId → odbiorcy e-mail ze zgłoszeń NEW dla preferred_location.
  */
 export async function GET(request: NextRequest) {
   const payload = await getTokenFromRequest(request);
@@ -20,11 +20,35 @@ export async function GET(request: NextRequest) {
   }
 
   const locationId = request.nextUrl.searchParams.get("locationId")?.trim() ?? "";
-  if (!locationId) {
-    return NextResponse.json({ message: "Wybierz lokalizację" }, { status: 400 });
-  }
 
   try {
+    if (!locationId) {
+      const locations = await queryDb<{ id: string; name: string; new_count: number }>(
+        `SELECT l.id,
+                l.name,
+                COUNT(er.id)::int AS new_count
+         FROM locations l
+         LEFT JOIN enrollment_requests er
+           ON er.school_id = l.school_id
+          AND NULLIF(TRIM(BOTH FROM COALESCE(er.preferred_location, '')), '') = l.id
+          AND UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'NEW'
+          AND NULLIF(BTRIM(COALESCE(er.parent_email::text, '')), '') IS NOT NULL
+         WHERE l.school_id = $1
+           AND l.active = TRUE
+         GROUP BY l.id, l.name, l.sort_order
+         ORDER BY l.sort_order ASC, l.name ASC`,
+        [actor.user.schoolId]
+      );
+
+      return NextResponse.json({
+        locations: locations.rows.map((l) => ({
+          id: l.id,
+          name: l.name,
+          newCount: l.new_count,
+        })),
+      });
+    }
+
     const locCheck = await queryDb<{ id: string }>(
       `SELECT id FROM locations WHERE id = $1 AND school_id = $2 AND active = TRUE LIMIT 1`,
       [locationId, actor.user.schoolId]
