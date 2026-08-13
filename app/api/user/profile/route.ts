@@ -114,12 +114,23 @@ export async function PUT(request: NextRequest) {
 
     // Podpisane umowy mają zamrożoną treść — zmiana profilu dotyczy przyszłych dokumentów/faktur.
     const body = await request.json();
-    const billingType = String(body.billingType ?? body.billing_type ?? "private")
+    const existingProfile = await getParentProfileByUserId(userId);
+    const requestedBillingType = String(body.billingType ?? body.billing_type ?? "private")
       .trim()
       .toLowerCase() as BillingType;
-    if (billingType !== "private" && billingType !== "company") {
+    if (requestedBillingType !== "private" && requestedBillingType !== "company") {
       return NextResponse.json({ message: "Nieprawidłowy typ rozliczenia" }, { status: 400 });
     }
+
+    // W profilu nie wolno zmieniać osoba/firma — tylko przy zapisie z procesu umowy.
+    const allowBillingTypeChange = body.allowBillingTypeChange === true;
+    const existingBillingType = existingProfile
+      ? resolveBillingTypeFromProfile(existingProfile)
+      : null;
+    const billingType: BillingType =
+      existingBillingType && !allowBillingTypeChange
+        ? existingBillingType
+        : requestedBillingType;
 
     const firstName = String(body.firstName ?? body.first_name ?? user.first_name).trim();
     const lastName = String(body.lastName ?? body.last_name ?? user.last_name).trim();

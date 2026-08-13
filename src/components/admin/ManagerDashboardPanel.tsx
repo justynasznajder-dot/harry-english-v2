@@ -139,7 +139,11 @@ function Section({
   );
 }
 
-export default function ManagerDashboardPanel() {
+export default function ManagerDashboardPanel({
+  onOpenGroup,
+}: {
+  onOpenGroup?: (groupId: string) => void;
+}) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
@@ -208,37 +212,70 @@ export default function ManagerDashboardPanel() {
 
   return (
     <div className="space-y-6">
-      {warnings.length > 0 ? (
-        <header className="rounded-2xl border border-red-300 bg-red-50 p-4 sm:p-5">
-          <h2 className="text-xl font-bold text-red-800 sm:text-2xl">Uwagi operacyjne</h2>
-          <ul className="mt-3 space-y-2">
-            {warnings.map((w) => (
-              <li
-                key={`${w.type}-${(w.groupIds ?? []).join(',') || w.message}`}
-                className="rounded-xl border border-red-200 bg-white/70 px-3 py-2.5 text-sm font-medium text-red-800"
-              >
-                {w.message}
-                {(w.type === 'missing_lessons' || w.type === 'unconfirmed_schedule') &&
-                w.groupNames &&
-                w.groupNames.length > 1 ? (
-                  <ul className="mt-2 list-disc space-y-0.5 pl-5 text-sm font-normal text-red-700">
-                    {w.groupNames.map((name) => (
-                      <li key={name}>{name}</li>
-                    ))}
-                  </ul>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </header>
-      ) : (
-        <header className="rounded-2xl border border-emerald-100 bg-white p-4 sm:p-5">
-          <h2 className="text-xl font-bold text-[#0f6e56] sm:text-2xl">Pulpit operacyjny</h2>
-          <p className="mt-1 text-sm text-zinc-600">
-            Szybki podgląd zgłoszeń, zajęć i płatności.
+      <header
+        className={`rounded-2xl border p-4 sm:p-5 ${
+          warnings.length > 0
+            ? 'border-red-300 bg-red-50'
+            : 'border-emerald-100 bg-white'
+        }`}
+      >
+        <h2
+          className={`text-xl font-bold sm:text-2xl ${
+            warnings.length > 0 ? 'text-red-800' : 'text-[#0f6e56]'
+          }`}
+        >
+          Zgłoszenia operacyjne
+        </h2>
+        {warnings.length > 0 ? (
+          <div className="mt-3 space-y-2">
+            {warnings.map((w) => {
+              const groups = (w.groupIds ?? []).map((id, i) => ({
+                id,
+                name: w.groupNames?.[i] ?? id,
+              }));
+              return (
+                <div
+                  key={`${w.type}-${(w.groupIds ?? []).join(',') || w.message}`}
+                  className="rounded-xl border border-red-200 bg-white/70 px-3 py-2.5 text-sm text-red-800"
+                >
+                  <p className="font-semibold">{w.message}</p>
+                  {groups.length > 0 ? (
+                    <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                      {groups.map((g) => (
+                        <li key={g.id}>
+                          {onOpenGroup ? (
+                            <button
+                              type="button"
+                              className="font-medium underline decoration-red-400 underline-offset-2 hover:text-red-950"
+                              onClick={() => onOpenGroup(g.id)}
+                            >
+                              {g.name}
+                            </button>
+                          ) : (
+                            <span className="font-medium">{g.name}</span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : w.groupNames && w.groupNames.length > 0 ? (
+                    <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                      {w.groupNames.map((name) => (
+                        <li key={name}>
+                          <span className="font-medium">{name}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="mt-2 text-sm text-zinc-600">
+            Nie ma pilnych zgłoszeń operacyjnych.
           </p>
-        </header>
-      )}
+        )}
+      </header>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <CounterCard

@@ -638,6 +638,7 @@ export default function EnrollmentParentFlow({
           lastName: contractProfile.lastName,
           phone: contractProfile.phone,
           billingType: contractProfile.billingType,
+          allowBillingTypeChange: true,
           address: contractProfile.address,
           city: contractProfile.city,
           zipCode: contractProfile.zipCode,

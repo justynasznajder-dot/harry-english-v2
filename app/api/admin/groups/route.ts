@@ -6,7 +6,9 @@ import {
   requireAdminSchoolContext,
   resolveInsertSchoolId,
 } from "@/lib/admin-school-context";
+import { sqlExistsUnfilledFutureScheduleSlot } from "@/lib/lesson-generation";
 import { sqlSchoolTimestampAsTimestamptz } from "@/lib/school-timezone";
+import { validateHarryEnglishGroupNaming } from "@/lib/harry-english-group-naming";
 
 export async function GET(request: NextRequest) {
   const ctx = await requireAdminSchoolContext(request);
@@ -75,7 +77,11 @@ export async function GET(request: NextRequest) {
              AND l.status = 'SCHEDULED'
          ), 0) AS future_lessons_count,
          (
-           COUNT(DISTINCT st.id) > 0
+           EXISTS (
+             SELECT 1 FROM school_years sy
+             WHERE sy.school_id = g.school_id AND sy.active = TRUE
+           )
+           AND COUNT(DISTINCT st.id) > 0
            AND COUNT(DISTINCT st.id) FILTER (
              WHERE st.school_year_id IS DISTINCT FROM (
                SELECT sy.id FROM school_years sy
@@ -83,16 +89,14 @@ export async function GET(request: NextRequest) {
                LIMIT 1
              )
            ) = 0
-           AND COALESCE((
-             SELECT COUNT(*)::int
-             FROM lessons l
-             WHERE l.group_id = g.id
-               AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} > NOW()
-               AND l.status = 'SCHEDULED'
-           ), 0) = 0
+           AND ${sqlExistsUnfilledFutureScheduleSlot("g.id", "g.school_id")}
          ) AS missing_generated_lessons,
          (
-           COUNT(DISTINCT st.id) > 0
+           EXISTS (
+             SELECT 1 FROM school_years sy
+             WHERE sy.school_id = g.school_id AND sy.active = TRUE
+           )
+           AND COUNT(DISTINCT st.id) > 0
            AND COUNT(DISTINCT st.id) FILTER (
              WHERE st.school_year_id IS DISTINCT FROM (
                SELECT sy.id FROM school_years sy
@@ -154,9 +158,17 @@ export async function POST(request: NextRequest) {
       teacherPickupConsent?: boolean;
     } = body;
 
-    if (!name) return NextResponse.json({ message: "Nazwa grupy jest wymagana" }, { status: 400 });
     if (!teacherId) {
       return NextResponse.json({ message: "Wybierz nauczyciela dla grupy" }, { status: 400 });
+    }
+
+    const naming = validateHarryEnglishGroupNaming({
+      name,
+      level,
+      requireLevel: true,
+    });
+    if (!naming.ok) {
+      return NextResponse.json({ message: naming.message }, { status: 400 });
     }
 
     const insertSchoolId = resolveInsertSchoolId(ctx.tenant, {
@@ -187,8 +199,8 @@ export async function POST(request: NextRequest) {
         randomUUID(),
         insertSchoolId,
         teacherId ?? null,
-        name.trim(),
-        level ?? null,
+        naming.name,
+        naming.level,
         maxStudents,
         active,
         locationId ?? null,

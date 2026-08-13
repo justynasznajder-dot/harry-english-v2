@@ -4,6 +4,46 @@ import { SCHOOL_TIMEZONE, sqlSchoolWallTimestamp } from "@/lib/school-timezone";
 
 const TZ = SCHOOL_TIMEZONE;
 
+/**
+ * SQL EXISTS: grupa ma przyszły termin z potwierdzonego harmonogramu aktywnego roku
+ * (z pominięciem dni wolnych), dla którego nie ma jeszcze wpisu w `lessons`.
+ * `groupIdSql` / `schoolIdSql` — wyrażenia SQL, np. `g.id`, `g.school_id`.
+ */
+export function sqlExistsUnfilledFutureScheduleSlot(
+  groupIdSql: string,
+  schoolIdSql: string,
+): string {
+  return `EXISTS (
+    SELECT 1
+    FROM school_years sy_gap
+    JOIN schedule_templates st_gap
+      ON st_gap.group_id = ${groupIdSql}
+     AND st_gap.active = TRUE
+     AND st_gap.school_year_id = sy_gap.id
+    CROSS JOIN LATERAL generate_series(
+      GREATEST(sy_gap.date_from, (NOW() AT TIME ZONE '${TZ}')::date),
+      sy_gap.date_to,
+      interval '1 day'
+    ) AS d_gap(day)
+    WHERE sy_gap.school_id = ${schoolIdSql}
+      AND sy_gap.active = TRUE
+      AND st_gap.day_of_week = EXTRACT(ISODOW FROM d_gap.day)::int
+      AND ((d_gap.day::date + st_gap.start_time) AT TIME ZONE '${TZ}') > NOW()
+      AND NOT EXISTS (
+        SELECT 1 FROM school_holidays h_gap
+        WHERE h_gap.school_id = ${schoolIdSql}
+          AND (h_gap.school_year_id = sy_gap.id OR h_gap.school_year_id IS NULL)
+          AND h_gap.date_from <= d_gap.day::date
+          AND h_gap.date_to >= d_gap.day::date
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM lessons l_gap
+        WHERE l_gap.group_id = ${groupIdSql}
+          AND l_gap.scheduled_at = (d_gap.day::date + st_gap.start_time)
+      )
+  )`;
+}
+
 function nextDateForWeekday(base: Date, dayOfWeek: number): Date {
   const current = ((base.getDay() + 6) % 7) + 1;
   const diff = (dayOfWeek - current + 7) % 7;

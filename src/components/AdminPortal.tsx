@@ -19,6 +19,14 @@ import {
   periodMonthKey,
   todayYmdSchool,
 } from '@/lib/school-timezone';
+import {
+  detectLevelFromGroupName,
+  groupNameMatchesLevel,
+  isHarryEnglishLevelCode,
+} from '@/src/data/harryEnglishLevels';
+import GroupNamingFields, {
+  syncGroupNameWithLocation,
+} from '@/src/components/admin/GroupNamingFields';
 
 type TabKey =
   | 'dashboard'
@@ -205,8 +213,10 @@ interface GroupDetail {
     completedCount: number;
     schoolYearCount?: number;
   };
+  missingGeneratedLessons?: boolean;
   locations: Array<{ id: string; name: string }>;
   activeSchoolYear?: { id: string; name: string | null } | null;
+  lessonsSchoolYear?: { id: string; name: string | null } | null;
   scheduleConfirmedForActiveYear?: boolean;
   scheduleNeedsConfirmation?: boolean;
 }
@@ -1201,7 +1211,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   useEffect(() => {
     if (
       activeTab === 'organization' &&
-      (organizationSubTab === 'schoolYear' || organizationSubTab === 'history')
+      (organizationSubTab === 'schoolYear' ||
+        organizationSubTab === 'history' ||
+        organizationSubTab === 'groups')
     ) {
       void loadSchoolYearData();
     }
@@ -1698,12 +1710,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
 
   const populateGroupFormFromGroup = useCallback(
     (g: GroupDetail['group']) => {
+      const name = g.name;
       setGroupForm({
         id: g.id,
         schoolId: g.school_id ?? sessionSchoolId ?? '',
         locationId: g.location_id ?? '',
-        name: g.name,
-        level: g.level ?? '',
+        name,
+        level: detectLevelFromGroupName(name) ?? g.level ?? '',
         teacherId: g.teacher_id ?? '',
         maxStudents: g.max_students,
         active: g.active,
@@ -1749,10 +1762,31 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     [groupsSubTab, organizeExpandedGroupId, groupForm.id],
   );
 
+  const resolveGroupLocationName = useCallback(
+    (locationId: string) => {
+      if (!locationId) return '';
+      const fromDetail = groupDetail?.locations?.find((loc) => loc.id === locationId);
+      if (fromDetail?.name) return fromDetail.name;
+      return schoolLocations.find((loc) => loc.id === locationId)?.name ?? '';
+    },
+    [groupDetail?.locations, schoolLocations],
+  );
+
   const saveGroupForm = useCallback(async () => {
     if (!groupForm.id) return;
+    if (!groupForm.level.trim() || !isHarryEnglishLevelCode(groupForm.level.trim())) {
+      pushToast('error', 'Wybierz poziom z listy (P3–P6, Sz1–Sz8, Sz8E)');
+      return;
+    }
     if (!groupForm.name.trim()) {
       pushToast('error', 'Podaj nazwę grupy');
+      return;
+    }
+    if (!groupNameMatchesLevel(groupForm.name, groupForm.level)) {
+      pushToast(
+        'error',
+        `Nazwa grupy musi zaczynać się od poziomu ${groupForm.level.trim()}`,
+      );
       return;
     }
     if (!groupForm.teacherId) {
@@ -1766,7 +1800,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: groupForm.name.trim(),
-          level: groupForm.level.trim() || null,
+          level: groupForm.level.trim(),
           teacherId: groupForm.teacherId,
           maxStudents: groupForm.maxStudents,
           active: groupForm.active,
@@ -4147,23 +4181,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           </div>
         </div>
         <div className="grid gap-4 md:grid-cols-2">
-          <div className="space-y-1">
-            <label className="block text-sm font-medium text-zinc-700">Nazwa grupy</label>
-            <input
-              className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-              value={groupForm.name}
-              onChange={(e) => setGroupForm((p) => ({ ...p, name: e.target.value }))}
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="block text-sm font-medium text-zinc-700">Poziom</label>
-            <input
-              type="text"
-              className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-              value={groupForm.level}
-              onChange={(e) => setGroupForm((p) => ({ ...p, level: e.target.value }))}
-            />
-          </div>
+          <GroupNamingFields
+            className="contents"
+            name={groupForm.name}
+            level={groupForm.level}
+            locationName={resolveGroupLocationName(groupForm.locationId)}
+            onChange={({ name, level }) => setGroupForm((p) => ({ ...p, name, level }))}
+          />
           <div className="space-y-1">
             <label className="block text-sm font-medium text-zinc-700">Nauczyciel</label>
             <select
@@ -4184,7 +4208,23 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             <select
               className="w-full rounded-xl border border-emerald-200 px-3 py-2"
               value={groupForm.locationId}
-              onChange={(e) => setGroupForm((p) => ({ ...p, locationId: e.target.value }))}
+              onChange={(e) => {
+                const locationId = e.target.value;
+                const locationName = resolveGroupLocationName(locationId);
+                setGroupForm((p) => {
+                  const name = syncGroupNameWithLocation({
+                    name: p.name,
+                    level: p.level,
+                    locationName,
+                  });
+                  return {
+                    ...p,
+                    locationId,
+                    name,
+                    level: detectLevelFromGroupName(name) ?? '',
+                  };
+                });
+              }}
             >
               <option value="">Brak lokalizacji</option>
               {(groupDetail?.locations ?? schoolLocations)
@@ -4293,6 +4333,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     const completedLessonsCount = detail?.generatedLessons?.completedCount ?? 0;
     const schoolYearLessonCount =
       detail?.generatedLessons?.schoolYearCount ?? schoolYearLessons.length;
+    const lessonsYearLabel =
+      detail?.lessonsSchoolYear?.name ?? detail?.activeSchoolYear?.name ?? null;
     const dayNames: Record<number, string> = {
       1: 'Poniedziałek',
       2: 'Wtorek',
@@ -4344,7 +4386,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                             ? `${st.future_lessons_count} nadchodzących`
                             : null,
                           (st.completed_lessons_count ?? 0) > 0
-                            ? `${st.completed_lessons_count} odbytych`
+                            ? `${st.completed_lessons_count} zakończonych`
                             : null,
                         ]
                           .filter(Boolean)
@@ -4396,20 +4438,23 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   dopóki nie potwierdzisz (po uzupełnieniu dni wolnych).
                 </p>
               )}
-              {!disabled && !detail?.scheduleNeedsConfirmation && scheduleTemplates.length > 0 && schoolYearLessonCount === 0 && (
+              {!disabled &&
+                !detail?.scheduleNeedsConfirmation &&
+                scheduleTemplates.length > 0 &&
+                detail?.missingGeneratedLessons === true && (
                 <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
                   Brak wygenerowanych zajęć dla tej grupy w aktywnym roku szkolnym.
                 </p>
               )}
               {!disabled && schoolYearLessonCount > 0 && (
                 <p className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
-                  W roku szkolnym{detail?.activeSchoolYear?.name ? ` ${detail.activeSchoolYear.name}` : ''}:{' '}
+                  W roku szkolnym{lessonsYearLabel ? ` ${lessonsYearLabel}` : ''}:{' '}
                   <strong>{schoolYearLessonCount}</strong>{' '}
                   {schoolYearLessonCount === 1 ? 'zajęcie' : schoolYearLessonCount < 5 ? 'zajęcia' : 'zajęć'}
                   {futureLessonsCount > 0 || completedLessonsCount > 0
                     ? ` (${[
                         futureLessonsCount > 0 ? `${futureLessonsCount} nadchodzących` : null,
-                        completedLessonsCount > 0 ? `${completedLessonsCount} odbytych` : null,
+                        completedLessonsCount > 0 ? `${completedLessonsCount} zakończonych` : null,
                       ]
                         .filter(Boolean)
                         .join(', ')})`
@@ -4453,27 +4498,36 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             <div className="mt-3">
               {schoolYearLessons.length === 0 ? (
                 <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-600">
-                  Brak zajęć w planie na aktywny rok szkolny.
+                  {!detail?.activeSchoolYear && !detail?.lessonsSchoolYear
+                    ? 'Brak aktywnego roku szkolnego — nie ma listy zajęć do wyświetlenia.'
+                    : 'Brak zajęć w planie na ten rok szkolny.'}
                 </p>
               ) : (
                 <ul className="max-h-80 space-y-1.5 overflow-y-auto text-sm">
                   {schoolYearLessons.map((lesson) => {
-                    const statusLabel =
-                      lesson.status === 'COMPLETED'
-                        ? 'odbyte'
-                        : lesson.status === 'SCHEDULED'
-                          ? 'zaplanowane'
-                          : lesson.status;
-                    const statusClass =
-                      lesson.status === 'COMPLETED'
-                        ? 'bg-zinc-100 text-zinc-700'
+                    const isCompleted = lesson.status === 'COMPLETED';
+                    const isCancelled = lesson.status === 'CANCELLED';
+                    const statusLabel = isCompleted
+                      ? 'zakończone'
+                      : isCancelled
+                        ? 'anulowane'
+                        : 'zaplanowane';
+                    const statusClass = isCompleted
+                      ? 'bg-zinc-200 text-zinc-700'
+                      : isCancelled
+                        ? 'bg-rose-100 text-rose-800'
                         : 'bg-emerald-100 text-emerald-800';
+                    const rowClass = isCompleted
+                      ? 'border-zinc-200 bg-zinc-50'
+                      : isCancelled
+                        ? 'border-rose-100 bg-rose-50/50'
+                        : 'border-emerald-100 bg-emerald-50/40';
                     return (
                       <li
                         key={lesson.id}
-                        className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-100 bg-emerald-50/40 px-3 py-2"
+                        className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 ${rowClass}`}
                       >
-                        <span className="font-medium text-zinc-900">
+                        <span className={`font-medium ${isCompleted || isCancelled ? 'text-zinc-600' : 'text-zinc-900'}`}>
                           {formatSchoolDateTime(lesson.scheduled_at)}
                           {lesson.duration_min ? (
                             <span className="ml-2 font-normal text-zinc-500">· {lesson.duration_min} min</span>
@@ -4675,6 +4729,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           {groupsSubTab === 'list' ? (
             <div className="space-y-3">
               {(() => {
+                const hasActiveYear = Boolean(activeSchoolYear);
                 const unconfirmedGroups = groups.filter(
                   (g) => g.active && g.schedule_needs_confirmation === true,
                 );
@@ -4684,10 +4739,29 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     g.missing_generated_lessons === true &&
                     g.schedule_needs_confirmation !== true,
                 );
-                if (unconfirmedGroups.length === 0 && missingLessonGroups.length === 0) return null;
+                const overCapacityGroups = groups.filter(
+                  (g) =>
+                    g.active && Number(g.students_count) > Number(g.max_students),
+                );
+                if (
+                  hasActiveYear &&
+                  unconfirmedGroups.length === 0 &&
+                  missingLessonGroups.length === 0 &&
+                  overCapacityGroups.length === 0
+                ) {
+                  return null;
+                }
                 return (
                   <div className="space-y-2">
-                    {unconfirmedGroups.length > 0 && (
+                    {!hasActiveYear && (
+                      <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+                        <p className="font-semibold">
+                          Brak aktywnego roku szkolnego — ustaw lub aktywuj rok w zakładce „Rok
+                          szkolny”.
+                        </p>
+                      </div>
+                    )}
+                    {hasActiveYear && unconfirmedGroups.length > 0 && (
                       <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
                         <p className="font-semibold">
                           Niepotwierdzony harmonogram na aktywny rok — cron nie generuje zajęć:
@@ -4707,7 +4781,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         </ul>
                       </div>
                     )}
-                    {missingLessonGroups.length > 0 && (
+                    {hasActiveYear && missingLessonGroups.length > 0 && (
                       <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
                         <p className="font-semibold">
                           Brak wygenerowanych zajęć dla{' '}
@@ -4722,6 +4796,28 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                 onClick={() => void loadGroupDetail(g.id)}
                               >
                                 {g.name}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {overCapacityGroups.length > 0 && (
+                      <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+                        <p className="font-semibold">
+                          {overCapacityGroups.length === 1
+                            ? 'W grupie jest więcej osób niż limit miejsc:'
+                            : 'W grupach jest więcej osób niż limit miejsc:'}
+                        </p>
+                        <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                          {overCapacityGroups.map((g) => (
+                            <li key={g.id}>
+                              <button
+                                type="button"
+                                className="font-medium underline decoration-red-400 underline-offset-2 hover:text-red-950"
+                                onClick={() => void loadGroupDetail(g.id)}
+                              >
+                                {g.name} ({g.students_count}/{g.max_students})
                               </button>
                             </li>
                           ))}
@@ -4811,20 +4907,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             <div className="space-y-4">
             <div className="space-y-3 rounded-2xl border border-emerald-100 bg-white p-4">
               <h3 className="text-lg font-semibold">{groupForm.id ? 'Edycja grupy' : 'Nowa grupa'}</h3>
-              <div className="space-y-1">
-                <label className="block text-sm font-medium text-zinc-700">Nazwa grupy</label>
-                <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" placeholder="Nazwa grupy" value={groupForm.name} onChange={(e) => setGroupForm((p) => ({ ...p, name: e.target.value }))} />
-              </div>
-              <div className="space-y-1">
-                <label className="block text-sm font-medium text-zinc-700">Poziom</label>
-                <input
-                  type="text"
-                  className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-                  placeholder="Poziom"
-                  value={groupForm.level}
-                  onChange={(e) => setGroupForm((p) => ({ ...p, level: e.target.value }))}
-                />
-              </div>
+              <GroupNamingFields
+                className="space-y-3"
+                name={groupForm.name}
+                level={groupForm.level}
+                locationName={resolveGroupLocationName(groupForm.locationId)}
+                onChange={({ name, level }) => setGroupForm((p) => ({ ...p, name, level }))}
+              />
               <div className="space-y-1">
                 <label className="block text-sm font-medium text-zinc-700">Nauczyciel</label>
                 <select className="w-full rounded-xl border border-emerald-200 px-3 py-2" value={groupForm.teacherId} onChange={(e) => setGroupForm((p) => ({ ...p, teacherId: e.target.value }))}>
@@ -4839,7 +4928,23 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 <select
                   className="w-full rounded-xl border border-emerald-200 px-3 py-2"
                   value={groupForm.locationId}
-                  onChange={(e) => setGroupForm((p) => ({ ...p, locationId: e.target.value }))}
+                  onChange={(e) => {
+                    const locationId = e.target.value;
+                    const locationName = resolveGroupLocationName(locationId);
+                    setGroupForm((p) => {
+                      const name = syncGroupNameWithLocation({
+                        name: p.name,
+                        level: p.level,
+                        locationName,
+                      });
+                      return {
+                        ...p,
+                        locationId,
+                        name,
+                        level: detectLevelFromGroupName(name) ?? '',
+                      };
+                    });
+                  }}
                 >
                   <option value="">Brak lokalizacji</option>
                   {schoolLocations.filter((loc) => loc.active).map((loc) => (
@@ -4924,8 +5029,19 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   className="rounded-xl bg-emerald-600 px-3 py-2 text-white disabled:opacity-60"
                   disabled={groupSaving}
                   onClick={async () => {
+                    if (!groupForm.level.trim() || !isHarryEnglishLevelCode(groupForm.level.trim())) {
+                      pushToast('error', 'Wybierz poziom z listy (P3–P6, Sz1–Sz8, Sz8E)');
+                      return;
+                    }
                     if (!groupForm.name.trim()) {
                       pushToast('error', 'Podaj nazwę grupy');
+                      return;
+                    }
+                    if (!groupNameMatchesLevel(groupForm.name, groupForm.level)) {
+                      pushToast(
+                        'error',
+                        `Nazwa grupy musi zaczynać się od poziomu ${groupForm.level.trim()}`,
+                      );
                       return;
                     }
                     if (!groupForm.teacherId) {
@@ -4943,7 +5059,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                           name: groupForm.name.trim(),
-                          level: groupForm.level.trim() || null,
+                          level: groupForm.level.trim(),
                           teacherId: groupForm.teacherId,
                           maxStudents: groupForm.maxStudents,
                           active: groupForm.active,
@@ -6127,7 +6243,17 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       );
     }
     if (activeTab === 'dashboard') {
-      return <ManagerDashboardPanel />;
+      return (
+        <ManagerDashboardPanel
+          onOpenGroup={(groupId) => {
+            setActiveTab('organization');
+            setOrganizationSubTab('groups');
+            setGroupsSubTab('list');
+            setMobileTab('organization');
+            void loadGroupDetail(groupId);
+          }}
+        />
+      );
     }
     if (activeTab === 'organization') return renderOrganization();
     if (activeTab === 'classes') {
@@ -6186,16 +6312,27 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   isActive={activeTab === 'announcements'}
                 />
               ) : tab.key === 'enrollments' ? (
-                <MessagesTabLabel
-                  label={tab.label}
-                  unreadCount={enrollmentsPendingCount + resignationsOpenCount}
-                  isActive={activeTab === 'enrollments'}
-                  badgeAriaLabel={(n) =>
-                    n === 1
-                      ? '1 oczekujące zgłoszenie lub rezygnacja'
-                      : `${n} oczekujących zgłoszeń lub rezygnacji`
-                  }
-                />
+                <span className="inline-flex items-center gap-1.5">
+                  <MessagesTabLabel
+                    label="Zapisy"
+                    unreadCount={enrollmentsPendingCount}
+                    isActive={activeTab === 'enrollments'}
+                    badgeAriaLabel={(n) =>
+                      n === 1 ? '1 nowe zgłoszenie' : `${n} nowych zgłoszeń`
+                    }
+                  />
+                  <span aria-hidden>/</span>
+                  <MessagesTabLabel
+                    label="rezygnacje"
+                    unreadCount={resignationsOpenCount}
+                    isActive={activeTab === 'enrollments'}
+                    badgeAriaLabel={(n) =>
+                      n === 1
+                        ? '1 otwarte zgłoszenie rezygnacji'
+                        : `${n} otwartych zgłoszeń rezygnacji`
+                    }
+                  />
+                </span>
               ) : (
                 tab.label
               )}

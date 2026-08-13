@@ -7,7 +7,9 @@ export async function GET(request: NextRequest) {
   if (!ctx.ok) return ctx.response;
 
   try {
-    const data = await fetchFullDashboard(ctx.schoolId);
+    const data = await fetchFullDashboard(ctx.schoolId, {
+      warningsAcrossSchools: ctx.tenant.role === "ADMIN",
+    });
     return NextResponse.json(data);
   } catch (error) {
     console.error("GET /api/admin/dashboard:", error);

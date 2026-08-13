@@ -1,15 +1,19 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import ComposeEmailRecipientsColumn from '@/src/components/messages/ComposeEmailRecipientsColumn';
+import ComposeEmailRecipientsColumn, {
+  type ComposeExternalEmailRecipient,
+} from '@/src/components/messages/ComposeEmailRecipientsColumn';
 import {
   applyTemplateValues,
   extractTemplatePlaceholders,
   getTemplateFieldMeta,
 } from '@/lib/message-templates';
 
+export type { ComposeExternalEmailRecipient };
+
 export type ComposePanelMode = 'manager' | 'teacher' | 'parent';
-export type ComposeSection = 'parents' | 'teachers' | 'email';
+export type ComposeSection = 'parents' | 'teachers' | 'email' | 'enrollment-email';
 
 const COMPOSE_FILTER_FIELD =
   'flex w-full min-h-[2.375rem] items-center justify-between rounded-lg border border-zinc-300 bg-white px-3 py-2 text-left text-sm text-zinc-900 outline-none transition focus:border-[#0f6e56] focus:ring-2 focus:ring-[#0f6e56]/20';
@@ -298,11 +302,14 @@ export interface ComposeMessageModalProps {
   onComposeSectionChange?: (section: ComposeSection) => void;
   showSectionTabs?: boolean;
   showTeachersTab?: boolean;
-  externalEmails?: string[];
+  externalEmailRecipients?: ComposeExternalEmailRecipient[];
   externalEmailBulkPaste?: string;
   onExternalEmailBulkPasteChange?: (value: string) => void;
   onParseExternalEmailBulk?: () => void;
-  onRemoveExternalEmail?: (email: string) => void;
+  onRemoveExternalEmailRecipient?: (key: string) => void;
+  enrollmentEmailLocationId?: string;
+  onEnrollmentEmailLocationIdChange?: (locationId: string) => void;
+  enrollmentEmailAddLoading?: boolean;
   messageTemplates?: Array<{ key: string; label: string; subject: string; content: string }>;
   onApplyTemplate?: (subject: string, content: string) => void;
   /** Aktywne dzieci rodzica — pole szablonu `dziecko` jako select. */
@@ -388,11 +395,15 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
     : props.singleRecipientId
       ? [props.singleRecipientId]
       : [];
-  const externalEmails = props.externalEmails ?? [];
+  const externalEmailRecipients = props.externalEmailRecipients ?? [];
+  const uniqueExternalEmails = [
+    ...new Set(externalEmailRecipients.map((r) => r.email.trim().toLowerCase()).filter(Boolean)),
+  ];
   const section = props.composeSection ?? 'parents';
-  const isEmailSection = section === 'email';
+  const isEmailSection = section === 'email' || section === 'enrollment-email';
+  const isEnrollmentEmailSection = section === 'enrollment-email';
   const isTeachersAudience = section === 'teachers';
-  const totalRecipients = isEmailSection ? externalEmails.length : adresatIds.length;
+  const totalRecipients = isEmailSection ? uniqueExternalEmails.length : adresatIds.length;
 
   const searchPlaceholder =
     props.mode === 'parent'
@@ -476,6 +487,19 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
                 >
                   Wyślij e-mail
                 </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={section === 'enrollment-email'}
+                  onClick={() => props.onComposeSectionChange!('enrollment-email')}
+                  className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                    section === 'enrollment-email'
+                      ? 'bg-white text-[#0f6e56] shadow-sm'
+                      : 'text-zinc-600 hover:text-zinc-900'
+                  }`}
+                >
+                  E-mail ze zgłoszeń
+                </button>
               </div>
             )}
 
@@ -493,11 +517,18 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
         <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] overflow-hidden md:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] md:grid-rows-1">
           {isEmailSection ? (
             <ComposeEmailRecipientsColumn
-              externalEmails={externalEmails}
+              mode={isEnrollmentEmailSection ? 'enrollment' : 'manual'}
+              recipients={externalEmailRecipients}
+              onRemoveRecipient={(key) => props.onRemoveExternalEmailRecipient?.(key)}
               externalEmailBulkPaste={props.externalEmailBulkPaste ?? ''}
               onExternalEmailBulkPasteChange={(v) => props.onExternalEmailBulkPasteChange?.(v)}
               onParseExternalEmailBulk={() => props.onParseExternalEmailBulk?.()}
-              onRemoveExternalEmail={(email) => props.onRemoveExternalEmail?.(email)}
+              locations={props.filterMeta?.locations ?? []}
+              enrollmentLocationId={props.enrollmentEmailLocationId ?? ''}
+              onEnrollmentLocationIdChange={(id) =>
+                props.onEnrollmentEmailLocationIdChange?.(id)
+              }
+              enrollmentAddLoading={props.enrollmentEmailAddLoading}
             />
           ) : (
           <div className="flex min-h-0 flex-col overflow-hidden border-b border-zinc-200 bg-zinc-50/80 p-3 md:border-b-0 md:border-r md:p-4">

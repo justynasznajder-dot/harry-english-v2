@@ -84,6 +84,8 @@ export default function ParentProfileSection({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [flash, setFlash] = useState<Flash | null>(null);
+  /** Sposób rozliczenia edytowalny tylko przy generowaniu umowy (Proces zapisu). */
+  const billingTypeLocked = hasProfile;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -282,7 +284,7 @@ export default function ParentProfileSection({
                 type="text"
                 value={form.firstName}
                 onChange={(e) => patch({ firstName: e.target.value })}
-                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 [color-scheme:light] placeholder:text-zinc-400"
               />
             </div>
             <div className="space-y-1">
@@ -291,7 +293,7 @@ export default function ParentProfileSection({
                 type="text"
                 value={form.lastName}
                 onChange={(e) => patch({ lastName: e.target.value })}
-                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 [color-scheme:light] placeholder:text-zinc-400"
               />
             </div>
             <div className="space-y-1 md:col-span-2">
@@ -300,33 +302,55 @@ export default function ParentProfileSection({
                 type="text"
                 value={form.phone}
                 onChange={(e) => patch({ phone: e.target.value })}
-                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 [color-scheme:light] placeholder:text-zinc-400"
               />
             </div>
             <div className="space-y-2 md:col-span-2">
               <p className="text-sm font-medium text-zinc-800">Rozliczenie</p>
-              <div className="flex flex-wrap gap-4">
-                <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
+              <div
+                className={`flex flex-wrap gap-4 rounded-xl border px-3 py-3 ${
+                  billingTypeLocked
+                    ? 'border-zinc-200 bg-zinc-100/80'
+                    : 'border-transparent bg-transparent p-0'
+                }`}
+              >
+                <label
+                  className={`inline-flex items-center gap-2 text-sm ${
+                    billingTypeLocked ? 'cursor-default text-zinc-500' : 'text-zinc-700'
+                  }`}
+                >
                   <input
                     type="radio"
                     name="billingType"
                     checked={form.billingType === 'private'}
+                    disabled={billingTypeLocked}
                     onChange={() => patch({ billingType: 'private' })}
-                    className="accent-[#0f6e56]"
+                    className="accent-[#0f6e56] disabled:opacity-60"
                   />
                   Osoba prywatna (PESEL)
                 </label>
-                <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
+                <label
+                  className={`inline-flex items-center gap-2 text-sm ${
+                    billingTypeLocked ? 'cursor-default text-zinc-500' : 'text-zinc-700'
+                  }`}
+                >
                   <input
                     type="radio"
                     name="billingType"
                     checked={form.billingType === 'company'}
+                    disabled={billingTypeLocked}
                     onChange={() => patch({ billingType: 'company' })}
-                    className="accent-[#0f6e56]"
+                    className="accent-[#0f6e56] disabled:opacity-60"
                   />
                   Firma (faktura)
                 </label>
               </div>
+              {billingTypeLocked ? (
+                <p className="text-xs text-zinc-500">
+                  Sposób rozliczenia (osoba prywatna / firma) można zmienić tylko przy generowaniu
+                  kolejnej umowy w zakładce Proces zapisu.
+                </p>
+              ) : null}
             </div>
             {form.billingType === 'private' ? (
               <>
@@ -338,7 +362,7 @@ export default function ParentProfileSection({
                     maxLength={11}
                     value={form.pesel}
                     onChange={(e) => patch({ pesel: e.target.value })}
-                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 [color-scheme:light] placeholder:text-zinc-400"
                   />
                 </div>
                 <div className="space-y-1 md:col-span-2">
@@ -348,7 +372,7 @@ export default function ParentProfileSection({
                     value={form.address}
                     onChange={(e) => patch({ address: e.target.value })}
                     placeholder="ul. Przykładowa 1"
-                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 [color-scheme:light] placeholder:text-zinc-400"
                   />
                 </div>
                 <div className="space-y-1">
@@ -357,7 +381,7 @@ export default function ParentProfileSection({
                     type="text"
                     value={form.city}
                     onChange={(e) => patch({ city: e.target.value })}
-                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 [color-scheme:light] placeholder:text-zinc-400"
                   />
                 </div>
                 <div className="space-y-1">
@@ -367,7 +391,7 @@ export default function ParentProfileSection({
                     value={form.zipCode}
                     onChange={(e) => patch({ zipCode: e.target.value })}
                     placeholder="00-000"
-                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 [color-scheme:light] placeholder:text-zinc-400"
                   />
                 </div>
               </>
@@ -380,7 +404,7 @@ export default function ParentProfileSection({
                     value={form.companyName}
                     onChange={(e) => patch({ companyName: e.target.value })}
                     placeholder="Pełna nazwa firmy"
-                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 [color-scheme:light] placeholder:text-zinc-400"
                   />
                 </div>
                 <div className="space-y-1 md:col-span-2 max-w-sm">
@@ -392,7 +416,7 @@ export default function ParentProfileSection({
                     value={form.nip}
                     onChange={(e) => patch({ nip: e.target.value })}
                     placeholder="10 cyfr"
-                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 [color-scheme:light] placeholder:text-zinc-400"
                   />
                 </div>
                 <div className="space-y-1 md:col-span-2">
@@ -402,7 +426,7 @@ export default function ParentProfileSection({
                     value={form.address}
                     onChange={(e) => patch({ address: e.target.value })}
                     placeholder="ul. Przykładowa 1"
-                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 [color-scheme:light] placeholder:text-zinc-400"
                   />
                 </div>
                 <div className="space-y-1">
@@ -411,7 +435,7 @@ export default function ParentProfileSection({
                     type="text"
                     value={form.city}
                     onChange={(e) => patch({ city: e.target.value })}
-                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 [color-scheme:light] placeholder:text-zinc-400"
                   />
                 </div>
                 <div className="space-y-1">
@@ -421,7 +445,7 @@ export default function ParentProfileSection({
                     value={form.zipCode}
                     onChange={(e) => patch({ zipCode: e.target.value })}
                     placeholder="00-000"
-                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2"
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 [color-scheme:light] placeholder:text-zinc-400"
                   />
                 </div>
               </>

@@ -1,4 +1,5 @@
 import { queryDb } from "@/lib/db";
+import { sqlExistsUnfilledFutureScheduleSlot } from "@/lib/lesson-generation";
 import { formatRenewalStatusLabel } from "@/lib/renewal-status";
 import {
   SCHOOL_TIMEZONE,
@@ -678,112 +679,193 @@ export async function fetchGroupsRoster(schoolId: string): Promise<GroupRosterRo
 }
 
 export type DashboardWarning = {
-  type: "unconfirmed_schedule" | "missing_lessons";
+  type: "unconfirmed_schedule" | "missing_lessons" | "over_capacity" | "no_active_year";
   message: string;
   groupIds: string[];
   groupNames: string[];
 };
 
-/** Ostrzeżenia operacyjne na pulpit (niepotwierdzony harmonogram / brak zajęć). */
-export async function fetchDashboardWarnings(schoolId: string): Promise<DashboardWarning[]> {
-  const activeYear = await queryDb<{ id: string; name: string }>(
-    `SELECT id, name FROM school_years WHERE school_id = $1 AND active = TRUE LIMIT 1`,
-    [schoolId],
-  );
-  const activeYearId = activeYear.rows[0]?.id ?? null;
-  const activeYearName = activeYear.rows[0]?.name ?? "aktywny rok";
+/**
+ * Ostrzeżenia operacyjne na pulpit (brak roku / niepotwierdzony harmonogram / brak zajęć / przepełnienie).
+ * Logika zgodna z flagami `schedule_needs_confirmation` / `missing_generated_lessons` na liście grup.
+ * `schoolId = null` → wszystkie szkoły (ADMIN).
+ */
+export async function fetchDashboardWarnings(
+  schoolId: string | null
+): Promise<DashboardWarning[]> {
+  const schoolFilter = schoolId ? "AND g.school_id = $1" : "";
+  const schoolFilterBare = schoolId ? "AND s.id = $1" : "";
+  const params: string[] = schoolId ? [schoolId] : [];
 
   const warnings: DashboardWarning[] = [];
 
-  if (activeYearId) {
-    const unconfirmed = await queryDb<{ id: string; name: string }>(
-      `SELECT g.id, g.name
-       FROM groups g
-       WHERE g.school_id = $1
-         AND g.active = TRUE
-         AND EXISTS (
-           SELECT 1 FROM schedule_templates st
-           WHERE st.group_id = g.id AND st.active = TRUE
-         )
-         AND EXISTS (
-           SELECT 1 FROM schedule_templates st
-           WHERE st.group_id = g.id
-             AND st.active = TRUE
-             AND st.school_year_id IS DISTINCT FROM $2
-         )
-       ORDER BY g.name ASC`,
-      [schoolId, activeYearId],
-    );
+  const noActiveYear = await queryDb<{ id: string; name: string }>(
+    `SELECT s.id, s.name
+     FROM schools s
+     WHERE s.active = TRUE
+       ${schoolFilterBare}
+       AND NOT EXISTS (
+         SELECT 1 FROM school_years sy
+         WHERE sy.school_id = s.id AND sy.active = TRUE
+       )
+     ORDER BY s.name ASC`,
+    params
+  );
 
-    if (unconfirmed.rows.length > 0) {
-      const groupNames = unconfirmed.rows.map((r) => r.name);
-      const groupIds = unconfirmed.rows.map((r) => r.id);
-      warnings.push({
-        type: "unconfirmed_schedule",
-        message:
-          groupNames.length === 1
-            ? `Niepotwierdzony harmonogram na rok ${activeYearName} — grupa ${groupNames[0]} (cron nie generuje zajęć, aż potwierdzisz)`
-            : `Niepotwierdzony harmonogram na rok ${activeYearName} — ${groupNames.length} grup (cron nie generuje zajęć, aż potwierdzisz)`,
-        groupIds,
-        groupNames,
-      });
-    }
+  if (noActiveYear.rows.length > 0) {
+    warnings.push({
+      type: "no_active_year",
+      message:
+        noActiveYear.rows.length === 1
+          ? "Brak aktywnego roku szkolnego — ustaw lub aktywuj rok w Organizacja → Rok szkolny."
+          : "Brak aktywnego roku szkolnego w szkołach — ustaw lub aktywuj rok w Organizacja → Rok szkolny.",
+      groupIds: [],
+      groupNames: noActiveYear.rows.map((r) => r.name),
+    });
+  }
 
-    const missingLessons = await queryDb<{ id: string; name: string }>(
-      `SELECT g.id, g.name
-       FROM groups g
-       WHERE g.school_id = $1
-         AND g.active = TRUE
-         AND EXISTS (
-           SELECT 1 FROM schedule_templates st
-           WHERE st.group_id = g.id
-             AND st.active = TRUE
-             AND st.school_year_id = $2
-         )
-         AND NOT EXISTS (
-           SELECT 1 FROM schedule_templates st
-           WHERE st.group_id = g.id
-             AND st.active = TRUE
-             AND st.school_year_id IS DISTINCT FROM $2
-         )
-         AND NOT EXISTS (
-           SELECT 1 FROM lessons l
-           WHERE l.group_id = g.id
-             AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} > NOW()
-             AND l.status = 'SCHEDULED'
-         )
-       ORDER BY g.name ASC`,
-      [schoolId, activeYearId],
-    );
+  const unconfirmed = await queryDb<{ id: string; name: string }>(
+    `SELECT g.id, g.name
+     FROM groups g
+     WHERE g.active = TRUE
+       ${schoolFilter}
+       AND EXISTS (
+         SELECT 1 FROM school_years sy
+         WHERE sy.school_id = g.school_id AND sy.active = TRUE
+       )
+       AND EXISTS (
+         SELECT 1 FROM schedule_templates st
+         WHERE st.group_id = g.id AND st.active = TRUE
+       )
+       AND EXISTS (
+         SELECT 1 FROM schedule_templates st
+         WHERE st.group_id = g.id
+           AND st.active = TRUE
+           AND st.school_year_id IS DISTINCT FROM (
+             SELECT sy.id FROM school_years sy
+             WHERE sy.school_id = g.school_id AND sy.active = TRUE
+             LIMIT 1
+           )
+       )
+     ORDER BY g.name ASC`,
+    params
+  );
 
-    if (missingLessons.rows.length > 0) {
-      const groupNames = missingLessons.rows.map((r) => r.name);
-      const groupIds = missingLessons.rows.map((r) => r.id);
-      warnings.push({
-        type: "missing_lessons",
-        message:
-          groupNames.length === 1
-            ? `Brak wygenerowanych zajęć dla grupy ${groupNames[0]}`
-            : `Brak wygenerowanych zajęć dla ${groupNames.length} grup`,
-        groupIds,
-        groupNames,
-      });
-    }
+  if (unconfirmed.rows.length > 0) {
+    warnings.push({
+      type: "unconfirmed_schedule",
+      message: "Niepotwierdzony harmonogram na aktywny rok — cron nie generuje zajęć:",
+      groupIds: unconfirmed.rows.map((r) => r.id),
+      groupNames: unconfirmed.rows.map((r) => r.name),
+    });
+  }
+
+  const missingLessons = await queryDb<{ id: string; name: string }>(
+    `SELECT g.id, g.name
+     FROM groups g
+     WHERE g.active = TRUE
+       ${schoolFilter}
+       AND EXISTS (
+         SELECT 1 FROM school_years sy
+         WHERE sy.school_id = g.school_id AND sy.active = TRUE
+       )
+       AND EXISTS (
+         SELECT 1 FROM schedule_templates st
+         WHERE st.group_id = g.id
+           AND st.active = TRUE
+           AND st.school_year_id = (
+             SELECT sy.id FROM school_years sy
+             WHERE sy.school_id = g.school_id AND sy.active = TRUE
+             LIMIT 1
+           )
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM schedule_templates st
+         WHERE st.group_id = g.id
+           AND st.active = TRUE
+           AND st.school_year_id IS DISTINCT FROM (
+             SELECT sy.id FROM school_years sy
+             WHERE sy.school_id = g.school_id AND sy.active = TRUE
+             LIMIT 1
+           )
+       )
+       AND ${sqlExistsUnfilledFutureScheduleSlot("g.id", "g.school_id")}
+     ORDER BY g.name ASC`,
+    params
+  );
+
+  if (missingLessons.rows.length > 0) {
+    warnings.push({
+      type: "missing_lessons",
+      message:
+        missingLessons.rows.length === 1
+          ? "Brak wygenerowanych zajęć dla grupy:"
+          : "Brak wygenerowanych zajęć dla grup:",
+      groupIds: missingLessons.rows.map((r) => r.id),
+      groupNames: missingLessons.rows.map((r) => r.name),
+    });
+  }
+
+  const overCapacity = await queryDb<{
+    id: string;
+    name: string;
+    students_count: number;
+    max_students: number;
+  }>(
+    `SELECT
+       g.id,
+       g.name,
+       g.max_students,
+       (
+         SELECT COUNT(*)::int
+         FROM group_students gs
+         WHERE gs.group_id = g.id
+           AND gs.left_at IS NULL
+       ) AS students_count
+     FROM groups g
+     WHERE g.active = TRUE
+       ${schoolFilter}
+       AND (
+         SELECT COUNT(*)::int
+         FROM group_students gs
+         WHERE gs.group_id = g.id
+           AND gs.left_at IS NULL
+       ) > g.max_students
+     ORDER BY g.name ASC`,
+    params
+  );
+
+  if (overCapacity.rows.length > 0) {
+    warnings.push({
+      type: "over_capacity",
+      message:
+        overCapacity.rows.length === 1
+          ? "W grupie jest więcej osób niż limit miejsc:"
+          : "W grupach jest więcej osób niż limit miejsc:",
+      groupIds: overCapacity.rows.map((r) => r.id),
+      groupNames: overCapacity.rows.map(
+        (r) => `${r.name} (${r.students_count}/${r.max_students})`
+      ),
+    });
   }
 
   return warnings;
 }
 
-export async function fetchFullDashboard(schoolId: string) {
+export async function fetchFullDashboard(
+  schoolId: string,
+  options?: { warningsAcrossSchools?: boolean }
+) {
   const today = todayYmdWarsaw();
   const weekEnd = weekEndYmd(today);
+  const warningsSchoolId = options?.warningsAcrossSchools ? null : schoolId;
 
   const [counters, lessonsToday, lessonsThisWeek, billing, warnings] = await Promise.all([
     fetchDashboardCounters(schoolId),
     fetchDashboardLessonsMerged(schoolId, today, today),
     fetchDashboardLessonsMerged(schoolId, today, weekEnd),
     fetchDashboardBillingSummary(schoolId),
-    fetchDashboardWarnings(schoolId),
+    fetchDashboardWarnings(warningsSchoolId),
   ]);
 
   return {

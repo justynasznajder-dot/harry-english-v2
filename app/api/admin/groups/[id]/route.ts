@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryDb } from "@/lib/db";
 import { requireAdminSchoolContext } from "@/lib/admin-school-context";
+import { completePastScheduledLessons } from "@/lib/lesson-completion";
+import {
+  ensureLessonsThroughActiveSchoolYear,
+  sqlExistsUnfilledFutureScheduleSlot,
+} from "@/lib/lesson-generation";
 import { sqlSchoolTimestampAsTimestamptz, toIsoUtc } from "@/lib/school-timezone";
+import { validateHarryEnglishGroupNaming } from "@/lib/harry-english-group-naming";
 
 export async function GET(
   request: NextRequest,
@@ -13,7 +19,14 @@ export async function GET(
   const { tenant } = ctx;
   const { id } = await params;
   try {
-    const group = await queryDb(
+    await completePastScheduledLessons();
+
+    const group = await queryDb<{
+      id: string;
+      school_id: string;
+      teacher_id: string | null;
+      [key: string]: unknown;
+    }>(
       `SELECT g.*, CONCAT(u.first_name, ' ', u.last_name) AS teacher_name, gl.name AS location_name
        FROM groups g
        LEFT JOIN users u ON u.id = g.teacher_id
@@ -24,6 +37,18 @@ export async function GET(
     );
     if (!group.rows[0]) return NextResponse.json({ message: "Nie znaleziono grupy" }, { status: 404 });
 
+    const groupRow = group.rows[0];
+    const groupSchoolId = String(groupRow.school_id);
+
+    const activeYear = await queryDb<{ id: string; name: string }>(
+      `SELECT id, name FROM school_years
+       WHERE school_id = $1 AND active = TRUE
+       LIMIT 1`,
+      [groupSchoolId],
+    );
+    const activeYearId = activeYear.rows[0]?.id ?? null;
+    const activeYearName = activeYear.rows[0]?.name ?? null;
+
     const scheduleTemplatesRaw = await queryDb(
       `SELECT st.*, l.name AS location_name
        FROM schedule_templates st
@@ -32,25 +57,75 @@ export async function GET(
        ORDER BY st.day_of_week, st.start_time`,
       [id]
     );
-    const futureLessonsByTemplate = await queryDb<{ schedule_template_id: string; cnt: number }>(
-      `SELECT schedule_template_id, COUNT(*)::int AS cnt
-       FROM lessons
-       WHERE group_id = $1
-         AND schedule_template_id IS NOT NULL
-         AND ${sqlSchoolTimestampAsTimestamptz("scheduled_at")} > NOW()
-         AND status = 'SCHEDULED'
-       GROUP BY schedule_template_id`,
-      [id]
-    );
-    const completedLessonsByTemplate = await queryDb<{ schedule_template_id: string; cnt: number }>(
-      `SELECT schedule_template_id, COUNT(*)::int AS cnt
-       FROM lessons
-       WHERE group_id = $1
-         AND schedule_template_id IS NOT NULL
-         AND status = 'COMPLETED'
-       GROUP BY schedule_template_id`,
-      [id]
-    );
+
+    const scheduleNeedsConfirmation =
+      Boolean(activeYearId) &&
+      scheduleTemplatesRaw.rows.length > 0 &&
+      scheduleTemplatesRaw.rows.some(
+        (st) => String((st as { school_year_id?: string | null }).school_year_id ?? "") !== activeYearId,
+      );
+    const scheduleConfirmedForActiveYear =
+      Boolean(activeYearId) &&
+      scheduleTemplatesRaw.rows.length > 0 &&
+      scheduleTemplatesRaw.rows.every(
+        (st) => String((st as { school_year_id?: string | null }).school_year_id ?? "") === activeYearId,
+      );
+
+    if (scheduleConfirmedForActiveYear && groupRow.teacher_id) {
+      await ensureLessonsThroughActiveSchoolYear({
+        schoolId: groupSchoolId,
+        groupId: id,
+        teacherId: groupRow.teacher_id,
+      });
+      await completePastScheduledLessons();
+    }
+
+    /** Lekcje listy: aktywny rok, a gdy go brak — rok z potwierdzonego harmonogramu. */
+    let lessonsYearId = activeYearId;
+    let lessonsYearName = activeYearName;
+    if (!lessonsYearId && scheduleTemplatesRaw.rows.length > 0) {
+      const yearIds = [
+        ...new Set(
+          scheduleTemplatesRaw.rows
+            .map((st) => String((st as { school_year_id?: string | null }).school_year_id ?? ""))
+            .filter(Boolean),
+        ),
+      ];
+      if (yearIds.length === 1) {
+        const yr = await queryDb<{ id: string; name: string }>(
+          `SELECT id, name FROM school_years WHERE id = $1 LIMIT 1`,
+          [yearIds[0]],
+        );
+        lessonsYearId = yr.rows[0]?.id ?? null;
+        lessonsYearName = yr.rows[0]?.name ?? null;
+      }
+    }
+
+    const futureLessonsByTemplate = lessonsYearId
+      ? await queryDb<{ schedule_template_id: string; cnt: number }>(
+          `SELECT schedule_template_id, COUNT(*)::int AS cnt
+           FROM lessons
+           WHERE group_id = $1
+             AND school_year_id = $2
+             AND schedule_template_id IS NOT NULL
+             AND ${sqlSchoolTimestampAsTimestamptz("scheduled_at")} > NOW()
+             AND status = 'SCHEDULED'
+           GROUP BY schedule_template_id`,
+          [id, lessonsYearId],
+        )
+      : { rows: [] as Array<{ schedule_template_id: string; cnt: number }> };
+    const completedLessonsByTemplate = lessonsYearId
+      ? await queryDb<{ schedule_template_id: string; cnt: number }>(
+          `SELECT schedule_template_id, COUNT(*)::int AS cnt
+           FROM lessons
+           WHERE group_id = $1
+             AND school_year_id = $2
+             AND schedule_template_id IS NOT NULL
+             AND status = 'COMPLETED'
+           GROUP BY schedule_template_id`,
+          [id, lessonsYearId],
+        )
+      : { rows: [] as Array<{ schedule_template_id: string; cnt: number }> };
     const templateFutureMap = new Map(
       futureLessonsByTemplate.rows.map((r) => [r.schedule_template_id, r.cnt]),
     );
@@ -62,21 +137,7 @@ export async function GET(
       future_lessons_count: templateFutureMap.get(st.id) ?? 0,
       completed_lessons_count: templateCompletedMap.get(st.id) ?? 0,
     }));
-    const futureLessonsTotal = await queryDb<{ cnt: number }>(
-      `SELECT COUNT(*)::int AS cnt
-       FROM lessons
-       WHERE group_id = $1
-         AND ${sqlSchoolTimestampAsTimestamptz("scheduled_at")} > NOW()
-         AND status = 'SCHEDULED'`,
-      [id]
-    );
-    const completedLessonsTotal = await queryDb<{ cnt: number }>(
-      `SELECT COUNT(*)::int AS cnt
-       FROM lessons
-       WHERE group_id = $1
-         AND status = 'COMPLETED'`,
-      [id]
-    );
+
     const students = await queryDb(
       `SELECT
          gs.id,
@@ -104,16 +165,7 @@ export async function GET(
       tenant.role === "MANAGER" ? [ctx.schoolId] : []
     );
 
-    const activeYear = await queryDb<{ id: string; name: string }>(
-      `SELECT id, name FROM school_years
-       WHERE school_id = $1 AND active = TRUE
-       LIMIT 1`,
-      [ctx.schoolId],
-    );
-    const activeYearId = activeYear.rows[0]?.id ?? null;
-    const activeYearName = activeYear.rows[0]?.name ?? null;
-
-    const schoolYearLessonsRes = activeYearId
+    const schoolYearLessonsRes = lessonsYearId
       ? await queryDb<{
           id: string;
           scheduled_at: Date | string;
@@ -128,9 +180,9 @@ export async function GET(
            FROM lessons l
            WHERE l.group_id = $1
              AND l.school_year_id = $2
-             AND l.status IN ('SCHEDULED', 'COMPLETED')
+             AND l.status IN ('SCHEDULED', 'COMPLETED', 'CANCELLED')
            ORDER BY l.scheduled_at ASC`,
-          [id, activeYearId],
+          [id, lessonsYearId],
         )
       : { rows: [] as Array<{ id: string; scheduled_at: Date | string; status: string; duration_min: number }> };
 
@@ -141,32 +193,34 @@ export async function GET(
       duration_min: row.duration_min,
     }));
 
-    const scheduleConfirmedForActiveYear =
-      Boolean(activeYearId) &&
-      scheduleTemplates.length > 0 &&
-      scheduleTemplates.every(
-        (st) => String((st as { school_year_id?: string | null }).school_year_id ?? "") === activeYearId,
-      );
-    const scheduleNeedsConfirmation =
-      Boolean(activeYearId) &&
-      scheduleTemplates.length > 0 &&
-      scheduleTemplates.some(
-        (st) => String((st as { school_year_id?: string | null }).school_year_id ?? "") !== activeYearId,
-      );
+    const futureCount = schoolYearLessons.filter((l) => l.status === "SCHEDULED").length;
+    const completedCount = schoolYearLessons.filter((l) => l.status === "COMPLETED").length;
+
+    const missingGeneratedRes =
+      scheduleConfirmedForActiveYear && activeYearId
+        ? await queryDb<{ missing: boolean }>(
+            `SELECT ${sqlExistsUnfilledFutureScheduleSlot("$1", "$2")} AS missing`,
+            [id, groupSchoolId],
+          )
+        : { rows: [{ missing: false }] };
 
     return NextResponse.json({
-      group: group.rows[0],
+      group: groupRow,
       scheduleTemplates,
       students: students.rows,
       schoolYearLessons,
       locations: locations.rows,
       generatedLessons: {
-        futureCount: futureLessonsTotal.rows[0]?.cnt ?? 0,
-        completedCount: completedLessonsTotal.rows[0]?.cnt ?? 0,
+        futureCount,
+        completedCount,
         schoolYearCount: schoolYearLessons.length,
       },
+      missingGeneratedLessons: Boolean(missingGeneratedRes.rows[0]?.missing),
       activeSchoolYear: activeYearId
         ? { id: activeYearId, name: activeYearName }
+        : null,
+      lessonsSchoolYear: lessonsYearId
+        ? { id: lessonsYearId, name: lessonsYearName }
         : null,
       scheduleConfirmedForActiveYear,
       scheduleNeedsConfirmation,
@@ -200,6 +254,16 @@ export async function PUT(
       pricePerLesson,
       teacherPickupConsent,
     } = body;
+
+    const naming = validateHarryEnglishGroupNaming({
+      name: name ?? "",
+      level: level ?? "",
+      requireLevel: true,
+    });
+    if (!naming.ok) {
+      return NextResponse.json({ message: naming.message }, { status: 400 });
+    }
+
     await queryDb(
       `UPDATE groups
        SET name = COALESCE($2, name),
@@ -216,8 +280,8 @@ export async function PUT(
       tenant.role === "MANAGER"
         ? [
             id,
-            name ?? null,
-            level ?? null,
+            naming.name,
+            naming.level,
             teacherId ?? null,
             maxStudents ?? null,
             active ?? null,
@@ -230,8 +294,8 @@ export async function PUT(
           ]
         : [
             id,
-            name ?? null,
-            level ?? null,
+            naming.name,
+            naming.level,
             teacherId ?? null,
             maxStudents ?? null,
             active ?? null,

@@ -2,10 +2,19 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ComposeMessageModal, {
+  type ComposeExternalEmailRecipient,
   type ComposeSection,
 } from '@/src/components/messages/ComposeMessageModal';
 import { parseEmailList } from '@/lib/email-address';
 import { normalizePolishPhone } from '@/lib/phone';
+
+function uniqueEmailsFromRecipients(list: ComposeExternalEmailRecipient[]): string[] {
+  return [...new Set(list.map((r) => r.email.trim().toLowerCase()).filter(Boolean))];
+}
+
+function isExternalEmailComposeSection(section: ComposeSection): boolean {
+  return section === 'email' || section === 'enrollment-email';
+}
 
 type PanelMode = 'manager' | 'teacher' | 'parent';
 
@@ -161,8 +170,12 @@ export default function MessagesPanel({
   const [recipientsLoading, setRecipientsLoading] = useState(false);
   const [composeSection, setComposeSection] = useState<ComposeSection>('parents');
   const [bulkAddLoading, setBulkAddLoading] = useState<'all' | 'active' | null>(null);
-  const [externalEmails, setExternalEmails] = useState<string[]>([]);
+  const [externalEmailRecipients, setExternalEmailRecipients] = useState<
+    ComposeExternalEmailRecipient[]
+  >([]);
   const [externalEmailBulkPaste, setExternalEmailBulkPaste] = useState('');
+  const [enrollmentEmailLocationId, setEnrollmentEmailLocationId] = useState('');
+  const [enrollmentEmailAddLoading, setEnrollmentEmailAddLoading] = useState(false);
   const pendingComposeMetaRef = useRef<{
     templateKey?: string;
     templateFieldValues?: Record<string, string>;
@@ -186,8 +199,10 @@ export default function MessagesPanel({
     setBulkAddLoading(null);
     setComposeSubject('');
     setComposeContent('');
-    setExternalEmails([]);
+    setExternalEmailRecipients([]);
     setExternalEmailBulkPaste('');
+    setEnrollmentEmailLocationId('');
+    setEnrollmentEmailAddLoading(false);
     pendingComposeMetaRef.current = null;
     setRecipientsReloadToken((t) => t + 1);
   }, []);
@@ -349,7 +364,7 @@ export default function MessagesPanel({
   }, [fetchRecipientsList]);
 
   useEffect(() => {
-    if (composeOpen && composeSection !== 'email') void loadRecipients();
+    if (composeOpen && !isExternalEmailComposeSection(composeSection)) void loadRecipients();
   }, [
     composeOpen,
     composeSection,
@@ -362,7 +377,10 @@ export default function MessagesPanel({
 
   const handleComposeSectionChange = useCallback((section: ComposeSection) => {
     setComposeSection(section);
-    if (section === 'email') {
+    setSendPreviewOpen(false);
+    setError(null);
+
+    if (isExternalEmailComposeSection(section)) {
       setSelectedRecipientIds([]);
       setSelectedRecipientLabels({});
       setSingleRecipientId('');
@@ -370,17 +388,24 @@ export default function MessagesPanel({
       setFilterLocationIds([]);
       setFilterRenewalNoResponse(false);
       setShowGroupFilters(false);
-    } else {
-      setExternalEmails([]);
+      setExternalEmailRecipients([]);
       setExternalEmailBulkPaste('');
-      setSelectedRecipientIds([]);
-      setSelectedRecipientLabels({});
-      setFilterGroupIds([]);
-      setFilterLocationIds([]);
-      setFilterRenewalNoResponse(false);
-      setShowGroupFilters(false);
-      setRecipientsReloadToken((t) => t + 1);
+      setEnrollmentEmailLocationId('');
+      setEnrollmentEmailAddLoading(false);
+      return;
     }
+
+    setExternalEmailRecipients([]);
+    setExternalEmailBulkPaste('');
+    setEnrollmentEmailLocationId('');
+    setEnrollmentEmailAddLoading(false);
+    setSelectedRecipientIds([]);
+    setSelectedRecipientLabels({});
+    setFilterGroupIds([]);
+    setFilterLocationIds([]);
+    setFilterRenewalNoResponse(false);
+    setShowGroupFilters(false);
+    setRecipientsReloadToken((t) => t + 1);
   }, []);
 
   useEffect(() => {
@@ -460,7 +485,7 @@ export default function MessagesPanel({
     if (meta) pendingComposeMetaRef.current = meta;
     const composeMeta = meta ?? pendingComposeMetaRef.current;
 
-    const isEmailSection = composeSection === 'email';
+    const isEmailSection = isExternalEmailComposeSection(composeSection);
     const recipientIds = isEmailSection
       ? []
       : canPickIndividuals
@@ -468,7 +493,9 @@ export default function MessagesPanel({
         : singleRecipientId
           ? [singleRecipientId]
           : [];
-    const emailsToSend = isEmailSection ? externalEmails : [];
+    const emailsToSend = isEmailSection
+      ? uniqueEmailsFromRecipients(externalEmailRecipients)
+      : [];
     if (
       (recipientIds.length === 0 && emailsToSend.length === 0) ||
       !composeSubject.trim() ||
@@ -544,10 +571,69 @@ export default function MessagesPanel({
       setError('Nie znaleziono poprawnych adresów e-mail na liście');
       return;
     }
-    setExternalEmails((prev) => [...new Set([...prev, ...parsed])]);
+    setExternalEmailRecipients((prev) => {
+      const existingKeys = new Set(prev.map((r) => r.key));
+      const next = [...prev];
+      for (const email of parsed) {
+        const key = `manual:${email}`;
+        if (existingKeys.has(key)) continue;
+        existingKeys.add(key);
+        next.push({ key, email });
+      }
+      return next;
+    });
     setExternalEmailBulkPaste('');
     setError(null);
   };
+
+  const loadEnrollmentEmailRecipients = useCallback(async (locationId: string) => {
+    // Zachowaj tylko ręczne adresy; zgłoszenia podmieniamy pod wybraną lokalizację.
+    setExternalEmailRecipients((prev) => prev.filter((r) => r.key.startsWith('manual:')));
+    if (!locationId) {
+      setEnrollmentEmailAddLoading(false);
+      return;
+    }
+    setEnrollmentEmailAddLoading(true);
+    setError(null);
+    try {
+      const q = new URLSearchParams({ locationId });
+      const res = await fetch(`/api/messages/enrollment-email-recipients?${q}`, {
+        cache: 'no-store',
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message ?? 'Błąd pobierania zgłoszeń');
+      const list = (data.recipients ?? []) as Array<{
+        requestId: string;
+        email: string;
+        parentFirstName: string;
+        parentLastName: string;
+        childFirstName: string;
+        childLastName: string;
+      }>;
+      const fromEnrollment: ComposeExternalEmailRecipient[] = list.map((row) => ({
+        key: row.requestId,
+        email: row.email,
+        parentName: `${row.parentFirstName} ${row.parentLastName}`.trim(),
+        childName: `${row.childFirstName} ${row.childLastName}`.trim(),
+      }));
+      setExternalEmailRecipients((prev) => [
+        ...prev.filter((r) => r.key.startsWith('manual:')),
+        ...fromEnrollment,
+      ]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd pobierania zgłoszeń');
+    } finally {
+      setEnrollmentEmailAddLoading(false);
+    }
+  }, []);
+
+  const handleEnrollmentEmailLocationChange = useCallback(
+    (locationId: string) => {
+      setEnrollmentEmailLocationId(locationId);
+      void loadEnrollmentEmailRecipients(locationId);
+    },
+    [loadEnrollmentEmailRecipients]
+  );
 
   const addRecipient = (r: RecipientOption) => {
     setSelectedRecipientIds((prev) => (prev.includes(r.id) ? prev : [...prev, r.id]));
@@ -926,13 +1012,16 @@ export default function MessagesPanel({
         onComposeSectionChange={handleComposeSectionChange}
         showSectionTabs={canUseExternalEmails}
         showTeachersTab={mode === 'manager'}
-        externalEmails={externalEmails}
+        externalEmailRecipients={externalEmailRecipients}
         externalEmailBulkPaste={externalEmailBulkPaste}
         onExternalEmailBulkPasteChange={setExternalEmailBulkPaste}
         onParseExternalEmailBulk={parseExternalEmailBulk}
-        onRemoveExternalEmail={(email) =>
-          setExternalEmails((prev) => prev.filter((e) => e !== email))
+        onRemoveExternalEmailRecipient={(key) =>
+          setExternalEmailRecipients((prev) => prev.filter((r) => r.key !== key))
         }
+        enrollmentEmailLocationId={enrollmentEmailLocationId}
+        onEnrollmentEmailLocationIdChange={handleEnrollmentEmailLocationChange}
+        enrollmentEmailAddLoading={enrollmentEmailAddLoading}
         messageTemplates={messageTemplates}
         onApplyTemplate={(subject, content) => {
           setComposeSubject(subject);
@@ -953,16 +1042,26 @@ export default function MessagesPanel({
             <div className="border-b border-zinc-200 px-5 py-4">
               <h3 className="text-lg font-bold text-zinc-900">Podgląd wysyłki</h3>
               <p className="mt-1 text-sm text-zinc-600">
-                {composeSection === 'email'
-                  ? `Wyślesz e-mail do ${externalEmails.length} adresów`
+                {isExternalEmailComposeSection(composeSection)
+                  ? `Wyślesz e-mail do ${uniqueEmailsFromRecipients(externalEmailRecipients).length} adresów`
                   : `Wyślesz wiadomość do ${selectedRecipientIds.length} odbiorców`}
               </p>
             </div>
             <ul className="max-h-64 overflow-y-auto px-5 py-3 text-sm">
-              {composeSection === 'email'
-                ? externalEmails.map((email) => (
-                    <li key={email} className="border-b border-zinc-100 py-2">
-                      {email}
+              {isExternalEmailComposeSection(composeSection)
+                ? externalEmailRecipients.map((r) => (
+                    <li key={r.key} className="border-b border-zinc-100 py-2">
+                      {r.parentName || r.childName ? (
+                        <>
+                          <span className="font-medium">{r.parentName || 'Rodzic'}</span>
+                          {r.childName ? (
+                            <span className="text-zinc-600"> · dziecko: {r.childName}</span>
+                          ) : null}
+                          <span className="mt-0.5 block text-xs text-zinc-500">{r.email}</span>
+                        </>
+                      ) : (
+                        r.email
+                      )}
                     </li>
                   ))
                 : selectedRecipientIds.map((id) => (
