@@ -6,7 +6,6 @@ import ComposeEmailRecipientsColumn, {
 } from '@/src/components/messages/ComposeEmailRecipientsColumn';
 import {
   applyTemplateValues,
-  ENROLLMENT_CHILD_NAME_PLACEHOLDER,
   ENROLLMENT_CHILD_NAME_TOKEN,
   extractTemplatePlaceholders,
   getTemplateFieldMeta,
@@ -282,9 +281,6 @@ export interface ComposeMessageModalProps {
   filterGroupIds: string[];
   onGroupFilterChange: (groupIds: string[]) => void;
   onConfirmGroupFilter: (groupIds: string[]) => void | Promise<void>;
-  filterLocationIds: string[];
-  onLocationFilterChange: (locationIds: string[]) => void;
-  onConfirmLocationFilter: (locationIds: string[]) => void | Promise<void>;
   onAddAllFromList: () => void;
   showBulkParentAddButtons?: boolean;
   onAddAllFromDatabase?: () => void;
@@ -335,6 +331,13 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
     }
   }, [props.open]);
 
+  useEffect(() => {
+    if (props.composeSection && props.composeSection !== 'parents') {
+      setSelectedTemplateKey('');
+      setTemplateFieldValues({});
+    }
+  }, [props.composeSection]);
+
   if (!props.open) return null;
 
   const section = props.composeSection ?? 'parents';
@@ -343,15 +346,11 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
   const isTeachersAudience = section === 'teachers';
 
   const selectedTemplate =
-    props.messageTemplates?.find((t) => t.key === selectedTemplateKey) ?? null;
+    section !== 'parents'
+      ? null
+      : (props.messageTemplates?.find((t) => t.key === selectedTemplateKey) ?? null);
   const templateFields = selectedTemplate
-    ? extractTemplatePlaceholders(selectedTemplate.subject, selectedTemplate.content).filter(
-        (field) =>
-          !(
-            isEnrollmentEmailSection &&
-            (field === 'dziecko' || field === ENROLLMENT_CHILD_NAME_PLACEHOLDER)
-          )
-      )
+    ? extractTemplatePlaceholders(selectedTemplate.subject, selectedTemplate.content)
     : [];
   const templateFieldsIncomplete =
     selectedTemplate != null &&
@@ -363,11 +362,7 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
   ) => {
     if (!props.onApplyTemplate) return;
     const displayValues = { ...values };
-    if (isEnrollmentEmailSection) {
-      // Zostaw token do podstawienia przy wysyłce per dziecko.
-      displayValues.dziecko = ENROLLMENT_CHILD_NAME_TOKEN;
-      displayValues[ENROLLMENT_CHILD_NAME_PLACEHOLDER] = ENROLLMENT_CHILD_NAME_TOKEN;
-    } else if (displayValues.dziecko) {
+    if (displayValues.dziecko) {
       const child = (props.parentChildren ?? []).find((c) => c.id === displayValues.dziecko);
       if (child) {
         displayValues.dziecko = `${child.firstName} ${child.lastName}`.trim();
@@ -389,12 +384,7 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
     const emptyValues: Record<string, string> = {};
     const children = props.parentChildren ?? [];
     for (const field of extractTemplatePlaceholders(tpl.subject, tpl.content)) {
-      if (
-        isEnrollmentEmailSection &&
-        (field === 'dziecko' || field === ENROLLMENT_CHILD_NAME_PLACEHOLDER)
-      ) {
-        emptyValues[field] = ENROLLMENT_CHILD_NAME_TOKEN;
-      } else if (field === 'dziecko' && children.length === 1) {
+      if (field === 'dziecko' && children.length === 1) {
         emptyValues[field] = children[0].id;
       } else {
         emptyValues[field] = '';
@@ -440,19 +430,6 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
         : isTeachersAudience
           ? 'Szukaj nauczyciela po imieniu, nazwisku lub e-mailu…'
           : 'Szukaj rodzica po imieniu, nazwisku lub e-mailu…';
-
-  const visibleGroups = props.filterMeta
-    ? props.filterLocationIds.length === 0
-      ? props.filterMeta.groups
-      : props.filterMeta.groups.filter(
-          (g) => g.locationId && props.filterLocationIds.includes(g.locationId)
-        )
-    : [];
-
-  const groupPlaceholder =
-    props.filterLocationIds.length > 0
-      ? 'Wybierz grupę (z wybranej lokalizacji)'
-      : 'Wybierz grupę';
 
   return (
     <div
@@ -587,18 +564,9 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
                     {props.filterMeta && (
                       <>
                         <ComposeFilterMultiSelect
-                          items={props.filterMeta.locations}
-                          selectedIds={props.filterLocationIds}
-                          placeholder="Wybierz lokalizację"
-                          emptyListMessage="Brak lokalizacji"
-                          pluralLabel="lokalizacje"
-                          onFilterChange={props.onLocationFilterChange}
-                          onConfirm={props.onConfirmLocationFilter}
-                        />
-                        <ComposeFilterMultiSelect
-                          items={visibleGroups}
+                          items={props.filterMeta.groups}
                           selectedIds={props.filterGroupIds}
-                          placeholder={groupPlaceholder}
+                          placeholder="Wybierz grupę"
                           emptyListMessage="Brak grup"
                           pluralLabel="grupy"
                           onFilterChange={props.onGroupFilterChange}
@@ -737,7 +705,10 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
           {/* Prawa kolumna — treść wiadomości */}
           <div className="flex min-h-0 flex-col overflow-hidden p-3 md:p-4">
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto md:gap-3">
-              {props.messageTemplates && props.messageTemplates.length > 0 && props.onApplyTemplate && (
+              {section === 'parents' &&
+                props.messageTemplates &&
+                props.messageTemplates.length > 0 &&
+                props.onApplyTemplate && (
                 <div className="shrink-0">
                   <label htmlFor="compose-template" className="mb-1 block text-sm font-medium text-zinc-800">
                     Szablon wiadomości
@@ -905,7 +876,7 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
                 disabled={props.sendingCompose || templateFieldsIncomplete}
                 onClick={() =>
                   props.onSend(
-                    selectedTemplateKey
+                    section === 'parents' && selectedTemplateKey
                       ? {
                           templateKey: selectedTemplateKey,
                           templateFieldValues,

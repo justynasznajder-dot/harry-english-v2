@@ -166,7 +166,7 @@ export function getMessageTemplatesForRole(role: MessagePortalRole): MessageTemp
 }
 
 /** Placeholder w mailach ze zgłoszeń — imię i nazwisko dziecka (podstawiane per odbiorca). */
-export const ENROLLMENT_CHILD_NAME_PLACEHOLDER = "imie_i_nazwisko_dziecka";
+export const ENROLLMENT_CHILD_NAME_PLACEHOLDER = "dziecko";
 export const ENROLLMENT_CHILD_NAME_TOKEN = `{{${ENROLLMENT_CHILD_NAME_PLACEHOLDER}}}`;
 
 export const ENROLLMENT_EMAIL_DRAFT = {
@@ -189,10 +189,6 @@ const TEMPLATE_FIELD_META: Record<string, TemplateFieldMeta> = {
   dziecko: {
     label: "Imię i nazwisko dziecka",
     placeholder: "Wybierz dziecko…",
-  },
-  imie_i_nazwisko_dziecka: {
-    label: "Imię i nazwisko dziecka",
-    placeholder: "Podstawiane przy wysyłce…",
   },
   powod: {
     label: "Powód",

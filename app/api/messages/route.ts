@@ -150,7 +150,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ message: "Temat i treść są wymagane" }, { status: 400 });
   }
 
-  /** E-mail ze zgłoszeń: jeden mail na dziecko, z {{imie_i_nazwisko_dziecka}} (lub {{dziecko}}) w temacie/treści. */
+  /** E-mail ze zgłoszeń: jeden mail na dziecko, z {{dziecko}} w temacie/treści. */
   if (enrollmentEmailRecipients.length > 0) {
     if (actor.user.role !== "MANAGER" && actor.user.role !== "TEACHER") {
       return NextResponse.json(
@@ -180,16 +180,12 @@ export async function POST(request: NextRequest) {
     const portalUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://www.harry-english.pl";
 
     const personalized = enrollmentEmailRecipients.map((r) => {
-      const childName = r.childName || "dziecko";
-      const placeholders = {
-        dziecko: childName,
-        imie_i_nazwisko_dziecka: childName,
-      };
+      const dziecko = r.childName || "dziecko";
       return {
         email: r.email,
         childName: r.childName,
-        subject: fillTemplatePlaceholders(subject, placeholders),
-        content: fillTemplatePlaceholders(content, placeholders),
+        subject: fillTemplatePlaceholders(subject, { dziecko }),
+        content: fillTemplatePlaceholders(content, { dziecko }),
         user: byEmail.get(r.email) ?? null,
       };
     });

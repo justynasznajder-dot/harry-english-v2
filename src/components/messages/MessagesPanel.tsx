@@ -161,7 +161,6 @@ export default function MessagesPanel({
 
   const [filterMeta, setFilterMeta] = useState<FilterMeta | null>(null);
   const [filterGroupIds, setFilterGroupIds] = useState<string[]>([]);
-  const [filterLocationIds, setFilterLocationIds] = useState<string[]>([]);
   const [filterRenewalNoResponse, setFilterRenewalNoResponse] = useState(false);
   const [sendPreviewOpen, setSendPreviewOpen] = useState(false);
   const [messageTemplates, setMessageTemplates] = useState<
@@ -202,7 +201,6 @@ export default function MessagesPanel({
     setRecipientSearch('');
     setRecipientSearchDebounced('');
     setFilterGroupIds([]);
-    setFilterLocationIds([]);
     setFilterRenewalNoResponse(false);
     setSendPreviewOpen(false);
     setShowGroupFilters(false);
@@ -300,8 +298,7 @@ export default function MessagesPanel({
   }, [selectedThreadId, loadThread]);
 
   const buildRecipientsQuery = useCallback(
-    (overrides?: { locationIds?: string[]; groupIds?: string[] }) => {
-      const locationIds = overrides?.locationIds ?? filterLocationIds;
+    (overrides?: { groupIds?: string[] }) => {
       const groupIds = overrides?.groupIds ?? filterGroupIds;
       const q = new URLSearchParams();
       if (mode !== 'parent' && recipientSearchDebounced) q.set('search', recipientSearchDebounced);
@@ -312,26 +309,22 @@ export default function MessagesPanel({
       }
 
       if (mode === 'manager') {
-        const hasBulk =
-          groupIds.length > 0 || locationIds.length > 0 || filterRenewalNoResponse;
+        const hasBulk = groupIds.length > 0 || filterRenewalNoResponse;
         if (!hasBulk) q.set('all', 'true');
         else {
           if (groupIds.length > 0) q.set('groupIds', groupIds.join(','));
-          if (locationIds.length > 0) q.set('locationIds', locationIds.join(','));
           if (filterRenewalNoResponse) q.set('renewalNoResponse', 'true');
         }
       } else if (mode === 'teacher') {
         if (groupIds.length > 0) q.set('groupIds', groupIds.join(','));
-        if (locationIds.length > 0) q.set('locationIds', locationIds.join(','));
       }
       return q;
     },
-    [mode, composeSection, recipientSearchDebounced, filterGroupIds, filterLocationIds, filterRenewalNoResponse]
+    [mode, composeSection, recipientSearchDebounced, filterGroupIds, filterRenewalNoResponse]
   );
 
   const fetchRecipientsList = useCallback(
     async (overrides?: {
-      locationIds?: string[];
       groupIds?: string[];
     }): Promise<RecipientOption[]> => {
       const res = await fetch(`/api/messages/recipients?${buildRecipientsQuery(overrides)}`, {
@@ -392,7 +385,6 @@ export default function MessagesPanel({
     loadRecipients,
     recipientsReloadToken,
     filterGroupIds,
-    filterLocationIds,
     filterRenewalNoResponse,
   ]);
 
@@ -406,7 +398,6 @@ export default function MessagesPanel({
       setSelectedRecipientLabels({});
       setSingleRecipientId('');
       setFilterGroupIds([]);
-      setFilterLocationIds([]);
       setFilterRenewalNoResponse(false);
       setShowGroupFilters(false);
       setExternalEmailRecipients([]);
@@ -438,7 +429,6 @@ export default function MessagesPanel({
     setSelectedRecipientIds([]);
     setSelectedRecipientLabels({});
     setFilterGroupIds([]);
-    setFilterLocationIds([]);
     setFilterRenewalNoResponse(false);
     setShowGroupFilters(false);
     setRecipientsReloadToken((t) => t + 1);
@@ -494,17 +484,10 @@ export default function MessagesPanel({
 
   useEffect(() => {
     if (!filterMeta || filterGroupIds.length === 0) return;
-    const visibleGroupIds = new Set(
-      (filterLocationIds.length === 0
-        ? filterMeta.groups
-        : filterMeta.groups.filter(
-            (g) => g.locationId && filterLocationIds.includes(g.locationId)
-          )
-      ).map((g) => g.id)
-    );
-    const valid = filterGroupIds.filter((id) => visibleGroupIds.has(id));
+    const validGroupIds = new Set(filterMeta.groups.map((g) => g.id));
+    const valid = filterGroupIds.filter((id) => validGroupIds.has(id));
     if (valid.length !== filterGroupIds.length) setFilterGroupIds(valid);
-  }, [filterMeta, filterGroupIds, filterLocationIds]);
+  }, [filterMeta, filterGroupIds]);
 
   const selectedThread = useMemo(
     () => threads.find((t) => t.id === selectedThreadId) ?? null,
@@ -806,20 +789,17 @@ export default function MessagesPanel({
   );
 
   const addParentsFromFilter = useCallback(
-    async (opts: { locationIds?: string[]; groupIds?: string[] }) => {
-      const locationIds = opts.locationIds;
+    async (opts: { groupIds?: string[] }) => {
       const groupIds = opts.groupIds;
       if (composeSection !== 'parents') return;
-      if ((locationIds?.length ?? 0) === 0 && (groupIds?.length ?? 0) === 0) return;
+      if ((groupIds?.length ?? 0) === 0) return;
 
-      if (locationIds) setFilterLocationIds(locationIds);
       if (groupIds) setFilterGroupIds(groupIds);
 
       setRecipientsLoading(true);
       setError(null);
       try {
         const list = await fetchRecipientsList({
-          ...(locationIds ? { locationIds } : {}),
           ...(groupIds ? { groupIds } : {}),
         });
         setRecipients(list);
@@ -843,11 +823,6 @@ export default function MessagesPanel({
       }
     },
     [composeSection, fetchRecipientsList, recipientLabel]
-  );
-
-  const addParentsFromLocations = useCallback(
-    (locationIds: string[]) => addParentsFromFilter({ locationIds }),
-    [addParentsFromFilter]
   );
 
   const addParentsFromGroups = useCallback(
@@ -1098,9 +1073,6 @@ export default function MessagesPanel({
         filterGroupIds={filterGroupIds}
         onGroupFilterChange={setFilterGroupIds}
         onConfirmGroupFilter={addParentsFromGroups}
-        filterLocationIds={filterLocationIds}
-        onLocationFilterChange={setFilterLocationIds}
-        onConfirmLocationFilter={addParentsFromLocations}
         onAddAllFromList={() => addRecipientsToSelection(recipients)}
         showBulkParentAddButtons={mode === 'manager' && composeSection === 'parents'}
         onAddAllFromDatabase={() => void fetchBulkParents('all')}
