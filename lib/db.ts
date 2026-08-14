@@ -10,6 +10,7 @@ import {
   DuplicateEnrollmentError,
 } from "@/lib/enrollment-duplicate";
 import { formatPersonName } from "@/lib/format-person-name";
+import { phonesMatch } from "@/lib/phone";
 import {
   allocateChildClientNumber,
   allocateParentClientNumber,
@@ -1069,7 +1070,7 @@ export async function syncParentIdentityFromEnrollments(
          OR LOWER(parent_email::text) = LOWER($3::text)
        )
        AND UPPER(BTRIM(COALESCE(status::text, ''))) NOT IN ('COMPLETED', 'REJECTED')
-     ORDER BY created_at DESC
+     ORDER BY created_at ASC
      LIMIT 1`,
     [user.school_id, parentId, user.email]
   );
@@ -1215,6 +1216,45 @@ async function insertEnrollmentRequestsInTx(
   return created;
 }
 
+export type ExistingEnrollmentParent = {
+  parentFirstName: string;
+  parentLastName: string;
+  parentPhone: string | null;
+  userId: string | null;
+};
+
+/** Najstarsze zgłoszenie na dany e-mail w szkole — tożsamość rodzica (mail = klucz). */
+export async function findExistingPublicEnrollmentParent(
+  schoolId: string,
+  email: string
+): Promise<ExistingEnrollmentParent | null> {
+  const parentEmail = String(email).trim().toLowerCase();
+  if (!schoolId?.trim() || !parentEmail) return null;
+
+  const r = await pool.query<{
+    parent_first_name: string;
+    parent_last_name: string;
+    parent_phone: string | null;
+    user_id: string | null;
+  }>(
+    `SELECT parent_first_name, parent_last_name, parent_phone, user_id
+     FROM enrollment_requests
+     WHERE school_id = $1
+       AND LOWER(BTRIM(parent_email::text)) = $2
+     ORDER BY created_at ASC
+     LIMIT 1`,
+    [schoolId, parentEmail]
+  );
+  const row = r.rows[0];
+  if (!row) return null;
+  return {
+    parentFirstName: formatPersonName(row.parent_first_name),
+    parentLastName: formatPersonName(row.parent_last_name),
+    parentPhone: row.parent_phone?.trim() || null,
+    userId: row.user_id?.trim() || null,
+  };
+}
+
 /** Publiczne zgłoszenie dziecka — tylko wiersze `enrollment_requests`, bez konta w `users` i bez `children`. */
 export async function insertPublicEnrollmentRequests(data: {
   schoolId: string;
@@ -1225,7 +1265,7 @@ export async function insertPublicEnrollmentRequests(data: {
   children: EnrollmentRequestChildInput[];
   /** Gdy rodzic potwierdził powiązanie z istniejącym kontem. */
   userId?: string | null;
-}): Promise<void> {
+}): Promise<{ reusedExistingParent: boolean; keptExistingPhone: boolean }> {
   const hasTable = await pool.query<{ exists: boolean }>(
     `SELECT EXISTS(
        SELECT 1 FROM information_schema.tables
@@ -1242,17 +1282,68 @@ export async function insertPublicEnrollmentRequests(data: {
   }
 
   const parentEmail = String(data.email).trim().toLowerCase();
-  const parentPhone = data.phone?.trim() || null;
-  const parentFirstName = formatPersonName(data.firstName);
-  const parentLastName = formatPersonName(data.lastName);
+  let parentPhone = data.phone?.trim() || null;
+  let parentFirstName = formatPersonName(data.firstName);
+  let parentLastName = formatPersonName(data.lastName);
+  let userId = data.userId?.trim() || null;
+  let reusedExistingParent = false;
+  let keptExistingPhone = false;
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     await ensureDefaultSchoolRow(client, schoolId);
+
+    const existingRes = await client.query<{
+      parent_first_name: string;
+      parent_last_name: string;
+      parent_phone: string | null;
+      user_id: string | null;
+    }>(
+      `SELECT parent_first_name, parent_last_name, parent_phone, user_id
+       FROM enrollment_requests
+       WHERE school_id = $1
+         AND LOWER(BTRIM(parent_email::text)) = $2
+       ORDER BY created_at ASC
+       LIMIT 1`,
+      [schoolId, parentEmail]
+    );
+    const existing = existingRes.rows[0];
+    if (existing) {
+      reusedExistingParent = true;
+      parentFirstName = formatPersonName(existing.parent_first_name);
+      parentLastName = formatPersonName(existing.parent_last_name);
+      const existingPhone = existing.parent_phone?.trim() || null;
+      if (existingPhone) {
+        keptExistingPhone = Boolean(parentPhone) && !phonesMatch(existingPhone, parentPhone);
+        parentPhone = existingPhone;
+      }
+      userId = userId || existing.user_id?.trim() || null;
+
+      await client.query(
+        `UPDATE enrollment_requests
+         SET parent_first_name = $3,
+             parent_last_name = $4,
+             parent_phone = $5,
+             user_id = COALESCE(NULLIF(BTRIM(user_id), ''), $6::text)
+         WHERE school_id = $1
+           AND LOWER(BTRIM(parent_email::text)) = $2
+           AND (
+             parent_first_name IS DISTINCT FROM $3
+             OR parent_last_name IS DISTINCT FROM $4
+             OR parent_phone IS DISTINCT FROM $5
+             OR (
+               NULLIF(BTRIM(user_id), '') IS NULL
+               AND $6::text IS NOT NULL
+             )
+           )`,
+        [schoolId, parentEmail, parentFirstName, parentLastName, parentPhone, userId]
+      );
+    }
+
     await insertEnrollmentRequestsInTx(client, {
       schoolId,
-      userId: data.userId?.trim() || null,
+      userId,
       parentEmail,
       parentFirstName,
       parentLastName,
@@ -1260,6 +1351,7 @@ export async function insertPublicEnrollmentRequests(data: {
       children: data.children,
     });
     await client.query("COMMIT");
+    return { reusedExistingParent, keptExistingPhone };
   } catch (e) {
     await client.query("ROLLBACK");
     throw e;

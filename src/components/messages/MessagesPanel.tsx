@@ -6,6 +6,7 @@ import ComposeMessageModal, {
   type ComposeSection,
 } from '@/src/components/messages/ComposeMessageModal';
 import { parseEmailList } from '@/lib/email-address';
+import { ENROLLMENT_EMAIL_DRAFT } from '@/lib/message-templates';
 import { normalizePolishPhone } from '@/lib/phone';
 
 function uniqueEmailsFromRecipients(list: ComposeExternalEmailRecipient[]): string[] {
@@ -175,6 +176,10 @@ export default function MessagesPanel({
   >([]);
   const [externalEmailBulkPaste, setExternalEmailBulkPaste] = useState('');
   const [enrollmentEmailLocationId, setEnrollmentEmailLocationId] = useState('');
+  const [enrollmentEmailBirthYear, setEnrollmentEmailBirthYear] = useState('');
+  const [enrollmentEmailBirthYears, setEnrollmentEmailBirthYears] = useState<
+    Array<{ year: number; count: number }>
+  >([]);
   const [enrollmentEmailAddLoading, setEnrollmentEmailAddLoading] = useState(false);
   const [enrollmentEmailLocations, setEnrollmentEmailLocations] = useState<
     Array<{ id: string; name: string; newCount: number }>
@@ -187,7 +192,10 @@ export default function MessagesPanel({
   const canPickIndividuals = mode === 'manager' || mode === 'teacher' || mode === 'parent';
   const canUseExternalEmails = mode === 'manager' || mode === 'teacher';
 
-  const clearComposeFields = useCallback((options?: { resetSection?: boolean }) => {
+  const clearComposeFields = useCallback((options?: {
+    resetSection?: boolean;
+    keepEnrollmentDraft?: boolean;
+  }) => {
     setSelectedRecipientIds([]);
     setSelectedRecipientLabels({});
     setSingleRecipientId('');
@@ -199,11 +207,17 @@ export default function MessagesPanel({
     setSendPreviewOpen(false);
     setShowGroupFilters(false);
     setBulkAddLoading(null);
-    setComposeSubject('');
-    setComposeContent('');
+    setComposeSubject(
+      options?.keepEnrollmentDraft ? ENROLLMENT_EMAIL_DRAFT.subject : ''
+    );
+    setComposeContent(
+      options?.keepEnrollmentDraft ? ENROLLMENT_EMAIL_DRAFT.content : ''
+    );
     setExternalEmailRecipients([]);
     setExternalEmailBulkPaste('');
     setEnrollmentEmailLocationId('');
+    setEnrollmentEmailBirthYear('');
+    setEnrollmentEmailBirthYears([]);
     setEnrollmentEmailAddLoading(false);
     pendingComposeMetaRef.current = null;
     setRecipientsReloadToken((t) => t + 1);
@@ -398,16 +412,27 @@ export default function MessagesPanel({
       setExternalEmailRecipients([]);
       setExternalEmailBulkPaste('');
       setEnrollmentEmailLocationId('');
+      setEnrollmentEmailBirthYear('');
+      setEnrollmentEmailBirthYears([]);
       setEnrollmentEmailAddLoading(false);
-      if (section !== 'enrollment-email') {
+      if (section === 'enrollment-email') {
+        setComposeSubject(ENROLLMENT_EMAIL_DRAFT.subject);
+        setComposeContent(ENROLLMENT_EMAIL_DRAFT.content);
+      } else {
+        setComposeSubject('');
+        setComposeContent('');
         setEnrollmentEmailLocations([]);
       }
       return;
     }
 
+    setComposeSubject('');
+    setComposeContent('');
     setExternalEmailRecipients([]);
     setExternalEmailBulkPaste('');
     setEnrollmentEmailLocationId('');
+    setEnrollmentEmailBirthYear('');
+    setEnrollmentEmailBirthYears([]);
     setEnrollmentEmailAddLoading(false);
     setEnrollmentEmailLocations([]);
     setSelectedRecipientIds([]);
@@ -526,6 +551,7 @@ export default function MessagesPanel({
     const composeMeta = meta ?? pendingComposeMetaRef.current;
 
     const isEmailSection = isExternalEmailComposeSection(composeSection);
+    const isEnrollmentEmail = composeSection === 'enrollment-email';
     const recipientIds = isEmailSection
       ? []
       : canPickIndividuals
@@ -533,11 +559,22 @@ export default function MessagesPanel({
         : singleRecipientId
           ? [singleRecipientId]
           : [];
-    const emailsToSend = isEmailSection
-      ? uniqueEmailsFromRecipients(externalEmailRecipients)
+    const emailsToSend =
+      isEmailSection && !isEnrollmentEmail
+        ? uniqueEmailsFromRecipients(externalEmailRecipients)
+        : [];
+    const enrollmentToSend = isEnrollmentEmail
+      ? externalEmailRecipients
+          .map((r) => ({
+            email: r.email.trim().toLowerCase(),
+            childName: (r.childName ?? '').trim(),
+          }))
+          .filter((r) => r.email.length > 0)
       : [];
     if (
-      (recipientIds.length === 0 && emailsToSend.length === 0) ||
+      (recipientIds.length === 0 &&
+        emailsToSend.length === 0 &&
+        enrollmentToSend.length === 0) ||
       !composeSubject.trim() ||
       !composeContent.trim()
     ) {
@@ -548,7 +585,11 @@ export default function MessagesPanel({
       );
       return;
     }
-    const totalRecipients = isEmailSection ? emailsToSend.length : recipientIds.length;
+    const totalRecipients = isEnrollmentEmail
+      ? enrollmentToSend.length
+      : isEmailSection
+        ? emailsToSend.length
+        : recipientIds.length;
     if (totalRecipients > 1 && !sendPreviewOpen) {
       setSendPreviewOpen(true);
       return;
@@ -561,9 +602,11 @@ export default function MessagesPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           recipientIds,
-          ...(isEmailSection && canUseExternalEmails
-            ? { externalEmails: emailsToSend }
-            : {}),
+          ...(isEnrollmentEmail && canUseExternalEmails
+            ? { enrollmentEmailRecipients: enrollmentToSend }
+            : isEmailSection && canUseExternalEmails
+              ? { externalEmails: emailsToSend }
+              : {}),
           subject: composeSubject.trim(),
           content: composeContent.trim(),
           ...(composeMeta?.templateKey
@@ -626,53 +669,75 @@ export default function MessagesPanel({
     setError(null);
   };
 
-  const loadEnrollmentEmailRecipients = useCallback(async (locationId: string) => {
-    // Zachowaj tylko ręczne adresy; zgłoszenia podmieniamy pod wybraną lokalizację.
-    setExternalEmailRecipients((prev) => prev.filter((r) => r.key.startsWith('manual:')));
-    if (!locationId) {
-      setEnrollmentEmailAddLoading(false);
-      return;
-    }
-    setEnrollmentEmailAddLoading(true);
-    setError(null);
-    try {
-      const q = new URLSearchParams({ locationId });
-      const res = await fetch(`/api/messages/enrollment-email-recipients?${q}`, {
-        cache: 'no-store',
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message ?? 'Błąd pobierania zgłoszeń');
-      const list = (data.recipients ?? []) as Array<{
-        requestId: string;
-        email: string;
-        parentFirstName: string;
-        parentLastName: string;
-        childFirstName: string;
-        childLastName: string;
-      }>;
-      const fromEnrollment: ComposeExternalEmailRecipient[] = list.map((row) => ({
-        key: row.requestId,
-        email: row.email,
-        parentName: `${row.parentFirstName} ${row.parentLastName}`.trim(),
-        childName: `${row.childFirstName} ${row.childLastName}`.trim(),
-      }));
-      setExternalEmailRecipients((prev) => [
-        ...prev.filter((r) => r.key.startsWith('manual:')),
-        ...fromEnrollment,
-      ]);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Błąd pobierania zgłoszeń');
-    } finally {
-      setEnrollmentEmailAddLoading(false);
-    }
-  }, []);
+  const loadEnrollmentEmailRecipients = useCallback(
+    async (locationId: string, birthYear: string) => {
+      // Zachowaj tylko ręczne adresy; zgłoszenia podmieniamy pod wybraną lokalizację/rok.
+      setExternalEmailRecipients((prev) => prev.filter((r) => r.key.startsWith('manual:')));
+      if (!locationId) {
+        setEnrollmentEmailBirthYears([]);
+        setEnrollmentEmailAddLoading(false);
+        return;
+      }
+      setEnrollmentEmailAddLoading(true);
+      setError(null);
+      try {
+        const q = new URLSearchParams({ locationId });
+        if (birthYear) q.set('birthYear', birthYear);
+        const res = await fetch(`/api/messages/enrollment-email-recipients?${q}`, {
+          cache: 'no-store',
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message ?? 'Błąd pobierania zgłoszeń');
+        const years = (data.birthYears ?? []) as Array<{ year: number; count: number }>;
+        setEnrollmentEmailBirthYears(years);
+        if (birthYear && !years.some((y) => String(y.year) === birthYear)) {
+          setEnrollmentEmailBirthYear('');
+        }
+        const list = (data.recipients ?? []) as Array<{
+          requestId: string;
+          email: string;
+          parentFirstName: string;
+          parentLastName: string;
+          childFirstName: string;
+          childLastName: string;
+          childBirthYear?: number | null;
+        }>;
+        const fromEnrollment: ComposeExternalEmailRecipient[] = list.map((row) => ({
+          key: row.requestId,
+          email: row.email,
+          parentName: `${row.parentFirstName} ${row.parentLastName}`.trim(),
+          childName: `${row.childFirstName} ${row.childLastName}`.trim(),
+          childBirthYear: row.childBirthYear ?? null,
+        }));
+        setExternalEmailRecipients((prev) => [
+          ...prev.filter((r) => r.key.startsWith('manual:')),
+          ...fromEnrollment,
+        ]);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Błąd pobierania zgłoszeń');
+      } finally {
+        setEnrollmentEmailAddLoading(false);
+      }
+    },
+    []
+  );
 
   const handleEnrollmentEmailLocationChange = useCallback(
     (locationId: string) => {
       setEnrollmentEmailLocationId(locationId);
-      void loadEnrollmentEmailRecipients(locationId);
+      setEnrollmentEmailBirthYear('');
+      void loadEnrollmentEmailRecipients(locationId, '');
     },
     [loadEnrollmentEmailRecipients]
+  );
+
+  const handleEnrollmentEmailBirthYearChange = useCallback(
+    (year: string) => {
+      setEnrollmentEmailBirthYear(year);
+      if (!enrollmentEmailLocationId) return;
+      void loadEnrollmentEmailRecipients(enrollmentEmailLocationId, year);
+    },
+    [enrollmentEmailLocationId, loadEnrollmentEmailRecipients]
   );
 
   const addRecipient = (r: RecipientOption) => {
@@ -1047,7 +1112,11 @@ export default function MessagesPanel({
         onComposeContentChange={setComposeContent}
         sendingCompose={sendingCompose}
         onSend={(meta) => void handleSendCompose(meta)}
-        onClearForm={() => clearComposeFields()}
+        onClearForm={() =>
+          clearComposeFields({
+            keepEnrollmentDraft: composeSection === 'enrollment-email',
+          })
+        }
         composeSection={composeSection}
         onComposeSectionChange={handleComposeSectionChange}
         showSectionTabs={canUseExternalEmails}
@@ -1061,6 +1130,9 @@ export default function MessagesPanel({
         }
         enrollmentEmailLocationId={enrollmentEmailLocationId}
         onEnrollmentEmailLocationIdChange={handleEnrollmentEmailLocationChange}
+        enrollmentEmailBirthYear={enrollmentEmailBirthYear}
+        onEnrollmentEmailBirthYearChange={handleEnrollmentEmailBirthYearChange}
+        enrollmentEmailBirthYears={enrollmentEmailBirthYears}
         enrollmentEmailAddLoading={enrollmentEmailAddLoading}
         enrollmentEmailLocations={enrollmentEmailLocations}
         messageTemplates={messageTemplates}
@@ -1083,9 +1155,11 @@ export default function MessagesPanel({
             <div className="border-b border-zinc-200 px-5 py-4">
               <h3 className="text-lg font-bold text-zinc-900">Podgląd wysyłki</h3>
               <p className="mt-1 text-sm text-zinc-600">
-                {isExternalEmailComposeSection(composeSection)
-                  ? `Wyślesz e-mail do ${uniqueEmailsFromRecipients(externalEmailRecipients).length} adresów`
-                  : `Wyślesz wiadomość do ${selectedRecipientIds.length} odbiorców`}
+                {composeSection === 'enrollment-email'
+                  ? `Wyślesz ${externalEmailRecipients.length} e-maili (osobno na każde dziecko)`
+                  : isExternalEmailComposeSection(composeSection)
+                    ? `Wyślesz e-mail do ${uniqueEmailsFromRecipients(externalEmailRecipients).length} adresów`
+                    : `Wyślesz wiadomość do ${selectedRecipientIds.length} odbiorców`}
               </p>
             </div>
             <ul className="max-h-64 overflow-y-auto px-5 py-3 text-sm">

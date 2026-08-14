@@ -6,6 +6,7 @@ export type ComposeExternalEmailRecipient = {
   email: string;
   parentName?: string;
   childName?: string;
+  childBirthYear?: number | null;
 };
 
 export type ComposeEmailRecipientsMode = 'manual' | 'enrollment';
@@ -22,6 +23,9 @@ type Props = {
   locations?: Array<{ id: string; name: string; newCount?: number }>;
   enrollmentLocationId?: string;
   onEnrollmentLocationIdChange?: (locationId: string) => void;
+  birthYears?: Array<{ year: number; count: number }>;
+  enrollmentBirthYear?: string;
+  onEnrollmentBirthYearChange?: (year: string) => void;
   enrollmentAddLoading?: boolean;
 };
 
@@ -35,24 +39,18 @@ export default function ComposeEmailRecipientsColumn({
   locations = [],
   enrollmentLocationId = '',
   onEnrollmentLocationIdChange,
+  birthYears = [],
+  enrollmentBirthYear = '',
+  onEnrollmentBirthYearChange,
   enrollmentAddLoading = false,
 }: Props) {
   const isEnrollment = mode === 'enrollment';
 
   return (
     <div className="flex min-h-0 flex-col overflow-hidden border-b border-zinc-200 bg-sky-50/40 p-3 md:border-b-0 md:border-r md:p-4">
-      <p className="mb-1 shrink-0 text-sm font-semibold text-zinc-800">Adresy odbiorców</p>
-      <p className="mb-3 shrink-0 text-xs text-zinc-600">
-        Każdy adres dostanie osobną wiadomość e-mail (odbiorcy nie widzą siebie nawzajem). Jeśli adres
-        jest w bazie szkoły, wiadomość trafi też do panelu.
-      </p>
-
       {isEnrollment ? (
-        <div className="mb-3 shrink-0 rounded-xl border border-sky-200 bg-white p-3">
-          <p className="mb-1.5 text-xs font-semibold text-zinc-800">Zgłoszenia (status NEW)</p>
-          <p className="mb-2 text-[11px] leading-snug text-zinc-500">
-            Po wyborze lokalizacji od razu widać listę rodziców — możesz usunąć pojedyncze osoby.
-          </p>
+        <div className="mb-3 shrink-0 space-y-2 rounded-xl border border-sky-200 bg-white p-3">
+          <p className="text-xs font-semibold text-zinc-800">Zgłoszenia (status NEW)</p>
           <select
             value={enrollmentLocationId}
             onChange={(e) => onEnrollmentLocationIdChange?.(e.target.value)}
@@ -69,12 +67,22 @@ export default function ComposeEmailRecipientsColumn({
               </option>
             ))}
           </select>
+          <select
+            value={enrollmentBirthYear}
+            onChange={(e) => onEnrollmentBirthYearChange?.(e.target.value)}
+            disabled={!enrollmentLocationId || enrollmentAddLoading}
+            className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 [color-scheme:light] disabled:opacity-60"
+            aria-label="Rok urodzenia dziecka"
+          >
+            <option value="">Wszystkie lata urodzenia</option>
+            {birthYears.map((y) => (
+              <option key={y.year} value={String(y.year)}>
+                {y.year} ({y.count})
+              </option>
+            ))}
+          </select>
           {enrollmentAddLoading ? (
-            <p className="mt-2 text-[11px] text-sky-800">Ładowanie zgłoszeń…</p>
-          ) : enrollmentLocationId ? (
-            <p className="mt-2 text-[11px] text-zinc-500">
-              Z tej lokalizacji: {recipients.length}
-            </p>
+            <p className="text-[11px] text-sky-800">Ładowanie zgłoszeń…</p>
           ) : null}
         </div>
       ) : (
@@ -102,7 +110,9 @@ export default function ComposeEmailRecipientsColumn({
           <p className="px-2 py-4 text-xs text-zinc-500">
             {isEnrollment
               ? enrollmentLocationId
-                ? 'Brak zgłoszeń NEW dla tej lokalizacji'
+                ? enrollmentBirthYear
+                  ? `Brak zgłoszeń NEW dla roku ${enrollmentBirthYear}`
+                  : 'Brak zgłoszeń NEW dla tej lokalizacji'
                 : 'Wybierz lokalizację, aby zobaczyć odbiorców'
               : 'Brak dodanych adresów'}
           </p>
@@ -117,7 +127,11 @@ export default function ComposeEmailRecipientsColumn({
                   <p className="truncate font-semibold">
                     {r.parentName || 'Rodzic'}
                     {r.childName ? (
-                      <span className="font-normal text-sky-800"> · dziecko: {r.childName}</span>
+                      <span className="font-normal text-sky-800">
+                        {' '}
+                        · dziecko: {r.childName}
+                        {r.childBirthYear != null ? ` (${r.childBirthYear})` : ''}
+                      </span>
                     ) : null}
                   </p>
                   <p className="truncate text-sky-800">{r.email}</p>

@@ -10,6 +10,7 @@ import {
   runPgTransaction,
 } from "@/lib/db";
 import { isValidEmailAddress } from "@/lib/email-address";
+import { fillTemplatePlaceholders } from "@/lib/message-templates";
 import {
   fetchThreadRoots,
   getThreadRootId,
@@ -95,6 +96,7 @@ export async function POST(request: NextRequest) {
   let body: {
     recipientIds?: unknown;
     externalEmails?: unknown;
+    enrollmentEmailRecipients?: unknown;
     subject?: unknown;
     content?: unknown;
     parentMessageId?: unknown;
@@ -117,6 +119,20 @@ export async function POST(request: NextRequest) {
         .filter((e) => isValidEmailAddress(e))
     : [];
   const externalEmails = [...new Set(externalEmailsInput)];
+  const enrollmentEmailRecipients = Array.isArray(body.enrollmentEmailRecipients)
+    ? body.enrollmentEmailRecipients
+        .map((item) => {
+          if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+          const row = item as { email?: unknown; childName?: unknown };
+          const email =
+            typeof row.email === "string" ? row.email.trim().toLowerCase() : "";
+          if (!isValidEmailAddress(email)) return null;
+          const childName =
+            typeof row.childName === "string" ? row.childName.trim() : "";
+          return { email, childName };
+        })
+        .filter((r): r is { email: string; childName: string } => r != null)
+    : [];
   const subject = typeof body.subject === "string" ? body.subject.trim() : "";
   const content = typeof body.content === "string" ? body.content.trim() : "";
   const parentMessageId =
@@ -132,6 +148,144 @@ export async function POST(request: NextRequest) {
 
   if (!subject || !content) {
     return NextResponse.json({ message: "Temat i treść są wymagane" }, { status: 400 });
+  }
+
+  /** E-mail ze zgłoszeń: jeden mail na dziecko, z {{imie_i_nazwisko_dziecka}} (lub {{dziecko}}) w temacie/treści. */
+  if (enrollmentEmailRecipients.length > 0) {
+    if (actor.user.role !== "MANAGER" && actor.user.role !== "TEACHER") {
+      return NextResponse.json(
+        { message: "Brak uprawnień do wysyłki e-mail ze zgłoszeń" },
+        { status: 403 }
+      );
+    }
+    if (parentMessageId) {
+      return NextResponse.json(
+        { message: "E-mail ze zgłoszeń można wysłać tylko jako nową wiadomość" },
+        { status: 400 }
+      );
+    }
+    if (enrollmentEmailRecipients.length > 500) {
+      return NextResponse.json(
+        { message: "Maksymalnie 500 odbiorców na jedną wysyłkę" },
+        { status: 400 }
+      );
+    }
+
+    const emails = enrollmentEmailRecipients.map((r) => r.email);
+    const byEmail = await resolveUsersByEmails(actor.user.schoolId, emails);
+    const senderUsers = await getUsersForEmail([actor.user.id]);
+    const senderReplyTo = senderUsers[0]?.email?.trim() || undefined;
+    const senderName = `${actor.user.firstName} ${actor.user.lastName}`.trim();
+    const senderRole = actor.user.role as "MANAGER" | "TEACHER";
+    const portalUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://www.harry-english.pl";
+
+    const personalized = enrollmentEmailRecipients.map((r) => {
+      const childName = r.childName || "dziecko";
+      const placeholders = {
+        dziecko: childName,
+        imie_i_nazwisko_dziecka: childName,
+      };
+      return {
+        email: r.email,
+        childName: r.childName,
+        subject: fillTemplatePlaceholders(subject, placeholders),
+        content: fillTemplatePlaceholders(content, placeholders),
+        user: byEmail.get(r.email) ?? null,
+      };
+    });
+
+    const portalRows = personalized
+      .filter((p) => p.user && p.user.id !== actor.user.id)
+      .map((p) => {
+        const user = p.user!;
+        return {
+          schoolId: actor.user.schoolId,
+          parentId: resolveParentIdForMessage(
+            actor.user.role,
+            user.role,
+            actor.user.id,
+            user.id
+          ),
+          senderId: actor.user.id,
+          senderRole: actor.user.role,
+          recipientId: user.id,
+          subject: p.subject,
+          content: p.content,
+          parentMessageId: null as string | null,
+          broadcastId: null as string | null,
+        };
+      });
+
+    const broadcastId = portalRows.length > 1 ? randomUUID() : null;
+    for (const row of portalRows) {
+      row.broadcastId = broadcastId;
+    }
+
+    let messageIds: string[] = [];
+    if (portalRows.length > 0) {
+      const validation = await validateRecipientsForSender({
+        senderId: actor.user.id,
+        senderRole: actor.user.role,
+        schoolId: actor.user.schoolId,
+        recipientIds: [...new Set(portalRows.map((r) => r.recipientId))],
+        threadRootId: null,
+      });
+      if (!validation.ok) {
+        return NextResponse.json({ message: validation.message }, { status: 403 });
+      }
+      messageIds = await runPgTransaction(async (client) => insertMessages(client, portalRows));
+    }
+
+    let emailsSent = 0;
+    let emailsFailed = 0;
+    let portalMsgIdx = 0;
+
+    for (const item of personalized) {
+      const matchedUser = item.user && item.user.id !== actor.user.id ? item.user : null;
+      const messageId = matchedUser ? messageIds[portalMsgIdx++] : null;
+      const recipientName = matchedUser
+        ? `${matchedUser.first_name} ${matchedUser.last_name}`.trim()
+        : item.childName
+          ? `Rodzic: ${item.childName}`
+          : (() => {
+              const localPart = item.email.split("@")[0] ?? "";
+              return localPart.length > 0
+                ? localPart.charAt(0).toUpperCase() + localPart.slice(1)
+                : "Odbiorco";
+            })();
+
+      try {
+        await sendMessageNotificationEmail({
+          to: item.email,
+          recipientName,
+          senderName,
+          senderRole,
+          subject: item.subject,
+          contentPreview: item.content,
+          portalUrl,
+          deliveryMode: "direct-email",
+          replyTo: senderReplyTo,
+        });
+        emailsSent += 1;
+        if (messageId) {
+          await queryDb(`UPDATE messages SET email_status = 'SENT' WHERE id = $1`, [messageId]);
+        }
+      } catch (emailErr) {
+        console.error("Enrollment message notification email failed:", emailErr);
+        emailsFailed += 1;
+        if (messageId) {
+          await queryDb(`UPDATE messages SET email_status = 'FAILED' WHERE id = $1`, [messageId]);
+        }
+      }
+    }
+
+    return NextResponse.json({
+      messageIds,
+      broadcastId: broadcastId ?? undefined,
+      emailsSent,
+      emailsFailed,
+      externalEmailsCount: personalized.length,
+    });
   }
 
   let threadRootId: string | null = null;

@@ -225,7 +225,7 @@ export async function submitEnrollmentProposal(
     await updateUser(parentUserId, {
       first_name: parentFirstName,
       last_name: parentLastName,
-      phone: enrollment.parent_phone?.trim() || existing.phone || null,
+      phone: existing.phone?.trim() || enrollment.parent_phone?.trim() || null,
     });
   } else {
     const existing = await findUserBySchoolAndEmail(parentSchoolId, parentEmail);
@@ -240,7 +240,7 @@ export async function submitEnrollmentProposal(
       await updateUser(parentUserId, {
         first_name: parentFirstName,
         last_name: parentLastName,
-        phone: enrollment.parent_phone?.trim() || existing.phone || null,
+        phone: existing.phone?.trim() || enrollment.parent_phone?.trim() || null,
       });
     } else {
       tempPassword = generateTempPassword();

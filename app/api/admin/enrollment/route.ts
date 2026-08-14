@@ -27,15 +27,11 @@ export async function GET(request: NextRequest) {
     );
     const parentsParams = parentsSchoolId ? [parentsSchoolId] : [];
 
-    // Klucz karty: konto rodzica, inaczej e-mail + imię/nazwisko (żeby wspólny
-    // placeholder e-mail nie sklejał różnych rodzin w jedną kartę).
+    // Klucz karty: e-mail rodzica (to samo zgłoszenie = ten sam rodzic).
+    // Gdy brak e-maila — konto, żeby puste adresy nie sklejały rodzin.
     const parentGroupKeySql = `COALESCE(
-         NULLIF(BTRIM(er.user_id), ''),
-         LOWER(BTRIM(er.parent_email::text))
-           || E'\\x1f'
-           || LOWER(BTRIM(er.parent_first_name::text))
-           || E'\\x1f'
-           || LOWER(BTRIM(er.parent_last_name::text))
+         LOWER(NULLIF(BTRIM(er.parent_email::text), '')),
+         NULLIF(BTRIM(er.user_id), '')
        )`;
 
     const parentsRes = await queryDb<{
@@ -52,12 +48,14 @@ export async function GET(request: NextRequest) {
          ${parentGroupKeySql} AS id,
          MAX(COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id, '')) AS parent_user_id,
          COALESCE(
-           MAX(NULLIF(BTRIM(er.parent_first_name), '')),
+           (ARRAY_AGG(NULLIF(BTRIM(er.parent_first_name), '') ORDER BY er.created_at ASC)
+             FILTER (WHERE NULLIF(BTRIM(er.parent_first_name), '') IS NOT NULL))[1],
            MAX(NULLIF(BTRIM(u.first_name), '')),
            ''
          ) AS first_name,
          COALESCE(
-           MAX(NULLIF(BTRIM(er.parent_last_name), '')),
+           (ARRAY_AGG(NULLIF(BTRIM(er.parent_last_name), '') ORDER BY er.created_at ASC)
+             FILTER (WHERE NULLIF(BTRIM(er.parent_last_name), '') IS NOT NULL))[1],
            MAX(NULLIF(BTRIM(u.last_name), '')),
            ''
          ) AS last_name,

@@ -5,18 +5,18 @@ import { NextResponse } from "next/server";
  */
 import {
   DuplicateEnrollmentError,
+  findExistingPublicEnrollmentParent,
   findUserBySchoolAndEmail,
   getRegistrationSchoolId,
   insertPublicEnrollmentRequests,
   queryDb,
-  updateUser,
 } from "@/lib/db";
-import { formatPersonName } from "@/lib/format-person-name";
 import {
   sendEnrollmentConfirmationToParent,
   sendPublicEnrollmentBackupEmail,
 } from "@/lib/email";
-import { normalizePolishPhone } from "@/lib/phone";
+import { existingEmailDifferentPhoneMessage } from "@/lib/enrollment-duplicate";
+import { normalizePolishPhone, phonesMatch } from "@/lib/phone";
 import { pgDateToYmd } from "@/lib/school-timezone";
 
 /** Kopia mailowa zgłoszeń na kontakt@ dla wskazanych szkół (prod + dev). */
@@ -137,6 +137,7 @@ export async function POST(request: Request) {
       children,
       rodoConsent,
       confirmExistingAccount,
+      confirmPhoneMismatch,
     } = body;
 
     if (
@@ -326,6 +327,17 @@ export async function POST(request: Request) {
     );
     const existingParentAccount =
       existingParent && existingParent.role === "PARENT" ? existingParent : null;
+    const existingEnrollmentParent = await findExistingPublicEnrollmentParent(
+      schoolId,
+      parentEmailNormalized
+    );
+    const storedPhone =
+      existingEnrollmentParent?.parentPhone ||
+      existingParentAccount?.phone ||
+      null;
+    const phoneMismatch = Boolean(
+      storedPhone && !phonesMatch(storedPhone, phoneNorm.value)
+    );
 
     if (existingParentAccount && confirmExistingAccount !== true) {
       const accountName =
@@ -338,14 +350,32 @@ export async function POST(request: Request) {
             firstName: existingParentAccount.first_name,
             lastName: existingParentAccount.last_name,
           },
+          phoneMismatch,
+          warning: phoneMismatch
+            ? existingEmailDifferentPhoneMessage(parentEmailNormalized)
+            : undefined,
+        },
+        { status: 409 }
+      );
+    }
+
+    if (phoneMismatch && confirmPhoneMismatch !== true) {
+      return NextResponse.json(
+        {
+          code: "EXISTING_ENROLLMENT_PHONE_MISMATCH",
+          message: existingEmailDifferentPhoneMessage(parentEmailNormalized),
         },
         { status: 409 }
       );
     }
 
     const enrollmentEmailPayload = {
-      parentFirstName: String(firstName).trim(),
-      parentLastName: String(lastName).trim(),
+      parentFirstName: existingEnrollmentParent?.parentFirstName
+        || existingParentAccount?.first_name
+        || String(firstName).trim(),
+      parentLastName: existingEnrollmentParent?.parentLastName
+        || existingParentAccount?.last_name
+        || String(lastName).trim(),
       parentEmail: parentEmailNormalized,
       children: enrollmentChildren,
     };
@@ -360,22 +390,19 @@ export async function POST(request: Request) {
         parentFirstName: enrollmentEmailPayload.parentFirstName,
         parentLastName: enrollmentEmailPayload.parentLastName,
         parentEmail: enrollmentEmailPayload.parentEmail,
-        parentPhone: phoneNorm.value,
+        parentPhone:
+          existingEnrollmentParent?.parentPhone ||
+          existingParentAccount?.phone ||
+          phoneNorm.value,
         rodoConsent: true,
         children: enrollmentEmailPayload.children,
         dbSaveOk: true,
       };
     }
 
+    let keptExistingPhone = false;
     try {
-      if (existingParentAccount) {
-        await updateUser(existingParentAccount.id, {
-          first_name: formatPersonName(String(firstName).trim()),
-          last_name: formatPersonName(String(lastName).trim()),
-          phone: phoneNorm.value,
-        });
-      }
-      await insertPublicEnrollmentRequests({
+      const insertResult = await insertPublicEnrollmentRequests({
         schoolId,
         email: parentEmailNormalized,
         firstName: String(firstName).trim(),
@@ -384,6 +411,7 @@ export async function POST(request: Request) {
         children: normalizedChildren,
         userId: existingParentAccount?.id ?? null,
       });
+      keptExistingPhone = insertResult.keptExistingPhone;
     } catch (insertErr) {
       if (insertErr instanceof DuplicateEnrollmentError) {
         return NextResponse.json({ message: insertErr.message }, { status: 409 });
@@ -435,6 +463,10 @@ export async function POST(request: Request) {
     return NextResponse.json({
       message:
         "Zgłoszenie zostało zapisane. Skontaktujemy się z Tobą po weryfikacji.",
+      phoneKeptFromExisting: keptExistingPhone,
+      warning: keptExistingPhone
+        ? existingEmailDifferentPhoneMessage(parentEmailNormalized)
+        : undefined,
     });
   } catch (error: unknown) {
     console.error("Public enrollment error:", error);

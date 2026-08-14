@@ -6,6 +6,8 @@ import ComposeEmailRecipientsColumn, {
 } from '@/src/components/messages/ComposeEmailRecipientsColumn';
 import {
   applyTemplateValues,
+  ENROLLMENT_CHILD_NAME_PLACEHOLDER,
+  ENROLLMENT_CHILD_NAME_TOKEN,
   extractTemplatePlaceholders,
   getTemplateFieldMeta,
 } from '@/lib/message-templates';
@@ -309,6 +311,9 @@ export interface ComposeMessageModalProps {
   onRemoveExternalEmailRecipient?: (key: string) => void;
   enrollmentEmailLocationId?: string;
   onEnrollmentEmailLocationIdChange?: (locationId: string) => void;
+  enrollmentEmailBirthYear?: string;
+  onEnrollmentEmailBirthYearChange?: (year: string) => void;
+  enrollmentEmailBirthYears?: Array<{ year: number; count: number }>;
   enrollmentEmailAddLoading?: boolean;
   enrollmentEmailLocations?: Array<{ id: string; name: string; newCount?: number }>;
   messageTemplates?: Array<{ key: string; label: string; subject: string; content: string }>;
@@ -332,10 +337,21 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
 
   if (!props.open) return null;
 
+  const section = props.composeSection ?? 'parents';
+  const isEmailSection = section === 'email' || section === 'enrollment-email';
+  const isEnrollmentEmailSection = section === 'enrollment-email';
+  const isTeachersAudience = section === 'teachers';
+
   const selectedTemplate =
     props.messageTemplates?.find((t) => t.key === selectedTemplateKey) ?? null;
   const templateFields = selectedTemplate
-    ? extractTemplatePlaceholders(selectedTemplate.subject, selectedTemplate.content)
+    ? extractTemplatePlaceholders(selectedTemplate.subject, selectedTemplate.content).filter(
+        (field) =>
+          !(
+            isEnrollmentEmailSection &&
+            (field === 'dziecko' || field === ENROLLMENT_CHILD_NAME_PLACEHOLDER)
+          )
+      )
     : [];
   const templateFieldsIncomplete =
     selectedTemplate != null &&
@@ -347,7 +363,11 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
   ) => {
     if (!props.onApplyTemplate) return;
     const displayValues = { ...values };
-    if (displayValues.dziecko) {
+    if (isEnrollmentEmailSection) {
+      // Zostaw token do podstawienia przy wysyłce per dziecko.
+      displayValues.dziecko = ENROLLMENT_CHILD_NAME_TOKEN;
+      displayValues[ENROLLMENT_CHILD_NAME_PLACEHOLDER] = ENROLLMENT_CHILD_NAME_TOKEN;
+    } else if (displayValues.dziecko) {
       const child = (props.parentChildren ?? []).find((c) => c.id === displayValues.dziecko);
       if (child) {
         displayValues.dziecko = `${child.firstName} ${child.lastName}`.trim();
@@ -369,7 +389,12 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
     const emptyValues: Record<string, string> = {};
     const children = props.parentChildren ?? [];
     for (const field of extractTemplatePlaceholders(tpl.subject, tpl.content)) {
-      if (field === 'dziecko' && children.length === 1) {
+      if (
+        isEnrollmentEmailSection &&
+        (field === 'dziecko' || field === ENROLLMENT_CHILD_NAME_PLACEHOLDER)
+      ) {
+        emptyValues[field] = ENROLLMENT_CHILD_NAME_TOKEN;
+      } else if (field === 'dziecko' && children.length === 1) {
         emptyValues[field] = children[0].id;
       } else {
         emptyValues[field] = '';
@@ -401,11 +426,11 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
   const uniqueExternalEmails = [
     ...new Set(externalEmailRecipients.map((r) => r.email.trim().toLowerCase()).filter(Boolean)),
   ];
-  const section = props.composeSection ?? 'parents';
-  const isEmailSection = section === 'email' || section === 'enrollment-email';
-  const isEnrollmentEmailSection = section === 'enrollment-email';
-  const isTeachersAudience = section === 'teachers';
-  const totalRecipients = isEmailSection ? uniqueExternalEmails.length : adresatIds.length;
+  const totalRecipients = isEnrollmentEmailSection
+    ? externalEmailRecipients.length
+    : isEmailSection
+      ? uniqueExternalEmails.length
+      : adresatIds.length;
 
   const searchPlaceholder =
     props.mode === 'parent'
@@ -533,6 +558,11 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
               enrollmentLocationId={props.enrollmentEmailLocationId ?? ''}
               onEnrollmentLocationIdChange={(id) =>
                 props.onEnrollmentEmailLocationIdChange?.(id)
+              }
+              birthYears={props.enrollmentEmailBirthYears ?? []}
+              enrollmentBirthYear={props.enrollmentEmailBirthYear ?? ''}
+              onEnrollmentBirthYearChange={(year) =>
+                props.onEnrollmentEmailBirthYearChange?.(year)
               }
               enrollmentAddLoading={props.enrollmentEmailAddLoading}
             />
@@ -823,6 +853,15 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
                 </div>
               ) : (
                 <>
+                  {isEnrollmentEmailSection && (
+                    <p className="shrink-0 text-[11px] leading-snug text-zinc-500">
+                      W temacie i treści jest token{' '}
+                      <code className="rounded bg-zinc-100 px-1 py-0.5 text-[11px] text-zinc-800">
+                        {ENROLLMENT_CHILD_NAME_TOKEN}
+                      </code>{' '}
+                      (imię i nazwisko dziecka) — przy wysyłce podstawi się dane z listy odbiorców.
+                    </p>
+                  )}
                   <div className="shrink-0">
                     <label htmlFor="compose-subject" className="mb-1 block text-sm font-medium text-zinc-800">
                       Temat
@@ -845,7 +884,7 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
                       value={props.composeContent}
                       onChange={(e) => props.onComposeContentChange(e.target.value)}
                       className={`min-h-0 w-full flex-1 resize-none ${COMPOSE_INPUT}`}
-                      placeholder="Napisz wiadomość…"
+                      placeholder={isEnrollmentEmailSection ? undefined : 'Napisz wiadomość…'}
                     />
                   </div>
                 </>

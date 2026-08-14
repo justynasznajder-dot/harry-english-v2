@@ -31,6 +31,11 @@ export function childEnrollmentIdentityKey(
 export const DUPLICATE_CHILD_IN_FORM_MESSAGE =
   "To dziecko występuje w formularzu więcej niż raz";
 
+export function existingEmailDifferentPhoneMessage(email: string): string {
+  const normalized = email.trim().toLowerCase();
+  return `Użytkownik już jest w bazie z podanym mailem ${normalized} i innym nr telefonu. Dziecko zostanie dopisane do tamtego zgłoszenia.`;
+}
+
 /** Indeksy dzieci powtórzonych w tej samej liście (imię + nazwisko + data urodzenia). */
 export function findDuplicateChildIndices(
   children: Array<{ firstName: string; lastName: string; birthDate: string }>

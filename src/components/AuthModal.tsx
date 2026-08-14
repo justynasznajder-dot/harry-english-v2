@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import {
   DUPLICATE_CHILD_IN_FORM_MESSAGE,
+  existingEmailDifferentPhoneMessage,
   findDuplicateChildIndices,
 } from "@/lib/enrollment-duplicate";
 import { normalizePolishPhone } from "@/lib/phone";
@@ -44,8 +45,13 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
   const [existingAccountConfirm, setExistingAccountConfirm] = useState<{
     firstName: string;
     lastName: string;
+    phoneMismatch?: boolean;
   } | null>(null);
   const [confirmExistingAccount, setConfirmExistingAccount] = useState(false);
+  const [phoneMismatchConfirm, setPhoneMismatchConfirm] = useState(false);
+  const [confirmPhoneMismatch, setConfirmPhoneMismatch] = useState(false);
+  const [registerSuccessWarning, setRegisterSuccessWarning] = useState<string | null>(null);
+  const phoneMismatchMessage = existingEmailDifferentPhoneMessage(formData.email);
 
   useEffect(() => {
     if (!forgotPasswordSuccess) return;
@@ -62,6 +68,9 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
       setRegisterSuccess(false);
       setExistingAccountConfirm(null);
       setConfirmExistingAccount(false);
+      setPhoneMismatchConfirm(false);
+      setConfirmPhoneMismatch(false);
+      setRegisterSuccessWarning(null);
     }
   }, [isOpen, initialMode]);
 
@@ -134,7 +143,10 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
     }
   };
 
-  const submitRegister = async (opts?: { confirmExistingAccount?: boolean }) => {
+  const submitRegister = async (opts?: {
+    confirmExistingAccount?: boolean;
+    confirmPhoneMismatch?: boolean;
+  }) => {
     setErrors({});
 
     const newErrors: Record<string, string> = {};
@@ -211,8 +223,10 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
       return;
     }
 
-    const withConfirm =
+    const withAccountConfirm =
       opts?.confirmExistingAccount === true || confirmExistingAccount;
+    const withPhoneConfirm =
+      opts?.confirmPhoneMismatch === true || confirmPhoneMismatch;
 
     setIsLoading(true);
 
@@ -232,19 +246,30 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
             preferredLocationId: s.preferredLocationId.trim() || undefined,
           })),
           rodoConsent: formData.rodoConsent,
-          confirmExistingAccount: withConfirm || undefined,
+          confirmExistingAccount: withAccountConfirm || undefined,
+          confirmPhoneMismatch: withPhoneConfirm || undefined,
         }),
       });
 
       const data = (await response.json()) as {
         message?: string;
         code?: string;
+        warning?: string;
+        phoneMismatch?: boolean;
+        phoneKeptFromExisting?: boolean;
         existingAccount?: { firstName?: string; lastName?: string };
       };
 
       if (response.ok) {
         setExistingAccountConfirm(null);
         setConfirmExistingAccount(false);
+        setPhoneMismatchConfirm(false);
+        setConfirmPhoneMismatch(false);
+        setRegisterSuccessWarning(
+          data.phoneKeptFromExisting && data.warning
+            ? data.warning
+            : null
+        );
         setRegisterSuccess(true);
         return;
       }
@@ -254,16 +279,33 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
         data.code === "EXISTING_ACCOUNT_CONFIRMATION_REQUIRED" &&
         data.existingAccount
       ) {
+        setErrors({});
         setExistingAccountConfirm({
           firstName: String(data.existingAccount.firstName ?? "").trim(),
           lastName: String(data.existingAccount.lastName ?? "").trim(),
+          phoneMismatch: Boolean(data.phoneMismatch),
         });
         setConfirmExistingAccount(false);
+        setPhoneMismatchConfirm(false);
         return;
       }
 
+      if (
+        response.status === 409 &&
+        data.code === "EXISTING_ENROLLMENT_PHONE_MISMATCH"
+      ) {
+        setErrors({});
+        setPhoneMismatchConfirm(true);
+        setConfirmPhoneMismatch(false);
+        return;
+      }
+
+      setPhoneMismatchConfirm(false);
+      setExistingAccountConfirm(null);
       setErrors({ form: data.message || "Nie udało się wysłać zgłoszenia" });
     } catch {
+      setPhoneMismatchConfirm(false);
+      setExistingAccountConfirm(null);
       setErrors({ form: "Wystąpił błąd. Spróbuj ponownie." });
     } finally {
       setIsLoading(false);
@@ -322,6 +364,11 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
     setErrors({});
     setForgotPasswordSuccess(false);
     setRegisterSuccess(false);
+    setRegisterSuccessWarning(null);
+    setExistingAccountConfirm(null);
+    setConfirmExistingAccount(false);
+    setPhoneMismatchConfirm(false);
+    setConfirmPhoneMismatch(false);
   };
 
   const addStudent = () => {
@@ -547,6 +594,11 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
                 Dziękujemy! Zgłoszenie zostało zapisane. Wkrótce skontaktujemy się z Tobą e-mailem lub
                 telefonicznie.
               </div>
+              {registerSuccessWarning && (
+                <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-950 text-sm">
+                  {registerSuccessWarning}
+                </div>
+              )}
               <button
                 type="button"
                 onClick={handleClose}
@@ -603,6 +655,8 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
                     setFormData({ ...formData, email: e.target.value });
                     setExistingAccountConfirm(null);
                     setConfirmExistingAccount(false);
+                    setPhoneMismatchConfirm(false);
+                    setConfirmPhoneMismatch(false);
                   }}
                   className={`w-full rounded-lg border ${errors.email ? 'border-red-300' : 'border-gray-300'} px-4 py-2.5 text-gray-900 focus:border-[#175244] focus:ring-2 focus:ring-[#175244]/20 outline-none transition-all`}
                   placeholder="twoj@email.pl"
@@ -620,9 +674,11 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
                   inputMode="tel"
                   autoComplete="tel"
                   value={formData.phone}
-                  onChange={(e) =>
-                    setFormData({ ...formData, phone: normalizePolishPhone(e.target.value) })
-                  }
+                  onChange={(e) => {
+                    setFormData({ ...formData, phone: normalizePolishPhone(e.target.value) });
+                    setPhoneMismatchConfirm(false);
+                    setConfirmPhoneMismatch(false);
+                  }}
                   onBlur={(e) =>
                     setFormData({ ...formData, phone: normalizePolishPhone(e.target.value) })
                   }
@@ -781,7 +837,7 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
                 {errors.rodoConsent && <p className="mt-1 text-xs text-red-600">{errors.rodoConsent}</p>}
               </div>
 
-              {errors.form && (
+              {errors.form && !existingAccountConfirm && !phoneMismatchConfirm && (
                 <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
                   {errors.form}
                 </div>
@@ -796,6 +852,9 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
                     </strong>
                     . Kontynuować? Zgłoszenie będzie powiązane z tym kontem.
                   </p>
+                  {existingAccountConfirm.phoneMismatch && (
+                    <p>{phoneMismatchMessage}</p>
+                  )}
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <button
                       type="button"
@@ -803,6 +862,8 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
                       onClick={() => {
                         setExistingAccountConfirm(null);
                         setConfirmExistingAccount(false);
+                        setPhoneMismatchConfirm(false);
+                        setConfirmPhoneMismatch(false);
                       }}
                       className="w-full rounded-full border border-amber-400 bg-white px-4 py-2.5 font-semibold text-amber-950 hover:bg-amber-100 disabled:opacity-50"
                     >
@@ -813,7 +874,14 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
                       disabled={isLoading}
                       onClick={() => {
                         setConfirmExistingAccount(true);
-                        void submitRegister({ confirmExistingAccount: true });
+                        setConfirmPhoneMismatch(
+                          existingAccountConfirm.phoneMismatch === true
+                        );
+                        void submitRegister({
+                          confirmExistingAccount: true,
+                          confirmPhoneMismatch:
+                            existingAccountConfirm.phoneMismatch === true,
+                        });
                       }}
                       className="w-full rounded-full bg-[#ffc94a] px-4 py-2.5 font-semibold text-[#3b2a10] hover:bg-[#ffd76f] disabled:opacity-50"
                     >
@@ -823,7 +891,37 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
                 </div>
               )}
 
-              {!existingAccountConfirm && (
+              {!existingAccountConfirm && phoneMismatchConfirm && (
+                <div className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+                  <p>{phoneMismatchMessage}</p>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <button
+                      type="button"
+                      disabled={isLoading}
+                      onClick={() => {
+                        setPhoneMismatchConfirm(false);
+                        setConfirmPhoneMismatch(false);
+                      }}
+                      className="w-full rounded-full border border-amber-400 bg-white px-4 py-2.5 font-semibold text-amber-950 hover:bg-amber-100 disabled:opacity-50"
+                    >
+                      Anuluj
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isLoading}
+                      onClick={() => {
+                        setConfirmPhoneMismatch(true);
+                        void submitRegister({ confirmPhoneMismatch: true });
+                      }}
+                      className="w-full rounded-full bg-[#ffc94a] px-4 py-2.5 font-semibold text-[#3b2a10] hover:bg-[#ffd76f] disabled:opacity-50"
+                    >
+                      {isLoading ? "Wysyłanie..." : "Kontynuuj zgłoszenie"}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {!existingAccountConfirm && !phoneMismatchConfirm && (
                 <button
                   type="submit"
                   disabled={isLoading}
