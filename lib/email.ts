@@ -8,6 +8,7 @@ const EMAIL_CID = {
   googleBtn: "he-google-btn",
   facebookBtn: "he-facebook-btn",
   kdrBtn: "he-kdr-btn",
+  instagramBtn: "he-instagram-btn",
   logo: "he-logo",
 } as const;
 
@@ -16,6 +17,7 @@ function buildEmailInlineAttachments(html: string): NonNullable<SendMailOptions[
     { file: "ocen_google1.png", cid: EMAIL_CID.googleBtn },
     { file: "facebook_like1.png", cid: EMAIL_CID.facebookBtn },
     { file: "KDR.png", cid: EMAIL_CID.kdrBtn },
+    { file: "instagram.png", cid: EMAIL_CID.instagramBtn },
     { file: "2zyrafa2.png", cid: EMAIL_CID.logo },
   ];
   return defs
@@ -58,6 +60,7 @@ const BRAND_FONT = "Geist, Arial, Helvetica, sans-serif";
 const EMAIL_DIVIDER_HEIGHT = 5;
 const EMAIL_CARD_BORDER_WIDTH = 1;
 const FACEBOOK_URL = "https://www.facebook.com/Zyrafa.Harry/";
+const INSTAGRAM_URL = "https://www.instagram.com/harryenglish.insta";
 const GOOGLE_REVIEWS_URL = "https://g.page/r/CXQ-JVaomYm6EBM/review";
 
 /** Wspólna wysokość przycisków social w stopce (szerokości z proporcji plików PNG). */
@@ -65,6 +68,7 @@ const EMAIL_SOCIAL_BTN_HEIGHT = 52;
 const EMAIL_SOCIAL_GOOGLE_WIDTH = Math.round((EMAIL_SOCIAL_BTN_HEIGHT * 421) / 188);
 const EMAIL_SOCIAL_FACEBOOK_WIDTH = Math.round((EMAIL_SOCIAL_BTN_HEIGHT * 681) / 227);
 const EMAIL_SOCIAL_KDR_WIDTH = Math.round((EMAIL_SOCIAL_BTN_HEIGHT * 1022) / 418);
+const EMAIL_SOCIAL_INSTAGRAM_WIDTH = Math.round((EMAIL_SOCIAL_BTN_HEIGHT * 2169) / 725);
 
 /** Paleta szablonu maili (gradienty ze strony, odporne na dark mode w kliencie poczty). */
 export type EmailPalette = {
@@ -112,6 +116,7 @@ function buildEmailSocialLinksButtons(): string {
   const googleW = EMAIL_SOCIAL_GOOGLE_WIDTH;
   const fbW = EMAIL_SOCIAL_FACEBOOK_WIDTH;
   const kdrW = EMAIL_SOCIAL_KDR_WIDTH;
+  const igW = EMAIL_SOCIAL_INSTAGRAM_WIDTH;
   const imgBaseStyle =
     "display:block;border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;";
   const imgSize = (w: number) =>
@@ -128,6 +133,12 @@ function buildEmailSocialLinksButtons(): string {
         <td align="center" valign="middle" height="${h}" style="padding:0;height:${h}px;line-height:${h}px;">
           <a href="${FACEBOOK_URL}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;">
             <img src="cid:${EMAIL_CID.facebookBtn}" alt="Polub nas na Facebooku" width="${fbW}" height="${h}" style="${imgSize(fbW)}" />
+          </a>
+        </td>
+        <td style="width:12px;font-size:0;line-height:0;">&nbsp;</td>
+        <td align="center" valign="middle" height="${h}" style="padding:0;height:${h}px;line-height:${h}px;">
+          <a href="${INSTAGRAM_URL}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;">
+            <img src="cid:${EMAIL_CID.instagramBtn}" alt="Obserwuj nas na Instagramie" width="${igW}" height="${h}" style="${imgSize(igW)}" />
           </a>
         </td>
         <td style="width:12px;font-size:0;line-height:0;">&nbsp;</td>
@@ -654,6 +665,7 @@ Kontakt:
 - kontakt@harry-english.pl
 - www.harry-english.pl
 - Facebook: ${FACEBOOK_URL}
+- Instagram: ${INSTAGRAM_URL}
     `.trim(),
   });
 }
@@ -832,6 +844,7 @@ ${messageBody}
 
 Opinie Google: ${GOOGLE_REVIEWS_URL}
 Facebook: ${FACEBOOK_URL}
+Instagram: ${INSTAGRAM_URL}
 
 Harry English`
       : `Dzień dobry ${params.recipientName},
@@ -848,6 +861,7 @@ Aby odpowiedzieć, zaloguj się do panelu. Nie odpowiadaj na tę wiadomość.
 
 Opinie Google: ${GOOGLE_REVIEWS_URL}
 Facebook: ${FACEBOOK_URL}
+Instagram: ${INSTAGRAM_URL}
 
 Harry English`,
   });

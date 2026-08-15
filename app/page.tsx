@@ -932,6 +932,20 @@ export default function HomePage() {
                   className="h-[52px] w-auto"
                 />
               </a>
+              <a
+                href="https://www.instagram.com/harryenglish.insta"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="transition-opacity hover:opacity-90"
+              >
+                <img
+                  src="/images/instagram.png"
+                  alt="Obserwuj nas na Instagramie"
+                  width={156}
+                  height={52}
+                  className="h-[52px] w-auto"
+                />
+              </a>
               <img
                 src="/images/KDR.png"
                 alt="Karta Dużej Rodziny"
