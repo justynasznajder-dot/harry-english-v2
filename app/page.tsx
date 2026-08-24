@@ -1106,7 +1106,7 @@ export default function HomePage() {
                   <div />
                   <div>koszt przy opłacie z góry za rok</div>
                   <div>koszt przy płatności ratalnej x10</div>
-                  <div>za pojedyncze zajęcia</div>
+                  <div>koszt przy opłacie za pojedyncze zajęcia</div>
                 </div>
                 {[
                   {
@@ -1155,7 +1155,7 @@ export default function HomePage() {
                         <th className="px-4 py-3 text-center text-sm font-semibold text-[#1f2933]"></th>
                         <th className="px-4 py-3 text-center text-sm font-semibold text-[#1f2933]">koszt przy opłacie z góry za rok</th>
                         <th className="px-4 py-3 text-center text-sm font-semibold text-[#1f2933]">koszt przy płatności ratalnej x10</th>
-                        <th className="px-4 py-3 text-center text-sm font-semibold text-[#1f2933]">opłata za pojedyncze zajęcia</th>
+                        <th className="px-4 py-3 text-center text-sm font-semibold text-[#1f2933]">koszt przy opłacie za pojedyncze zajęcia</th>
                       </tr>
                     </thead>
                     <tbody>
