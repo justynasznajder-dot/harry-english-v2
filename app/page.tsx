@@ -1133,13 +1133,13 @@ export default function HomePage() {
                     className="grid grid-cols-[minmax(4.5rem,auto)_1fr_1fr_1fr] gap-1.5 items-center rounded-xl border border-gray-200 bg-gray-50/50 p-2 text-center text-xs"
                   >
                     <div className="text-left text-[11px] font-semibold text-[#1f2933] leading-tight">{row.label}</div>
-                    <div className={`font-bold text-[#1f2933] ${row.label === "koszt roku" ? "inline-block bg-gray-100 rounded px-1.5 py-0.5" : ""}`}>
+                    <div className={`font-bold text-[#1f2933] ${row.label === "koszt roku" ? "inline-block bg-gray-300 rounded px-1.5 py-0.5" : ""}`}>
                       {row.rok[selectedPlan!]}
                     </div>
-                    <div className={`font-bold text-[#1f2933] ${row.label === "koszt miesiąca" ? "inline-block bg-gray-100 rounded px-1.5 py-0.5" : ""}`}>
+                    <div className={`font-bold text-[#1f2933] ${row.label === "koszt miesiąca" ? "inline-block bg-gray-300 rounded px-1.5 py-0.5" : ""}`}>
                       {row.ratalna[selectedPlan!]}
                     </div>
-                    <div className={`font-bold text-[#1f2933] ${row.label === "koszt 1 zajęć" ? "inline-block bg-gray-100 rounded px-1.5 py-0.5" : ""}`}>
+                    <div className={`font-bold text-[#1f2933] ${row.label === "koszt 1 zajęć" ? "inline-block bg-gray-300 rounded px-1.5 py-0.5" : ""}`}>
                       {row.pojedyncze[selectedPlan!]}
                     </div>
                   </div>
@@ -1173,7 +1173,7 @@ export default function HomePage() {
                           {selectedPlan === "swim" && "60 zł"}
                           {selectedPlan === "fly" && "—"}
                         </td>
-                        <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933] bg-gray-100">
+                        <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933] bg-gray-300">
                           {selectedPlan === "walk" && "49 zł"}
                           {selectedPlan === "run" && "55 zł"}
                           {selectedPlan === "swim" && "64 zł"}
@@ -1188,7 +1188,7 @@ export default function HomePage() {
                           {selectedPlan === "swim" && "370 zł"}
                           {selectedPlan === "fly" && "—"}
                         </td>
-                        <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933] bg-gray-100">
+                        <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933] bg-gray-300">
                           {selectedPlan === "walk" && "149 zł"}
                           {selectedPlan === "run" && "168 zł"}
                           {selectedPlan === "swim" && "396 zł"}
@@ -1203,7 +1203,7 @@ export default function HomePage() {
                       </tr>
                       <tr>
                         <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933] bg-gray-50">koszt roku</td>
-                        <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933] bg-gray-100">
+                        <td className="px-4 py-3 text-center text-sm font-bold text-[#1f2933] bg-gray-300">
                           {selectedPlan === "walk" && "1 353 zł"}
                           {selectedPlan === "run" && "1 551 zł"}
                           {selectedPlan === "swim" && "3 696 zł"}
