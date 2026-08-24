@@ -1100,8 +1100,14 @@ export default function HomePage() {
                 </p>
               </div>
 
-              {/* Mobile: układ kartowy – bez scrollu na boki */}
+              {/* Mobile: nagłówki kolumn raz na górze, potem wiersze z kwotami */}
               <div className="space-y-3 md:hidden">
+                <div className="grid grid-cols-[minmax(4.5rem,auto)_1fr_1fr_1fr] gap-1.5 text-center text-[10px] leading-tight font-semibold text-[#1f2933] px-1">
+                  <div />
+                  <div>koszt przy opłacie z góry za rok</div>
+                  <div>koszt przy płatności ratalnej x10</div>
+                  <div>za pojedyncze zajęcia</div>
+                </div>
                 {[
                   {
                     label: "koszt 1 zajęć",
@@ -1122,21 +1128,19 @@ export default function HomePage() {
                     pojedyncze: { walk: "1 617 zł", run: "1 815 zł", swim: "4 224 zł", fly: "—" },
                   },
                 ].map((row) => (
-                  <div key={row.label} className="rounded-xl border border-gray-200 bg-gray-50/50 p-3">
-                    <div className="text-sm font-semibold text-[#1f2933] mb-2">{row.label}</div>
-                    <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                      <div>
-                        <div className="text-[#1f2933]">jednorazowa</div>
-                        <div className={`font-bold text-[#1f2933] ${row.label === "koszt roku" ? "inline-block bg-gray-100 rounded px-2 py-0.5" : ""}`}>{row.rok[selectedPlan!]}</div>
-                      </div>
-                      <div>
-                        <div className="text-[#1f2933]">ratalna (x10)</div>
-                        <div className={`font-bold text-[#1f2933] ${row.label === "koszt miesiąca" ? "inline-block bg-gray-100 rounded px-2 py-0.5" : ""}`}>{row.ratalna[selectedPlan!]}</div>
-                      </div>
-                      <div>
-                        <div className="text-[#1f2933]">za pojedyncze zajęcia</div>
-                        <div className={`font-bold text-[#1f2933] ${row.label === "koszt 1 zajęć" ? "inline-block bg-gray-100 rounded px-2 py-0.5" : ""}`}>{row.pojedyncze[selectedPlan!]}</div>
-                      </div>
+                  <div
+                    key={row.label}
+                    className="grid grid-cols-[minmax(4.5rem,auto)_1fr_1fr_1fr] gap-1.5 items-center rounded-xl border border-gray-200 bg-gray-50/50 p-2 text-center text-xs"
+                  >
+                    <div className="text-left text-[11px] font-semibold text-[#1f2933] leading-tight">{row.label}</div>
+                    <div className={`font-bold text-[#1f2933] ${row.label === "koszt roku" ? "inline-block bg-gray-100 rounded px-1.5 py-0.5" : ""}`}>
+                      {row.rok[selectedPlan!]}
+                    </div>
+                    <div className={`font-bold text-[#1f2933] ${row.label === "koszt miesiąca" ? "inline-block bg-gray-100 rounded px-1.5 py-0.5" : ""}`}>
+                      {row.ratalna[selectedPlan!]}
+                    </div>
+                    <div className={`font-bold text-[#1f2933] ${row.label === "koszt 1 zajęć" ? "inline-block bg-gray-100 rounded px-1.5 py-0.5" : ""}`}>
+                      {row.pojedyncze[selectedPlan!]}
                     </div>
                   </div>
                 ))}
@@ -1149,8 +1153,8 @@ export default function HomePage() {
                     <thead>
                       <tr className="bg-gray-50 border-b border-gray-200">
                         <th className="px-4 py-3 text-center text-sm font-semibold text-[#1f2933]"></th>
-                        <th className="px-4 py-3 text-center text-sm font-semibold text-[#1f2933]">opłata jednorazowa</th>
-                        <th className="px-4 py-3 text-center text-sm font-semibold text-[#1f2933]">opłata ratalna (x10)</th>
+                        <th className="px-4 py-3 text-center text-sm font-semibold text-[#1f2933]">koszt przy opłacie z góry za rok</th>
+                        <th className="px-4 py-3 text-center text-sm font-semibold text-[#1f2933]">koszt przy płatności ratalnej x10</th>
                         <th className="px-4 py-3 text-center text-sm font-semibold text-[#1f2933]">opłata za pojedyncze zajęcia</th>
                       </tr>
                     </thead>
