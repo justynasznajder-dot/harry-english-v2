@@ -15,15 +15,15 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Harry English - angielski z pasją",
-  description: "Szkoła języka angielskiego. Zajęcia dla przedszkolaków, uczniów i dorosłych. Małe grupy, doświadczeni lektorzy.",
+  description: "Kursy języka angielskiego. Zajęcia dla przedszkolaków, uczniów i dorosłych. Małe grupy, doświadczeni lektorzy.",
   icons: {
-    icon: [{ url: "/images/logo_link.png", type: "image/png", sizes: "1200x1200" }],
-    apple: [{ url: "/images/logo_link.png", type: "image/png", sizes: "1200x1200" }],
+    icon: [{ url: "/icon.png", type: "image/png", sizes: "512x512" }],
+    apple: [{ url: "/apple-icon.png", type: "image/png", sizes: "180x180" }],
   },
   metadataBase: new URL("https://www.harry-english.pl"),
   openGraph: {
     title: "Harry English - angielski z pasją",
-    description: "Szkoła języka angielskiego. Zajęcia dla przedszkolaków, uczniów i dorosłych. Małe grupy, doświadczeni lektorzy.",
+    description: "Kursy języka angielskiego. Zajęcia dla przedszkolaków, uczniów i dorosłych. Małe grupy, doświadczeni lektorzy.",
     url: "https://www.harry-english.pl",
     siteName: "Harry English",
     type: "website",
@@ -31,7 +31,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "Harry English - angielski z pasją",
-    description: "Szkoła języka angielskiego. Zajęcia dla przedszkolaków, uczniów i dorosłych. Małe grupy, doświadczeni lektorzy.",
+    description: "Kursy języka angielskiego. Zajęcia dla przedszkolaków, uczniów i dorosłych. Małe grupy, doświadczeni lektorzy.",
     images: ["/images/logo_link.png"],
   },
 };
