@@ -267,7 +267,7 @@ async function countActiveSiblingChildrenExcluding(
        AND c.school_id = $2
        AND c.active = TRUE
        AND c.id <> $3
-       AND UPPER(BTRIM(COALESCE(c.access_level::text, ''))) IN ('ACCEPTED', 'SIGNED')`,
+       AND UPPER(BTRIM(COALESCE(c.access_level::text, ''))) IN ('ACCEPTED', 'AWAITING_CONTRACT', 'CONTRACT_READY', 'SIGNED')`,
     [parentId, schoolId, excludeChildId]
   );
   return Number(res.rows[0]?.count ?? 0);

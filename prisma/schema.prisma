@@ -1039,6 +1039,10 @@ enum enrollment_status {
   NEW
   PROPOSED
   ACCEPTED
+  /// Dane do umowy uzupełnione — czeka na zatwierdzenie grupy / generowanie przez szkołę
+  AWAITING_CONTRACT
+  /// Umowa wygenerowana przez szkołę — czeka na podpis rodzica
+  CONTRACT_READY
   SIGNED
   COMPLETED
   REJECTED

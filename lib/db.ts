@@ -78,6 +78,8 @@ export type ChildAccessLevel =
   | "PROPOSED"
   | "NEGOTIATING"
   | "ACCEPTED"
+  | "AWAITING_CONTRACT"
+  | "CONTRACT_READY"
   | "SIGNED"
   | "COMPLETED"
   | "REJECTED";

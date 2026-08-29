@@ -3,6 +3,8 @@ export const ENROLLMENT_STATUSES = [
   "PROPOSED",
   "NEGOTIATING",
   "ACCEPTED",
+  "AWAITING_CONTRACT",
+  "CONTRACT_READY",
   "SIGNED",
   "COMPLETED",
   "REJECTED",
@@ -14,7 +16,9 @@ export const ENROLLMENT_STATUS_LABELS: Record<EnrollmentStatus, string> = {
   NEW: "Nowe zgłoszenie",
   PROPOSED: "Propozycja wysłana — oczekuje na rodzica",
   NEGOTIATING: "Rodzic nie zaakceptował terminu zajęć",
-  ACCEPTED: "Zaakceptowane przez rodzica",
+  ACCEPTED: "Zaakceptowane — uzupełnij dane do umowy",
+  AWAITING_CONTRACT: "Dane uzupełnione — oczekuje na umowę ze szkoły",
+  CONTRACT_READY: "Umowa gotowa — oczekuje na podpis",
   SIGNED: "Umowa podpisana",
   COMPLETED: "Zakończone",
   REJECTED: "Odrzucone przez managera",
@@ -28,6 +32,8 @@ export const ENROLLMENT_STATUS_COLORS: Record<EnrollmentStatus, string> = {
   PROPOSED: "bg-sky-100 text-sky-800",
   NEGOTIATING: "bg-amber-100 text-amber-900",
   ACCEPTED: "bg-teal-100 text-teal-800 ring-1 ring-inset ring-teal-200",
+  AWAITING_CONTRACT: "bg-violet-100 text-violet-900 ring-1 ring-inset ring-violet-200",
+  CONTRACT_READY: "bg-indigo-100 text-indigo-900 ring-1 ring-inset ring-indigo-200",
   SIGNED: "bg-emerald-700 text-white",
   COMPLETED: "bg-zinc-200 text-zinc-700",
   REJECTED: "bg-rose-100 text-rose-800",
@@ -50,6 +56,8 @@ export const ENROLLMENT_LIST_FILTERS = [
   { value: "PROPOSED", label: "Zaproponowane" },
   { value: "NEGOTIATING", label: "Negocjacje" },
   { value: "ACCEPTED", label: "Zaakceptowane" },
+  { value: "AWAITING_CONTRACT", label: "Czeka na umowę" },
+  { value: "CONTRACT_READY", label: "Umowa do podpisu" },
   { value: "REJECTED", label: "Odrzucone" },
 ] as const;
 
@@ -74,4 +82,20 @@ export function enrollmentMatchesStatusFilter(
   filter: string,
 ): boolean {
   return filterEnrollmentChildrenByStatus(children, filter).length > 0;
+}
+
+/** Statusy w pipeline umowy (po akceptacji grupy, przed / w trakcie umowy). */
+export const ENROLLMENT_CONTRACT_PIPELINE_STATUSES: ReadonlySet<string> = new Set([
+  "ACCEPTED",
+  "AWAITING_CONTRACT",
+  "CONTRACT_READY",
+  "SIGNED",
+]);
+
+export function isEnrollmentContractPipelineStatus(status: string | null | undefined): boolean {
+  return ENROLLMENT_CONTRACT_PIPELINE_STATUSES.has(
+    String(status ?? "")
+      .trim()
+      .toUpperCase(),
+  );
 }

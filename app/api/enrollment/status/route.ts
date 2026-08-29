@@ -132,7 +132,7 @@ export async function GET(request: NextRequest) {
          AND (
            (
              c.active = TRUE
-             AND ${accessLevelExpr} IN ('PROPOSED', 'NEGOTIATING', 'ACCEPTED', 'SIGNED', 'COMPLETED')
+             AND ${accessLevelExpr} IN ('PROPOSED', 'NEGOTIATING', 'ACCEPTED', 'AWAITING_CONTRACT', 'CONTRACT_READY', 'SIGNED', 'COMPLETED')
            )
            OR ${accessLevelExpr} = 'REJECTED'
            OR UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'REJECTED'

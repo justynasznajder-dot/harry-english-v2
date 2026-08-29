@@ -5,6 +5,8 @@ export const RENEWAL_STATUSES = [
   "PROPOSED",
   "NEGOTIATING",
   "ACCEPTED",
+  "AWAITING_CONTRACT",
+  "CONTRACT_READY",
   "SIGNED",
   "RESIGNED",
 ] as const;
@@ -25,7 +27,9 @@ export const RENEWAL_STATUS_LABELS: Record<RenewalStatus, string> = {
   CONFIRMED: "Rodzic potwierdził chęć kontynuacji",
   PROPOSED: "Propozycja grupy wysłana",
   NEGOTIATING: "Negocjacje terminu",
-  ACCEPTED: "Propozycja zaakceptowana",
+  ACCEPTED: "Propozycja zaakceptowana — uzupełnij dane",
+  AWAITING_CONTRACT: "Dane uzupełnione — oczekuje na umowę ze szkoły",
+  CONTRACT_READY: "Umowa gotowa — oczekuje na podpis",
   SIGNED: "Umowa podpisana",
   RESIGNED: "Rezygnacja z odnowienia",
 };
@@ -37,6 +41,8 @@ export const RENEWAL_STATUS_COLORS: Record<RenewalStatus, string> = {
   PROPOSED: "bg-indigo-100 text-indigo-900",
   NEGOTIATING: "bg-amber-100 text-amber-950",
   ACCEPTED: "bg-emerald-100 text-emerald-900",
+  AWAITING_CONTRACT: "bg-violet-100 text-violet-900",
+  CONTRACT_READY: "bg-indigo-100 text-indigo-900",
   SIGNED: "bg-emerald-200 text-emerald-950",
   RESIGNED: "bg-zinc-200 text-zinc-700",
 };

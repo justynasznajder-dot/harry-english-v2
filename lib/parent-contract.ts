@@ -108,7 +108,7 @@ export async function countActiveSiblingChildren(
      WHERE c.parent_id = $1
        AND c.school_id = $2
        AND c.active = TRUE
-       AND UPPER(BTRIM(COALESCE(c.access_level::text, ''))) IN ('ACCEPTED', 'SIGNED')`,
+       AND UPPER(BTRIM(COALESCE(c.access_level::text, ''))) IN ('ACCEPTED', 'AWAITING_CONTRACT', 'CONTRACT_READY', 'SIGNED')`,
     [parentId, schoolId]
   );
   return Number(res.rows[0]?.count ?? 0);
@@ -163,7 +163,9 @@ export async function findNextQueuedChildWithoutContract(
   excludeChildId?: string | null
 ): Promise<ParentContractChildRow | null> {
   const queue = queueRequestIds.map((id) => String(id).trim()).filter(Boolean);
-  const accepted = children.filter((c) => String(c.access_level).toUpperCase() === "ACCEPTED");
+  const accepted = children.filter(
+    (c) => String(c.access_level).toUpperCase() === "AWAITING_CONTRACT"
+  );
   const ordered =
     queue.length > 0
       ? queue
@@ -183,7 +185,7 @@ export async function findNextQueuedChildWithoutContract(
 /**
  * Kolejne dziecko z kolejki do umowy.
  * Najpierw dziecko z istniejącą umową SENT (regeneracja) — max jedna SENT naraz.
- * Potem pierwsze ACCEPTED z kolejki bez SENT/SIGNED.
+ * Potem pierwsze AWAITING_CONTRACT z kolejki bez SENT/SIGNED.
  */
 export async function findNextChildNeedingContract(
   parentId: string,
@@ -192,7 +194,9 @@ export async function findNextChildNeedingContract(
   queueRequestIds: string[]
 ): Promise<ParentContractChildRow | null> {
   const queue = queueRequestIds.map((id) => String(id).trim()).filter(Boolean);
-  const accepted = children.filter((c) => String(c.access_level).toUpperCase() === "ACCEPTED");
+  const accepted = children.filter(
+    (c) => String(c.access_level).toUpperCase() === "AWAITING_CONTRACT"
+  );
   const ordered =
     queue.length > 0
       ? queue
@@ -272,7 +276,7 @@ export async function fetchParentEnrollmentChildren(
      WHERE c.parent_id = $1
        AND c.school_id = $2
        AND c.active = TRUE
-       AND ${accessLevelExpr} IN ('PROPOSED', 'NEGOTIATING', 'ACCEPTED', 'SIGNED')
+       AND ${accessLevelExpr} IN ('PROPOSED', 'NEGOTIATING', 'ACCEPTED', 'AWAITING_CONTRACT', 'CONTRACT_READY', 'SIGNED')
      ORDER BY er.created_at ASC, c.created_at ASC`,
     [parentId, schoolId]
   );
@@ -287,7 +291,9 @@ export function validateParentContractSelection(
     return { ok: false, message: "Brak dzieci w procesie zapisu" };
   }
 
-  const accepted = children.filter((c) => String(c.access_level).toUpperCase() === "ACCEPTED");
+  const accepted = children.filter(
+    (c) => String(c.access_level).toUpperCase() === "AWAITING_CONTRACT"
+  );
   const includedSet = new Set(includedRequestIds.map((id) => String(id).trim()).filter(Boolean));
   if (includedSet.size === 0) {
     return { ok: false, message: "Wybierz co najmniej jedno dziecko do umowy" };
@@ -298,7 +304,8 @@ export function validateParentContractSelection(
     if (!row) {
       return {
         ok: false,
-        message: "Do umowy można dodać tylko dzieci ze statusem „zaakceptowano propozycję”.",
+        message:
+          "Do umowy można dodać tylko dzieci ze statusem „dane uzupełnione — oczekuje na umowę”.",
       };
     }
     if (!row.group_id) {
@@ -322,10 +329,11 @@ export function validateSingleChildForContract(
       message: "Brak kolejnego dziecka do wygenerowania umowy — wszystkie zaznaczone mają już umowę.",
     };
   }
-  if (String(child.access_level).toUpperCase() !== "ACCEPTED") {
+  if (String(child.access_level).toUpperCase() !== "AWAITING_CONTRACT") {
     return {
       ok: false,
-      message: "Umowę można wygenerować tylko dla dziecka ze statusem „zaakceptowano propozycję”.",
+      message:
+        "Umowę można wygenerować tylko dla dziecka ze statusem „dane uzupełnione — oczekuje na umowę”.",
     };
   }
   if (!child.group_id) {
@@ -544,7 +552,7 @@ export async function rejectExcludedEnrollmentRequests(
      WHERE id = ANY($1::text[])
        AND user_id = $2
        AND school_id = $3
-       AND UPPER(BTRIM(COALESCE(status::text, ''))) IN ('ACCEPTED', 'PROPOSED', 'NEGOTIATING')`,
+       AND UPPER(BTRIM(COALESCE(status::text, ''))) IN ('ACCEPTED', 'AWAITING_CONTRACT', 'CONTRACT_READY', 'PROPOSED', 'NEGOTIATING')`,
     [excludedRequestIds, parentId, schoolId]
   );
   await queryDb(
@@ -1172,7 +1180,7 @@ export async function fetchParentContractForPortal(
            WHERE ch.parent_id = $1
              AND ch.school_id = $2
              AND ch.active = TRUE
-             AND UPPER(BTRIM(COALESCE(ch.access_level::text, ''))) = 'ACCEPTED'
+             AND UPPER(BTRIM(COALESCE(ch.access_level::text, ''))) IN ('ACCEPTED', 'AWAITING_CONTRACT', 'CONTRACT_READY')
              AND NOT EXISTS (
                SELECT 1
                FROM contracts ct

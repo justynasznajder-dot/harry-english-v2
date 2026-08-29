@@ -27,14 +27,6 @@ export const metadata: Metadata = {
     url: "https://www.harry-english.pl",
     siteName: "Harry English",
     type: "website",
-    images: [
-      {
-        url: "/images/logo_link.png",
-        width: 1200,
-        height: 1200,
-        alt: "Harry English",
-      },
-    ],
   },
   twitter: {
     card: "summary_large_image",

@@ -24,7 +24,7 @@ export async function fetchParentRenewalContractChildren(
        c.id AS child_id,
        r.id AS renewal_id,
        r.id AS request_id,
-       'ACCEPTED' AS access_level,
+       'AWAITING_CONTRACT' AS access_level,
        c.first_name,
        c.last_name,
        c.birth_date,
@@ -50,7 +50,7 @@ export async function fetchParentRenewalContractChildren(
      WHERE r.parent_id = $1
        AND r.school_id = $2
        AND r.season = $3
-       AND UPPER(BTRIM(COALESCE(r.status::text, ''))) = 'ACCEPTED'
+       AND UPPER(BTRIM(COALESCE(r.status::text, ''))) = 'AWAITING_CONTRACT'
        AND r.proposed_group_id IS NOT NULL
        ${idFilter}
      GROUP BY
@@ -99,7 +99,7 @@ export async function fetchParentRenewalIdsReadyForContract(
      WHERE r.parent_id = $1
        AND r.school_id = $2
        AND r.season = $3
-       AND UPPER(BTRIM(COALESCE(r.status::text, ''))) = 'ACCEPTED'
+       AND UPPER(BTRIM(COALESCE(r.status::text, ''))) = 'AWAITING_CONTRACT'
        AND r.proposed_group_id IS NOT NULL`,
     [parentId, schoolId, planned.name]
   );

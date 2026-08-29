@@ -70,6 +70,8 @@ export async function GET(request: NextRequest) {
            WHEN BOOL_OR(UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'REJECTED') THEN 'REJECTED'
            WHEN BOOL_OR(UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'PROPOSED') THEN 'PROPOSED'
            WHEN BOOL_OR(UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'ACCEPTED') THEN 'ACCEPTED'
+           WHEN BOOL_OR(UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'AWAITING_CONTRACT') THEN 'AWAITING_CONTRACT'
+           WHEN BOOL_OR(UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'CONTRACT_READY') THEN 'CONTRACT_READY'
            WHEN BOOL_OR(UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'SIGNED') THEN 'SIGNED'
            ELSE 'NEW'
          END AS access_level,
