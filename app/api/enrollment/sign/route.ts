@@ -319,7 +319,7 @@ export async function POST(request: NextRequest) {
              AND season = (
                SELECT name FROM school_years WHERE id = $4 LIMIT 1
              )
-             AND UPPER(BTRIM(COALESCE(status::text, ''))) = 'ACCEPTED'`,
+             AND UPPER(BTRIM(COALESCE(status::text, ''))) IN ('ACCEPTED', 'AWAITING_CONTRACT', 'CONTRACT_READY')`,
           [row.child_id, parentId, SCHOOL_ID, contract.school_year_id]
         );
       }

@@ -83,12 +83,12 @@ describe("umowa per dziecko — sibling i walidacja", () => {
     expect(breakdown.final_total).toBe(142.5);
   });
 
-  it("validateSingleChildForContract wymaga ACCEPTED i grupy", () => {
+  it("validateSingleChildForContract wymaga AWAITING_CONTRACT i grupy", () => {
     expect(validateSingleChildForContract(null).ok).toBe(false);
     const ok = validateSingleChildForContract({
       child_id: "c1",
       request_id: "r1",
-      access_level: "ACCEPTED",
+      access_level: "AWAITING_CONTRACT",
       first_name: "A",
       last_name: "B",
       birth_date: "2020-01-01",

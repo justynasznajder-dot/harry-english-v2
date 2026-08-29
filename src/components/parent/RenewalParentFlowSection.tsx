@@ -42,7 +42,7 @@ const renewalSteps = [
 
 function renewalStepIndex(status: RenewalStatus, hasPendingProposal: boolean): number {
   if (status === 'SIGNED') return 3;
-  if (status === 'ACCEPTED') return 2;
+  if (status === 'ACCEPTED' || status === 'AWAITING_CONTRACT' || status === 'CONTRACT_READY') return 2;
   if (status === 'PROPOSED' && hasPendingProposal) return 1;
   if (status === 'NEGOTIATING') return 1;
   if (status === 'CONFIRMED') return 1;
@@ -64,7 +64,6 @@ export default function RenewalParentFlowSection({
   const [rejectComments, setRejectComments] = useState<Record<string, string>>({});
   const [declineOpen, setDeclineOpen] = useState<Record<string, boolean>>({});
   const [contractPreview, setContractPreview] = useState<ParentContractDocument | null>(null);
-  const [generatingContract, setGeneratingContract] = useState(false);
   const busyRef = useRef(false);
 
   const load = useCallback(async () => {
@@ -116,27 +115,6 @@ export default function RenewalParentFlowSection({
     } finally {
       busyRef.current = false;
       setBusyId(null);
-    }
-  }
-
-  async function generateRenewalContract(renewalId: string) {
-    setGeneratingContract(true);
-    try {
-      const res = await fetch('/api/renewals/contract/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ includedRenewalIds: [renewalId], paymentType: 'MONTHLY' }),
-      });
-      const data = (await res.json().catch(() => ({}))) as { message?: string };
-      if (!res.ok) {
-        onFlash({ kind: 'error', message: data.message ?? 'Nie udało się przygotować umowy' });
-        return;
-      }
-      onFlash({ kind: 'success', message: 'Umowa gotowa — przejrzyj i podpisz poniżej.' });
-      await load();
-    } finally {
-      setGeneratingContract(false);
     }
   }
 
@@ -378,21 +356,56 @@ export default function RenewalParentFlowSection({
             {r.status === 'ACCEPTED' && (
               <div className="mt-3 space-y-3">
                 <p className="text-sm text-emerald-800">
-                  Propozycja zaakceptowana. Wygeneruj i podpisz umowę na rok {r.season}.
+                  Propozycja zaakceptowana. Potwierdź dane do umowy — szkoła wygeneruje dokument po
+                  ostatecznym zatwierdzeniu grupy.
                 </p>
-                {!contractPreview && !generatingContract ? (
-                  <button
-                    type="button"
-                    disabled={busyId === r.id}
-                    className="rounded-full bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white"
-                    onClick={() => void generateRenewalContract(r.id)}
-                  >
-                    Wygeneruj umowę
-                  </button>
-                ) : null}
-                {generatingContract ? (
-                  <p className="text-sm text-zinc-600">Generowanie umowy…</p>
-                ) : null}
+                <button
+                  type="button"
+                  disabled={busyId === r.id}
+                  className="rounded-full bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  onClick={() =>
+                    void runAction(r.id, async () => {
+                      const res = await fetch('/api/renewals/contract-data/submit', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({ renewalId: r.id }),
+                      });
+                      const data = (await res.json().catch(() => ({}))) as { message?: string };
+                      if (!res.ok) {
+                        onFlash({
+                          kind: 'error',
+                          message: data.message ?? 'Nie udało się potwierdzić danych',
+                        });
+                        return false;
+                      }
+                      onFlash({
+                        kind: 'success',
+                        message:
+                          data.message ??
+                          'Dane potwierdzone. Poczekaj na wygenerowanie umowy przez szkołę.',
+                      });
+                      return true;
+                    })
+                  }
+                >
+                  Potwierdzam dane — czekam na umowę
+                </button>
+              </div>
+            )}
+
+            {r.status === 'AWAITING_CONTRACT' && (
+              <p className="mt-2 text-sm text-violet-900">
+                Dane do umowy zostały przekazane. Poczekaj na ostateczne zatwierdzenie grupy — szkoła
+                wygeneruje umowę na rok {r.season}.
+              </p>
+            )}
+
+            {r.status === 'CONTRACT_READY' && (
+              <div className="mt-3 space-y-3">
+                <p className="text-sm text-indigo-900">
+                  Umowa na rok {r.season} jest gotowa — podpisz poniżej.
+                </p>
                 {contractPreview && !isContractSigned ? (
                   <ContractPortal
                     contract={{

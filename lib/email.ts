@@ -924,7 +924,7 @@ Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logow
     subject: "Nowa propozycja grupy - Harry English",
     html: buildEmailShell({
       title: `Dzień dobry ${escapeHtmlForEmail(parentName)},`,
-      intro: `Przygotowaliśmy nową propozycję grupy dla ${safeChildName}. Zaakceptuj ją w portalu, aby przejść dalej w procesie zapisu.`,
+      intro: `Przygotowaliśmy nową propozycję grupy dla ${safeChildName}. Zaakceptuj ją w portalu, a następnie uzupełnij dane do umowy. Umowę przygotuje szkoła.`,
       contentHtml: `
         <ul style="margin:0 0 12px 18px;padding:0;font-size:15px;line-height:1.6;color:${p.text};">
           <li><strong>Grupa:</strong> ${escapeHtmlForEmail(proposal.groupName)}</li>
@@ -940,7 +940,7 @@ Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logow
     }),
     text: `Dzień dobry ${parentName},
 
-Przygotowaliśmy nową propozycję grupy dla ${childNameText}. Zaakceptuj ją w portalu, aby przejść dalej w procesie zapisu:
+Przygotowaliśmy nową propozycję grupy dla ${childNameText}. Zaakceptuj ją w portalu, a następnie uzupełnij dane do umowy. Umowę przygotuje szkoła:
 - Grupa: ${proposal.groupName}
 - Lokalizacja: ${proposal.locationName}
 - Termin: ${proposal.schedule}
@@ -1067,7 +1067,7 @@ ${
         : `Propozycje grup (${childCount} dzieci) - Harry English`,
     html: buildEmailShell({
       title: `Dzień dobry ${escapeHtmlForEmail(parentName)},`,
-      intro: `${introPlural} Zaakceptuj je w portalu, aby przejść do uzupełnienia danych oraz do podpisania umowy.`,
+      intro: `${introPlural} Zaakceptuj je w portalu, uzupełnij dane do umowy — dokument przygotuje szkoła po zatwierdzeniu grupy.`,
       contentHtml: `
         ${proposalsHtml}
         ${credentialsHtml}
@@ -1079,7 +1079,7 @@ ${
     }),
     text: `Dzień dobry ${parentName},
 
-${introPlural} Zaakceptuj je w portalu, aby przejść do uzupełnienia danych oraz do podpisania umowy.
+${introPlural} Zaakceptuj je w portalu, uzupełnij dane do umowy — dokument przygotuje szkoła po zatwierdzeniu grupy.
 
 ${proposalsText}
 ${credentialsText}

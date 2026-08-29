@@ -15,7 +15,7 @@ import { isComplimentaryForParent } from "@/lib/school-discounts";
  *
  * Tryb bez opłat: zapis kończy się od razu (COMPLETED), bez umowy/wizerunku;
  * ewentualnie generuje zgodę na odbiór przez lektora.
- * Standardowo: ACCEPTED → kolejny krok to umowa.
+ * Standardowo: ACCEPTED → uzupełnienie danych do umowy (bez auto-generowania).
  */
 export async function PUT(request: NextRequest) {
   const payload = await getTokenFromRequest(request);

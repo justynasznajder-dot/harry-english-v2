@@ -76,8 +76,10 @@ export async function GET(request: NextRequest) {
            WHEN 'NEGOTIATING' THEN 2
            WHEN 'CONFIRMED' THEN 3
            WHEN 'ACCEPTED' THEN 4
-           WHEN 'SIGNED' THEN 5
-           ELSE 6
+           WHEN 'AWAITING_CONTRACT' THEN 5
+           WHEN 'CONTRACT_READY' THEN 6
+           WHEN 'SIGNED' THEN 7
+           ELSE 8
          END,
          r.initiated_at DESC`,
       [parentId, schoolId]

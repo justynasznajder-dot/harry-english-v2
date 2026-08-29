@@ -597,8 +597,38 @@ export default function EnrollmentAdminPanel({
                                 </p>
                               ) : null}
                               <p className="mt-2 text-xs text-emerald-800">
-                                Rodzic przechodzi do uzupełnienia danych do umowy.
+                                Rodzic uzupełnia dane do umowy.
                               </p>
+                            </div>
+                          )}
+                          {child.status === 'AWAITING_CONTRACT' && (
+                            <div className="rounded-xl border border-violet-200 bg-violet-50 p-3 text-sm">
+                              <p className="font-semibold text-violet-950">
+                                Dane uzupełnione — oczekuje na umowę
+                              </p>
+                              {proposedGroup ? (
+                                <p className="mt-1 text-violet-950">
+                                  {proposedGroup.name} · {proposedGroup.location_name} ·{' '}
+                                  {proposedGroup.schedule}
+                                </p>
+                              ) : null}
+                              <p className="mt-2 text-xs text-violet-900">
+                                Po zatwierdzeniu grupy wygenerujesz umowę (akcja będzie dostępna w
+                                kolejnym etapie).
+                              </p>
+                            </div>
+                          )}
+                          {child.status === 'CONTRACT_READY' && (
+                            <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-3 text-sm">
+                              <p className="font-semibold text-indigo-950">
+                                Umowa gotowa — oczekuje na podpis rodzica
+                              </p>
+                              {proposedGroup ? (
+                                <p className="mt-1 text-indigo-950">
+                                  {proposedGroup.name} · {proposedGroup.location_name} ·{' '}
+                                  {proposedGroup.schedule}
+                                </p>
+                              ) : null}
                             </div>
                           )}
                           {(child.status === 'SIGNED' || child.status === 'COMPLETED') && (

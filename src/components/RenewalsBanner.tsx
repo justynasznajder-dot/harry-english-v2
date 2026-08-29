@@ -297,73 +297,53 @@ export default function RenewalsBanner({
             {r.status === 'ACCEPTED' && (
               <div className="mt-2 space-y-2">
                 <p className="text-sm text-emerald-800">
-                  Propozycja zaakceptowana. Przygotuj i podpisz umowę na rok {r.season} — tak jak
-                  przy zapisie.
+                  Propozycja zaakceptowana. Potwierdź dane do umowy — szkoła wygeneruje dokument.
                 </p>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    disabled={busyId === r.id}
-                    className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                    onClick={() =>
-                      void runAction(r.id, async () => {
-                        const res = await fetch('/api/renewals/contract/generate', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            includedRenewalIds: [r.id],
-                            paymentType: 'MONTHLY',
-                          }),
-                          credentials: 'include',
-                        });
-                        const data = (await res.json().catch(() => ({}))) as { message?: string };
-                        if (!res.ok) {
-                          onFlash({
-                            kind: 'error',
-                            message: data.message ?? 'Nie udało się przygotować umowy',
-                          });
-                          return false;
-                        }
+                <button
+                  type="button"
+                  disabled={busyId === r.id}
+                  className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  onClick={() =>
+                    void runAction(r.id, async () => {
+                      const res = await fetch('/api/renewals/contract-data/submit', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ renewalId: r.id }),
+                        credentials: 'include',
+                      });
+                      const data = (await res.json().catch(() => ({}))) as { message?: string };
+                      if (!res.ok) {
                         onFlash({
-                          kind: 'success',
-                          message: 'Umowa gotowa — podpisz ją poniżej.',
+                          kind: 'error',
+                          message: data.message ?? 'Nie udało się potwierdzić danych',
                         });
-                        return true;
-                      })
-                    }
-                  >
-                    Przygotuj umowę
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busyId === r.id}
-                    className="rounded-xl border border-emerald-600 bg-white px-3 py-2 text-sm font-semibold text-emerald-800"
-                    onClick={() =>
-                      void runAction(r.id, async () => {
-                        const res = await fetch('/api/enrollment/sign', {
-                          method: 'POST',
-                          credentials: 'include',
-                        });
-                        const data = (await res.json().catch(() => ({}))) as { message?: string };
-                        if (!res.ok) {
-                          onFlash({
-                            kind: 'error',
-                            message: data.message ?? 'Nie udało się podpisać umowy',
-                          });
-                          return false;
-                        }
-                        onFlash({
-                          kind: 'success',
-                          message: 'Umowa podpisana — dziecko zapisane na kolejny rok!',
-                        });
-                        return true;
-                      })
-                    }
-                  >
-                    Podpisz umowę
-                  </button>
-                </div>
+                        return false;
+                      }
+                      onFlash({
+                        kind: 'success',
+                        message:
+                          data.message ??
+                          'Dane potwierdzone. Poczekaj na wygenerowanie umowy przez szkołę.',
+                      });
+                      return true;
+                    })
+                  }
+                >
+                  Potwierdzam dane — czekam na umowę
+                </button>
               </div>
+            )}
+
+            {r.status === 'AWAITING_CONTRACT' && (
+              <p className="mt-2 text-sm text-violet-900">
+                Dane przekazane szkole. Poczekaj na wygenerowanie umowy na rok {r.season}.
+              </p>
+            )}
+
+            {r.status === 'CONTRACT_READY' && (
+              <p className="mt-2 text-sm text-indigo-900">
+                Umowa gotowa — podpisz ją w zakładce zapisu / odnowienia.
+              </p>
             )}
 
             {r.status === 'SIGNED' && (

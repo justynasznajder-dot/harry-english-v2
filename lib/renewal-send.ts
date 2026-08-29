@@ -44,6 +44,8 @@ const BLOCK_STATUSES = new Set([
   "PROPOSED",
   "NEGOTIATING",
   "ACCEPTED",
+  "AWAITING_CONTRACT",
+  "CONTRACT_READY",
   "SIGNED",
 ]);
 

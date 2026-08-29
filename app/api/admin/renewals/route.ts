@@ -135,9 +135,11 @@ export async function GET(request: NextRequest) {
            WHEN 'PENDING_CONFIRMATION' THEN 3
            WHEN 'NEGOTIATING' THEN 4
            WHEN 'ACCEPTED' THEN 5
-           WHEN 'SIGNED' THEN 6
-           WHEN 'RESIGNED' THEN 7
-           ELSE 8
+           WHEN 'AWAITING_CONTRACT' THEN 6
+           WHEN 'CONTRACT_READY' THEN 7
+           WHEN 'SIGNED' THEN 8
+           WHEN 'RESIGNED' THEN 9
+           ELSE 10
          END,
          r.confirmed_at DESC NULLS LAST,
          r.initiated_at DESC`,

@@ -575,9 +575,11 @@ export async function fetchRenewalPipeline(
          WHEN 'PROPOSED' THEN 2
          WHEN 'NEGOTIATING' THEN 3
          WHEN 'ACCEPTED' THEN 4
-         WHEN 'SIGNED' THEN 5
-         WHEN 'RESIGNED' THEN 6
-         ELSE 7
+         WHEN 'AWAITING_CONTRACT' THEN 5
+         WHEN 'CONTRACT_READY' THEN 6
+         WHEN 'SIGNED' THEN 7
+         WHEN 'RESIGNED' THEN 8
+         ELSE 9
        END,
        c.last_name,
        c.first_name
