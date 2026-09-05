@@ -567,3 +567,72 @@ export async function saveEnrollmentProposalDraft(
     groupChanged: result.groupChanged,
   };
 }
+
+function parseOptionalUnitPrice(
+  raw: number | string | null | undefined,
+  label: string
+): { ok: true; value: number | null } | { ok: false; message: string } {
+  if (raw == null || raw === "") return { ok: true, value: null };
+  const n = typeof raw === "number" ? raw : Number(String(raw).replace(",", "."));
+  if (!Number.isFinite(n) || n < 0) {
+    return { ok: false, message: `Nieprawidłowa stawka: ${label}` };
+  }
+  return { ok: true, value: n };
+}
+
+/**
+ * Zapis samych stawek na zgłoszeniu NEW — bez grupy, konta rodzica i członkostwa.
+ * Manager może wrócić później i dopisać grupę.
+ */
+export async function saveEnrollmentRequestPrices(
+  input: {
+    requestId: string;
+    lessonUnitPrice?: number | string | null;
+    monthlyUnitPrice?: number | string | null;
+    yearlyUnitPrice?: number | string | null;
+  },
+  options?: { restrictToSchoolId?: string }
+): Promise<{ ok: true } | { ok: false; status: number; message: string }> {
+  const enrollmentRes = await queryDb<{ id: string }>(
+    `SELECT er.id
+     FROM enrollment_requests er
+     WHERE er.id = $1
+       AND ($2::text IS NULL OR er.school_id = $2::text)
+       AND UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'NEW'
+     LIMIT 1`,
+    [input.requestId, options?.restrictToSchoolId ?? null]
+  );
+  if (!enrollmentRes.rows[0]) {
+    return {
+      ok: false,
+      status: 409,
+      message: "Stawki można zapisać tylko dla zgłoszenia „Nowe”.",
+    };
+  }
+
+  const lesson = parseOptionalUnitPrice(input.lessonUnitPrice, "za pojedyncze zajęcia");
+  if (!lesson.ok) return { ok: false, status: 400, message: lesson.message };
+  const monthly = parseOptionalUnitPrice(input.monthlyUnitPrice, "ratalna");
+  if (!monthly.ok) return { ok: false, status: 400, message: monthly.message };
+  const yearly = parseOptionalUnitPrice(input.yearlyUnitPrice, "jednorazowa");
+  if (!yearly.ok) return { ok: false, status: 400, message: yearly.message };
+
+  if (lesson.value == null || monthly.value == null || yearly.value == null) {
+    return {
+      ok: false,
+      status: 400,
+      message: "Podaj wszystkie 3 stawki albo wybierz grupę",
+    };
+  }
+
+  await queryDb(
+    `UPDATE enrollment_requests
+     SET lesson_unit_price = $2,
+         monthly_unit_price = $3,
+         yearly_unit_price = $4
+     WHERE id = $1`,
+    [input.requestId, lesson.value, monthly.value, yearly.value]
+  );
+
+  return { ok: true };
+}

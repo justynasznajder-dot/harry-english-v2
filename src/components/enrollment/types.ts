@@ -17,6 +17,7 @@ export type EnrollmentChildRow = {
   lessonUnitPrice?: string | number | null;
   monthlyUnitPrice?: string | number | null;
   yearlyUnitPrice?: string | number | null;
+  lessonsPerWeek?: number | null;
 };
 
 export type EnrollmentParentRow = {

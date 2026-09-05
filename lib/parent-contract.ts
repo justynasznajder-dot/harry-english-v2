@@ -40,6 +40,11 @@ import {
   type ContractAmountBreakdown,
 } from "@/lib/contract-amount-breakdown";
 import { resolveLessonUnitPrice, resolveMonthlyUnitPrice, resolveYearlyUnitPrice, type PaymentType } from "@/lib/lesson-pricing";
+import {
+  lessonsPerWeekLabel,
+  normalizeLessonsPerWeek,
+  type LessonsPerWeek,
+} from "@/lib/lessons-per-week";
 import { normalizePickupConsentDocumentHtml } from "@/lib/pickup-consent-notice";
 
 function parsePaymentType(raw: string | null | undefined): PaymentType {
@@ -93,6 +98,8 @@ export type ParentContractContext = {
   excludedRequestIds: string[];
   paymentType: PaymentType;
   includeAttachment2: boolean;
+  /** Częstotliwość zajęć wybrana przez rodzica (1 lub 2× w tygodniu). */
+  lessonsPerWeek?: LessonsPerWeek | null;
   /** Umowa odnowienia — rok docelowy zamiast aktywnego. */
   schoolYearOverride?: { id: string; name: string };
 };
@@ -606,6 +613,20 @@ export async function generateParentContract(
   }
   const child = included[0];
 
+  let lessonsPerWeek =
+    normalizeLessonsPerWeek(ctx.lessonsPerWeek) ??
+    null;
+  if (!lessonsPerWeek && child.request_id) {
+    const freqRes = await queryDb<{ lessons_per_week: number | null }>(
+      `SELECT lessons_per_week
+       FROM enrollment_requests
+       WHERE id = $1 AND school_id = $2
+       LIMIT 1`,
+      [child.request_id, schoolId]
+    );
+    lessonsPerWeek = normalizeLessonsPerWeek(freqRes.rows[0]?.lessons_per_week);
+  }
+
   if (excludedRequestIds.length > 0) {
     await rejectExcludedEnrollmentRequests(parentId, schoolId, excludedRequestIds);
   }
@@ -845,6 +866,8 @@ export async function generateParentContract(
     parent_email: user.email?.trim() ?? "",
     lesson_duration: lessonDuration || formatLessonDuration(60),
     group_schedule: groupSchedule,
+    lessons_per_week: lessonsPerWeek ? String(lessonsPerWeek) : "",
+    lessons_per_week_label: lessonsPerWeek ? lessonsPerWeekLabel(lessonsPerWeek) : "",
     payment_type: formatPaymentTypeLabel(paymentType),
     amount_clause: amountClause,
     signed_at_line: "",

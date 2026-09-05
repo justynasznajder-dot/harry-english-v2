@@ -10,6 +10,11 @@ import { ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE } from '@/lib/enrollment-status'
 import { resolveLessonUnitPrice } from '@/lib/lesson-pricing';
 import { validateParentContractProfileInput } from '@/lib/parent-contract-profile';
 import { paymentTypeShortLabel } from '@/lib/payment-labels';
+import {
+  lessonsPerWeekLabel,
+  normalizeLessonsPerWeek,
+  type LessonsPerWeek,
+} from '@/lib/lessons-per-week';
 import { PICKUP_CONSENT_PRINT_INSTRUCTIONS } from '@/lib/pickup-consent-notice';
 
 type ChildEnrollmentLevel =
@@ -58,6 +63,7 @@ interface EnrollmentProposal {
   lesson_unit_price?: number | null;
   monthly_unit_price?: number | null;
   yearly_unit_price?: number | null;
+  lessons_per_week?: number | null;
   teacher_pickup_consent?: boolean;
 }
 
@@ -390,6 +396,10 @@ export default function EnrollmentParentFlow({
   const [paymentTypeByRequestId, setPaymentTypeByRequestId] = useState<
     Record<string, 'MONTHLY' | 'YEARLY' | 'PER_LESSON'>
   >({});
+  /** Częstotliwość zajęć (1× / 2× w tygodniu) per zgłoszenie. */
+  const [lessonsPerWeekByRequestId, setLessonsPerWeekByRequestId] = useState<
+    Record<string, LessonsPerWeek>
+  >({});
   const [contractReadiness, setContractReadiness] = useState<ContractReadiness>({
     hasPendingDecisions: true,
     allDecisionsResolved: false,
@@ -508,6 +518,19 @@ export default function EnrollmentParentFlow({
             contractPayment === 'PER_LESSON')
         ) {
           next[contractChildId] = contractPayment;
+        }
+        return next;
+      });
+      setLessonsPerWeekByRequestId((prev) => {
+        const next = { ...prev };
+        for (const p of incoming) {
+          if (!isProposalInContractPricing(p)) continue;
+          const fromServer = normalizeLessonsPerWeek(p.lessons_per_week);
+          if (fromServer) {
+            next[p.request_id] = fromServer;
+          } else if (!next[p.request_id]) {
+            next[p.request_id] = 1;
+          }
         }
         return next;
       });
@@ -760,12 +783,19 @@ export default function EnrollmentParentFlow({
     const resolvedPaymentTypes: Record<string, 'MONTHLY' | 'YEARLY' | 'PER_LESSON'> = {
       ...paymentTypeByRequestId,
     };
+    const resolvedLessonsPerWeek: Record<string, LessonsPerWeek> = {
+      ...lessonsPerWeekByRequestId,
+    };
     for (const p of priced) {
       if (!resolvedPaymentTypes[p.request_id]) {
         resolvedPaymentTypes[p.request_id] = 'MONTHLY';
       }
+      if (!resolvedLessonsPerWeek[p.request_id]) {
+        resolvedLessonsPerWeek[p.request_id] = 1;
+      }
     }
     setPaymentTypeByRequestId(resolvedPaymentTypes);
+    setLessonsPerWeekByRequestId(resolvedLessonsPerWeek);
 
     setSavingContract(true);
     try {
@@ -775,6 +805,7 @@ export default function EnrollmentParentFlow({
         credentials: 'include',
         body: JSON.stringify({
           paymentTypeByRequestId: resolvedPaymentTypes,
+          lessonsPerWeekByRequestId: resolvedLessonsPerWeek,
           includedRequestIds: priced.map((p) => p.request_id),
         }),
       });
@@ -826,6 +857,7 @@ export default function EnrollmentParentFlow({
     isEditingContractProfile,
     loadParentProfile,
     loadProposals,
+    lessonsPerWeekByRequestId,
     paymentTypeByRequestId,
     profileComplete,
     proposals,
@@ -1749,8 +1781,8 @@ export default function EnrollmentParentFlow({
                     <div>
                       <p className="text-base font-semibold text-zinc-900">Dzieci i sposób rozliczeń</p>
                       <p className="mt-1 text-sm text-zinc-600">
-                        Dla każdego dziecka wybierz osobno sposób płatności. Umowy generują się po
-                        kolei (jedno dziecko = jedna umowa).
+                        Dla każdego dziecka wybierz częstotliwość zajęć i sposób płatności. Umowy
+                        generują się po kolei (jedno dziecko = jedna umowa).
                       </p>
                     </div>
                     <div className="space-y-3">
@@ -1766,6 +1798,7 @@ export default function EnrollmentParentFlow({
                           (ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && level === 'PROPOSED');
                         const isSignedDone = level === 'SIGNED' || level === 'COMPLETED';
                         const childPaymentType = paymentTypeByRequestId[p.request_id] ?? 'MONTHLY';
+                        const childLessonsPerWeek = lessonsPerWeekByRequestId[p.request_id] ?? 1;
                         const billingExempt = Boolean(contractPricing?.billingExempt);
                         const paymentRadiosLocked =
                           isSignedDone ||
@@ -1808,6 +1841,9 @@ export default function EnrollmentParentFlow({
                                     {paymentTypeByRequestId[p.request_id]
                                       ? ` · ${paymentTypeShortLabel(paymentTypeByRequestId[p.request_id]!)}`
                                       : ''}
+                                    {lessonsPerWeekByRequestId[p.request_id]
+                                      ? ` · ${lessonsPerWeekLabel(lessonsPerWeekByRequestId[p.request_id]!)}`
+                                      : ''}
                                   </span>
                                 ) : null}
                                 {level === 'AWAITING_CONTRACT' ? (
@@ -1841,52 +1877,83 @@ export default function EnrollmentParentFlow({
                               </div>
 
                               {isPipeline && !isSignedDone ? (
-                                <div className="space-y-2 border-t border-emerald-100 pt-3">
-                                  <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                                    Sposób rozliczeń
-                                  </p>
-                                  <div className="flex flex-col gap-2">
-                                    {(['MONTHLY', 'YEARLY', 'PER_LESSON'] as const).map((type) => {
-                                      const amount = amountFor(type);
-                                      return (
+                                <div className="space-y-3 border-t border-emerald-100 pt-3">
+                                  <div className="space-y-2">
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                                      Częstotliwość zajęć
+                                    </p>
+                                    <div className="flex flex-col gap-2">
+                                      {([1, 2] as const).map((freq) => (
                                         <label
-                                          key={type}
+                                          key={freq}
                                           className="inline-flex items-start gap-2 text-sm text-zinc-700"
                                         >
                                           <input
                                             type="radio"
-                                            name={`paymentType-${p.request_id}`}
+                                            name={`lessonsPerWeek-${p.request_id}`}
                                             className="mt-0.5 accent-[#0f6e56]"
                                             disabled={paymentRadiosLocked}
-                                            checked={childPaymentType === type}
+                                            checked={childLessonsPerWeek === freq}
                                             onChange={() => {
                                               setAllowContractRegenerate(true);
-                                              setPaymentTypeByRequestId((prev) => ({
+                                              setLessonsPerWeekByRequestId((prev) => ({
                                                 ...prev,
-                                                [p.request_id]: type,
+                                                [p.request_id]: freq,
                                               }));
                                             }}
                                           />
-                                          <span>
-                                            {paymentTypeShortLabel(type)}
-                                            <span className="ml-1.5 font-semibold text-zinc-900">
-                                              ({formatPlnAmount(amount)}
-                                              {type === 'PER_LESSON' && amount != null
-                                                ? ' / zajęcie'
-                                                : ''}
-                                              )
-                                            </span>
-                                          </span>
+                                          <span>{lessonsPerWeekLabel(freq)}</span>
                                         </label>
-                                      );
-                                    })}
+                                      ))}
+                                    </div>
                                   </div>
-                                  {childPaymentType === 'PER_LESSON' ? (
-                                    <p className="text-xs text-zinc-500">
-                                      Rozliczenie za zajęcia następuje co miesiąc według liczby
-                                      odbytych lekcji.
+                                  <div className="space-y-2">
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                                      Sposób rozliczeń
                                     </p>
-                                  ) : null}
+                                    <div className="flex flex-col gap-2">
+                                      {(['MONTHLY', 'YEARLY', 'PER_LESSON'] as const).map((type) => {
+                                        const amount = amountFor(type);
+                                        return (
+                                          <label
+                                            key={type}
+                                            className="inline-flex items-start gap-2 text-sm text-zinc-700"
+                                          >
+                                            <input
+                                              type="radio"
+                                              name={`paymentType-${p.request_id}`}
+                                              className="mt-0.5 accent-[#0f6e56]"
+                                              disabled={paymentRadiosLocked}
+                                              checked={childPaymentType === type}
+                                              onChange={() => {
+                                                setAllowContractRegenerate(true);
+                                                setPaymentTypeByRequestId((prev) => ({
+                                                  ...prev,
+                                                  [p.request_id]: type,
+                                                }));
+                                              }}
+                                            />
+                                            <span>
+                                              {paymentTypeShortLabel(type)}
+                                              <span className="ml-1.5 font-semibold text-zinc-900">
+                                                ({formatPlnAmount(amount)}
+                                                {type === 'PER_LESSON' && amount != null
+                                                  ? ' / zajęcie'
+                                                  : ''}
+                                                )
+                                              </span>
+                                            </span>
+                                          </label>
+                                        );
+                                      })}
+                                    </div>
+                                    {childPaymentType === 'PER_LESSON' ? (
+                                      <p className="text-xs text-zinc-500">
+                                        Rozliczenie za zajęcia następuje co miesiąc według liczby
+                                        odbytych lekcji.
+                                      </p>
+                                    ) : null}
+                                  </div>
                                 </div>
                               ) : null}
                             </div>
@@ -2032,6 +2099,7 @@ export default function EnrollmentParentFlow({
                                       body: JSON.stringify({
                                         paymentType: nextPaymentType,
                                         paymentTypeByRequestId,
+                                        lessonsPerWeekByRequestId,
                                         includedRequestIds: next.request_id
                                           ? [next.request_id]
                                           : undefined,

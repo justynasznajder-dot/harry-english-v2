@@ -4,6 +4,7 @@ import { requireAdminSchoolContext } from "@/lib/admin-school-context";
 import {
   resolveProposalEmailCredentials,
   saveEnrollmentProposalDraft,
+  saveEnrollmentRequestPrices,
   submitEnrollmentProposal,
   type ProposalEmailItem,
   type SharedParentState,
@@ -16,6 +17,11 @@ type BatchProposalBody = {
   monthlyUnitPrice?: number | string | null;
   yearlyUnitPrice?: number | string | null;
 };
+
+function hasAllPriceInputs(p: BatchProposalBody): boolean {
+  const vals = [p.lessonUnitPrice, p.monthlyUnitPrice, p.yearlyUnitPrice];
+  return vals.every((v) => v != null && String(v).trim() !== "");
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -33,22 +39,42 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    for (const p of proposals) {
-      if (!p.requestId || !p.groupId) {
-        return NextResponse.json({ message: "Brak wymaganych pól w propozycji" }, { status: 400 });
-      }
-    }
-
     const schoolRestrict =
       ctx.tenant.role === "MANAGER" ? { restrictToSchoolId: ctx.schoolId } : undefined;
 
     /** Tylko zapis grupy/stawek — bez zmiany statusu i bez maila. */
     if (!sendEmail) {
       for (const p of proposals) {
+        if (!p.requestId) {
+          return NextResponse.json({ message: "Brak wymaganych pól w propozycji" }, { status: 400 });
+        }
+        const groupId = typeof p.groupId === "string" ? p.groupId.trim() : "";
+        if (!groupId) {
+          if (!hasAllPriceInputs(p)) {
+            return NextResponse.json(
+              { message: "Podaj wszystkie 3 stawki albo wybierz grupę dla każdego dziecka" },
+              { status: 400 }
+            );
+          }
+          const result = await saveEnrollmentRequestPrices(
+            {
+              requestId: p.requestId,
+              lessonUnitPrice: p.lessonUnitPrice,
+              monthlyUnitPrice: p.monthlyUnitPrice,
+              yearlyUnitPrice: p.yearlyUnitPrice,
+            },
+            schoolRestrict
+          );
+          if (!result.ok) {
+            return NextResponse.json({ message: result.message }, { status: result.status });
+          }
+          continue;
+        }
+
         const result = await saveEnrollmentProposalDraft(
           {
-            requestId: p.requestId!,
-            groupId: p.groupId!,
+            requestId: p.requestId,
+            groupId,
             lessonUnitPrice: p.lessonUnitPrice,
             monthlyUnitPrice: p.monthlyUnitPrice,
             yearlyUnitPrice: p.yearlyUnitPrice,
@@ -62,11 +88,22 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ message: result.message }, { status: result.status });
         }
       }
+      const anyWithGroup = proposals.some(
+        (p) => typeof p.groupId === "string" && p.groupId.trim().length > 0
+      );
       return NextResponse.json({
-        message: "Zapisano dane i dodano dziecko do grupy (niepotwierdzone — bez wysyłki e-mail)",
+        message: anyWithGroup
+          ? "Zapisano dane i dodano dziecko do grupy (niepotwierdzone — bez wysyłki e-mail)"
+          : "Zapisano stawki (bez grupy — możesz uzupełnić później)",
         saved: true,
         count: proposals.length,
       });
+    }
+
+    for (const p of proposals) {
+      if (!p.requestId || !(typeof p.groupId === "string" && p.groupId.trim())) {
+        return NextResponse.json({ message: "Brak wymaganych pól w propozycji" }, { status: 400 });
+      }
     }
 
     let sharedParent: SharedParentState | null = null;

@@ -258,9 +258,18 @@ export default function EnrollmentAdminPanel({
       if (proposalParentIsComplimentary) return true;
       return draftHasRequiredPrices(draft);
     });
+  /** Zapisz: grupa i/lub pełne 3 stawki — manager może wrócić i uzupełnić resztę. */
   const proposalBatchSaveReady =
     proposalNewChildren.length >= 1 &&
-    proposalNewChildren.every((c) => Boolean((proposalDrafts[c.requestId]?.groupId ?? '').trim()));
+    proposalNewChildren.every((c) => {
+      const draft = proposalDrafts[c.requestId];
+      return Boolean((draft?.groupId ?? '').trim()) || draftHasRequiredPrices(draft);
+    });
+  const proposalBatchSaveTitle = proposalBatchSaveReady
+    ? proposalNewChildren.every((c) => Boolean((proposalDrafts[c.requestId]?.groupId ?? '').trim()))
+      ? 'Zapisz grupę i stawki bez wysyłania e-maila'
+      : 'Zapisz stawki (grupę możesz uzupełnić później)'
+    : 'Wybierz grupę albo podaj wszystkie 3 stawki dla każdego dziecka ze statusem „Nowe”';
 
   const buildBatchProposalsPayload = () =>
     proposalNewChildren.map((child) => {
@@ -570,6 +579,11 @@ export default function EnrollmentAdminPanel({
                           <p className="text-sm text-zinc-600">
                             Preferowana lokalizacja: {child.preferredLocation ?? 'brak'}
                           </p>
+                          {child.lessonsPerWeek === 1 || child.lessonsPerWeek === 2 ? (
+                            <p className="text-sm text-zinc-600">
+                              Częstotliwość: {child.lessonsPerWeek === 1 ? '1× w tygodniu' : '2× w tygodniu'}
+                            </p>
+                          ) : null}
                         </div>
                         <div className="min-w-0 space-y-2">
                           {child.status === 'PROPOSED' && (
@@ -999,11 +1013,7 @@ export default function EnrollmentAdminPanel({
                       submittingProposalRequestId != null ||
                       rejectingParentResignationId != null
                     }
-                    title={
-                      proposalBatchSaveReady
-                        ? 'Zapisz grupę i stawki bez wysyłania e-maila'
-                        : 'Wybierz grupę dla każdego dziecka ze statusem „Nowe”'
-                    }
+                    title={proposalBatchSaveTitle}
                     className="rounded-xl border border-[#0f6e56] bg-white px-3 py-2 text-sm font-semibold text-[#0f6e56] shadow-sm transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
                     onClick={async () => {
                       if (!confirmGroupChangesIfNeeded()) return;

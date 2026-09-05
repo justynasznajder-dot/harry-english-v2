@@ -17,6 +17,7 @@ import {
 } from "@/lib/enrollment-sync";
 import { ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE } from "@/lib/enrollment-status";
 import { normalizePaymentType } from "@/lib/lesson-pricing";
+import { normalizeLessonsPerWeek, type LessonsPerWeek } from "@/lib/lessons-per-week";
 import {
   fetchParentEnrollmentChildren,
   findNextChildNeedingContract,
@@ -70,6 +71,8 @@ export async function POST(request: NextRequest) {
       payment_type?: unknown;
       paymentTypeByRequestId?: unknown;
       payment_type_by_request_id?: unknown;
+      lessonsPerWeekByRequestId?: unknown;
+      lessons_per_week_by_request_id?: unknown;
       includedRequestIds?: unknown;
       included_request_ids?: unknown;
     };
@@ -80,6 +83,14 @@ export async function POST(request: NextRequest) {
         : body.payment_type_by_request_id &&
             typeof body.payment_type_by_request_id === "object"
           ? (body.payment_type_by_request_id as Record<string, unknown>)
+          : {};
+
+    const lessonsPerWeekByRequestIdRaw =
+      body.lessonsPerWeekByRequestId && typeof body.lessonsPerWeekByRequestId === "object"
+        ? (body.lessonsPerWeekByRequestId as Record<string, unknown>)
+        : body.lessons_per_week_by_request_id &&
+            typeof body.lessons_per_week_by_request_id === "object"
+          ? (body.lessons_per_week_by_request_id as Record<string, unknown>)
           : {};
 
     const profile = await getParentProfileByUserId(parentId);
@@ -201,6 +212,40 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const lessonsPerWeek: LessonsPerWeek | null = normalizeLessonsPerWeek(
+      lessonsPerWeekByRequestIdRaw[single.child.request_id]
+    );
+    if (!lessonsPerWeek) {
+      return NextResponse.json(
+        {
+          message: `Wybierz częstotliwość zajęć (1× lub 2× w tygodniu) dla: ${single.child.first_name} ${single.child.last_name}`,
+        },
+        { status: 400 }
+      );
+    }
+
+    // Zapisz częstotliwość dla wszystkich dzieci z mapy (kolejne umowy użyją zapisanego wyboru).
+    for (const [requestId, raw] of Object.entries(lessonsPerWeekByRequestIdRaw)) {
+      const value = normalizeLessonsPerWeek(raw);
+      if (!value || !requestId.trim()) continue;
+      await queryDb(
+        `UPDATE enrollment_requests
+         SET lessons_per_week = $2
+         WHERE id = $1
+           AND school_id = $3
+           AND user_id = $4`,
+        [requestId.trim(), value, SCHOOL_ID, parentId]
+      );
+    }
+    await queryDb(
+      `UPDATE enrollment_requests
+       SET lessons_per_week = $2
+       WHERE id = $1
+         AND school_id = $3
+         AND user_id = $4`,
+      [single.child.request_id, lessonsPerWeek, SCHOOL_ID, parentId]
+    );
+
     const included = [single.child];
     const includeAttachment2 = resolveIncludeAttachment2FromGroups(included);
     const billingType = resolveBillingTypeFromProfile(profile);
@@ -213,6 +258,7 @@ export async function POST(request: NextRequest) {
         excludedRequestIds: [],
         paymentType,
         includeAttachment2,
+        lessonsPerWeek,
       },
       {
         address: String(profile.address ?? "").trim(),

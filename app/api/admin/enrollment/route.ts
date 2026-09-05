@@ -97,7 +97,8 @@ export async function GET(request: NextRequest) {
                'proposedAt', er.proposed_at,
                'lessonUnitPrice', er.lesson_unit_price::text,
                'monthlyUnitPrice', er.monthly_unit_price::text,
-               'yearlyUnitPrice', er.yearly_unit_price::text
+               'yearlyUnitPrice', er.yearly_unit_price::text,
+               'lessonsPerWeek', er.lessons_per_week
              )
            ) FILTER (
              WHERE COALESCE(c.id, er.id) IS NOT NULL

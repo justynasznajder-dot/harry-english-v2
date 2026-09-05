@@ -217,6 +217,8 @@ model enrollment_requests {
   lesson_unit_price  Decimal?            @db.Decimal(10, 2)
   monthly_unit_price Decimal?            @db.Decimal(10, 2)
   yearly_unit_price  Decimal?            @db.Decimal(10, 2)
+  /// Wybór rodzica: ile razy w tygodniu dziecko ma chodzić (1 lub 2)
+  lessons_per_week   Int?
   /// Staging KDR przed kontem rodzica; po utworzeniu konta kopiowane do parent_profiles
   discount_large_family Boolean          @default(false)
   children           children[]
