@@ -8,7 +8,10 @@ import {
 } from "@/lib/admin-school-context";
 import { sqlExistsUnfilledFutureScheduleSlot } from "@/lib/lesson-generation";
 import { sqlSchoolTimestampAsTimestamptz } from "@/lib/school-timezone";
-import { validateHarryEnglishGroupNaming } from "@/lib/harry-english-group-naming";
+import {
+  resolveUniqueActiveGroupName,
+  validateHarryEnglishGroupNaming,
+} from "@/lib/harry-english-group-naming";
 
 export async function GET(request: NextRequest) {
   const ctx = await requireAdminSchoolContext(request);
@@ -131,7 +134,6 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const {
-      name,
       level,
       teacherId,
       maxStudents = 12,
@@ -144,7 +146,6 @@ export async function POST(request: NextRequest) {
       pricePerLesson,
       teacherPickupConsent,
     }: {
-      name?: string;
       level?: string;
       teacherId?: string | null;
       maxStudents?: number;
@@ -162,13 +163,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: "Wybierz nauczyciela dla grupy" }, { status: 400 });
     }
 
-    const naming = validateHarryEnglishGroupNaming({
-      name,
-      level,
+    const locationIdTrim =
+      typeof locationId === "string" && locationId.trim() ? locationId.trim() : "";
+    if (!locationIdTrim) {
+      return NextResponse.json({ message: "Wybierz lokalizację grupy" }, { status: 400 });
+    }
+
+    const levelNorm = String(level ?? "").trim();
+    const namingProbe = validateHarryEnglishGroupNaming({
+      name: `${levelNorm} · x`,
+      level: levelNorm,
       requireLevel: true,
     });
-    if (!naming.ok) {
-      return NextResponse.json({ message: naming.message }, { status: 400 });
+    if (!namingProbe.ok || !namingProbe.level) {
+      return NextResponse.json(
+        { message: namingProbe.ok ? "Wybierz poziom" : namingProbe.message },
+        { status: 400 }
+      );
     }
 
     const insertSchoolId = resolveInsertSchoolId(ctx.tenant, {
@@ -187,6 +198,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const locRes = await queryDb<{ id: string; name: string }>(
+      `SELECT id, name FROM locations
+       WHERE id = $1 AND school_id = $2 AND active = TRUE
+       LIMIT 1`,
+      [locationIdTrim, insertSchoolId]
+    );
+    const location = locRes.rows[0];
+    if (!location) {
+      return NextResponse.json({ message: "Nie znaleziono lokalizacji" }, { status: 404 });
+    }
+
+    const uniqueName = await resolveUniqueActiveGroupName({
+      schoolId: insertSchoolId,
+      levelCode: namingProbe.level,
+      locationName: location.name,
+    });
+    if (!uniqueName.ok) {
+      return NextResponse.json({ message: uniqueName.message }, { status: 400 });
+    }
+
     const inserted = await queryDb<{ id: string }>(
       `INSERT INTO groups (
          id, school_id, teacher_id, name, level, max_students, active,
@@ -199,11 +230,11 @@ export async function POST(request: NextRequest) {
         randomUUID(),
         insertSchoolId,
         teacherId ?? null,
-        naming.name,
-        naming.level,
+        uniqueName.name,
+        namingProbe.level,
         maxStudents,
         active,
-        locationId ?? null,
+        locationIdTrim,
         priceMonthly != null && priceMonthly !== "" ? Number(priceMonthly) : null,
         priceYearly != null && priceYearly !== "" ? Number(priceYearly) : null,
         pricePerLesson != null && pricePerLesson !== "" ? Number(pricePerLesson) : null,
@@ -211,7 +242,11 @@ export async function POST(request: NextRequest) {
       ]
     );
 
-    return NextResponse.json({ id: inserted.rows[0].id, message: "Grupa została utworzona" });
+    return NextResponse.json({
+      id: inserted.rows[0].id,
+      name: uniqueName.name,
+      message: "Grupa została utworzona",
+    });
   } catch (error) {
     console.error("POST groups error:", error);
     return NextResponse.json({ message: "Błąd tworzenia grupy" }, { status: 500 });

@@ -49,6 +49,25 @@ function draftHasRequiredPrices(draft?: ProposalDraft): boolean {
   );
 }
 
+function draftFilledPriceCount(draft?: ProposalDraft): number {
+  if (!draft) return 0;
+  return [
+    draft.yearlyUnitPrice,
+    draft.monthlyUnitPrice,
+    draft.lessonUnitPrice,
+  ].filter((v) => parsePriceDecimal(v) != null).length;
+}
+
+/** Częściowo uzupełnione stawki (1–2 z 3) — blokują zapis. */
+function draftHasPartialPrices(draft?: ProposalDraft): boolean {
+  const n = draftFilledPriceCount(draft);
+  return n === 1 || n === 2;
+}
+
+function draftIsSaveable(draft?: ProposalDraft): boolean {
+  return Boolean((draft?.groupId ?? '').trim()) || draftHasRequiredPrices(draft);
+}
+
 /*
  * Rabaty procentowe (KDR) — wyłączone na ten sezon (ceny ręczne per dziecko).
  * function applyDiscountPreview(...) { ... applyDiscountsToAmount ... }
@@ -258,30 +277,45 @@ export default function EnrollmentAdminPanel({
       if (proposalParentIsComplimentary) return true;
       return draftHasRequiredPrices(draft);
     });
-  /** Zapisz: grupa i/lub pełne 3 stawki — manager może wrócić i uzupełnić resztę. */
+  /**
+   * Zapisz: wystarczy pełne dane u jednego dziecka; pozostałe mogą być puste.
+   * Częściowe stawki (1–2 z 3) u któregokolwiek dziecka blokują zapis.
+   */
   const proposalBatchSaveReady =
     proposalNewChildren.length >= 1 &&
-    proposalNewChildren.every((c) => {
-      const draft = proposalDrafts[c.requestId];
-      return Boolean((draft?.groupId ?? '').trim()) || draftHasRequiredPrices(draft);
-    });
-  const proposalBatchSaveTitle = proposalBatchSaveReady
-    ? proposalNewChildren.every((c) => Boolean((proposalDrafts[c.requestId]?.groupId ?? '').trim()))
-      ? 'Zapisz grupę i stawki bez wysyłania e-maila'
-      : 'Zapisz stawki (grupę możesz uzupełnić później)'
-    : 'Wybierz grupę albo podaj wszystkie 3 stawki dla każdego dziecka ze statusem „Nowe”';
+    proposalNewChildren.every((c) => !draftHasPartialPrices(proposalDrafts[c.requestId])) &&
+    proposalNewChildren.some((c) => draftIsSaveable(proposalDrafts[c.requestId]));
+  const proposalBatchSaveTitle = (() => {
+    if (proposalBatchSaveReady) {
+      const allHaveGroup = proposalNewChildren
+        .filter((c) => draftIsSaveable(proposalDrafts[c.requestId]))
+        .every((c) => Boolean((proposalDrafts[c.requestId]?.groupId ?? '').trim()));
+      return allHaveGroup
+        ? 'Zapisz grupę i stawki bez wysyłania e-maila'
+        : 'Zapisz stawki (grupę możesz uzupełnić później)';
+    }
+    if (proposalNewChildren.some((c) => draftHasPartialPrices(proposalDrafts[c.requestId]))) {
+      return 'Uzupełnij wszystkie 3 stawki albo wyczyść je — częściowe ceny blokują zapis';
+    }
+    return 'Wybierz grupę albo podaj wszystkie 3 stawki dla co najmniej jednego dziecka';
+  })();
 
-  const buildBatchProposalsPayload = () =>
-    proposalNewChildren.map((child) => {
-      const draft = proposalDrafts[child.requestId];
-      return {
-        requestId: child.requestId,
-        groupId: draft?.groupId ?? '',
-        lessonUnitPrice: draft?.lessonUnitPrice?.trim() || null,
-        monthlyUnitPrice: draft?.monthlyUnitPrice?.trim() || null,
-        yearlyUnitPrice: draft?.yearlyUnitPrice?.trim() || null,
-      };
-    });
+  const buildBatchProposalsPayload = (opts?: { saveOnly?: boolean }) =>
+    proposalNewChildren
+      .filter((child) => {
+        if (!opts?.saveOnly) return true;
+        return draftIsSaveable(proposalDrafts[child.requestId]);
+      })
+      .map((child) => {
+        const draft = proposalDrafts[child.requestId];
+        return {
+          requestId: child.requestId,
+          groupId: draft?.groupId ?? '',
+          lessonUnitPrice: draft?.lessonUnitPrice?.trim() || null,
+          monthlyUnitPrice: draft?.monthlyUnitPrice?.trim() || null,
+          yearlyUnitPrice: draft?.yearlyUnitPrice?.trim() || null,
+        };
+      });
 
   /** Potwierdzenie przy zmianie wcześniej zapisanej grupy. */
   const confirmGroupChangesIfNeeded = (): boolean => {
@@ -1019,7 +1053,11 @@ export default function EnrollmentAdminPanel({
                       if (!confirmGroupChangesIfNeeded()) return;
                       setSavingBatchProposals(true);
                       try {
-                        const proposals = buildBatchProposalsPayload();
+                        const proposals = buildBatchProposalsPayload({ saveOnly: true });
+                        if (proposals.length === 0) {
+                          pushToast('error', 'Brak danych do zapisu');
+                          return;
+                        }
                         const res = await fetch('/api/admin/enrollment/batch', {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },

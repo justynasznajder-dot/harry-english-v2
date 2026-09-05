@@ -7,7 +7,10 @@ import {
   sqlExistsUnfilledFutureScheduleSlot,
 } from "@/lib/lesson-generation";
 import { sqlSchoolTimestampAsTimestamptz, toIsoUtc } from "@/lib/school-timezone";
-import { validateHarryEnglishGroupNaming } from "@/lib/harry-english-group-naming";
+import {
+  findActiveGroupNameConflict,
+  validateHarryEnglishGroupNaming,
+} from "@/lib/harry-english-group-naming";
 
 export async function GET(
   request: NextRequest,
@@ -243,49 +246,75 @@ export async function PUT(
   try {
     const body = await request.json();
     const {
-      name,
-      level,
       teacherId,
       maxStudents,
       active,
-      locationId,
       priceMonthly,
       priceYearly,
       pricePerLesson,
       teacherPickupConsent,
     } = body;
 
+    const existingRes = await queryDb<{
+      id: string;
+      school_id: string;
+      name: string;
+      level: string | null;
+      location_id: string | null;
+      active: boolean;
+    }>(
+      `SELECT id, school_id, name, level, location_id, active
+       FROM groups
+       WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $2" : ""}
+       LIMIT 1`,
+      tenant.role === "MANAGER" ? [id, ctx.schoolId] : [id]
+    );
+    const existing = existingRes.rows[0];
+    if (!existing) {
+      return NextResponse.json({ message: "Nie znaleziono grupy" }, { status: 404 });
+    }
+
+    // Po pierwszym zapisie nazwa / poziom / lokalizacja są zamrożone.
     const naming = validateHarryEnglishGroupNaming({
-      name: name ?? "",
-      level: level ?? "",
+      name: existing.name,
+      level: existing.level ?? "",
       requireLevel: true,
     });
     if (!naming.ok) {
       return NextResponse.json({ message: naming.message }, { status: 400 });
     }
 
+    const nextActive = active == null ? existing.active : Boolean(active);
+    if (!existing.active && nextActive) {
+      const conflict = await findActiveGroupNameConflict({
+        schoolId: existing.school_id,
+        name: existing.name,
+        excludeGroupId: id,
+      });
+      if (conflict) {
+        return NextResponse.json(
+          { message: "Grupa o podanej nazwie już istnieje" },
+          { status: 409 }
+        );
+      }
+    }
+
     await queryDb(
       `UPDATE groups
-       SET name = COALESCE($2, name),
-           level = COALESCE($3, level),
-           teacher_id = $4,
-           max_students = COALESCE($5, max_students),
-           active = COALESCE($6, active),
-           location_id = $7,
-           price_monthly = $8,
-           price_yearly = $9,
-           price_per_lesson = $10,
-           teacher_pickup_consent = COALESCE($11, teacher_pickup_consent)
-       WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $12" : ""}`,
+       SET teacher_id = $2,
+           max_students = COALESCE($3, max_students),
+           active = $4,
+           price_monthly = $5,
+           price_yearly = $6,
+           price_per_lesson = $7,
+           teacher_pickup_consent = COALESCE($8, teacher_pickup_consent)
+       WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $9" : ""}`,
       tenant.role === "MANAGER"
         ? [
             id,
-            naming.name,
-            naming.level,
             teacherId ?? null,
             maxStudents ?? null,
-            active ?? null,
-            locationId ?? null,
+            nextActive,
             priceMonthly != null && priceMonthly !== "" ? Number(priceMonthly) : null,
             priceYearly != null && priceYearly !== "" ? Number(priceYearly) : null,
             pricePerLesson != null && pricePerLesson !== "" ? Number(pricePerLesson) : null,
@@ -294,12 +323,9 @@ export async function PUT(
           ]
         : [
             id,
-            naming.name,
-            naming.level,
             teacherId ?? null,
             maxStudents ?? null,
-            active ?? null,
-            locationId ?? null,
+            nextActive,
             priceMonthly != null && priceMonthly !== "" ? Number(priceMonthly) : null,
             priceYearly != null && priceYearly !== "" ? Number(priceYearly) : null,
             pricePerLesson != null && pricePerLesson !== "" ? Number(pricePerLesson) : null,

@@ -21,11 +21,10 @@ import {
 } from '@/lib/school-timezone';
 import {
   detectLevelFromGroupName,
-  groupNameMatchesLevel,
   isHarryEnglishLevelCode,
 } from '@/src/data/harryEnglishLevels';
 import GroupNamingFields, {
-  syncGroupNameWithLocation,
+  previewAutoGroupName,
 } from '@/src/components/admin/GroupNamingFields';
 
 type TabKey =
@@ -1865,7 +1864,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         schoolId: g.school_id ?? sessionSchoolId ?? '',
         locationId: g.location_id ?? '',
         name,
-        level: detectLevelFromGroupName(name) ?? g.level ?? '',
+        level: (g.level && String(g.level).trim()) || detectLevelFromGroupName(name) || '',
         teacherId: g.teacher_id ?? '',
         maxStudents: g.max_students,
         active: g.active,
@@ -1921,23 +1920,23 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     [groupDetail?.locations, schoolLocations],
   );
 
+  const activeGroupNamesForPreview = useMemo(
+    () => groups.filter((g) => g.active).map((g) => g.name),
+    [groups],
+  );
+
+  const computeAutoGroupName = useCallback(
+    (level: string, locationId: string) =>
+      previewAutoGroupName({
+        level,
+        locationName: resolveGroupLocationName(locationId),
+        activeGroupNames: activeGroupNamesForPreview,
+      }),
+    [activeGroupNamesForPreview, resolveGroupLocationName],
+  );
+
   const saveGroupForm = useCallback(async () => {
     if (!groupForm.id) return;
-    if (!groupForm.level.trim() || !isHarryEnglishLevelCode(groupForm.level.trim())) {
-      pushToast('error', 'Wybierz poziom z listy (P3–P6, Sz1–Sz8, Sz8E)');
-      return;
-    }
-    if (!groupForm.name.trim()) {
-      pushToast('error', 'Podaj nazwę grupy');
-      return;
-    }
-    if (!groupNameMatchesLevel(groupForm.name, groupForm.level)) {
-      pushToast(
-        'error',
-        `Nazwa grupy musi zaczynać się od poziomu ${groupForm.level.trim()}`,
-      );
-      return;
-    }
     if (!groupForm.teacherId) {
       pushToast('error', 'Wybierz nauczyciela dla grupy');
       return;
@@ -1948,14 +1947,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: groupForm.name.trim(),
-          level: groupForm.level.trim(),
           teacherId: groupForm.teacherId,
           maxStudents: groupForm.maxStudents,
           active: groupForm.active,
-          schoolId: groupForm.schoolId || null,
-          locationId: groupForm.locationId || null,
-          priceMonthly: null, // cennik grupy wyłączony — ceny ręczne per dziecko
+          priceMonthly: null,
           priceYearly: null,
           pricePerLesson: null,
           teacherPickupConsent: groupForm.teacherPickupConsent,
@@ -4739,8 +4734,28 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             className="contents"
             name={groupForm.name}
             level={groupForm.level}
-            locationName={resolveGroupLocationName(groupForm.locationId)}
-            onChange={({ name, level }) => setGroupForm((p) => ({ ...p, name, level }))}
+            locked
+            onLevelChange={() => {}}
+            locationField={
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-zinc-700">Lokalizacja</label>
+                <select
+                  className="w-full rounded-xl border border-emerald-200 px-3 py-2 bg-zinc-50 text-zinc-600"
+                  value={groupForm.locationId}
+                  disabled
+                  title="Lokalizacja zablokowana po pierwszym zapisie"
+                >
+                  <option value="">Brak lokalizacji</option>
+                  {(groupDetail?.locations ?? schoolLocations)
+                    .filter((loc) => ('active' in loc ? loc.active : true))
+                    .map((loc) => (
+                      <option key={loc.id} value={loc.id}>
+                        {loc.name}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            }
           />
           <div className="space-y-1">
             <label className="block text-sm font-medium text-zinc-700">Nauczyciel</label>
@@ -4755,39 +4770,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   {t.first_name} {t.last_name}
                 </option>
               ))}
-            </select>
-          </div>
-          <div className="space-y-1">
-            <label className="block text-sm font-medium text-zinc-700">Lokalizacja</label>
-            <select
-              className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-              value={groupForm.locationId}
-              onChange={(e) => {
-                const locationId = e.target.value;
-                const locationName = resolveGroupLocationName(locationId);
-                setGroupForm((p) => {
-                  const name = syncGroupNameWithLocation({
-                    name: p.name,
-                    level: p.level,
-                    locationName,
-                  });
-                  return {
-                    ...p,
-                    locationId,
-                    name,
-                    level: detectLevelFromGroupName(name) ?? '',
-                  };
-                });
-              }}
-            >
-              <option value="">Brak lokalizacji</option>
-              {(groupDetail?.locations ?? schoolLocations)
-                .filter((loc) => ('active' in loc ? loc.active : true))
-                .map((loc) => (
-                  <option key={loc.id} value={loc.id}>
-                    {loc.name}
-                  </option>
-                ))}
             </select>
           </div>
           <div className="space-y-1">
@@ -5479,8 +5461,46 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 className="space-y-3"
                 name={groupForm.name}
                 level={groupForm.level}
-                locationName={resolveGroupLocationName(groupForm.locationId)}
-                onChange={({ name, level }) => setGroupForm((p) => ({ ...p, name, level }))}
+                locked={Boolean(groupForm.id)}
+                onLevelChange={(level) => {
+                  if (groupForm.id) return;
+                  setGroupForm((p) => ({
+                    ...p,
+                    level,
+                    name: computeAutoGroupName(level, p.locationId),
+                  }));
+                }}
+                locationField={
+                  <div className="space-y-1">
+                    <label className="block text-sm font-medium text-zinc-700">Lokalizacja</label>
+                    <select
+                      className="w-full rounded-xl border border-emerald-200 px-3 py-2 bg-white disabled:bg-zinc-50 disabled:text-zinc-600"
+                      value={groupForm.locationId}
+                      disabled={Boolean(groupForm.id)}
+                      title={
+                        groupForm.id
+                          ? 'Lokalizacja zablokowana po pierwszym zapisie'
+                          : undefined
+                      }
+                      onChange={(e) => {
+                        if (groupForm.id) return;
+                        const locationId = e.target.value;
+                        setGroupForm((p) => ({
+                          ...p,
+                          locationId,
+                          name: computeAutoGroupName(p.level, locationId),
+                        }));
+                      }}
+                    >
+                      <option value="">Wybierz lokalizację</option>
+                      {schoolLocations.filter((loc) => loc.active).map((loc) => (
+                        <option key={loc.id} value={loc.id}>
+                          {loc.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                }
               />
               <div className="space-y-1">
                 <label className="block text-sm font-medium text-zinc-700">Nauczyciel</label>
@@ -5488,37 +5508,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   <option value="">Wybierz nauczyciela</option>
                   {users.filter((u) => u.role === 'TEACHER' && u.active).map((t) => (
                     <option key={t.id} value={t.id}>{t.first_name} {t.last_name}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-1">
-                <label className="block text-sm font-medium text-zinc-700">Lokalizacja</label>
-                <select
-                  className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-                  value={groupForm.locationId}
-                  onChange={(e) => {
-                    const locationId = e.target.value;
-                    const locationName = resolveGroupLocationName(locationId);
-                    setGroupForm((p) => {
-                      const name = syncGroupNameWithLocation({
-                        name: p.name,
-                        level: p.level,
-                        locationName,
-                      });
-                      return {
-                        ...p,
-                        locationId,
-                        name,
-                        level: detectLevelFromGroupName(name) ?? '',
-                      };
-                    });
-                  }}
-                >
-                  <option value="">Brak lokalizacji</option>
-                  {schoolLocations.filter((loc) => loc.active).map((loc) => (
-                    <option key={loc.id} value={loc.id}>
-                      {loc.name}
-                    </option>
                   ))}
                 </select>
               </div>
@@ -5565,15 +5554,12 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       pushToast('error', 'Wybierz poziom z listy (P3–P6, Sz1–Sz8, Sz8E)');
                       return;
                     }
-                    if (!groupForm.name.trim()) {
-                      pushToast('error', 'Podaj nazwę grupy');
+                    if (!groupForm.locationId.trim()) {
+                      pushToast('error', 'Wybierz lokalizację grupy');
                       return;
                     }
-                    if (!groupNameMatchesLevel(groupForm.name, groupForm.level)) {
-                      pushToast(
-                        'error',
-                        `Nazwa grupy musi zaczynać się od poziomu ${groupForm.level.trim()}`,
-                      );
+                    if (!groupForm.name.trim()) {
+                      pushToast('error', 'Uzupełnij poziom i lokalizację — nazwa powstanie automatycznie');
                       return;
                     }
                     if (!groupForm.teacherId) {
@@ -5590,14 +5576,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                          name: groupForm.name.trim(),
                           level: groupForm.level.trim(),
                           teacherId: groupForm.teacherId,
                           maxStudents: groupForm.maxStudents,
                           active: groupForm.active,
                           schoolId: groupForm.schoolId || null,
                           locationId: groupForm.locationId || null,
-                          priceMonthly: null, // cennik grupy wyłączony
+                          priceMonthly: null,
                           priceYearly: null,
                           pricePerLesson: null,
                           teacherPickupConsent: groupForm.teacherPickupConsent,
@@ -5608,7 +5593,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         pushToast('error', data.message ?? 'Nie udało się zapisać grupy');
                         return;
                       }
-                      pushToast('success', 'Grupa zapisana');
+                      pushToast('success', data.name ? `Grupa zapisana: ${data.name}` : 'Grupa zapisana');
                       await loadData();
                       await loadGroupDetail(data.id, { quiet: true });
                     } catch {

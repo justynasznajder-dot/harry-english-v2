@@ -45,6 +45,9 @@ const LEVEL_CODE_SET = new Set<string>(HARRY_ENGLISH_LEVEL_CODES);
 
 export const GROUP_NAME_SEP = ' · ';
 
+/** Sufiks równoległej grupy: ` (2)`, ` (3)`, … — bez `(1)` na pierwszej. */
+const GROUP_NAME_NUMERIC_SUFFIX_RE = / \((\d+)\)$/;
+
 export function isHarryEnglishLevelCode(value: string | null | undefined): value is HarryEnglishLevelCode {
   return Boolean(value && LEVEL_CODE_SET.has(value.trim()));
 }
@@ -92,12 +95,13 @@ export function detectLevelFromGroupName(name: string): HarryEnglishLevelCode | 
 export type ParsedGroupName = {
   levelCode: HarryEnglishLevelCode | null;
   location: string;
-  /** Dzień/godzina i ewentualny sufiks (np. B) */
+  /** Dzień/godzina i ewentualny sufiks (legacy) albo pusty */
   schedule: string;
 };
 
 export function parseGroupName(name: string): ParsedGroupName {
-  const parts = name
+  const withoutNumeric = stripGroupNameNumericSuffix(name);
+  const parts = withoutNumeric
     .split(GROUP_NAME_SEP)
     .map((p) => p.trim())
     .filter((p) => p.length > 0);
@@ -118,10 +122,41 @@ export function parseGroupName(name: string): ParsedGroupName {
   };
 }
 
+/** Bazowa nazwa: `P4 · Mokotów` (bez numeru równoległego). */
+export function buildGroupNameBase(levelCode: string, locationName: string): string {
+  const level = levelCode.trim();
+  const loc = locationName.trim();
+  if (!level || !loc) return '';
+  return `${level}${GROUP_NAME_SEP}${loc}`;
+}
+
+export function stripGroupNameNumericSuffix(name: string): string {
+  return name.trim().replace(GROUP_NAME_NUMERIC_SUFFIX_RE, '');
+}
+
+/**
+ * Pierwsza wolna nazwa wśród aktywnych: baza, potem ` (2)`, ` (3)`, …
+ * Nie dodaje `(1)` do pierwszej grupy.
+ */
+export function allocateUniqueGroupName(
+  baseName: string,
+  existingActiveNames: readonly string[]
+): string {
+  const base = baseName.trim();
+  if (!base) return '';
+  const taken = new Set(
+    existingActiveNames.map((n) => n.trim()).filter((n) => n.length > 0)
+  );
+  if (!taken.has(base)) return base;
+  let n = 2;
+  while (taken.has(`${base} (${n})`)) n += 1;
+  return `${base} (${n})`;
+}
+
 export function composeGroupName(
   levelCode: string,
   locationName: string,
-  schedule: string
+  schedule: string = ''
 ): string {
   const parts: string[] = [levelCode.trim()];
   const loc = locationName.trim();
@@ -132,15 +167,13 @@ export function composeGroupName(
 }
 
 /**
- * Przebudowuje nazwę po zmianie poziomu lub lokalizacji,
- * zachowując dzień/godzinę z dotychczasowej nazwy (tylko gdy była w formacie z poziomem).
+ * Przebudowuje nazwę po zmianie poziomu lub lokalizacji (szablon bez dnia/godziny).
+ * Legacy: zachowuje środkowe segmenty tylko gdy były w starej nazwie — obecnie UI ich nie używa.
  */
 export function rebuildGroupName(options: {
   previousName: string;
   levelCode: string;
   locationName: string;
 }): string {
-  const parsed = parseGroupName(options.previousName);
-  const schedule = parsed.levelCode ? parsed.schedule : '';
-  return composeGroupName(options.levelCode, options.locationName, schedule);
+  return buildGroupNameBase(options.levelCode, options.locationName);
 }
