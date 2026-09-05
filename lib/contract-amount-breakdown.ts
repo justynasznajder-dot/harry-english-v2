@@ -1,6 +1,6 @@
 import {
-  applyDiscountsToAmount,
-  DISCOUNT_LABELS,
+  // applyDiscountsToAmount, // wyłączone — sezon cen ręcznych
+  // DISCOUNT_LABELS,
   type DiscountKey,
   type SchoolDiscountSettings,
 } from "@/lib/school-discounts";
@@ -62,11 +62,15 @@ export function buildContractAmountBreakdown(input: {
   children: ContractChildRateSnapshot[];
   frozenAt?: Date | string | null;
 }): ContractAmountBreakdown {
-  const discounts: ContractAmountDiscountBreakdown[] = input.discountKeys.map((key) => ({
-    key,
-    label: DISCOUNT_LABELS[key],
-    percent: input.discountSettings[key] ?? 0,
-  }));
+  // Rabaty % wyłączone — nie zapisujemy pozycji zniżek. Przywrócić mapowanie discountKeys.
+  void input.discountKeys;
+  void input.discountSettings;
+  const discounts: ContractAmountDiscountBreakdown[] = [];
+  // const discounts: ContractAmountDiscountBreakdown[] = input.discountKeys.map((key) => ({
+  //   key,
+  //   label: DISCOUNT_LABELS[key],
+  //   percent: input.discountSettings[key] ?? 0,
+  // }));
 
   const children: ContractAmountChildBreakdown[] = input.children.map((child) => ({
     child_id: child.child_id,
@@ -110,10 +114,12 @@ export function buildContractAmountBreakdown(input: {
   }
 
   const base_total = hasAny ? roundMoney(baseTotal) : null;
-  const final_total =
-    base_total == null
-      ? null
-      : applyDiscountsToAmount(base_total, input.discountKeys, input.discountSettings);
+  // Rabaty % wyłączone (sezon cen ręcznych) — final = base. Przywrócić applyDiscountsToAmount.
+  const final_total = base_total;
+  // const final_total =
+  //   base_total == null
+  //     ? null
+  //     : applyDiscountsToAmount(base_total, input.discountKeys, input.discountSettings);
 
   return {
     payment_type: input.paymentType,
@@ -159,9 +165,11 @@ export function recomputeFinalTotalFromBreakdown(
   }
   if (!hasAny) return null;
 
-  const settings = {
-    ...Object.fromEntries(breakdown.discounts.map((d) => [d.key, d.percent])),
-  } as SchoolDiscountSettings;
-  const keys = breakdown.discounts.map((d) => d.key);
-  return applyDiscountsToAmount(roundMoney(baseTotal), keys, settings);
+  // Rabaty % wyłączone — final = suma stawek. Przywrócić applyDiscountsToAmount.
+  return roundMoney(baseTotal);
+  // const settings = {
+  //   ...Object.fromEntries(breakdown.discounts.map((d) => [d.key, d.percent])),
+  // } as SchoolDiscountSettings;
+  // const keys = breakdown.discounts.map((d) => d.key);
+  // return applyDiscountsToAmount(roundMoney(baseTotal), keys, settings);
 }

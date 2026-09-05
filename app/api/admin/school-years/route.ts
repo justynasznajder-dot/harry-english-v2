@@ -5,6 +5,7 @@ import {
   requireAdminSchoolContext,
   resolveInsertSchoolId,
 } from "@/lib/admin-school-context";
+import { ensurePolishPublicHolidays } from "@/lib/ensure-polish-public-holidays";
 import { attachOpenMembershipsToYear } from "@/lib/school-year-history";
 
 export async function GET(request: NextRequest) {
@@ -64,6 +65,12 @@ export async function POST(request: NextRequest) {
     };
     if (!name?.trim() || !date_from || !date_to) {
       return NextResponse.json({ message: "Brak nazwy lub zakresu dat" }, { status: 400 });
+    }
+    if (String(date_to).slice(0, 10) < String(date_from).slice(0, 10)) {
+      return NextResponse.json(
+        { message: "Data końca nie może być wcześniejsza niż data początku" },
+        { status: 400 }
+      );
     }
 
     const insertSchoolId = resolveInsertSchoolId(ctx.tenant, { bodySchoolId, bodySchoolIdCamel });
@@ -138,6 +145,22 @@ export async function POST(request: NextRequest) {
       }
       return created;
     });
+
+    if (row) {
+      const yFrom = String(row.date_from).slice(0, 10);
+      const yTo = String(row.date_to).slice(0, 10);
+      try {
+        await ensurePolishPublicHolidays({
+          schoolId: insertSchoolId,
+          schoolYearId: row.id,
+          dateFrom: yFrom,
+          dateTo: yTo,
+          forceCancelScheduled: true,
+        });
+      } catch (seedErr) {
+        console.error("ensurePolishPublicHolidays after school-year create:", seedErr);
+      }
+    }
 
     return NextResponse.json({
       year: row

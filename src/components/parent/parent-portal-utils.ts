@@ -36,6 +36,7 @@ export function attendanceStatusLabel(status: string | null | undefined): string
   if (s === 'ABSENT') return 'Nieobecny';
   if (s === 'EXCUSED') return 'Usprawiedliwiony';
   if (s === 'LATE') return 'Spóźniony';
+  if (s === 'UNMARKED') return 'Do oznaczenia';
   return s;
 }
 
@@ -44,6 +45,7 @@ export function attendanceStatusClass(status: string | null | undefined): string
   if (s === 'PRESENT' || s === 'LATE') return 'text-emerald-700 bg-emerald-50 border-emerald-200';
   if (s === 'EXCUSED') return 'text-sky-700 bg-sky-50 border-sky-200';
   if (s === 'ABSENT') return 'text-rose-700 bg-rose-50 border-rose-200';
+  if (s === 'UNMARKED') return 'text-amber-800 bg-amber-50 border-amber-200';
   return 'text-zinc-700 bg-zinc-50 border-zinc-200';
 }
 

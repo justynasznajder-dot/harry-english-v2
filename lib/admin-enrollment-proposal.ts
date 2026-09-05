@@ -7,10 +7,12 @@ import {
   queryDb,
   runPgTransaction,
   updateUser,
+  updateUserPasswordHash,
 } from "@/lib/db";
 import { generateTempPassword } from "@/lib/password";
 import { formatPersonName } from "@/lib/format-person-name";
 import {
+  assignChildToProposedGroup,
   syncChildrenAccessLevelForEnrollment,
   syncParentUserAccessLevel,
 } from "@/lib/enrollment-sync";
@@ -19,6 +21,9 @@ import {
   ensureChildClientNumber,
 } from "@/lib/client-numbers";
 import { promotePendingLargeFamilyCardToParent } from "@/lib/parent-profile-discount";
+import { completeComplimentaryEnrollment } from "@/lib/complimentary-enrollment";
+import { ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE } from "@/lib/enrollment-status";
+import { isComplimentaryForParent } from "@/lib/school-discounts";
 
 export type EnrollmentRow = {
   id: string;
@@ -32,6 +37,8 @@ export type EnrollmentRow = {
   child_last_name: string;
   child_birth_date: string;
   preferred_location: string | null;
+  proposed_group_id: string | null;
+  status: string;
 };
 
 export type ProposalEmailItem = {
@@ -93,17 +100,29 @@ export async function submitEnrollmentProposal(
   options?: {
     restrictToSchoolId?: string;
     allowedStatuses?: EnrollmentProposalStatus[];
+    /**
+     * Tylko zapis: konto rodzica + dziecko + członkostwo w grupie (confirmed=false),
+     * bez zmiany statusu na PROPOSED/ACCEPTED i bez maila.
+     */
+    draftOnly?: boolean;
+    /** Przy draftOnly — puste stawki jako NULL. */
+    allowEmptyPrices?: boolean;
   }
 ): Promise<
   | {
       ok: true;
       sharedParent: SharedParentState;
       emailItem: ProposalEmailItem;
+      /** Tryb bez opłat — zapis domknięty przy propozycji (gdy akceptacja wyłączona). */
+      complimentaryCompleted: boolean;
+      childId: string;
+      groupChanged: boolean;
     }
   | { ok: false; status: number; message: string }
 > {
   const { requestId, groupId, lessonUnitPrice, monthlyUnitPrice, yearlyUnitPrice } = input;
   const allowedStatuses = options?.allowedStatuses ?? ["NEW", "NEGOTIATING"];
+  const draftOnly = options?.draftOnly === true;
 
   const enrollmentRes = await queryDb<EnrollmentRow>(
     `SELECT er.id,
@@ -116,7 +135,9 @@ export async function submitEnrollmentProposal(
             er.child_first_name,
             er.child_last_name,
             er.child_birth_date::text AS child_birth_date,
-            er.preferred_location
+            er.preferred_location,
+            er.proposed_group_id,
+            UPPER(BTRIM(COALESCE(er.status::text, ''))) AS status
      FROM enrollment_requests er
      WHERE er.id = $1
        AND ($2::text IS NULL OR er.school_id = $2::text)
@@ -133,9 +154,14 @@ export async function submitEnrollmentProposal(
       status: 409,
       message: onlyNegotiating
         ? "Propozycję dla jednego dziecka można wysłać tylko gdy rodzic negocjuje termin zajęć."
-        : "Propozycję można wysłać tylko dla zgłoszenia „Nowe”.",
+        : draftOnly
+          ? "Szkic propozycji można zapisać tylko dla zgłoszenia „Nowe”."
+          : "Propozycję można wysłać tylko dla zgłoszenia „Nowe”.",
     };
   }
+
+  const previousGroupId = enrollment.proposed_group_id?.trim() || null;
+  const groupChanged = Boolean(previousGroupId && previousGroupId !== groupId);
 
   const parentSchoolId = enrollment.school_id;
   const parentEmail = String(enrollment.parent_email || "").trim().toLowerCase();
@@ -215,7 +241,6 @@ export async function submitEnrollmentProposal(
       };
     }
     parentUserId = existing.id;
-    // Preferuj imię/nazwisko ze zgłoszenia — konto mogło powstać wcześniej pod innym imieniem.
     parentFirstName = formatPersonName(
       enrollment.parent_first_name?.trim() || existing.first_name
     );
@@ -264,6 +289,19 @@ export async function submitEnrollmentProposal(
     }
   }
 
+  // Konto powstało wcześniej przy „Zapisz” (bez maila) — przy wysyłce daj nowe hasło tymczasowe.
+  if (!draftOnly && !parentCreated && !tempPassword) {
+    const pendingRes = await queryDb<{ must_change_password: boolean }>(
+      `SELECT must_change_password FROM users WHERE id = $1 LIMIT 1`,
+      [parentUserId]
+    );
+    if (pendingRes.rows[0]?.must_change_password === true) {
+      tempPassword = generateTempPassword();
+      await updateUserPasswordHash(parentUserId, await bcrypt.hash(tempPassword, 10));
+      parentCreated = true;
+    }
+  }
+
   await queryDb(
     `UPDATE enrollment_requests
      SET user_id = $1
@@ -279,33 +317,103 @@ export async function submitEnrollmentProposal(
     parentEmail,
   });
 
-  await queryDb(
-    `UPDATE enrollment_requests
-     SET status = 'PROPOSED',
-         proposed_group_id = $2,
-         proposed_at = NOW(),
-         user_id = COALESCE(user_id, $3),
-         lesson_unit_price = $4,
-         monthly_unit_price = $5,
-         yearly_unit_price = $6
-     WHERE id = $1`,
-    [
-      requestId,
-      groupId,
-      parentUserId,
-      lessonUnitPrice != null && lessonUnitPrice !== ""
-        ? Number(lessonUnitPrice)
-        : null,
-      monthlyUnitPrice != null && monthlyUnitPrice !== ""
-        ? Number(monthlyUnitPrice)
-        : null,
-      yearlyUnitPrice != null && yearlyUnitPrice !== ""
-        ? Number(yearlyUnitPrice)
-        : null,
-    ]
-  );
+  const complimentary = await isComplimentaryForParent(parentSchoolId, {
+    parentId: parentUserId,
+    parentEmail,
+  });
 
-  let resolvedChildId: string | null = null;
+  const parseUnitPrice = (
+    raw: number | string | null | undefined,
+    label: string,
+    required: boolean
+  ): { ok: true; value: number | null } | { ok: false; message: string } => {
+    if (raw == null || raw === "") {
+      if (!required) return { ok: true, value: null };
+      return { ok: false, message: `Podaj stawkę: ${label}` };
+    }
+    const n = typeof raw === "number" ? raw : Number(String(raw).replace(",", "."));
+    if (!Number.isFinite(n) || n < 0) {
+      return { ok: false, message: `Nieprawidłowa stawka: ${label}` };
+    }
+    return { ok: true, value: n };
+  };
+
+  let parsedLesson: number | null = null;
+  let parsedMonthly: number | null = null;
+  let parsedYearly: number | null = null;
+
+  if (complimentary) {
+    // tryb bez opłat — stawki NULL
+  } else if (draftOnly && options?.allowEmptyPrices) {
+    const lesson = parseUnitPrice(lessonUnitPrice, "za pojedyncze zajęcia", false);
+    if (!lesson.ok) return { ok: false, status: 400, message: lesson.message };
+    const monthly = parseUnitPrice(monthlyUnitPrice, "ratalna", false);
+    if (!monthly.ok) return { ok: false, status: 400, message: monthly.message };
+    const yearly = parseUnitPrice(yearlyUnitPrice, "jednorazowa", false);
+    if (!yearly.ok) return { ok: false, status: 400, message: yearly.message };
+    parsedLesson = lesson.value;
+    parsedMonthly = monthly.value;
+    parsedYearly = yearly.value;
+  } else {
+    const lesson = parseUnitPrice(lessonUnitPrice, "za pojedyncze zajęcia", true);
+    if (!lesson.ok) return { ok: false, status: 400, message: lesson.message };
+    const monthly = parseUnitPrice(monthlyUnitPrice, "ratalna", true);
+    if (!monthly.ok) return { ok: false, status: 400, message: monthly.message };
+    const yearly = parseUnitPrice(yearlyUnitPrice, "jednorazowa", true);
+    if (!yearly.ok) return { ok: false, status: 400, message: yearly.message };
+    parsedLesson = lesson.value;
+    parsedMonthly = monthly.value;
+    parsedYearly = yearly.value;
+  }
+
+  // draftOnly: status zostaje NEW — tylko zapis + członkostwo niepotwierdzone.
+  const initialStatus = draftOnly
+    ? "NEW"
+    : ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
+      ? "PROPOSED"
+      : complimentary
+        ? "PROPOSED"
+        : "ACCEPTED";
+
+  if (draftOnly) {
+    await queryDb(
+      `UPDATE enrollment_requests
+       SET proposed_group_id = $2,
+           user_id = COALESCE(user_id, $3),
+           lesson_unit_price = $4,
+           monthly_unit_price = $5,
+           yearly_unit_price = $6
+       WHERE id = $1`,
+      [requestId, groupId, parentUserId, parsedLesson, parsedMonthly, parsedYearly]
+    );
+  } else {
+    await queryDb(
+      `UPDATE enrollment_requests
+       SET status = $7::enrollment_status,
+           proposed_group_id = $2,
+           proposed_at = NOW(),
+           accepted_at = CASE
+             WHEN $7::text = 'ACCEPTED' THEN NOW()
+             ELSE accepted_at
+           END,
+           user_id = COALESCE(user_id, $3),
+           lesson_unit_price = $4,
+           monthly_unit_price = $5,
+           yearly_unit_price = $6
+       WHERE id = $1`,
+      [
+        requestId,
+        groupId,
+        parentUserId,
+        parsedLesson,
+        parsedMonthly,
+        parsedYearly,
+        initialStatus,
+      ]
+    );
+  }
+
+  let resolvedChildId: string;
   const childFirst = formatPersonName(enrollment.child_first_name ?? "");
   const childLast = formatPersonName(enrollment.child_last_name ?? "");
   const childBirth = String(enrollment.child_birth_date ?? "").slice(0, 10);
@@ -334,9 +442,24 @@ export async function submitEnrollmentProposal(
         `UPDATE children
          SET active = TRUE,
              enrollment_request_id = $2,
-             access_level = 'PROPOSED'
+             access_level = $3,
+             confirmed = CASE
+               WHEN UPPER(BTRIM(COALESCE(access_level::text, ''))) IN ('SIGNED', 'COMPLETED')
+                 THEN confirmed
+               ELSE FALSE
+             END,
+             lesson_unit_price = COALESCE($4, lesson_unit_price),
+             monthly_unit_price = COALESCE($5, monthly_unit_price),
+             yearly_unit_price = COALESCE($6, yearly_unit_price)
          WHERE id = $1`,
-        [existingChildId, requestId]
+        [
+          existingChildId,
+          requestId,
+          initialStatus,
+          parsedLesson,
+          parsedMonthly,
+          parsedYearly,
+        ]
       );
     });
   } else {
@@ -351,8 +474,9 @@ export async function submitEnrollmentProposal(
       await client.query(
         `INSERT INTO children (
            id, school_id, parent_id, client_number, first_name, last_name, birth_date,
-           active, confirmed, enrollment_request_id, access_level
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7::date, TRUE, FALSE, $8, 'PROPOSED')`,
+           active, confirmed, enrollment_request_id, access_level,
+           lesson_unit_price, monthly_unit_price, yearly_unit_price
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7::date, TRUE, FALSE, $8, $9, $10, $11, $12)`,
         [
           childId,
           parentSchoolId,
@@ -362,13 +486,35 @@ export async function submitEnrollmentProposal(
           childLast,
           childBirth,
           requestId,
+          initialStatus,
+          parsedLesson,
+          parsedMonthly,
+          parsedYearly,
         ]
       );
     });
   }
 
-  await syncChildrenAccessLevelForEnrollment(requestId, "PROPOSED");
-  await syncParentUserAccessLevel(parentUserId);
+  if (!draftOnly) {
+    await syncChildrenAccessLevelForEnrollment(requestId, initialStatus);
+  }
+
+  await assignChildToProposedGroup(resolvedChildId, groupId, {
+    previousGroupId,
+    lessonUnitPrice: parsedLesson,
+    monthlyUnitPrice: parsedMonthly,
+    yearlyUnitPrice: parsedYearly,
+    persistToChild: true,
+  });
+
+  const complimentaryCompleted =
+    !draftOnly && !ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && complimentary;
+
+  if (complimentaryCompleted) {
+    await completeComplimentaryEnrollment(requestId, parentUserId, parentSchoolId);
+  } else if (!draftOnly) {
+    await syncParentUserAccessLevel(parentUserId);
+  }
 
   return {
     ok: true,
@@ -387,5 +533,37 @@ export async function submitEnrollmentProposal(
       locationName: group.location_name,
       schedule: group.schedule,
     },
+    complimentaryCompleted,
+    childId: resolvedChildId,
+    groupChanged,
+  };
+}
+
+/**
+ * Zapis grupy i stawek + utworzenie konta/dziecka + członkostwo w grupie (confirmed=false),
+ * bez zmiany statusu zgłoszenia i bez maila.
+ */
+export async function saveEnrollmentProposalDraft(
+  input: ProposalInput,
+  options?: {
+    restrictToSchoolId?: string;
+    allowEmptyPrices?: boolean;
+  }
+): Promise<
+  | { ok: true; childId: string; parentCreated: boolean; groupChanged: boolean }
+  | { ok: false; status: number; message: string }
+> {
+  const result = await submitEnrollmentProposal(input, null, {
+    ...options,
+    allowedStatuses: ["NEW"],
+    draftOnly: true,
+    allowEmptyPrices: options?.allowEmptyPrices ?? true,
+  });
+  if (!result.ok) return result;
+  return {
+    ok: true,
+    childId: result.childId,
+    parentCreated: result.sharedParent.parentCreated,
+    groupChanged: result.groupChanged,
   };
 }

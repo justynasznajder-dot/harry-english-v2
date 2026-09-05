@@ -5,10 +5,8 @@ export type MessageTemplateKey =
   | "payment_reminder"
   | "group_proposal"
   | "schedule_change"
-  | "absence_excuse"
   | "resignation"
   | "payment_question"
-  | "group_change_request"
   | "general_contact";
 
 export type MessageTemplate = {
@@ -64,7 +62,7 @@ Grupa: {{grupa}}
 Lokalizacja: {{lokalizacja}}
 Termin: {{termin}}
 
-Prosimy o zalogowanie się do portalu rodzica i zaakceptowanie propozycji lub kontakt w celu ustalenia innego terminu.
+Prosimy o zalogowanie się do portalu rodzica i uzupełnienie danych do umowy.
 
 Pozdrawiamy,
 Zespół Harry English`,
@@ -92,67 +90,25 @@ Zespół Harry English`,
     key: "resignation",
     label: "Rezygnacja z zajęć",
     subject: "Rezygnacja z zajęć — {{dziecko}}",
-    content: `Dzień dobry,
+    content: `Zgłaszam rezygnację z zajęć dla {{dziecko}}.
 
-Chciał(a)bym zgłosić rezygnację z zajęć dla {{dziecko}} w trakcie roku szkolnego.
+Powód: 
 
-Powód: {{powod}}
-
-Proszę o kontakt w sprawie formalności. Rozumiem, że dziecko nie zostaje automatycznie wypisane z grupy.
-
-Pozdrawiam`,
-    audiences: ["PARENT"],
-  },
-  {
-    key: "absence_excuse",
-    label: "Usprawiedliwienie nieobecności",
-    subject: "Nieobecność — {{dziecko}} ({{data}})",
-    content: `Dzień dobry,
-
-Informuję, że {{dziecko}} nie będzie obecne/obecny na zajęciach w dniu {{data}}.
-
-Powód: {{powod}}
-
-Pozdrawiam`,
+Proszę o kontakt w sprawie formalności.`,
     audiences: ["PARENT"],
   },
   {
     key: "payment_question",
     label: "Pytanie o płatność",
-    subject: "Pytanie o płatność — {{miesiac}}",
-    content: `Dzień dobry,
-
-Chciał(a)bym dopytać o płatność za zajęcia w okresie {{miesiac}}.
-
-{{pytanie}}
-
-Pozdrawiam`,
-    audiences: ["PARENT"],
-  },
-  {
-    key: "group_change_request",
-    label: "Prośba o zmianę grupy / terminu",
-    subject: "Prośba o zmianę grupy / terminu — {{dziecko}}",
-    content: `Dzień dobry,
-
-Chciał(a)bym poprosić o zmianę grupy lub terminu zajęć dla {{dziecko}}.
-
-Obecna grupa / termin: {{obecny_termin}}
-Preferowany termin: {{preferowany_termin}}
-Dodatkowe informacje: {{uwagi}}
-
-Pozdrawiam`,
+    subject: "Pytanie o płatność",
+    content: "",
     audiences: ["PARENT"],
   },
   {
     key: "general_contact",
     label: "Ogólne pytanie",
-    subject: "Pytanie do szkoły",
-    content: `Dzień dobry,
-
-{{tresc}}
-
-Pozdrawiam`,
+    subject: "",
+    content: "",
     audiences: ["PARENT"],
   },
 ];
@@ -230,19 +186,6 @@ const TEMPLATE_FIELD_META: Record<string, TemplateFieldMeta> = {
   pytanie: {
     label: "Twoje pytanie",
     placeholder: "Opisz, o co chcesz zapytać…",
-    multiline: true,
-  },
-  obecny_termin: {
-    label: "Obecna grupa / termin",
-    placeholder: "Np. grupa A, wtorek 16:00",
-  },
-  preferowany_termin: {
-    label: "Preferowany termin",
-    placeholder: "Np. czwartek po 17:00",
-  },
-  uwagi: {
-    label: "Dodatkowe informacje",
-    placeholder: "Opcjonalnie…",
     multiline: true,
   },
   tresc: {

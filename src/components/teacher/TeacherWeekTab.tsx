@@ -18,6 +18,14 @@ type WeekLesson = {
   locationName: string | null;
 };
 
+type WeekHoliday = {
+  id: string;
+  name: string;
+  dateFrom: string;
+  dateTo: string;
+  type: string;
+};
+
 const WEEKDAY_LABELS = [
   'Poniedziałek',
   'Wtorek',
@@ -74,6 +82,7 @@ export default function TeacherWeekTab() {
     mondayOfWeekContaining(todayYmdSchool()),
   );
   const [lessons, setLessons] = useState<WeekLesson[]>([]);
+  const [holidays, setHolidays] = useState<WeekHoliday[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -101,17 +110,21 @@ export default function TeacherWeekTab() {
       });
       const data = (await res.json().catch(() => ({}))) as {
         lessons?: WeekLesson[];
+        holidays?: WeekHoliday[];
         message?: string;
       };
       if (!res.ok) {
         setError(data.message ?? 'Nie udało się wczytać planu tygodnia');
         setLessons([]);
+        setHolidays([]);
         return;
       }
       setLessons(data.lessons ?? []);
+      setHolidays(data.holidays ?? []);
     } catch {
       setError('Błąd połączenia z serwerem');
       setLessons([]);
+      setHolidays([]);
     } finally {
       setLoading(false);
     }
@@ -132,6 +145,22 @@ export default function TeacherWeekTab() {
     return map;
   }, [lessons]);
 
+  const holidayByDay = useMemo(() => {
+    const map = new Map<string, WeekHoliday[]>();
+    for (const h of holidays) {
+      let ymd = h.dateFrom;
+      while (ymd <= h.dateTo) {
+        if (ymd >= weekMonday && ymd <= weekEnd) {
+          const list = map.get(ymd) ?? [];
+          list.push(h);
+          map.set(ymd, list);
+        }
+        ymd = addDaysYmd(ymd, 1);
+      }
+    }
+    return map;
+  }, [holidays, weekMonday, weekEnd]);
+
   return (
     <div className="space-y-4 rounded-3xl bg-[#f8f6f3] p-6 shadow-xl md:p-8">
       <header className="flex flex-wrap items-end justify-between gap-3">
@@ -139,7 +168,7 @@ export default function TeacherWeekTab() {
           <h2 className="text-2xl font-bold text-[#1f2933]">Plan tygodnia</h2>
           <p className="mt-1 text-sm text-zinc-600">
             Podgląd zajęć we wszystkich Twoich grupach. Domyślnie bieżący tydzień —
-            możesz wrócić do wcześniejszych.
+            możesz wrócić do wcześniejszych. Żółte dni to ustawowe dni wolne.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -184,24 +213,46 @@ export default function TeacherWeekTab() {
         <div className="space-y-3">
           {days.map(({ index, ymd }) => {
             const dayLessons = lessonsByDay.get(ymd) ?? [];
+            const dayHolidays = holidayByDay.get(ymd) ?? [];
+            const isHoliday = dayHolidays.length > 0;
+            const isWeekend = index >= 5;
             const isToday = ymd === todayYmd;
             return (
               <section
                 key={ymd}
-                className={`rounded-2xl border bg-white p-4 ${
-                  isToday ? 'border-[#0f6e56] shadow-sm' : 'border-emerald-100'
+                className={`rounded-2xl border p-4 ${
+                  isHoliday
+                    ? 'border-amber-200 bg-amber-50/70'
+                    : isWeekend
+                      ? 'border-zinc-200 bg-zinc-100/80'
+                      : isToday
+                        ? 'border-[#0f6e56] bg-white shadow-sm'
+                        : 'border-emerald-100 bg-white'
                 }`}
               >
                 <h3
                   className={`text-sm font-semibold ${
-                    isToday ? 'text-[#0f6e56]' : 'text-zinc-800'
+                    isHoliday
+                      ? 'text-amber-900'
+                      : isWeekend
+                        ? 'text-zinc-500'
+                        : isToday
+                          ? 'text-[#0f6e56]'
+                          : 'text-zinc-800'
                   }`}
                 >
                   {dayHeaderLabel(ymd, index)}
                   {isToday ? ' · dziś' : ''}
+                  {isHoliday
+                    ? ` · wolne: ${dayHolidays.map((h) => h.name).join(', ')}`
+                    : isWeekend
+                      ? ' · weekend'
+                      : ''}
                 </h3>
                 {dayLessons.length === 0 ? (
-                  <p className="mt-2 text-sm text-zinc-500">Brak zajęć</p>
+                  <p className="mt-2 text-sm text-zinc-500">
+                    {isHoliday ? 'Dzień wolny — bez zajęć' : isWeekend ? 'Weekend' : 'Brak zajęć'}
+                  </p>
                 ) : (
                   <ul className="mt-2 space-y-2">
                     {dayLessons.map((lesson) => (

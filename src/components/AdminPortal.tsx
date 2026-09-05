@@ -50,8 +50,8 @@ type EnrollmentFlowSubTab = 'enrollment' | 'renewals' | 'resignations';
 type BillingSubTab = 'summary' | 'invoices' | 'settings';
 type BillingSummaryKind = 'monthly' | 'per_lesson';
 type TeacherOrgSubTab = 'list' | 'add';
-type LocationOrgSubTab = 'list' | 'add' | 'edit';
-type GroupsSubTab = 'list' | 'add' | 'organize';
+type LocationOrgSubTab = 'list' | 'add' | 'edit' | 'specials';
+type GroupsSubTab = 'list' | 'add' | 'organize' | 'yearLessons';
 
 /** Zgodnie z kolumną `users.role` (TEXT): ADMIN, MANAGER, TEACHER, PARENT, CHILD, ACCOUNTANT */
 type AdminPortalUserRole = 'ADMIN' | 'MANAGER' | 'TEACHER' | 'PARENT' | 'CHILD' | 'ACCOUNTANT';
@@ -114,6 +114,26 @@ interface GroupRow {
   schedule_needs_confirmation?: boolean;
 }
 
+interface GroupYearLessonsRow {
+  id: string;
+  name: string;
+  level: string | null;
+  active: boolean;
+  teacher_name: string | null;
+  location_name: string | null;
+  schedule: string | null;
+  lessons_count: number;
+  scheduled_count: number;
+  completed_count: number;
+  cancelled_count: number;
+  lessons: Array<{
+    id: string;
+    scheduled_at: string;
+    status: string;
+    duration_min: number;
+  }>;
+}
+
 function priceFieldFromDb(value: unknown): string {
   if (value == null || value === '') return '';
   const n = Number(String(value).replace(',', '.'));
@@ -121,6 +141,7 @@ function priceFieldFromDb(value: unknown): string {
   return String(n);
 }
 
+/** @deprecated Cennik grupy wyłączony — zostawione na przyszłą automatyzację. */
 function formatGroupPricePln(value: unknown): string | null {
   if (value == null || value === '') return null;
   const n = Number(String(value).replace(',', '.'));
@@ -128,9 +149,14 @@ function formatGroupPricePln(value: unknown): string | null {
   return `${n.toLocaleString('pl-PL', { minimumFractionDigits: 0, maximumFractionDigits: 2 })} PLN`;
 }
 
+/** Cennik grupy wyłączony — zostawione na przyszłą automatyzację. */
 function formatGroupPriceLines(
   group: Pick<GroupRow, 'price_monthly' | 'price_yearly' | 'price_per_lesson'>
 ): string[] {
+  void formatGroupPricePln;
+  void group;
+  return [];
+  /*
   const monthly = formatGroupPricePln(group.price_monthly);
   const yearly = formatGroupPricePln(group.price_yearly);
   const perLesson = formatGroupPricePln(group.price_per_lesson);
@@ -139,6 +165,7 @@ function formatGroupPriceLines(
     yearly ? `jednorazowo ${yearly}` : null,
     perLesson ? `za zajęcia ${perLesson}` : null,
   ].filter((line): line is string => Boolean(line));
+  */
 }
 
 function isSchoolYearEndDatePassed(dateTo: string): boolean {
@@ -358,10 +385,14 @@ interface SchoolHolidayRow {
 interface SchoolLocationRow {
   id: string;
   name: string;
+  town: string | null;
+  facility: string | null;
   address: string | null;
   active: boolean;
   sort_order: number;
   is_featured: boolean;
+  is_new: boolean;
+  is_special: boolean;
 }
 
 const topTabs: Array<{ key: TabKey; label: string }> = [
@@ -384,7 +415,7 @@ const organizationTabs: Array<{ key: OrganizationSubTab; label: string }> = [
   { key: 'schoolYear', label: 'Rok szkolny' },
   { key: 'teachers', label: 'Nauczyciele' },
   { key: 'locations', label: 'Lokalizacje' },
-  { key: 'discounts', label: 'Zniżki' },
+  { key: 'discounts', label: 'Tryb bez opłat' },
   { key: 'groups', label: 'Grupy' },
   { key: 'users', label: 'Użytkownicy' },
   { key: 'history', label: 'Historia' },
@@ -414,7 +445,8 @@ const teacherOrgSubTabs: Array<{ key: TeacherOrgSubTab; label: string }> = [
 
 const locationOrgSubTabs: Array<{ key: LocationOrgSubTab; label: string }> = [
   { key: 'list', label: 'Lista lokalizacji' },
-  { key: 'add', label: 'Dodaj nową lokalizację' },
+  { key: 'add', label: 'Dodaj lokalizację' },
+  { key: 'specials', label: 'Pozycje specjalne' },
 ];
 const usersSubTabs: Array<{ key: UsersSubTab; label: string }> = [
   { key: 'parents', label: 'Lista rodziców' },
@@ -428,6 +460,7 @@ const groupsSubTabs: Array<{ key: GroupsSubTab; label: string }> = [
   { key: 'list', label: 'Lista grup' },
   { key: 'add', label: 'Dodaj nową grupę' },
   { key: 'organize', label: 'Organizacja grup' },
+  { key: 'yearLessons', label: 'Zajęcia w roku szkolnym' },
 ];
 
 /** Wartości filtrów listy „Organizacja grup” (select); pusty string = wszystkie. */
@@ -444,8 +477,16 @@ function GroupSubTabButtons(props: {
   onEnterAddTab: () => void;
   onOrganizeStateReset: () => void;
   onEnterListTab?: () => void;
+  onEnterYearLessonsTab?: () => void;
 }) {
-  const { active, setGroupsSubTab, onEnterAddTab, onOrganizeStateReset, onEnterListTab } = props;
+  const {
+    active,
+    setGroupsSubTab,
+    onEnterAddTab,
+    onOrganizeStateReset,
+    onEnterListTab,
+    onEnterYearLessonsTab,
+  } = props;
   return (
     <div className="mb-4 flex flex-wrap gap-2">
       {groupsSubTabs.map((tab) => (
@@ -467,6 +508,9 @@ function GroupSubTabButtons(props: {
             }
             if (tab.key === 'add') {
               onEnterAddTab();
+            }
+            if (tab.key === 'yearLessons') {
+              onEnterYearLessonsTab?.();
             }
           }}
           className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
@@ -518,13 +562,35 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [groupsSubTab, setGroupsSubTab] = useState<GroupsSubTab>('list');
   const [schoolLocations, setSchoolLocations] = useState<SchoolLocationRow[]>([]);
   const [locationsLoading, setLocationsLoading] = useState(false);
-  const [newLocationForm, setNewLocationForm] = useState({ name: '', address: '', sortOrder: '100' });
+  const [newLocationForm, setNewLocationForm] = useState({
+    town: '',
+    facility: '',
+    address: '',
+    sortOrder: '100',
+    isNew: false,
+    isFeatured: false,
+  });
+  const [newSpecialForm, setNewSpecialForm] = useState({
+    name: '',
+    sortOrder: '0',
+    isNew: false,
+    isFeatured: true,
+  });
   const [editLocationId, setEditLocationId] = useState<string | null>(null);
-  const [editLocationForm, setEditLocationForm] = useState({ name: '', address: '' });
+  const [editLocationForm, setEditLocationForm] = useState({
+    town: '',
+    facility: '',
+    name: '',
+    address: '',
+    isSpecial: false,
+    isNew: false,
+    isFeatured: false,
+  });
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [children, setChildren] = useState<ChildRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [generateLessonsCount, setGenerateLessonsCount] = useState('30');
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [search, setSearch] = useState('');
   const [showInactive, setShowInactive] = useState(false);
@@ -705,6 +771,16 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [organizeLoadingGroupId, setOrganizeLoadingGroupId] = useState<string | null>(null);
   const [organizeFilterName, setOrganizeFilterName] = useState('');
   const [organizeFilterLocation, setOrganizeFilterLocation] = useState('');
+  const [yearLessonsYearId, setYearLessonsYearId] = useState('');
+  const [yearLessonsLoading, setYearLessonsLoading] = useState(false);
+  const [yearLessonsGroups, setYearLessonsGroups] = useState<GroupYearLessonsRow[]>([]);
+  const [yearLessonsSchoolYear, setYearLessonsSchoolYear] = useState<{
+    id: string;
+    name: string | null;
+    date_from: string;
+    date_to: string;
+  } | null>(null);
+  const [yearLessonsExpandedGroupId, setYearLessonsExpandedGroupId] = useState<string | null>(null);
   const [lessonBillingMonth, setLessonBillingMonth] = useState(() => periodMonthKey());
   const [lessonBillingRows, setLessonBillingRows] = useState<
     Array<{
@@ -1098,7 +1174,19 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         setSchoolLocations([]);
         return;
       }
-      setSchoolLocations(Array.isArray(data.locations) ? data.locations : []);
+      setSchoolLocations(
+        Array.isArray(data.locations)
+          ? data.locations.map((loc) => ({
+              ...loc,
+              town: loc.town ?? null,
+              facility: loc.facility ?? null,
+              is_new: Boolean(loc.is_new),
+              is_special: Boolean(loc.is_special),
+              is_featured: Boolean(loc.is_featured),
+              sort_order: Number(loc.sort_order) || 100,
+            }))
+          : [],
+      );
     } catch (e) {
       console.error('loadLocations', e);
       pushToast('error', 'Błąd pobierania lokalizacji');
@@ -1111,7 +1199,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const saveLocationDisplay = useCallback(
     async (
       locationId: string,
-      patch: { sort_order?: number; is_featured?: boolean },
+      patch: { sort_order?: number; is_featured?: boolean; is_new?: boolean },
       options?: { silent?: boolean },
     ) => {
       setBusy(true);
@@ -1133,10 +1221,12 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     ...loc,
                     ...(patch.sort_order !== undefined ? { sort_order: patch.sort_order } : {}),
                     ...(patch.is_featured !== undefined ? { is_featured: patch.is_featured } : {}),
+                    ...(patch.is_new !== undefined ? { is_new: patch.is_new } : {}),
                   }
                 : loc,
             )
             .sort((a, b) => {
+              if (a.is_special !== b.is_special) return a.is_special ? 1 : -1;
               if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
               if (a.is_featured !== b.is_featured) return a.is_featured ? -1 : 1;
               return a.name.localeCompare(b.name, 'pl');
@@ -1269,6 +1359,65 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       void loadSettlementData(settlementYearId, settlementMonth);
     }
   }, [activeTab, settlementYearId, settlementMonth, loadSettlementData]);
+
+  useEffect(() => {
+    if (activeTab !== 'organization' || organizationSubTab !== 'groups' || groupsSubTab !== 'yearLessons') {
+      return;
+    }
+    const selectable = schoolYears
+      .slice()
+      .sort((a, b) => String(b.date_from).localeCompare(String(a.date_from), 'pl'));
+    if (selectable.length === 0) {
+      setYearLessonsYearId('');
+      return;
+    }
+    if (!yearLessonsYearId || !selectable.some((y) => y.id === yearLessonsYearId)) {
+      const preferred =
+        selectable.find((y) => y.isActive ?? y.active) ?? selectable[0];
+      setYearLessonsYearId(preferred.id);
+    }
+  }, [activeTab, organizationSubTab, groupsSubTab, schoolYears, yearLessonsYearId]);
+
+  const loadYearLessons = useCallback(async (schoolYearId: string) => {
+    if (!schoolYearId) {
+      setYearLessonsGroups([]);
+      setYearLessonsSchoolYear(null);
+      return;
+    }
+    setYearLessonsLoading(true);
+    try {
+      const res = await fetch(
+        `/api/admin/groups/year-lessons?schoolYearId=${encodeURIComponent(schoolYearId)}`,
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        pushToast('error', data.message ?? 'Nie udało się pobrać zajęć grup');
+        setYearLessonsGroups([]);
+        setYearLessonsSchoolYear(null);
+        return;
+      }
+      setYearLessonsSchoolYear(data.schoolYear ?? null);
+      setYearLessonsGroups((data.groups ?? []) as GroupYearLessonsRow[]);
+    } catch {
+      pushToast('error', 'Nie udało się pobrać zajęć grup');
+      setYearLessonsGroups([]);
+      setYearLessonsSchoolYear(null);
+    } finally {
+      setYearLessonsLoading(false);
+    }
+  }, [pushToast]);
+
+  useEffect(() => {
+    if (
+      activeTab !== 'organization' ||
+      organizationSubTab !== 'groups' ||
+      groupsSubTab !== 'yearLessons' ||
+      !yearLessonsYearId
+    ) {
+      return;
+    }
+    void loadYearLessons(yearLessonsYearId);
+  }, [activeTab, organizationSubTab, groupsSubTab, yearLessonsYearId, loadYearLessons]);
 
   useEffect(() => {
     if (activeTab === 'organization' && organizationSubTab === 'discounts') {
@@ -1806,9 +1955,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           active: groupForm.active,
           schoolId: groupForm.schoolId || null,
           locationId: groupForm.locationId || null,
-          priceMonthly: groupForm.priceMonthly.trim() ? Number(groupForm.priceMonthly) : null,
-          priceYearly: groupForm.priceYearly.trim() ? Number(groupForm.priceYearly) : null,
-          pricePerLesson: groupForm.pricePerLesson.trim() ? Number(groupForm.pricePerLesson) : null,
+          priceMonthly: null, // cennik grupy wyłączony — ceny ręczne per dziecko
+          priceYearly: null,
+          pricePerLesson: null,
           teacherPickupConsent: groupForm.teacherPickupConsent,
         }),
       });
@@ -2587,6 +2736,35 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                           >
                             + Dodaj dzień wolny
                           </button>
+                          <button
+                            type="button"
+                            disabled={busy || !active}
+                            onClick={async () => {
+                              if (!active) return;
+                              setBusy(true);
+                              try {
+                                const res = await fetch('/api/admin/school-holidays/seed-public', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ school_year_id: active.id }),
+                                });
+                                const data = (await res.json().catch(() => ({}))) as {
+                                  message?: string;
+                                };
+                                if (!res.ok) throw new Error(data.message ?? 'Błąd');
+                                pushToast('success', data.message ?? 'Uzupełniono święta państwowe');
+                                setClassesCalRefreshSignal((s) => s + 1);
+                                await loadSchoolYearData();
+                              } catch (e) {
+                                pushToast('error', e instanceof Error ? e.message : 'Błąd uzupełniania świąt');
+                              } finally {
+                                setBusy(false);
+                              }
+                            }}
+                            className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-900 shadow-sm transition hover:bg-amber-100 disabled:opacity-50"
+                          >
+                            Uzupełnij święta państwowe PL
+                          </button>
                         </div>
 
                         {active && (
@@ -2858,103 +3036,402 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   ) : (
                     <div className="space-y-3">
                       <p className="text-xs text-zinc-500">
-                        Niższa kolejność = wyżej na formularzu zapisu. Wyróżnione pozycje mają gwiazdkę na
-                        liście dla rodzica.
+                        Niższa kolejność = wyżej na formularzu zapisu. Wyróżnione mają gwiazdkę; Nowość!
+                        dokłada „(Nowość!)” do etykiety.
                       </p>
                       <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
-                      {schoolLocations.length === 0 ? (
-                        <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
-                          Brak lokalizacji — dodaj pierwszą w zakładce „Dodaj nową lokalizację”.
-                        </p>
-                      ) : (
-                        schoolLocations.map((loc) => (
-                          <div
-                            key={loc.id}
-                            className={`flex flex-col gap-3 rounded-xl border px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${
-                              loc.is_featured
-                                ? 'border-emerald-300 bg-emerald-50/40'
-                                : 'border-emerald-100 bg-white'
-                            }`}
-                          >
-                            <div className="min-w-0 flex-1">
-                              <p className="font-semibold text-zinc-900">{loc.name}</p>
-                              {loc.address ? (
-                                <p className="text-sm text-zinc-600">{loc.address}</p>
-                              ) : (
-                                <p className="text-xs text-zinc-500">Bez adresu</p>
-                              )}
-                            </div>
-                            <div className="flex flex-wrap items-center gap-3 self-start sm:self-center">
-                              <label className="flex items-center gap-2 text-xs font-semibold text-zinc-700">
-                                <span className="whitespace-nowrap">Kolejność</span>
-                                <input
-                                  key={`${loc.id}-${loc.sort_order}`}
-                                  type="number"
-                                  min={0}
-                                  max={9999}
-                                  step={1}
-                                  defaultValue={loc.sort_order}
-                                  disabled={busy}
-                                  className="w-20 rounded-lg border border-emerald-100 bg-white px-2 py-1.5 text-sm text-zinc-900 disabled:opacity-50"
-                                  onBlur={async (e) => {
-                                    const next = Number(e.target.value);
-                                    if (
-                                      !Number.isFinite(next) ||
-                                      !Number.isInteger(next) ||
-                                      next < 0 ||
-                                      next > 9999
-                                    ) {
-                                      pushToast('error', 'Kolejność musi być liczbą całkowitą od 0 do 9999');
-                                      e.target.value = String(loc.sort_order);
-                                      return;
-                                    }
-                                    if (next === loc.sort_order) return;
-                                    await saveLocationDisplay(loc.id, { sort_order: next }, { silent: true });
-                                  }}
-                                />
-                              </label>
-                              <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-zinc-700">
-                                <input
-                                  type="checkbox"
-                                  checked={loc.is_featured}
-                                  disabled={busy}
-                                  className="h-4 w-4 rounded border-emerald-200 text-[#0f6e56] focus:ring-[#0f6e56]/30"
-                                  onChange={async (e) => {
-                                    await saveLocationDisplay(
-                                      loc.id,
-                                      { is_featured: e.target.checked },
-                                      { silent: true },
-                                    );
-                                  }}
-                                />
-                                Wyróżniona
-                              </label>
-                              <span
-                                className={`rounded-full px-2 py-1 text-xs font-semibold ${
-                                  loc.active ? 'bg-emerald-100 text-emerald-800' : 'bg-zinc-100 text-zinc-600'
+                        {schoolLocations.filter((l) => !l.is_special).length === 0 ? (
+                          <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
+                            Brak lokalizacji — dodaj pierwszą w zakładce „Dodaj lokalizację”.
+                          </p>
+                        ) : (
+                          schoolLocations
+                            .filter((loc) => !loc.is_special)
+                            .map((loc) => (
+                              <div
+                                key={loc.id}
+                                className={`flex flex-col gap-3 rounded-xl border px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${
+                                  loc.is_featured
+                                    ? 'border-emerald-300 bg-emerald-50/40'
+                                    : 'border-emerald-100 bg-white'
                                 }`}
                               >
-                                {loc.active ? 'Aktywna' : 'Nieaktywna'}
-                              </span>
-                              <button
-                                type="button"
-                                disabled={busy}
-                                className="rounded-lg bg-zinc-200 px-3 py-1 text-xs font-semibold text-zinc-800 transition hover:bg-zinc-300 disabled:cursor-not-allowed disabled:opacity-50"
-                                onClick={() => {
-                                  setEditLocationId(loc.id);
-                                  setEditLocationForm({
-                                    name: loc.name,
-                                    address: loc.address ?? '',
-                                  });
-                                  setLocationOrgSubTab('edit');
-                                }}
+                                <div className="min-w-0 flex-1">
+                                  <p className="font-semibold text-zinc-900">
+                                    {loc.name}
+                                    {loc.is_new ? ' (Nowość!)' : ''}
+                                  </p>
+                                  <p className="text-xs text-zinc-500">
+                                    {loc.town || '—'} / {loc.facility || '—'}
+                                  </p>
+                                  {loc.address ? (
+                                    <p className="text-sm text-zinc-600">{loc.address}</p>
+                                  ) : (
+                                    <p className="text-xs text-zinc-500">Bez adresu</p>
+                                  )}
+                                </div>
+                                <div className="flex flex-wrap items-center gap-3 self-start sm:self-center">
+                                  <label className="flex items-center gap-2 text-xs font-semibold text-zinc-700">
+                                    <span className="whitespace-nowrap">Kolejność</span>
+                                    <input
+                                      key={`${loc.id}-${loc.sort_order}`}
+                                      type="number"
+                                      min={0}
+                                      max={9999}
+                                      step={1}
+                                      defaultValue={loc.sort_order}
+                                      disabled={busy}
+                                      className="w-20 rounded-lg border border-emerald-100 bg-white px-2 py-1.5 text-sm text-zinc-900 disabled:opacity-50"
+                                      onBlur={async (e) => {
+                                        const next = Number(e.target.value);
+                                        if (
+                                          !Number.isFinite(next) ||
+                                          !Number.isInteger(next) ||
+                                          next < 0 ||
+                                          next > 9999
+                                        ) {
+                                          pushToast(
+                                            'error',
+                                            'Kolejność musi być liczbą całkowitą od 0 do 9999',
+                                          );
+                                          e.target.value = String(loc.sort_order);
+                                          return;
+                                        }
+                                        if (next === loc.sort_order) return;
+                                        await saveLocationDisplay(
+                                          loc.id,
+                                          { sort_order: next },
+                                          { silent: true },
+                                        );
+                                      }}
+                                    />
+                                  </label>
+                                  <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-zinc-700">
+                                    <input
+                                      type="checkbox"
+                                      checked={loc.is_featured}
+                                      disabled={busy}
+                                      className="h-4 w-4 rounded border-emerald-200 text-[#0f6e56] focus:ring-[#0f6e56]/30"
+                                      onChange={async (e) => {
+                                        await saveLocationDisplay(
+                                          loc.id,
+                                          { is_featured: e.target.checked },
+                                          { silent: true },
+                                        );
+                                      }}
+                                    />
+                                    Wyróżniona
+                                  </label>
+                                  <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-zinc-700">
+                                    <input
+                                      type="checkbox"
+                                      checked={loc.is_new}
+                                      disabled={busy}
+                                      className="h-4 w-4 rounded border-emerald-200 text-[#0f6e56] focus:ring-[#0f6e56]/30"
+                                      onChange={async (e) => {
+                                        await saveLocationDisplay(
+                                          loc.id,
+                                          { is_new: e.target.checked },
+                                          { silent: true },
+                                        );
+                                      }}
+                                    />
+                                    Nowość!
+                                  </label>
+                                  <span
+                                    className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                                      loc.active
+                                        ? 'bg-emerald-100 text-emerald-800'
+                                        : 'bg-zinc-100 text-zinc-600'
+                                    }`}
+                                  >
+                                    {loc.active ? 'Aktywna' : 'Nieaktywna'}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    className="rounded-lg bg-zinc-200 px-3 py-1 text-xs font-semibold text-zinc-800 transition hover:bg-zinc-300 disabled:cursor-not-allowed disabled:opacity-50"
+                                    onClick={() => {
+                                      setEditLocationId(loc.id);
+                                      setEditLocationForm({
+                                        town: loc.town ?? '',
+                                        facility: loc.facility ?? '',
+                                        name: loc.name,
+                                        address: loc.address ?? '',
+                                        isSpecial: false,
+                                        isNew: loc.is_new,
+                                        isFeatured: loc.is_featured,
+                                      });
+                                      setLocationOrgSubTab('edit');
+                                    }}
+                                  >
+                                    Edytuj
+                                  </button>
+                                </div>
+                              </div>
+                            ))
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+              {locationOrgSubTab === 'specials' && (
+                <>
+                  {locationsLoading ? (
+                    <div className="h-32 animate-pulse rounded-2xl bg-emerald-100/70" />
+                  ) : (
+                    <div className="space-y-4">
+                      <p className="text-xs text-zinc-500">
+                        Pozycje specjalne (np. przygotowanie do egzaminu) — jedna nazwa, bez
+                        miejscowości/placówki. Widoczne na formularzu zgłoszeniowym jak zwykłe lokalizacje.
+                      </p>
+                      <div className="max-h-[320px] space-y-2 overflow-y-auto pr-1">
+                        {schoolLocations.filter((l) => l.is_special).length === 0 ? (
+                          <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
+                            Brak pozycji specjalnych — dodaj poniżej.
+                          </p>
+                        ) : (
+                          schoolLocations
+                            .filter((loc) => loc.is_special)
+                            .map((loc) => (
+                              <div
+                                key={loc.id}
+                                className={`flex flex-col gap-3 rounded-xl border px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${
+                                  loc.is_featured
+                                    ? 'border-emerald-300 bg-emerald-50/40'
+                                    : 'border-emerald-100 bg-white'
+                                }`}
                               >
-                                Edytuj
-                              </button>
-                            </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="font-semibold text-zinc-900">
+                                    {loc.is_featured ? `★ ${loc.name}` : loc.name}
+                                    {loc.is_new ? ' (Nowość!)' : ''}
+                                  </p>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-3 self-start sm:self-center">
+                                  <label className="flex items-center gap-2 text-xs font-semibold text-zinc-700">
+                                    <span className="whitespace-nowrap">Kolejność</span>
+                                    <input
+                                      key={`${loc.id}-sp-${loc.sort_order}`}
+                                      type="number"
+                                      min={0}
+                                      max={9999}
+                                      step={1}
+                                      defaultValue={loc.sort_order}
+                                      disabled={busy}
+                                      className="w-20 rounded-lg border border-emerald-100 bg-white px-2 py-1.5 text-sm text-zinc-900 disabled:opacity-50"
+                                      onBlur={async (e) => {
+                                        const next = Number(e.target.value);
+                                        if (
+                                          !Number.isFinite(next) ||
+                                          !Number.isInteger(next) ||
+                                          next < 0 ||
+                                          next > 9999
+                                        ) {
+                                          pushToast(
+                                            'error',
+                                            'Kolejność musi być liczbą całkowitą od 0 do 9999',
+                                          );
+                                          e.target.value = String(loc.sort_order);
+                                          return;
+                                        }
+                                        if (next === loc.sort_order) return;
+                                        await saveLocationDisplay(
+                                          loc.id,
+                                          { sort_order: next },
+                                          { silent: true },
+                                        );
+                                      }}
+                                    />
+                                  </label>
+                                  <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-zinc-700">
+                                    <input
+                                      type="checkbox"
+                                      checked={loc.is_featured}
+                                      disabled={busy}
+                                      className="h-4 w-4 rounded border-emerald-200 text-[#0f6e56] focus:ring-[#0f6e56]/30"
+                                      onChange={async (e) => {
+                                        await saveLocationDisplay(
+                                          loc.id,
+                                          { is_featured: e.target.checked },
+                                          { silent: true },
+                                        );
+                                      }}
+                                    />
+                                    Wyróżniona
+                                  </label>
+                                  <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-zinc-700">
+                                    <input
+                                      type="checkbox"
+                                      checked={loc.is_new}
+                                      disabled={busy}
+                                      className="h-4 w-4 rounded border-emerald-200 text-[#0f6e56] focus:ring-[#0f6e56]/30"
+                                      onChange={async (e) => {
+                                        await saveLocationDisplay(
+                                          loc.id,
+                                          { is_new: e.target.checked },
+                                          { silent: true },
+                                        );
+                                      }}
+                                    />
+                                    Nowość!
+                                  </label>
+                                  <span
+                                    className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                                      loc.active
+                                        ? 'bg-emerald-100 text-emerald-800'
+                                        : 'bg-zinc-100 text-zinc-600'
+                                    }`}
+                                  >
+                                    {loc.active ? 'Aktywna' : 'Nieaktywna'}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    className="rounded-lg bg-zinc-200 px-3 py-1 text-xs font-semibold text-zinc-800 transition hover:bg-zinc-300 disabled:cursor-not-allowed disabled:opacity-50"
+                                    onClick={() => {
+                                      setEditLocationId(loc.id);
+                                      setEditLocationForm({
+                                        town: '',
+                                        facility: '',
+                                        name: loc.name,
+                                        address: loc.address ?? '',
+                                        isSpecial: true,
+                                        isNew: loc.is_new,
+                                        isFeatured: loc.is_featured,
+                                      });
+                                      setLocationOrgSubTab('edit');
+                                    }}
+                                  >
+                                    Edytuj
+                                  </button>
+                                </div>
+                              </div>
+                            ))
+                        )}
+                      </div>
+
+                      <div className="rounded-xl border border-dashed border-emerald-200 bg-emerald-50/30 p-4 text-sm">
+                        <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-700">
+                          Dodaj pozycję specjalną
+                        </p>
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                          <label className="block md:col-span-2">
+                            <span className="mb-1 block text-xs font-semibold text-zinc-700">Nazwa</span>
+                            <input
+                              className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                              placeholder="np. Przygotowanie do egzaminu 8-klasisty"
+                              value={newSpecialForm.name}
+                              onChange={(e) =>
+                                setNewSpecialForm((p) => ({ ...p, name: e.target.value }))
+                              }
+                            />
+                          </label>
+                          <label className="block">
+                            <span className="mb-1 block text-xs font-semibold text-zinc-700">
+                              Kolejność na formularzu
+                            </span>
+                            <input
+                              type="number"
+                              min={0}
+                              max={9999}
+                              step={1}
+                              className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                              value={newSpecialForm.sortOrder}
+                              onChange={(e) =>
+                                setNewSpecialForm((p) => ({ ...p, sortOrder: e.target.value }))
+                              }
+                            />
+                          </label>
+                          <div className="flex flex-wrap items-end gap-4 pb-1">
+                            <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-zinc-700">
+                              <input
+                                type="checkbox"
+                                checked={newSpecialForm.isFeatured}
+                                className="h-4 w-4 rounded border-emerald-200 text-[#0f6e56]"
+                                onChange={(e) =>
+                                  setNewSpecialForm((p) => ({
+                                    ...p,
+                                    isFeatured: e.target.checked,
+                                  }))
+                                }
+                              />
+                              Wyróżniona
+                            </label>
+                            <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-zinc-700">
+                              <input
+                                type="checkbox"
+                                checked={newSpecialForm.isNew}
+                                className="h-4 w-4 rounded border-emerald-200 text-[#0f6e56]"
+                                onChange={(e) =>
+                                  setNewSpecialForm((p) => ({ ...p, isNew: e.target.checked }))
+                                }
+                              />
+                              Nowość!
+                            </label>
                           </div>
-                        ))
-                      )}
+                        </div>
+                        <div className="mt-4 flex justify-end">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0c5a47] disabled:cursor-not-allowed disabled:opacity-50"
+                            onClick={async () => {
+                              const name = newSpecialForm.name.trim();
+                              if (!name) {
+                                pushToast('error', 'Podaj nazwę pozycji specjalnej');
+                                return;
+                              }
+                              const sortOrder = Number(newSpecialForm.sortOrder);
+                              if (
+                                !Number.isFinite(sortOrder) ||
+                                !Number.isInteger(sortOrder) ||
+                                sortOrder < 0 ||
+                                sortOrder > 9999
+                              ) {
+                                pushToast('error', 'Kolejność musi być liczbą całkowitą od 0 do 9999');
+                                return;
+                              }
+                              setBusy(true);
+                              try {
+                                const body: Record<string, unknown> = {
+                                  name,
+                                  is_special: true,
+                                  sort_order: sortOrder,
+                                  is_featured: newSpecialForm.isFeatured,
+                                  is_new: newSpecialForm.isNew,
+                                };
+                                if (sessionSchoolId) body.schoolId = sessionSchoolId;
+                                const res = await fetch('/api/admin/locations', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify(body),
+                                });
+                                const data = (await res.json().catch(() => ({}))) as {
+                                  message?: string;
+                                };
+                                if (!res.ok) {
+                                  throw new Error(data.message ?? 'Nie udało się dodać pozycji');
+                                }
+                                pushToast('success', 'Dodano pozycję specjalną');
+                                setNewSpecialForm({
+                                  name: '',
+                                  sortOrder: '0',
+                                  isNew: false,
+                                  isFeatured: true,
+                                });
+                                await loadLocations();
+                              } catch (e) {
+                                pushToast('error', e instanceof Error ? e.message : 'Błąd');
+                              } finally {
+                                setBusy(false);
+                              }
+                            }}
+                          >
+                            Dodaj pozycję specjalną
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )}
@@ -2962,28 +3439,47 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               )}
               {locationOrgSubTab === 'add' && (
                 <div className="rounded-xl border border-dashed border-emerald-200 bg-emerald-50/30 p-4 text-sm">
-                  <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-700">Nowa lokalizacja</p>
-                  <div className="grid grid-cols-1 gap-3">
+                  <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-700">
+                    Nowa lokalizacja
+                  </p>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                     <label className="block">
-                      <span className="mb-1 block text-xs font-semibold text-zinc-700">Nazwa</span>
+                      <span className="mb-1 block text-xs font-semibold text-zinc-700">Miejscowość</span>
                       <input
                         className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
-                        placeholder="np. Paniówki — sala 2"
-                        value={newLocationForm.name}
-                        onChange={(e) => setNewLocationForm((p) => ({ ...p, name: e.target.value }))}
+                        placeholder="np. Bujaków"
+                        value={newLocationForm.town}
+                        onChange={(e) => setNewLocationForm((p) => ({ ...p, town: e.target.value }))}
                       />
                     </label>
                     <label className="block">
-                      <span className="mb-1 block text-xs font-semibold text-zinc-500">Adres (opcjonalnie)</span>
+                      <span className="mb-1 block text-xs font-semibold text-zinc-700">Placówka</span>
+                      <input
+                        className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                        placeholder="np. Przedszkole / Szkoła"
+                        value={newLocationForm.facility}
+                        onChange={(e) =>
+                          setNewLocationForm((p) => ({ ...p, facility: e.target.value }))
+                        }
+                      />
+                    </label>
+                    <label className="block md:col-span-2">
+                      <span className="mb-1 block text-xs font-semibold text-zinc-500">
+                        Adres (opcjonalnie)
+                      </span>
                       <input
                         className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
                         placeholder="np. ul. …"
                         value={newLocationForm.address}
-                        onChange={(e) => setNewLocationForm((p) => ({ ...p, address: e.target.value }))}
+                        onChange={(e) =>
+                          setNewLocationForm((p) => ({ ...p, address: e.target.value }))
+                        }
                       />
                     </label>
                     <label className="block">
-                      <span className="mb-1 block text-xs font-semibold text-zinc-700">Kolejność na formularzu</span>
+                      <span className="mb-1 block text-xs font-semibold text-zinc-700">
+                        Kolejność na formularzu
+                      </span>
                       <input
                         type="number"
                         min={0}
@@ -2991,12 +3487,50 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         step={1}
                         className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
                         value={newLocationForm.sortOrder}
-                        onChange={(e) => setNewLocationForm((p) => ({ ...p, sortOrder: e.target.value }))}
+                        onChange={(e) =>
+                          setNewLocationForm((p) => ({ ...p, sortOrder: e.target.value }))
+                        }
                       />
                       <span className="mt-1 block text-xs text-zinc-500">
                         Niższa wartość = wyżej na liście (0 = pierwsza pozycja). Domyślnie 100.
                       </span>
                     </label>
+                    <div className="flex flex-wrap items-end gap-4 pb-1">
+                      <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-zinc-700">
+                        <input
+                          type="checkbox"
+                          checked={newLocationForm.isFeatured}
+                          className="h-4 w-4 rounded border-emerald-200 text-[#0f6e56]"
+                          onChange={(e) =>
+                            setNewLocationForm((p) => ({ ...p, isFeatured: e.target.checked }))
+                          }
+                        />
+                        Wyróżniona
+                      </label>
+                      <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-zinc-700">
+                        <input
+                          type="checkbox"
+                          checked={newLocationForm.isNew}
+                          className="h-4 w-4 rounded border-emerald-200 text-[#0f6e56]"
+                          onChange={(e) =>
+                            setNewLocationForm((p) => ({ ...p, isNew: e.target.checked }))
+                          }
+                        />
+                        Nowość!
+                      </label>
+                    </div>
+                    {(newLocationForm.town.trim() || newLocationForm.facility.trim()) && (
+                      <p className="md:col-span-2 text-xs text-zinc-600">
+                        Na formularzu:{' '}
+                        <span className="font-semibold text-zinc-800">
+                          {newLocationForm.isFeatured ? '★ ' : ''}
+                          {[newLocationForm.town.trim(), newLocationForm.facility.trim()]
+                            .filter(Boolean)
+                            .join(' ')}
+                          {newLocationForm.isNew ? ' (Nowość!)' : ''}
+                        </span>
+                      </p>
+                    )}
                   </div>
                   <div className="mt-4 flex flex-wrap justify-end gap-2">
                     <button
@@ -3004,9 +3538,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       disabled={busy}
                       className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0c5a47] disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={async () => {
-                        const name = newLocationForm.name.trim();
-                        if (!name) {
-                          pushToast('error', 'Podaj nazwę lokalizacji');
+                        const town = newLocationForm.town.trim();
+                        const facility = newLocationForm.facility.trim();
+                        if (!town || !facility) {
+                          pushToast('error', 'Podaj miejscowość i placówkę');
                           return;
                         }
                         const sortOrder = Number(newLocationForm.sortOrder);
@@ -3021,18 +3556,17 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         }
                         setBusy(true);
                         try {
-                          const body: {
-                            name: string;
-                            address?: string;
-                            schoolId?: string;
-                            sort_order: number;
-                          } = {
-                            name,
+                          const body: Record<string, unknown> = {
+                            town,
+                            facility,
                             sort_order: sortOrder,
-                            ...(newLocationForm.address.trim()
-                              ? { address: newLocationForm.address.trim() }
-                              : {}),
+                            is_featured: newLocationForm.isFeatured,
+                            is_new: newLocationForm.isNew,
+                            is_special: false,
                           };
+                          if (newLocationForm.address.trim()) {
+                            body.address = newLocationForm.address.trim();
+                          }
                           if (sessionSchoolId) body.schoolId = sessionSchoolId;
                           const res = await fetch('/api/admin/locations', {
                             method: 'POST',
@@ -3044,7 +3578,14 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                             throw new Error(data.message ?? 'Nie udało się dodać lokalizacji');
                           }
                           pushToast('success', 'Dodano lokalizację');
-                          setNewLocationForm({ name: '', address: '', sortOrder: '100' });
+                          setNewLocationForm({
+                            town: '',
+                            facility: '',
+                            address: '',
+                            sortOrder: '100',
+                            isNew: false,
+                            isFeatured: false,
+                          });
                           setLocationOrgSubTab('list');
                           await loadLocations();
                         } catch (e) {
@@ -3061,32 +3602,94 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               )}
               {locationOrgSubTab === 'edit' && (
                 <div className="rounded-xl border border-dashed border-emerald-200 bg-emerald-50/30 p-4 text-sm">
-                  <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-700">Edycja lokalizacji</p>
+                  <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-700">
+                    {editLocationForm.isSpecial ? 'Edycja pozycji specjalnej' : 'Edycja lokalizacji'}
+                  </p>
                   {!editLocationId ? (
                     <p className="rounded-lg border border-emerald-100 bg-white px-3 py-3 text-sm text-zinc-600">
-                      Wybierz lokalizację z listy i kliknij „Edytuj”.
+                      Wybierz pozycję z listy i kliknij „Edytuj”.
                     </p>
                   ) : (
                     <>
-                      <div className="grid grid-cols-1 gap-3">
-                        <label className="block">
-                          <span className="mb-1 block text-xs font-semibold text-zinc-700">Nazwa</span>
-                          <input
-                            className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
-                            placeholder="np. Paniówki — sala 2"
-                            value={editLocationForm.name}
-                            onChange={(e) => setEditLocationForm((p) => ({ ...p, name: e.target.value }))}
-                          />
-                        </label>
-                        <label className="block">
-                          <span className="mb-1 block text-xs font-semibold text-zinc-500">Adres (opcjonalnie)</span>
-                          <input
-                            className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
-                            placeholder="np. ul. …"
-                            value={editLocationForm.address}
-                            onChange={(e) => setEditLocationForm((p) => ({ ...p, address: e.target.value }))}
-                          />
-                        </label>
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                        {editLocationForm.isSpecial ? (
+                          <label className="block md:col-span-2">
+                            <span className="mb-1 block text-xs font-semibold text-zinc-700">Nazwa</span>
+                            <input
+                              className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                              value={editLocationForm.name}
+                              onChange={(e) =>
+                                setEditLocationForm((p) => ({ ...p, name: e.target.value }))
+                              }
+                            />
+                          </label>
+                        ) : (
+                          <>
+                            <label className="block">
+                              <span className="mb-1 block text-xs font-semibold text-zinc-700">
+                                Miejscowość
+                              </span>
+                              <input
+                                className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                                value={editLocationForm.town}
+                                onChange={(e) =>
+                                  setEditLocationForm((p) => ({ ...p, town: e.target.value }))
+                                }
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="mb-1 block text-xs font-semibold text-zinc-700">
+                                Placówka
+                              </span>
+                              <input
+                                className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                                value={editLocationForm.facility}
+                                onChange={(e) =>
+                                  setEditLocationForm((p) => ({ ...p, facility: e.target.value }))
+                                }
+                              />
+                            </label>
+                            <label className="block md:col-span-2">
+                              <span className="mb-1 block text-xs font-semibold text-zinc-500">
+                                Adres (opcjonalnie)
+                              </span>
+                              <input
+                                className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                                value={editLocationForm.address}
+                                onChange={(e) =>
+                                  setEditLocationForm((p) => ({ ...p, address: e.target.value }))
+                                }
+                              />
+                            </label>
+                          </>
+                        )}
+                        <div className="flex flex-wrap items-center gap-4 md:col-span-2">
+                          <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-zinc-700">
+                            <input
+                              type="checkbox"
+                              checked={editLocationForm.isFeatured}
+                              className="h-4 w-4 rounded border-emerald-200 text-[#0f6e56]"
+                              onChange={(e) =>
+                                setEditLocationForm((p) => ({
+                                  ...p,
+                                  isFeatured: e.target.checked,
+                                }))
+                              }
+                            />
+                            Wyróżniona
+                          </label>
+                          <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-zinc-700">
+                            <input
+                              type="checkbox"
+                              checked={editLocationForm.isNew}
+                              className="h-4 w-4 rounded border-emerald-200 text-[#0f6e56]"
+                              onChange={(e) =>
+                                setEditLocationForm((p) => ({ ...p, isNew: e.target.checked }))
+                              }
+                            />
+                            Nowość!
+                          </label>
+                        </div>
                       </div>
                       <div className="mt-4 flex flex-wrap justify-end gap-2">
                         <button
@@ -3102,14 +3705,21 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                             if (!current || !editLocationId) return;
                             setBusy(true);
                             try {
-                              const res = await fetch(`/api/admin/locations/${encodeURIComponent(editLocationId)}`, {
-                                method: 'PUT',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ active: !current.active }),
-                              });
-                              const data = (await res.json().catch(() => ({}))) as { message?: string };
+                              const res = await fetch(
+                                `/api/admin/locations/${encodeURIComponent(editLocationId)}`,
+                                {
+                                  method: 'PUT',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ active: !current.active }),
+                                },
+                              );
+                              const data = (await res.json().catch(() => ({}))) as {
+                                message?: string;
+                              };
                               if (!res.ok) {
-                                throw new Error(data.message ?? 'Nie udało się zaktualizować lokalizacji');
+                                throw new Error(
+                                  data.message ?? 'Nie udało się zaktualizować lokalizacji',
+                                );
                               }
                               pushToast(
                                 'success',
@@ -3119,13 +3729,18 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                               );
                               await loadLocations();
                             } catch (e) {
-                              pushToast('error', e instanceof Error ? e.message : 'Błąd aktualizacji lokalizacji');
+                              pushToast(
+                                'error',
+                                e instanceof Error ? e.message : 'Błąd aktualizacji lokalizacji',
+                              );
                             } finally {
                               setBusy(false);
                             }
                           }}
                         >
-                          {schoolLocations.find((l) => l.id === editLocationId)?.active ? 'Dezaktywuj' : 'Aktywuj'}
+                          {schoolLocations.find((l) => l.id === editLocationId)?.active
+                            ? 'Dezaktywuj'
+                            : 'Aktywuj'}
                         </button>
                         <button
                           type="button"
@@ -3133,8 +3748,18 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                           className="rounded-xl bg-zinc-200 px-4 py-2 text-sm font-semibold text-zinc-800 shadow-sm transition hover:bg-zinc-300 disabled:cursor-not-allowed disabled:opacity-50"
                           onClick={() => {
                             setEditLocationId(null);
-                            setEditLocationForm({ name: '', address: '' });
-                            setLocationOrgSubTab('list');
+                            setEditLocationForm({
+                              town: '',
+                              facility: '',
+                              name: '',
+                              address: '',
+                              isSpecial: false,
+                              isNew: false,
+                              isFeatured: false,
+                            });
+                            setLocationOrgSubTab(
+                              editLocationForm.isSpecial ? 'specials' : 'list',
+                            );
                           }}
                         >
                           Anuluj
@@ -3144,29 +3769,68 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                           disabled={busy}
                           className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0c5a47] disabled:cursor-not-allowed disabled:opacity-50"
                           onClick={async () => {
-                            const name = editLocationForm.name.trim();
-                            if (!name || !editLocationId) {
-                              pushToast('error', 'Podaj nazwę lokalizacji');
+                            if (!editLocationId) return;
+                            if (editLocationForm.isSpecial) {
+                              if (!editLocationForm.name.trim()) {
+                                pushToast('error', 'Podaj nazwę pozycji specjalnej');
+                                return;
+                              }
+                            } else if (
+                              !editLocationForm.town.trim() ||
+                              !editLocationForm.facility.trim()
+                            ) {
+                              pushToast('error', 'Podaj miejscowość i placówkę');
                               return;
                             }
                             setBusy(true);
                             try {
-                              const res = await fetch(`/api/admin/locations/${encodeURIComponent(editLocationId)}`, {
-                                method: 'PUT',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                  name,
-                                  address: editLocationForm.address.trim() ? editLocationForm.address.trim() : null,
-                                }),
-                              });
-                              const data = (await res.json().catch(() => ({}))) as { message?: string };
+                              const res = await fetch(
+                                `/api/admin/locations/${encodeURIComponent(editLocationId)}`,
+                                {
+                                  method: 'PUT',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify(
+                                    editLocationForm.isSpecial
+                                      ? {
+                                          name: editLocationForm.name.trim(),
+                                          is_special: true,
+                                          is_featured: editLocationForm.isFeatured,
+                                          is_new: editLocationForm.isNew,
+                                        }
+                                      : {
+                                          town: editLocationForm.town.trim(),
+                                          facility: editLocationForm.facility.trim(),
+                                          address: editLocationForm.address.trim()
+                                            ? editLocationForm.address.trim()
+                                            : null,
+                                          is_special: false,
+                                          is_featured: editLocationForm.isFeatured,
+                                          is_new: editLocationForm.isNew,
+                                        },
+                                  ),
+                                },
+                              );
+                              const data = (await res.json().catch(() => ({}))) as {
+                                message?: string;
+                              };
                               if (!res.ok) {
-                                throw new Error(data.message ?? 'Nie udało się zaktualizować lokalizacji');
+                                throw new Error(
+                                  data.message ?? 'Nie udało się zaktualizować lokalizacji',
+                                );
                               }
                               pushToast('success', 'Zaktualizowano lokalizację');
+                              const backTab = editLocationForm.isSpecial ? 'specials' : 'list';
                               setEditLocationId(null);
-                              setEditLocationForm({ name: '', address: '' });
-                              setLocationOrgSubTab('list');
+                              setEditLocationForm({
+                                town: '',
+                                facility: '',
+                                name: '',
+                                address: '',
+                                isSpecial: false,
+                                isNew: false,
+                                isFeatured: false,
+                              });
+                              setLocationOrgSubTab(backTab);
                               await loadLocations();
                             } catch (e) {
                               pushToast('error', e instanceof Error ? e.message : 'Błąd');
@@ -3188,8 +3852,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           {organizationSubTab === 'discounts' && (
             <div className="mt-4 space-y-6">
               <p className="text-sm text-zinc-600">
-                Zniżki procentowe przy kwotach umów oraz rodzice w trybie bez opłat (bez faktur i
-                płatności).
+                Rodzice w trybie bez opłat (bez faktur i płatności). Zniżki procentowe (KDR /
+                rodzeństwo) są wyłączone — ceny ustala manager ręcznie przy propozycji grupy.
               </p>
 
               {discountsLoading ? (
@@ -3199,128 +3863,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 </div>
               ) : (
                 <>
+                  {/*
+                   * Zniżki procentowe — UI schowane na sezon cen ręcznych.
                   <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-4">
                     <h4 className="font-semibold text-[#0f6e56]">Zniżki procentowe</h4>
-                    <p className="mt-1 text-sm text-zinc-600">
-                      KDR i rodzeństwo się nie łączą — przy KDR obowiązuje tylko KDR. Przy cenie
-                      indywidualnej zniżki procentowe nie działają. System nie zastosuje rabatu
-                      powyżej ustawionego maksimum.
-                    </p>
-                    <div className="mt-4 grid gap-4 sm:grid-cols-3">
-                      <label className="block space-y-1">
-                        <span className="text-sm font-medium text-zinc-700">
-                          Maksymalny poziom zniżek (%)
-                        </span>
-                        <input
-                          type="number"
-                          min="0"
-                          max="100"
-                          step="0.01"
-                          className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-                          value={maxDiscountPercentDraft}
-                          onChange={(e) => setMaxDiscountPercentDraft(e.target.value)}
-                        />
-                      </label>
-                      <label className="block space-y-1">
-                        <span className="text-sm font-medium text-zinc-700">
-                          Karta Dużej Rodziny (%)
-                        </span>
-                        <input
-                          type="number"
-                          min="0"
-                          max={Number(maxDiscountPercentDraft) || 100}
-                          step="0.01"
-                          className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-                          value={discountPercentsDraft.LARGE_FAMILY_CARD}
-                          onChange={(e) =>
-                            setDiscountPercentsDraft((prev) => ({
-                              ...prev,
-                              LARGE_FAMILY_CARD: e.target.value,
-                            }))
-                          }
-                        />
-                      </label>
-                      <label className="block space-y-1">
-                        <span className="text-sm font-medium text-zinc-700">Rodzeństwo (%)</span>
-                        <input
-                          type="number"
-                          min="0"
-                          max={Number(maxDiscountPercentDraft) || 100}
-                          step="0.01"
-                          className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-                          value={discountPercentsDraft.SIBLING}
-                          onChange={(e) =>
-                            setDiscountPercentsDraft((prev) => ({
-                              ...prev,
-                              SIBLING: e.target.value,
-                            }))
-                          }
-                        />
-                      </label>
-                    </div>
-                    <button
-                      type="button"
-                      disabled={discountsSaving}
-                      className="mt-4 rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                      onClick={async () => {
-                        setDiscountsSaving(true);
-                        try {
-                          const res = await fetch('/api/admin/discounts', {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                              maxDiscountPercent: Number(maxDiscountPercentDraft) || 0,
-                              discounts: [
-                                {
-                                  key: 'LARGE_FAMILY_CARD',
-                                  percent: Number(discountPercentsDraft.LARGE_FAMILY_CARD) || 0,
-                                },
-                                {
-                                  key: 'SIBLING',
-                                  percent: Number(discountPercentsDraft.SIBLING) || 0,
-                                },
-                              ],
-                            }),
-                          });
-                          const data = (await res.json().catch(() => ({}))) as {
-                            message?: string;
-                            discounts?: Array<{ key: string; percent: number }>;
-                            maxDiscountPercent?: number;
-                          };
-                          if (!res.ok) {
-                            pushToast('error', data.message ?? 'Nie udało się zapisać zniżek');
-                            return;
-                          }
-                          const nextSettings = {
-                            LARGE_FAMILY_CARD: 0,
-                            SIBLING: 0,
-                            maxPercent: Math.min(
-                              100,
-                              Math.max(0, Number(data.maxDiscountPercent) || 10),
-                            ),
-                          };
-                          for (const item of data.discounts ?? []) {
-                            if (item.key === 'LARGE_FAMILY_CARD' || item.key === 'SIBLING') {
-                              nextSettings[item.key] = Number(item.percent) || 0;
-                            }
-                          }
-                          setDiscountSettings(nextSettings);
-                          setDiscountPercentsDraft({
-                            LARGE_FAMILY_CARD: String(nextSettings.LARGE_FAMILY_CARD),
-                            SIBLING: String(nextSettings.SIBLING),
-                          });
-                          setMaxDiscountPercentDraft(String(nextSettings.maxPercent));
-                          pushToast('success', 'Zapisano ustawienia zniżek');
-                        } catch {
-                          pushToast('error', 'Błąd zapisu zniżek');
-                        } finally {
-                          setDiscountsSaving(false);
-                        }
-                      }}
-                    >
-                      {discountsSaving ? 'Zapisywanie…' : 'Zapisz zniżki'}
-                    </button>
+                    ... formularz max% / KDR / rodzeństwo ...
                   </div>
+                  */}
 
                   <div className="rounded-xl border border-emerald-100 bg-white p-4">
                     <h4 className="font-semibold text-[#0f6e56]">Tryb bez opłat</h4>
@@ -3347,15 +3896,88 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     </div>
                     <p className="mt-2 text-xs text-zinc-500">
                       {complimentarySearch.trim()
-                        ? `Wyniki: ${filteredComplimentaryCandidates.length} z ${complimentaryCandidates.length} kandydatów`
-                        : `Kandydaci: ${complimentaryCandidates.length} (konta rodziców + zgłoszenia bez konta)`}
-                      {complimentarySearch.trim()
-                        ? ` · ${filteredComplimentaryParents.length} na liście`
+                        ? `${filteredComplimentaryParents.length} na liście · wyniki: ${filteredComplimentaryCandidates.length} z ${complimentaryCandidates.length} kandydatów`
                         : complimentaryParents.length > 0
-                          ? ` · ${complimentaryParents.length} na liście`
-                          : ''}
+                          ? `${complimentaryParents.length} na liście · kandydaci: ${complimentaryCandidates.length}`
+                          : `Kandydaci: ${complimentaryCandidates.length} (konta rodziców + zgłoszenia bez konta)`}
                     </p>
-                    <div className="mt-3 space-y-2">
+
+                    <h5 className="mt-4 text-sm font-semibold text-[#0f6e56]">
+                      Rodzice bez opłat
+                    </h5>
+                    <div className="mt-2 max-h-64 space-y-2 overflow-y-auto">
+                      {complimentaryParents.length === 0 ? (
+                        <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
+                          Brak rodziców w trybie bez opłat.
+                        </p>
+                      ) : filteredComplimentaryParents.length === 0 ? (
+                        <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
+                          Brak wyników dla podanego wyszukiwania.
+                        </p>
+                      ) : (
+                        filteredComplimentaryParents.map((parent) => (
+                          <div
+                            key={parent.id}
+                            className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-100 px-4 py-3"
+                          >
+                            <div>
+                              <p className="font-semibold text-zinc-900">
+                                {parent.firstName} {parent.lastName}
+                              </p>
+                              <p className="text-sm text-zinc-600">{parent.email}</p>
+                              <p className="mt-0.5 text-xs text-zinc-500">
+                                {parent.source === 'ENROLLMENT'
+                                  ? 'Źródło: zgłoszenie · bez umowy po akceptacji grupy'
+                                  : 'Źródło: konto rodzica · bez umowy po akceptacji grupy'}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              className="rounded-lg border border-rose-200 px-3 py-1.5 text-sm text-rose-700 hover:bg-rose-50"
+                              onClick={async () => {
+                                setDiscountsSaving(true);
+                                try {
+                                  const res = await fetch('/api/admin/discounts', {
+                                    method: 'DELETE',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ id: parent.id }),
+                                  });
+                                  const data = (await res.json().catch(() => ({}))) as {
+                                    message?: string;
+                                    complimentaryParents?: typeof complimentaryParents;
+                                    complimentaryCandidates?: typeof complimentaryCandidates;
+                                  };
+                                  if (!res.ok) {
+                                    pushToast('error', data.message ?? 'Nie udało się usunąć');
+                                    return;
+                                  }
+                                  setComplimentaryParents(
+                                    Array.isArray(data.complimentaryParents)
+                                      ? data.complimentaryParents
+                                      : [],
+                                  );
+                                  if (Array.isArray(data.complimentaryCandidates)) {
+                                    setComplimentaryCandidates(data.complimentaryCandidates);
+                                  }
+                                  pushToast('success', 'Usunięto z trybu bez opłat');
+                                } catch {
+                                  pushToast('error', 'Błąd usuwania rodzica');
+                                } finally {
+                                  setDiscountsSaving(false);
+                                }
+                              }}
+                            >
+                              Usuń
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    <h5 className="mt-4 text-sm font-semibold text-[#0f6e56]">
+                      Dodaj do trybu bez opłat
+                    </h5>
+                    <div className="mt-2 space-y-2">
                       <div className="max-h-56 overflow-y-auto rounded-xl border border-emerald-200">
                         {complimentaryCandidates.length === 0 ? (
                           <p className="px-3 py-4 text-sm text-zinc-600">
@@ -3471,74 +4093,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       >
                         Dodaj wybranego
                       </button>
-                    </div>
-                    <div className="mt-4 max-h-64 space-y-2 overflow-y-auto">
-                      {complimentaryParents.length === 0 ? (
-                        <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
-                          Brak rodziców w trybie bez opłat.
-                        </p>
-                      ) : filteredComplimentaryParents.length === 0 ? (
-                        <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
-                          Brak wyników dla podanego wyszukiwania.
-                        </p>
-                      ) : (
-                        filteredComplimentaryParents.map((parent) => (
-                          <div
-                            key={parent.id}
-                            className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-100 px-4 py-3"
-                          >
-                            <div>
-                              <p className="font-semibold text-zinc-900">
-                                {parent.firstName} {parent.lastName}
-                              </p>
-                              <p className="text-sm text-zinc-600">{parent.email}</p>
-                              <p className="mt-0.5 text-xs text-zinc-500">
-                                {parent.source === 'ENROLLMENT'
-                                  ? 'Źródło: zgłoszenie · bez umowy po akceptacji grupy'
-                                  : 'Źródło: konto rodzica · bez umowy po akceptacji grupy'}
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              className="rounded-lg border border-rose-200 px-3 py-1.5 text-sm text-rose-700 hover:bg-rose-50"
-                              onClick={async () => {
-                                setDiscountsSaving(true);
-                                try {
-                                  const res = await fetch('/api/admin/discounts', {
-                                    method: 'DELETE',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ id: parent.id }),
-                                  });
-                                  const data = (await res.json().catch(() => ({}))) as {
-                                    message?: string;
-                                    complimentaryParents?: typeof complimentaryParents;
-                                    complimentaryCandidates?: typeof complimentaryCandidates;
-                                  };
-                                  if (!res.ok) {
-                                    pushToast('error', data.message ?? 'Nie udało się usunąć');
-                                    return;
-                                  }
-                                  setComplimentaryParents(
-                                    Array.isArray(data.complimentaryParents)
-                                      ? data.complimentaryParents
-                                      : [],
-                                  );
-                                  if (Array.isArray(data.complimentaryCandidates)) {
-                                    setComplimentaryCandidates(data.complimentaryCandidates);
-                                  }
-                                  pushToast('success', 'Usunięto z trybu bez opłat');
-                                } catch {
-                                  pushToast('error', 'Błąd usuwania rodzica');
-                                } finally {
-                                  setDiscountsSaving(false);
-                                }
-                              }}
-                            >
-                              Usuń
-                            </button>
-                          </div>
-                        ))
-                      )}
                     </div>
                   </div>
                 </>
@@ -4249,44 +4803,12 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             />
           </div>
           {renderParentContractConsentFields()}
+          {/*
+           * Ceny grupy wyłączone — stawki ustala manager per dziecko przy propozycji.
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 md:col-span-2">
-            <div className="space-y-1">
-              <label className="block text-sm font-medium text-zinc-700">Stawka ratalna (PLN)</label>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-                placeholder="Brak w bazie"
-                value={groupForm.priceMonthly}
-                onChange={(e) => setGroupForm((p) => ({ ...p, priceMonthly: e.target.value }))}
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="block text-sm font-medium text-zinc-700">Stawka jednorazowa (PLN)</label>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-                placeholder="Brak w bazie"
-                value={groupForm.priceYearly}
-                onChange={(e) => setGroupForm((p) => ({ ...p, priceYearly: e.target.value }))}
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="block text-sm font-medium text-zinc-700">Stawka za pojedyncze zajęcia (PLN)</label>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-                placeholder="Brak w bazie"
-                value={groupForm.pricePerLesson}
-                onChange={(e) => setGroupForm((p) => ({ ...p, pricePerLesson: e.target.value }))}
-              />
-            </div>
+            ... Stawka ratalna / jednorazowa / za zajęcia ...
           </div>
+          */}
           <div className="space-y-1 md:col-span-2">
             <label className="block text-sm font-medium text-zinc-700">Status grupy</label>
             <label className="flex items-center gap-2 rounded-xl border border-emerald-200 px-3 py-2 text-sm text-zinc-700">
@@ -4300,9 +4822,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             </label>
           </div>
         </div>
-        <p className="mt-3 text-xs text-zinc-500">
+        {/* <p className="mt-3 text-xs text-zinc-500">
           Stawki ratalna i jednorazowa dla tej grupy — zapisują się tutaj i trafiają do umowy rodzica.
-        </p>
+        </p> */}
         <div className="mt-4 flex justify-end">
           <button
             type="button"
@@ -4426,7 +4948,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               <h4 className="font-semibold text-zinc-900">Zajęcia w kalendarzu</h4>
               <p className="text-sm text-zinc-600">
                 Lista zajęć wygenerowanych z harmonogramu na aktywny rok szkolny. Zajęcia powstają
-                automatycznie po zapisie lub potwierdzeniu terminu (z pominięciem dni wolnych).
+                po kliknięciu „Wygeneruj zajęcia” (z pominięciem dni wolnych).
               </p>
               {disabled && (
                 <p className="mt-1 text-xs text-amber-700">Najpierw zapisz grupę, aby zobaczyć zajęcia.</p>
@@ -4434,8 +4956,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               {!disabled && detail?.scheduleNeedsConfirmation && (
                 <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
                   Harmonogram nie jest potwierdzony na rok{' '}
-                  {detail.activeSchoolYear?.name ?? 'aktywny'}. Cron nie będzie generował zajęć dla tej grupy,
-                  dopóki nie potwierdzisz (po uzupełnieniu dni wolnych).
+                  {detail.activeSchoolYear?.name ?? 'aktywny'}. Uzupełnij dni wolne, wpisz liczbę zajęć
+                  i kliknij Wygeneruj zajęcia.
                 </p>
               )}
               {!disabled &&
@@ -4463,34 +4985,64 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 </p>
               )}
             </div>
-            {!disabled && detail?.scheduleNeedsConfirmation && (
-              <button
-                type="button"
-                disabled={busy}
-                className="shrink-0 rounded-xl bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
-                onClick={async () => {
-                  if (!groupId) return;
-                  const res = await fetch(`/api/admin/groups/${groupId}/confirm-schedule`, {
-                    method: 'POST',
-                  });
-                  const data = await res.json().catch(() => ({}));
-                  if (!res.ok) {
-                    pushToast('error', data.message ?? 'Nie udało się potwierdzić harmonogramu');
-                    return;
-                  }
-                  pushToast('success', data.message ?? 'Harmonogram potwierdzony');
-                  setClassesCalRefreshSignal((s) => s + 1);
-                  await reloadDetail();
-                  const gRes = await fetch('/api/admin/groups');
-                  if (gRes.ok) {
-                    const gJson = await gRes.json();
-                    setGroups((gJson.groups ?? []) as GroupRow[]);
-                  }
-                }}
-              >
-                Potwierdź harmonogram
-                {detail.activeSchoolYear?.name ? ` (${detail.activeSchoolYear.name})` : ''}
-              </button>
+            {!disabled &&
+              detail?.activeSchoolYear &&
+              scheduleTemplates.length > 0 && (
+              <div className="flex shrink-0 flex-col items-stretch gap-2 sm:items-end">
+                <label className="block text-sm">
+                  <span className="mb-1 block font-semibold text-zinc-700">Liczba zajęć</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    className="w-full rounded-xl border border-emerald-200 px-3 py-2 sm:w-28"
+                    value={generateLessonsCount}
+                    onChange={(e) => setGenerateLessonsCount(e.target.value)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  disabled={busy}
+                  className={`rounded-xl px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 ${
+                    detail.scheduleNeedsConfirmation
+                      ? 'bg-red-600 hover:bg-red-700'
+                      : 'bg-[#0f6e56] hover:bg-[#0c5a46]'
+                  }`}
+                  onClick={async () => {
+                    if (!groupId) return;
+                    const count = Math.floor(Number(generateLessonsCount));
+                    if (!Number.isFinite(count) || count < 1 || count > 500) {
+                      pushToast('error', 'Podaj liczbę zajęć w zakresie 1–500');
+                      return;
+                    }
+                    setBusy(true);
+                    try {
+                      const res = await fetch(`/api/admin/groups/${groupId}/confirm-schedule`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ lessonCount: count }),
+                      });
+                      const data = await res.json().catch(() => ({}));
+                      if (!res.ok) {
+                        pushToast('error', data.message ?? 'Nie udało się wygenerować zajęć');
+                        return;
+                      }
+                      pushToast('success', data.message ?? 'Wygenerowano zajęcia');
+                      setClassesCalRefreshSignal((s) => s + 1);
+                      await reloadDetail();
+                      const gRes = await fetch('/api/admin/groups');
+                      if (gRes.ok) {
+                        const gJson = await gRes.json();
+                        setGroups((gJson.groups ?? []) as GroupRow[]);
+                      }
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  Wygeneruj zajęcia
+                </button>
+              </div>
             )}
           </div>
 
@@ -4579,8 +5131,19 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               activeStudents.map((st) => (
                 <div key={st.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-100 p-3">
                   <div>
-                    <p>
-                      {st.first_name} {st.last_name}
+                    <p className="flex flex-wrap items-center gap-2">
+                      <span>
+                        {st.first_name} {st.last_name}
+                      </span>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                          st.confirmed
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : 'bg-yellow-100 text-yellow-800'
+                        }`}
+                      >
+                        {st.confirmed ? 'potwierdzony' : 'niepotwierdzony'}
+                      </span>
                     </p>
                     <p className="text-zinc-600">{st.birth_date}</p>
                   </div>
@@ -4618,11 +5181,17 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       );
     }
 
-    if (selectedGroupId && groupDetail && groupsSubTab !== 'organize' && groupsSubTab !== 'add') {
+    if (
+      selectedGroupId &&
+      groupDetail &&
+      groupsSubTab !== 'organize' &&
+      groupsSubTab !== 'add' &&
+      groupsSubTab !== 'yearLessons'
+    ) {
       return (
         <div className="space-y-4">
-          {renderGroupEditForm({ showBackButton: true })}
-          {initialGroupId ? renderGroupManageSections(groupDetail, selectedGroupId) : null}
+          {renderGroupEditForm({ showBackButton: true, groupId: selectedGroupId })}
+          {renderGroupManageSections(groupDetail, selectedGroupId)}
         </div>
       );
     }
@@ -4641,6 +5210,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               setOrganizeExpandedGroupId(null);
               setSelectedGroupId(null);
               setGroupDetail(null);
+            }}
+            onEnterYearLessonsTab={() => {
+              setSelectedGroupId(null);
+              setGroupDetail(null);
+              setYearLessonsExpandedGroupId(null);
             }}
             onEnterAddTab={() => {
               setSelectedGroupId(null);
@@ -4764,7 +5338,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     {hasActiveYear && unconfirmedGroups.length > 0 && (
                       <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
                         <p className="font-semibold">
-                          Niepotwierdzony harmonogram na aktywny rok — cron nie generuje zajęć:
+                          Niepotwierdzony harmonogram na aktywny rok — wygeneruj zajęcia:
                         </p>
                         <ul className="mt-1 list-disc space-y-0.5 pl-5">
                           {unconfirmedGroups.map((g) => (
@@ -4836,7 +5410,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     <th className="px-4 py-3 text-left">Nauczyciel</th>
                     <th className="px-4 py-3 text-left">Lokalizacja</th>
                     <th className="px-4 py-3 text-left">Termin zajęć</th>
-                    <th className="px-4 py-3 text-left">Ceny</th>
+                    {/* <th className="px-4 py-3 text-left">Ceny</th> — cennik grupy wyłączony */}
                     <th className="px-4 py-3 text-left">Uczniowie</th>
                     <th className="px-4 py-3 text-left">Status</th>
                     <th className="px-4 py-3 text-left">Akcje</th>
@@ -4844,7 +5418,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 </thead>
                 <tbody>
                   {groups.map((g) => {
-                    const priceLines = formatGroupPriceLines(g);
+                    // const priceLines = formatGroupPriceLines(g); — cennik grupy wyłączony
                     return (
                     <tr
                       key={g.id}
@@ -4867,17 +5441,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       <td className="px-4 py-3">{g.teacher_name ?? '-'}</td>
                       <td className="px-4 py-3">{g.location_name ?? '-'}</td>
                       <td className="px-4 py-3 whitespace-normal text-zinc-700">{g.schedule ?? '-'}</td>
+                      {/*
                       <td className="px-4 py-3 whitespace-nowrap text-xs text-zinc-700">
-                        {priceLines.length > 0 ? (
-                          <div className="space-y-0.5">
-                            {priceLines.map((line) => (
-                              <div key={line}>{line}</div>
-                            ))}
-                          </div>
-                        ) : (
-                          '—'
-                        )}
+                        {priceLines...}
                       </td>
+                      */}
                       <td className="px-4 py-3">{g.students_count}/{g.max_students}</td>
                       <td className="px-4 py-3">
                         <span className={`rounded-full px-2 py-1 text-xs font-semibold ${g.active ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-700'}`}>
@@ -4959,47 +5527,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="number" min="1" value={groupForm.maxStudents} onChange={(e) => setGroupForm((p) => ({ ...p, maxStudents: Number(e.target.value || 12) }))} />
               </div>
               {renderParentContractConsentFields()}
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div className="space-y-1">
-                  <label className="block text-sm font-medium text-zinc-700">Stawka ratalna (PLN)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-                    placeholder="Brak w bazie"
-                    value={groupForm.priceMonthly}
-                    onChange={(e) => setGroupForm((p) => ({ ...p, priceMonthly: e.target.value }))}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="block text-sm font-medium text-zinc-700">Stawka jednorazowa (PLN)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-                    placeholder="Brak w bazie"
-                    value={groupForm.priceYearly}
-                    onChange={(e) => setGroupForm((p) => ({ ...p, priceYearly: e.target.value }))}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="block text-sm font-medium text-zinc-700">Stawka za pojedyncze zajęcia (PLN)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    className="w-full rounded-xl border border-emerald-200 px-3 py-2"
-                    placeholder="Brak w bazie"
-                    value={groupForm.pricePerLesson}
-                    onChange={(e) => setGroupForm((p) => ({ ...p, pricePerLesson: e.target.value }))}
-                  />
-                </div>
-              </div>
-              <p className="text-xs text-zinc-500">
-                Stawki dla tej grupy — ratalna, jednorazowa i za pojedyncze zajęcia — trafiają do umowy rodzica.
-              </p>
+              {/*
+               * Ceny grupy wyłączone — stawki ustala manager per dziecko przy propozycji.
+              <div className="grid gap-3 sm:grid-cols-3">...</div>
+              <p className="text-xs text-zinc-500">Stawki dla tej grupy...</p>
+              */}
               <div className="space-y-1">
                 <label className="block text-sm font-medium text-zinc-700">Status grupy</label>
                 <label className="flex items-center gap-2 rounded-xl border border-emerald-200 px-3 py-2 text-sm text-zinc-700">
@@ -5065,9 +5597,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                           active: groupForm.active,
                           schoolId: groupForm.schoolId || null,
                           locationId: groupForm.locationId || null,
-                          priceMonthly: groupForm.priceMonthly.trim() ? Number(groupForm.priceMonthly) : null,
-                          priceYearly: groupForm.priceYearly.trim() ? Number(groupForm.priceYearly) : null,
-                          pricePerLesson: groupForm.pricePerLesson.trim() ? Number(groupForm.pricePerLesson) : null,
+                          priceMonthly: null, // cennik grupy wyłączony
+                          priceYearly: null,
+                          pricePerLesson: null,
                           teacherPickupConsent: groupForm.teacherPickupConsent,
                         }),
                       });
@@ -5095,6 +5627,202 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               groupForm.id || null,
               { quietReload: true, disabled: !groupForm.id },
             )}
+            </div>
+          ) : groupsSubTab === 'yearLessons' ? (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <p className="text-sm text-zinc-600">
+                    Podsumowanie liczby zajęć w roku szkolnym. Rozwiń grupę, aby zobaczyć wszystkie
+                    terminy.
+                  </p>
+                </div>
+                <div>
+                  <label
+                    htmlFor="year-lessons-year"
+                    className="mb-1 block text-xs font-medium text-zinc-600"
+                  >
+                    Rok szkolny
+                  </label>
+                  <select
+                    id="year-lessons-year"
+                    className="min-w-[220px] rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
+                    value={yearLessonsYearId}
+                    onChange={(e) => {
+                      setYearLessonsYearId(e.target.value);
+                      setYearLessonsExpandedGroupId(null);
+                    }}
+                    disabled={schoolYearLoading || schoolYears.length === 0}
+                  >
+                    {schoolYears.length === 0 ? (
+                      <option value="">Brak lat szkolnych</option>
+                    ) : (
+                      schoolYears.map((y) => (
+                        <option key={y.id} value={y.id}>
+                          {y.name}
+                          {y.isActive ?? y.active ? ' (bieżący)' : ''}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+              </div>
+
+              {yearLessonsLoading || schoolYearLoading ? (
+                <div className="space-y-2">
+                  <SkeletonBlock />
+                  <SkeletonBlock />
+                </div>
+              ) : !yearLessonsYearId || !yearLessonsSchoolYear ? (
+                <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-6 text-center text-sm text-amber-900">
+                  Brak wybranego roku szkolnego — ustaw lub aktywuj rok w zakładce „Rok szkolny”.
+                </p>
+              ) : yearLessonsGroups.length === 0 ? (
+                <p className="rounded-xl border border-emerald-100 bg-white px-4 py-8 text-center text-sm text-zinc-600">
+                  Brak grup w szkole.
+                </p>
+              ) : (
+                <>
+                  <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 px-4 py-3 text-sm text-zinc-700">
+                    <span className="font-semibold text-[#0f6e56]">
+                      {yearLessonsSchoolYear.name ?? 'Rok szkolny'}
+                    </span>
+                    {' · '}
+                    łącznie{' '}
+                    <span className="font-semibold text-zinc-900">
+                      {yearLessonsGroups.reduce((sum, g) => sum + g.lessons_count, 0)}
+                    </span>{' '}
+                    zajęć w{' '}
+                    <span className="font-semibold text-zinc-900">{yearLessonsGroups.length}</span>{' '}
+                    grupach
+                  </div>
+                  <div className="space-y-2">
+                    {yearLessonsGroups.map((g) => {
+                      const expanded = yearLessonsExpandedGroupId === g.id;
+                      return (
+                        <div
+                          key={g.id}
+                          className="overflow-hidden rounded-2xl border border-emerald-100 bg-white shadow-sm"
+                        >
+                          <button
+                            type="button"
+                            className="flex w-full items-start gap-3 px-4 py-4 text-left transition hover:bg-emerald-50/50"
+                            onClick={() =>
+                              setYearLessonsExpandedGroupId(expanded ? null : g.id)
+                            }
+                          >
+                            <span
+                              className={`mt-0.5 shrink-0 text-emerald-700 transition ${expanded ? 'rotate-90' : ''}`}
+                              aria-hidden
+                            >
+                              ▶
+                            </span>
+                            <div className="min-w-0 flex-1 space-y-2">
+                              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                                <p className="text-base font-semibold text-zinc-900">{g.name}</p>
+                                <p className="shrink-0 text-sm font-bold text-[#0f6e56]">
+                                  {g.lessons_count}{' '}
+                                  {g.lessons_count === 1
+                                    ? 'zajęcie'
+                                    : g.lessons_count >= 2 && g.lessons_count <= 4
+                                      ? 'zajęcia'
+                                      : 'zajęć'}
+                                </p>
+                              </div>
+                              <div className="flex flex-wrap gap-2 text-xs">
+                                {g.schedule && g.schedule !== '-' ? (
+                                  <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-emerald-800">
+                                    Harmonogram: {g.schedule}
+                                  </span>
+                                ) : null}
+                                <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-emerald-800">
+                                  Nauczyciel: {g.teacher_name ?? '-'}
+                                </span>
+                                <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-emerald-800">
+                                  Lokalizacja: {g.location_name ?? '-'}
+                                </span>
+                                {g.scheduled_count > 0 ? (
+                                  <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 font-semibold text-emerald-800">
+                                    {g.scheduled_count} zaplanowanych
+                                  </span>
+                                ) : null}
+                                {g.completed_count > 0 ? (
+                                  <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 font-semibold text-zinc-700">
+                                    {g.completed_count} zakończonych
+                                  </span>
+                                ) : null}
+                                {g.cancelled_count > 0 ? (
+                                  <span className="rounded-full bg-rose-100 px-2.5 py-0.5 font-semibold text-rose-800">
+                                    {g.cancelled_count} anulowanych
+                                  </span>
+                                ) : null}
+                                <span
+                                  className={`rounded-full px-2.5 py-0.5 font-semibold ${g.active ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-700'}`}
+                                >
+                                  {g.active ? 'aktywna' : 'nieaktywna'}
+                                </span>
+                              </div>
+                            </div>
+                          </button>
+                          {expanded && (
+                            <div className="border-t border-emerald-100 bg-emerald-50/40 px-4 py-4">
+                              {g.lessons.length === 0 ? (
+                                <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-600">
+                                  Brak zajęć w planie na ten rok szkolny.
+                                </p>
+                              ) : (
+                                <ul className="max-h-96 space-y-1.5 overflow-y-auto text-sm">
+                                  {g.lessons.map((lesson) => {
+                                    const isCompleted = lesson.status === 'COMPLETED';
+                                    const isCancelled = lesson.status === 'CANCELLED';
+                                    const statusLabel = isCompleted
+                                      ? 'zakończone'
+                                      : isCancelled
+                                        ? 'anulowane'
+                                        : 'zaplanowane';
+                                    const statusClass = isCompleted
+                                      ? 'bg-zinc-200 text-zinc-700'
+                                      : isCancelled
+                                        ? 'bg-rose-100 text-rose-800'
+                                        : 'bg-emerald-100 text-emerald-800';
+                                    const rowClass = isCompleted
+                                      ? 'border-zinc-200 bg-zinc-50'
+                                      : isCancelled
+                                        ? 'border-rose-100 bg-rose-50/50'
+                                        : 'border-emerald-100 bg-emerald-50/40';
+                                    return (
+                                      <li
+                                        key={lesson.id}
+                                        className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 ${rowClass}`}
+                                      >
+                                        <span
+                                          className={`font-medium ${isCompleted || isCancelled ? 'text-zinc-600' : 'text-zinc-900'}`}
+                                        >
+                                          {formatSchoolDateTime(lesson.scheduled_at)}
+                                          {lesson.duration_min ? (
+                                            <span className="ml-2 font-normal text-zinc-500">
+                                              · {lesson.duration_min} min
+                                            </span>
+                                          ) : null}
+                                        </span>
+                                        <span
+                                          className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusClass}`}
+                                        >
+                                          {statusLabel}
+                                        </span>
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
             </div>
           ) : (
             <div className="space-y-2">
@@ -6472,6 +7200,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   type="date"
                   className="w-full rounded-xl border border-emerald-200 px-3 py-2"
                   value={newYearForm.dateTo}
+                  min={newYearForm.dateFrom || undefined}
                   onChange={(e) => setNewYearForm((p) => ({ ...p, dateTo: e.target.value }))}
                 />
               </label>
@@ -6487,6 +7216,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 onClick={async () => {
                   if (!newYearForm.name.trim() || !newYearForm.dateFrom || !newYearForm.dateTo) {
                     pushToast('error', 'Uzupełnij wszystkie pola');
+                    return;
+                  }
+                  if (newYearForm.dateTo < newYearForm.dateFrom) {
+                    pushToast('error', 'Data końca nie może być wcześniejsza niż data początku');
                     return;
                   }
                   setBusy(true);
@@ -6661,6 +7394,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 type="date"
                 className="w-full rounded-xl border border-emerald-200 px-3 py-2"
                 value={editYearModal.date_to.slice(0, 10)}
+                min={editYearModal.date_from.slice(0, 10) || undefined}
                 onChange={(e) =>
                   setEditYearModal((p) => (p ? { ...p, date_to: e.target.value } : p))
                 }
@@ -6676,6 +7410,12 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 className="rounded-xl bg-[#0f6e56] px-4 py-2 text-white disabled:opacity-50"
                 onClick={async () => {
                   if (!editYearModal) return;
+                  const dateFrom = editYearModal.date_from.slice(0, 10);
+                  const dateTo = editYearModal.date_to.slice(0, 10);
+                  if (dateTo < dateFrom) {
+                    pushToast('error', 'Data końca nie może być wcześniejsza niż data początku');
+                    return;
+                  }
                   setBusy(true);
                   try {
                     const res = await fetch(`/api/admin/school-years/${editYearModal.id}`, {
@@ -6683,8 +7423,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({
                         name: editYearModal.name.trim(),
-                        date_from: editYearModal.date_from.slice(0, 10),
-                        date_to: editYearModal.date_to.slice(0, 10),
+                        date_from: dateFrom,
+                        date_to: dateTo,
                       }),
                     });
                     const data = await res.json().catch(() => ({}));
@@ -6805,7 +7545,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       pushToast('error', data.message ?? 'Nie udało się dodać ucznia');
                       return;
                     }
-                    pushToast('success', 'Uczeń dodany do grupy');
+                    pushToast('success', data.message ?? 'Uczeń dodany do grupy');
                     setAddStudentModalOpen(false);
                     setSelectedChildId('');
                     await loadGroupDetail(selectedGroupId, getGroupDetailReloadOptions(selectedGroupId));

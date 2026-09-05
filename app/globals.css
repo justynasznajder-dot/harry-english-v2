@@ -77,3 +77,18 @@ input[type="reset"]:disabled {
 .admin-user-toggle-success:hover:not(:disabled) {
   background-color: #047857;
 }
+
+/* FullCalendar (admin) — weekendy i tło dni wolnych */
+.classes-fc .fc-day-sat,
+.classes-fc .fc-day-sun {
+  background-color: rgba(244, 244, 245, 0.85);
+}
+.classes-fc .fc-col-header-cell.fc-day-sat,
+.classes-fc .fc-col-header-cell.fc-day-sun {
+  background-color: #f4f4f5;
+  color: #71717a;
+}
+.classes-fc .fc-daygrid-day.fc-day-sat .fc-daygrid-day-number,
+.classes-fc .fc-daygrid-day.fc-day-sun .fc-daygrid-day-number {
+  color: #71717a;
+}

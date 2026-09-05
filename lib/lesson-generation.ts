@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { getActiveSchoolYear, queryDb } from "@/lib/db";
+import { ensurePolishPublicHolidaysForSchoolYear } from "@/lib/ensure-polish-public-holidays";
 import { SCHOOL_TIMEZONE, sqlSchoolWallTimestamp } from "@/lib/school-timezone";
 
 const TZ = SCHOOL_TIMEZONE;
@@ -7,6 +8,8 @@ const TZ = SCHOOL_TIMEZONE;
 /**
  * SQL EXISTS: grupa ma przyszły termin z potwierdzonego harmonogramu aktywnego roku
  * (z pominięciem dni wolnych), dla którego nie ma jeszcze wpisu w `lessons`.
+ * Zakres dat ograniczony do już zaplanowanego kalendarza (MAX scheduled_at);
+ * gdy brak zajęć — do końca aktywnego roku (sygnał „wygeneruj”).
  * `groupIdSql` / `schoolIdSql` — wyrażenia SQL, np. `g.id`, `g.school_id`.
  */
 export function sqlExistsUnfilledFutureScheduleSlot(
@@ -22,7 +25,18 @@ export function sqlExistsUnfilledFutureScheduleSlot(
      AND st_gap.school_year_id = sy_gap.id
     CROSS JOIN LATERAL generate_series(
       GREATEST(sy_gap.date_from, (NOW() AT TIME ZONE '${TZ}')::date),
-      sy_gap.date_to,
+      LEAST(
+        sy_gap.date_to,
+        COALESCE(
+          (
+            SELECT MAX(l_span.scheduled_at::date)
+            FROM lessons l_span
+            WHERE l_span.group_id = ${groupIdSql}
+              AND l_span.school_year_id = sy_gap.id
+          ),
+          sy_gap.date_to
+        )
+      ),
       interval '1 day'
     ) AS d_gap(day)
     WHERE sy_gap.school_id = ${schoolIdSql}
@@ -122,8 +136,13 @@ export async function generateLessonsForGroup(opts: {
   dateTo: string;
   /** Tylko szablony już przypięte do tego roku (cron / auto po potwierdzeniu). */
   onlyConfirmedForSchoolYearId?: string;
+  /** Utwórz co najwyżej tyle nowych zajęć (kolejność chronologiczna). */
+  limit?: number;
 }): Promise<GenerateLessonsOutcome> {
-  const { schoolId, groupId, teacherId, dateFrom, dateTo } = opts;
+  const { schoolId, groupId, teacherId, dateFrom, dateTo, limit } = opts;
+  if (limit != null && (!Number.isFinite(limit) || limit < 1)) {
+    return { ok: false, reason: "EMPTY_RANGE", message: "Liczba zajęć musi być co najmniej 1" };
+  }
 
   const activeYear = await getActiveSchoolYear(schoolId);
   if (!activeYear) {
@@ -145,6 +164,12 @@ export async function generateLessonsForGroup(opts: {
   if (dateFrom > dateTo) {
     return { ok: false, reason: "EMPTY_RANGE", message: "Nieprawidłowy zakres dat" };
   }
+
+  await ensurePolishPublicHolidaysForSchoolYear({
+    schoolId,
+    schoolYearId: yearId,
+    forceCancelScheduled: true,
+  });
 
   const todayRes = await queryDb<{ today: string }>(
     `SELECT (NOW() AT TIME ZONE '${TZ}')::date::text AS today`,
@@ -193,52 +218,73 @@ export async function generateLessonsForGroup(opts: {
 
   const from = new Date(dateFrom + "T12:00:00");
   const to = new Date(dateTo + "T12:00:00");
-  let created = 0;
 
+  type Slot = {
+    dateStr: string;
+    startTime: string;
+    duration_min: number;
+    location_id: string;
+    templateId: string;
+  };
+  const slots: Slot[] = [];
   for (const st of templates.rows) {
     let d = nextDateForWeekday(from, st.day_of_week);
     const startTime = st.start_time.slice(0, 8);
     while (d <= to) {
-      if (isDayInHolidayRanges(d, holidays.rows)) {
-        d.setDate(d.getDate() + 7);
-        continue;
-      }
-      const dateStr = dateOnlyYmd(d);
-
-      const wallTs = sqlSchoolWallTimestamp(2, 3);
-      const exists = await queryDb<{ id: string }>(
-        `SELECT id FROM lessons
-         WHERE group_id = $1
-           AND scheduled_at = ${wallTs}
-         LIMIT 1`,
-        [groupId, dateStr, startTime],
-      );
-      if (!exists.rows[0]) {
-        await queryDb(
-          `INSERT INTO lessons (
-            school_id, id, group_id, teacher_id, location_id, scheduled_at, duration_min, status, created_at, school_year_id, schedule_template_id
-           ) VALUES (
-            $1, $2, $3, $4, $5,
-            ${sqlSchoolWallTimestamp(6, 7)},
-            $8, 'SCHEDULED', NOW(), $9, $10
-           )`,
-          [
-            schoolId,
-            randomUUID(),
-            groupId,
-            teacherId,
-            st.location_id,
-            dateStr,
-            startTime,
-            st.duration_min,
-            yearId,
-            st.id,
-          ],
-        );
-        created += 1;
+      if (!isDayInHolidayRanges(d, holidays.rows)) {
+        slots.push({
+          dateStr: dateOnlyYmd(d),
+          startTime,
+          duration_min: st.duration_min,
+          location_id: st.location_id,
+          templateId: st.id,
+        });
       }
       d.setDate(d.getDate() + 7);
     }
+  }
+  slots.sort(
+    (a, b) => a.dateStr.localeCompare(b.dateStr) || a.startTime.localeCompare(b.startTime),
+  );
+
+  let created = 0;
+  const maxCreate = limit ?? Number.POSITIVE_INFINITY;
+
+  for (const slot of slots) {
+    if (created >= maxCreate) break;
+
+    const wallTs = sqlSchoolWallTimestamp(2, 3);
+    const exists = await queryDb<{ id: string }>(
+      `SELECT id FROM lessons
+       WHERE group_id = $1
+         AND scheduled_at = ${wallTs}
+       LIMIT 1`,
+      [groupId, slot.dateStr, slot.startTime],
+    );
+    if (exists.rows[0]) continue;
+
+    await queryDb(
+      `INSERT INTO lessons (
+        school_id, id, group_id, teacher_id, location_id, scheduled_at, duration_min, status, created_at, school_year_id, schedule_template_id
+       ) VALUES (
+        $1, $2, $3, $4, $5,
+        ${sqlSchoolWallTimestamp(6, 7)},
+        $8, 'SCHEDULED', NOW(), $9, $10
+       )`,
+      [
+        schoolId,
+        randomUUID(),
+        groupId,
+        teacherId,
+        slot.location_id,
+        slot.dateStr,
+        slot.startTime,
+        slot.duration_min,
+        yearId,
+        slot.templateId,
+      ],
+    );
+    created += 1;
   }
 
   const message = buildGenerateLessonsMessage({ created, retroactive });
@@ -254,8 +300,10 @@ export async function ensureLessonsThroughActiveSchoolYear(opts: {
   schoolId: string;
   groupId: string;
   teacherId: string | null;
+  /** Utwórz co najwyżej tyle nowych zajęć (kolejność chronologiczna). */
+  limit?: number;
 }): Promise<GenerateLessonsOutcome> {
-  const { schoolId, groupId, teacherId } = opts;
+  const { schoolId, groupId, teacherId, limit } = opts;
   if (!teacherId) {
     return {
       ok: false,
@@ -288,32 +336,67 @@ export async function ensureLessonsThroughActiveSchoolYear(opts: {
     };
   }
 
+  // Bez limitu: dopełniaj tylko luki w zakresie już zaplanowanych zajęć
+  // (nie przedłużaj kalendarza poza ostatni termin — to robi „Wygeneruj zajęcia”).
+  let dateTo = yTo;
+  if (limit == null) {
+    const lastRes = await queryDb<{ d: string | null }>(
+      `SELECT MAX(scheduled_at::date)::text AS d
+       FROM lessons
+       WHERE group_id = $1 AND school_year_id = $2`,
+      [groupId, yearId],
+    );
+    const lastYmd = lastRes.rows[0]?.d?.slice(0, 10) ?? null;
+    if (lastYmd && lastYmd < dateTo) {
+      dateTo = lastYmd;
+    }
+  }
+
+  if (dateFrom > dateTo) {
+    return {
+      ok: true,
+      created: 0,
+      retroactive: false,
+      message: "Brak brakujących zajęć w zakresie już zaplanowanego kalendarza.",
+    };
+  }
+
   return generateLessonsForGroup({
     schoolId,
     groupId,
     teacherId,
     dateFrom,
-    dateTo: yTo,
+    dateTo,
     onlyConfirmedForSchoolYearId: yearId,
+    limit,
   });
 }
 
 /**
  * Przypina aktywne terminy grupy do aktywnego roku (= potwierdzenie) i generuje zajęcia.
- * Manager powinien wcześniej uzupełnić dni wolne.
+ * Święta państwowe PL są dopinane automatycznie przed generowaniem.
  */
 export async function confirmScheduleAndGenerateLessons(opts: {
   schoolId: string;
   groupId: string;
   teacherId: string | null;
+  /** Dokładnie tyle nowych zajęć wygenerować (chronologicznie od dziś). */
+  lessonCount: number;
 }): Promise<GenerateLessonsOutcome & { templatesConfirmed?: number }> {
-  const { schoolId, groupId, teacherId } = opts;
+  const { schoolId, groupId, teacherId, lessonCount } = opts;
   const activeYear = await getActiveSchoolYear(schoolId);
   if (!activeYear) {
     return { ok: false, reason: "NO_ACTIVE_YEAR", message: "Brak aktywnego roku szkolnego" };
   }
   if (!teacherId) {
     return { ok: false, reason: "NO_TEACHER", message: "Grupa nie ma przypisanego nauczyciela" };
+  }
+  if (!Number.isFinite(lessonCount) || lessonCount < 1 || lessonCount > 500) {
+    return {
+      ok: false,
+      reason: "EMPTY_RANGE",
+      message: "Podaj liczbę zajęć w zakresie 1–500",
+    };
   }
 
   const yearId = String((activeYear as { id: string }).id);
@@ -335,6 +418,7 @@ export async function confirmScheduleAndGenerateLessons(opts: {
     schoolId,
     groupId,
     teacherId,
+    limit: Math.floor(lessonCount),
   });
   if (!result.ok) return result;
   return { ...result, templatesConfirmed: updated.rows.length };

@@ -360,10 +360,14 @@ model locations {
   id                 String               @id @default(dbgenerated("(gen_random_uuid())::text"))
   school_id          String
   name               String               @db.VarChar(255)
+  town               String?              @db.VarChar(255)
+  facility           String?              @db.VarChar(255)
   address            String?
   active             Boolean              @default(true)
   sort_order         Int                  @default(100)
   is_featured        Boolean              @default(false)
+  is_new             Boolean              @default(false)
+  is_special         Boolean              @default(false)
   groups             groups[]
   lessons            lessons[]
   schools            schools              @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)

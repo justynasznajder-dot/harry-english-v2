@@ -13,6 +13,7 @@ import {
   isParentContractProfileComplete,
   resolveBillingTypeFromProfile,
   validateParentContractProfileInput,
+  ensureStreetUlPrefix,
   type BillingType,
 } from "@/lib/parent-contract-profile";
 
@@ -145,10 +146,9 @@ export async function PUT(request: NextRequest) {
     const phone =
       phoneRaw && phoneRaw.length > 0 ? normalizePolishPhone(phoneRaw) : null;
 
-    const address = String(body.address ?? "").trim();
+    const address = ensureStreetUlPrefix(String(body.address ?? "").trim());
     const city = String(body.city ?? "").trim();
     const zipCode = normalizeZip(body.zipCode ?? body.zip_code) ?? "";
-    const pesel = String(body.pesel ?? "").trim();
     const companyName = String(body.companyName ?? body.company_name ?? "").trim();
     const nip = String(body.nip ?? "").trim();
     const discountLargeFamilyRaw =
@@ -166,7 +166,6 @@ export async function PUT(request: NextRequest) {
       address,
       city,
       zipCode,
-      pesel,
       companyName,
       nip,
     });
@@ -188,7 +187,8 @@ export async function PUT(request: NextRequest) {
       zip_code: zipCode,
       company_name: billingType === "company" ? companyName : null,
       nip: billingType === "company" ? nip : null,
-      pesel: billingType === "company" ? null : pesel,
+      // PESEL nie jest zbierany — kolumna w DB pozostaje nullable.
+      pesel: null,
       ...(discountLargeFamily !== undefined
         ? { discount_large_family: discountLargeFamily }
         : {}),

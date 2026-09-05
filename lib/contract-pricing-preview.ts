@@ -1,6 +1,5 @@
 import {
-  applyDiscountsToAmount,
-  DISCOUNT_KEYS,
+  // applyDiscountsToAmount, // wyłączone — sezon cen ręcznych
   DISCOUNT_LABELS,
   type DiscountKey,
   type DiscountPercents,
@@ -15,7 +14,7 @@ export type ContractPricingContext = {
 };
 
 /**
- * Reguły zniżek:
+ * Reguły zniżek (wyłączone na sezon cen ręcznych 2025/26):
  * - tryb bez opłat → brak zniżek
  * - cena indywidualna → brak zniżek
  * - KDR → tylko KDR (wyłącza rodzeństwo), max 10%
@@ -25,11 +24,17 @@ export function resolveContractDiscountKeys(
   siblingEligible: boolean,
   pricing: ContractPricingContext
 ): DiscountKey[] {
+  // Rabaty procentowe wyłączone — ceny ustalane ręcznie per dziecko. Przywrócić poniżej.
+  void siblingEligible;
+  void pricing;
+  return [];
+  /*
   if (pricing.billingExempt) return [];
   if (pricing.hasIndividualPricing) return [];
   if (pricing.discountLargeFamily) return [DISCOUNT_KEYS.LARGE_FAMILY_CARD];
   if (siblingEligible) return [DISCOUNT_KEYS.SIBLING];
   return [];
+  */
 }
 
 /**
@@ -61,7 +66,9 @@ export function computeContractPreviewAmount(
       : siblingEligibleOrCount;
 
   const discountKeys = resolveContractDiscountKeys(siblingEligible, pricing);
-  const finalTotal = applyDiscountsToAmount(baseTotal, discountKeys, pricing.discountSettings);
+  // Rabaty % wyłączone — final = base. Przywrócić applyDiscountsToAmount.
+  const finalTotal = baseTotal;
+  // const finalTotal = applyDiscountsToAmount(baseTotal, discountKeys, pricing.discountSettings);
   const discountLabels = discountKeys.map(
     (key) => `${DISCOUNT_LABELS[key]} (${pricing.discountSettings[key]}%)`
   );

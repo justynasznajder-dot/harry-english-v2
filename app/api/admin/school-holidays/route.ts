@@ -8,6 +8,7 @@ import {
   requireAdminSchoolContext,
   resolveInsertSchoolId,
 } from "@/lib/admin-school-context";
+import { ensurePolishPublicHolidaysForSchoolYear } from "@/lib/ensure-polish-public-holidays";
 import { notifyParents, type ParentNotifyRow } from "@/lib/parent-notifications";
 import { requireMessageActor } from "@/lib/messages";
 
@@ -102,6 +103,17 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const schoolYearId = searchParams.get("school_year_id");
+
+    if (schoolYearId && ctx.schoolId) {
+      try {
+        await ensurePolishPublicHolidaysForSchoolYear({
+          schoolId: ctx.schoolId,
+          schoolYearId,
+        });
+      } catch (seedErr) {
+        console.error("ensurePolishPublicHolidays on school-holidays GET:", seedErr);
+      }
+    }
 
     const withYearManager = `SELECT h.id, h.school_id, h.school_year_id, h.name, h.date_from::text, h.date_to::text, h.type, h.created_at
            FROM school_holidays h

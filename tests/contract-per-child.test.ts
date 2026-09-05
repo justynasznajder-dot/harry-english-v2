@@ -14,10 +14,10 @@ describe("umowa per dziecko — sibling i walidacja", () => {
     discountSettings: { SIBLING: 5, LARGE_FAMILY_CARD: 10 },
   };
 
-  it("rabat rodzeństwa przy siblingEligible=true nawet dla jednej kwoty bazowej", () => {
+  it("rabat rodzeństwa wyłączony — final = base nawet przy siblingEligible", () => {
     const preview = computeContractPreviewAmount(150, true, pricing);
-    expect(preview.finalTotal).toBe(142.5);
-    expect(preview.discountKeys).toContain(DISCOUNT_KEYS.SIBLING);
+    expect(preview.finalTotal).toBe(150);
+    expect(preview.discountKeys).toEqual([]);
   });
 
   it("bez rabatu gdy siblingEligible=false (jedno dziecko)", () => {
@@ -26,15 +26,15 @@ describe("umowa per dziecko — sibling i walidacja", () => {
     expect(preview.discountKeys).not.toContain(DISCOUNT_KEYS.SIBLING);
   });
 
-  it("resolveContractDiscountKeys: KDR wyłącza rodzeństwo", () => {
-    expect(resolveContractDiscountKeys(true, pricing)).toEqual([DISCOUNT_KEYS.SIBLING]);
+  it("resolveContractDiscountKeys: rabaty % wyłączone (zawsze [])", () => {
+    expect(resolveContractDiscountKeys(true, pricing)).toEqual([]);
     expect(resolveContractDiscountKeys(false, pricing)).toEqual([]);
     expect(
       resolveContractDiscountKeys(true, { ...pricing, discountLargeFamily: true })
-    ).toEqual([DISCOUNT_KEYS.LARGE_FAMILY_CARD]);
+    ).toEqual([]);
   });
 
-  it("resolveContractDiscountKeys: cena indywidualna wyłącza zniżki", () => {
+  it("resolveContractDiscountKeys: cena indywidualna — nadal brak zniżek", () => {
     expect(
       resolveContractDiscountKeys(true, {
         ...pricing,
@@ -63,12 +63,12 @@ describe("umowa per dziecko — sibling i walidacja", () => {
     expect(amount).toBe(85);
   });
 
-  it("breakdown jednej umowy = jedno dziecko z rabatem sibling", () => {
+  it("breakdown jednej umowy = jedno dziecko bez rabatu %", () => {
     const breakdown = buildContractAmountBreakdown({
       paymentType: "MONTHLY",
       billingExempt: false,
       discountKeys: [DISCOUNT_KEYS.SIBLING],
-      discountSettings: { SIBLING: 5, LARGE_FAMILY_CARD: 0 },
+      discountSettings: { SIBLING: 5, LARGE_FAMILY_CARD: 0, maxPercent: 10 },
       children: [
         {
           child_id: "c1",
@@ -80,7 +80,7 @@ describe("umowa per dziecko — sibling i walidacja", () => {
       ],
     });
     expect(breakdown.children).toHaveLength(1);
-    expect(breakdown.final_total).toBe(142.5);
+    expect(breakdown.final_total).toBe(150);
   });
 
   it("validateSingleChildForContract wymaga AWAITING_CONTRACT i grupy", () => {

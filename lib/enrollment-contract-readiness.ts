@@ -1,13 +1,17 @@
 import { queryDb } from "@/lib/db";
-import { isEnrollmentContractPipelineStatus } from "@/lib/enrollment-status";
+import {
+  isEnrollmentContractPipelineStatus,
+  isEnrollmentDecisionPendingStatus,
+  ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE,
+} from "@/lib/enrollment-status";
 
-const PENDING_STATUSES = new Set(["NEW", "PROPOSED", "NEGOTIATING"]);
 const RESOLVED_STATUSES = new Set([
   "ACCEPTED",
   "AWAITING_CONTRACT",
   "CONTRACT_READY",
   "REJECTED",
   "SIGNED",
+  ...(ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE ? [] : ["PROPOSED"]),
 ]);
 
 export type EnrollmentContractReadiness = {
@@ -28,7 +32,7 @@ export function computeEnrollmentContractReadiness(
 ): EnrollmentContractReadiness {
   const normalized = enrollmentStatuses.map((s) => String(s).trim().toUpperCase()).filter(Boolean);
 
-  const hasPendingDecisions = normalized.some((s) => PENDING_STATUSES.has(s));
+  const hasPendingDecisions = normalized.some((s) => isEnrollmentDecisionPendingStatus(s));
   const allDecisionsResolved =
     normalized.length > 0 && normalized.every((s) => RESOLVED_STATUSES.has(s));
   const acceptedCount = normalized.filter((s) => isEnrollmentContractPipelineStatus(s)).length;
@@ -36,10 +40,18 @@ export function computeEnrollmentContractReadiness(
   const awaitingContractCount = normalized.filter(
     (s) => s === "AWAITING_CONTRACT" || s === "CONTRACT_READY"
   ).length;
-  const hasAcceptedPendingSubmit = normalized.some((s) => s === "ACCEPTED");
+  const hasAcceptedPendingSubmit = normalized.some(
+    (s) =>
+      s === "ACCEPTED" || (!ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && s === "PROPOSED")
+  );
+  const hasAwaitingContract = normalized.some(
+    (s) => s === "AWAITING_CONTRACT" || s === "CONTRACT_READY"
+  );
   const canPrepareContract =
     !complimentaryEnrollment && allDecisionsResolved && acceptedCount > 0;
-  const canSubmitContractData = canPrepareContract && hasAcceptedPendingSubmit;
+  // Pierwsze wysłanie (ACCEPTED) albo kolejne dziecko / regeneracja (AWAITING / CONTRACT_READY).
+  const canSubmitContractData =
+    canPrepareContract && (hasAcceptedPendingSubmit || hasAwaitingContract);
 
   return {
     hasPendingDecisions,

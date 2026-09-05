@@ -10,9 +10,8 @@ import {
   filterEnrollmentChildrenByStatus,
   formatEnrollmentStatusLabel,
 } from '@/lib/enrollment-status';
-import { applyDiscountsToAmount, DISCOUNT_KEYS, hasIndividualPriceOverride } from '@/lib/discount-math';
+import { parsePriceDecimal } from '@/lib/lesson-pricing';
 import { isParentInComplimentaryList } from '@/lib/complimentary-parent-list';
-import { paymentPlanLabel, paymentRateLabel } from '@/lib/payment-labels';
 import type {
   ComplimentaryParentRow,
   EnrollmentGroupRow,
@@ -30,13 +29,6 @@ function emptyProposalDraft(groupId = ''): ProposalDraft {
   return { groupId, lessonUnitPrice: '', monthlyUnitPrice: '', yearlyUnitPrice: '' };
 }
 
-function formatPlnFromDb(value: unknown): string {
-  if (value == null || value === '') return '—';
-  const n = Number(String(value).replace(',', '.'));
-  if (!Number.isFinite(n)) return '—';
-  return `${n.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} PLN`;
-}
-
 function groupServesPreferredLocation(
   group: { location_ids?: string[] } | null | undefined,
   preferredLocationId: string | null | undefined,
@@ -47,17 +39,20 @@ function groupServesPreferredLocation(
   return (group.location_ids ?? []).includes(pref);
 }
 
-function applyDiscountPreview(
-  base: number | null,
-  discountLargeFamily: boolean,
-  discountSettings: { LARGE_FAMILY_CARD: number; SIBLING: number },
-  hasIndividualPricing: boolean,
-): number | null {
-  if (base == null || !Number.isFinite(base) || base <= 0) return base;
-  if (hasIndividualPricing) return base;
-  const keys = discountLargeFamily ? [DISCOUNT_KEYS.LARGE_FAMILY_CARD] : [];
-  return applyDiscountsToAmount(base, keys, discountSettings);
+/** Wszystkie 3 stawki ręczne muszą być podane (sezon bez cennika grupy / rabatów). */
+function draftHasRequiredPrices(draft?: ProposalDraft): boolean {
+  if (!draft) return false;
+  return (
+    parsePriceDecimal(draft.yearlyUnitPrice) != null &&
+    parsePriceDecimal(draft.monthlyUnitPrice) != null &&
+    parsePriceDecimal(draft.lessonUnitPrice) != null
+  );
 }
+
+/*
+ * Rabaty procentowe (KDR) — wyłączone na ten sezon (ceny ręczne per dziecko).
+ * function applyDiscountPreview(...) { ... applyDiscountsToAmount ... }
+ */
 
 function EmptyDataPanel({ title }: { title: string }) {
   return (
@@ -83,21 +78,25 @@ export default function EnrollmentAdminPanel({
   parents,
   groups,
   complimentaryParents,
-  discountSettings,
+  discountSettings: _discountSettings,
   onRefresh,
   onComplimentaryParentsChange,
 }: EnrollmentAdminPanelProps) {
   const [enrollmentStatusFilter, setEnrollmentStatusFilter] = useState('');
+  const [parentLastNameSearch, setParentLastNameSearch] = useState('');
   const [proposalModalParentId, setProposalModalParentId] = useState<string | null>(null);
   const [submittingProposalRequestId, setSubmittingProposalRequestId] = useState<string | null>(null);
   const [rejectingParentResignationId, setRejectingParentResignationId] = useState<string | null>(
     null,
   );
   const [submittingBatchProposals, setSubmittingBatchProposals] = useState(false);
+  const [savingBatchProposals, setSavingBatchProposals] = useState(false);
   const [proposalDrafts, setProposalDrafts] = useState<Record<string, ProposalDraft>>({});
-  const [savingParentDiscountId, setSavingParentDiscountId] = useState<string | null>(null);
+  // const [savingParentDiscountId, setSavingParentDiscountId] = useState<string | null>(null);
   const [savingComplimentaryKey, setSavingComplimentaryKey] = useState<string | null>(null);
+  void _discountSettings; // zniżki % wyłączone — prop zostaje dla kompatybilności AdminPortal
 
+  /*
   const saveParentLargeFamilyCard = useCallback(
     async (
       parent: {
@@ -139,6 +138,7 @@ export default function EnrollmentAdminPanel({
     },
     [onRefresh, pushToast],
   );
+  */
 
   const saveParentComplimentary = useCallback(
     async (
@@ -231,17 +231,14 @@ export default function EnrollmentAdminPanel({
       : parents.find((parent) => {
           const pid = proposalModalParentId.trim();
           if (parent.id === pid) return true;
+          // Po wysłaniu propozycji API zwraca UUID konta — karty listy mają id = e-mail.
+          if ((parent.parentUserId ?? '').trim() === pid) return true;
           const em = (parent.email ?? '').trim().toLowerCase();
           if (em.length > 0 && pid.includes('@') && em === pid.toLowerCase()) return true;
           return false;
         }) ?? null;
   const proposalNewChildren =
     proposalParent?.children.filter((c) => c.status === 'NEW') ?? [];
-  const proposalBatchReady =
-    proposalNewChildren.length >= 1 &&
-    proposalNewChildren.every((c) =>
-      Boolean((proposalDrafts[c.requestId]?.groupId ?? '').trim()),
-    );
   const hasAcceptedSibling = (requestId: string) =>
     proposalParent?.children.some(
       (c) => c.requestId !== requestId && c.status === 'ACCEPTED',
@@ -253,6 +250,47 @@ export default function EnrollmentAdminPanel({
         : false,
     [proposalParent, complimentaryParents],
   );
+  const proposalBatchReady =
+    proposalNewChildren.length >= 1 &&
+    proposalNewChildren.every((c) => {
+      const draft = proposalDrafts[c.requestId];
+      if (!(draft?.groupId ?? '').trim()) return false;
+      if (proposalParentIsComplimentary) return true;
+      return draftHasRequiredPrices(draft);
+    });
+  const proposalBatchSaveReady =
+    proposalNewChildren.length >= 1 &&
+    proposalNewChildren.every((c) => Boolean((proposalDrafts[c.requestId]?.groupId ?? '').trim()));
+
+  const buildBatchProposalsPayload = () =>
+    proposalNewChildren.map((child) => {
+      const draft = proposalDrafts[child.requestId];
+      return {
+        requestId: child.requestId,
+        groupId: draft?.groupId ?? '',
+        lessonUnitPrice: draft?.lessonUnitPrice?.trim() || null,
+        monthlyUnitPrice: draft?.monthlyUnitPrice?.trim() || null,
+        yearlyUnitPrice: draft?.yearlyUnitPrice?.trim() || null,
+      };
+    });
+
+  /** Potwierdzenie przy zmianie wcześniej zapisanej grupy. */
+  const confirmGroupChangesIfNeeded = (): boolean => {
+    const changes = proposalNewChildren.flatMap((child) => {
+      const newGroupId = (proposalDrafts[child.requestId]?.groupId ?? '').trim();
+      const prevGroupId = (child.proposedGroupId ?? '').trim();
+      if (!newGroupId || !prevGroupId || newGroupId === prevGroupId) return [];
+      const prevName = groups.find((g) => g.id === prevGroupId)?.name ?? 'poprzedniej';
+      const nextName = groups.find((g) => g.id === newGroupId)?.name ?? 'nowej';
+      return [
+        `${child.firstName} ${child.lastName}: ${prevName} → ${nextName}`,
+      ];
+    });
+    if (changes.length === 0) return true;
+    return window.confirm(
+      `Zmiana grupy dla:\n\n${changes.join('\n')}\n\nNa pewno przenieść dziecko do nowej grupy?`,
+    );
+  };
 
   const enrollmentStatusCounts = useMemo(() => {
     const children = parents.flatMap((parent) => parent.children);
@@ -266,17 +304,32 @@ export default function EnrollmentAdminPanel({
 
   const renderList = () => {
     const isPipeline = enrollmentStatusFilter === 'pipeline';
+    const lastNameQuery = parentLastNameSearch.trim().toLowerCase();
     const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
     const filteredEnrollmentRows = enrollmentRows
       .map((parent) => ({
         ...parent,
         children: filterEnrollmentChildrenByStatus(parent.children, enrollmentStatusFilter),
       }))
-      .filter((parent) => parent.children.length > 0);
+      .filter((parent) => parent.children.length > 0)
+      .filter((parent) =>
+        !lastNameQuery || (parent.lastName ?? '').toLowerCase().includes(lastNameQuery),
+      );
 
     return (
       <section className="space-y-4 rounded-2xl border border-emerald-100 bg-white p-4">
         <h2 className="text-lg font-semibold text-zinc-900">Zgłoszenia</h2>
+
+        {!isPipeline && (
+          <input
+            type="search"
+            autoComplete="off"
+            value={parentLastNameSearch}
+            onChange={(e) => setParentLastNameSearch(e.target.value)}
+            placeholder="Szukaj po nazwisku rodzica…"
+            className="w-full max-w-md rounded-xl border border-emerald-200 px-3 py-2 text-sm"
+          />
+        )}
 
         <div className="flex flex-wrap gap-2">
           {ENROLLMENT_LIST_FILTERS.map((filter) => (
@@ -317,7 +370,7 @@ export default function EnrollmentAdminPanel({
           <EmptyDataPanel title="Zgłoszenia" />
         ) : filteredEnrollmentRows.length === 0 ? (
           <p className="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-8 text-center text-sm text-zinc-600">
-            Brak zgłoszeń
+            {lastNameQuery ? 'Brak zgłoszeń dla podanego nazwiska' : 'Brak zgłoszeń'}
           </p>
         ) : (
           <div className="space-y-3">
@@ -454,41 +507,16 @@ export default function EnrollmentAdminPanel({
                       Po akceptacji grupy zapis kończy się bez umowy, faktur i płatności. Działa
                       też przed utworzeniem konta (po e-mailu zgłoszenia).
                     </p>
+                    {/*
+                     * KDR / zniżki procentowe — wyłączone (sezon cen ręcznych).
                     {!proposalParentIsComplimentary && (
                       <>
                         <label className="mt-3 inline-flex items-center gap-2 text-sm text-zinc-800">
-                          <input
-                            type="checkbox"
-                            checked={Boolean(proposalParent.discountLargeFamily)}
-                            disabled={
-                              !(
-                                (proposalParent.parentUserId ?? '').trim() ||
-                                (proposalParent.email ?? '').trim()
-                              ) ||
-                              savingParentDiscountId ===
-                                (proposalParent.parentUserId ?? proposalParent.id)
-                            }
-                            title={
-                              (proposalParent.parentUserId ?? '').trim() ||
-                              (proposalParent.email ?? '').trim()
-                                ? undefined
-                                : 'Podaj e-mail zgłoszenia, aby oznaczyć KDR'
-                            }
-                            onChange={(e) => {
-                              void saveParentLargeFamilyCard(proposalParent, e.target.checked);
-                            }}
-                          />
-                          Karta Dużej Rodziny ({discountSettings.LARGE_FAMILY_CARD}%)
+                          ... Karta Dużej Rodziny ...
                         </label>
-                        {!(proposalParent.parentUserId ?? '').trim() &&
-                          Boolean((proposalParent.email ?? '').trim()) && (
-                          <p className="mt-1 text-xs text-zinc-500">
-                            KDR zapisze się na zgłoszeniu; po utworzeniu konta trafi na profil
-                            rodzica.
-                          </p>
-                        )}
                       </>
                     )}
+                    */}
                   </div>
                   {proposalParentIsComplimentary && (
                     <p className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
@@ -589,7 +617,9 @@ export default function EnrollmentAdminPanel({
                           )}
                           {child.status === 'ACCEPTED' && (
                             <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm">
-                              <p className="font-semibold text-emerald-900">Propozycja zaakceptowana</p>
+                              <p className="font-semibold text-emerald-900">
+                                Grupa przypisana
+                              </p>
                               {proposedGroup ? (
                                 <p className="mt-1 text-emerald-900">
                                   {proposedGroup.name} · {proposedGroup.location_name} ·{' '}
@@ -604,7 +634,7 @@ export default function EnrollmentAdminPanel({
                           {child.status === 'AWAITING_CONTRACT' && (
                             <div className="rounded-xl border border-violet-200 bg-violet-50 p-3 text-sm">
                               <p className="font-semibold text-violet-950">
-                                Dane uzupełnione — oczekuje na umowę
+                                Dane uzupełnione — generowanie / podpis umowy
                               </p>
                               {proposedGroup ? (
                                 <p className="mt-1 text-violet-950">
@@ -613,8 +643,7 @@ export default function EnrollmentAdminPanel({
                                 </p>
                               ) : null}
                               <p className="mt-2 text-xs text-violet-900">
-                                Po zatwierdzeniu grupy wygenerujesz umowę (akcja będzie dostępna w
-                                kolejnym etapie).
+                                Rodzic zapisał dane — umowa generuje się automatycznie w portalu.
                               </p>
                             </div>
                           )}
@@ -657,225 +686,144 @@ export default function EnrollmentAdminPanel({
                           )}
                           {proposalAllowed && (
                             <>
-                              <select
-                                className="w-full max-w-full rounded-xl border border-emerald-200 px-3 py-2 disabled:cursor-not-allowed disabled:opacity-60"
-                                disabled={!proposalAllowed}
-                                value={proposalDrafts[child.requestId]?.groupId ?? ''}
-                                onChange={(e) =>
-                                  setProposalDrafts((prev) => ({
-                                    ...prev,
-                                    [child.requestId]: {
-                                      ...emptyProposalDraft(),
-                                      ...prev[child.requestId],
-                                      groupId: e.target.value,
-                                    },
-                                  }))
-                                }
-                              >
-                                <option value="">Wybierz grupę</option>
-                                {groups.map((group) => {
-                                  const label = `${group.name} · ${group.location_name} · ${group.schedule}`;
+                              <div className="space-y-2">
+                                <select
+                                  className="w-full max-w-full rounded-xl border border-emerald-200 px-3 py-2 disabled:cursor-not-allowed disabled:opacity-60"
+                                  disabled={!proposalAllowed}
+                                  value={proposalDrafts[child.requestId]?.groupId ?? ''}
+                                  onChange={(e) =>
+                                    setProposalDrafts((prev) => ({
+                                      ...prev,
+                                      [child.requestId]: {
+                                        ...emptyProposalDraft(),
+                                        ...prev[child.requestId],
+                                        groupId: e.target.value,
+                                      },
+                                    }))
+                                  }
+                                >
+                                  <option value="">Wybierz grupę</option>
+                                  {groups.map((group) => {
+                                    const label = `${group.name} · ${group.location_name} · ${group.schedule}`;
+                                    return (
+                                      <option key={group.id} value={group.id} title={label}>
+                                        {label}
+                                      </option>
+                                    );
+                                  })}
+                                </select>
+                                {!proposalParentIsComplimentary && (
+                                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:items-end">
+                                    <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
+                                      <span className="leading-snug">
+                                        Jednorazowa{' '}
+                                        <span className="font-normal text-zinc-400">(PLN)</span>
+                                      </span>
+                                      <input
+                                        type="text"
+                                        inputMode="decimal"
+                                        required
+                                        className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
+                                        disabled={!proposalAllowed}
+                                        placeholder="np. 1200"
+                                        value={
+                                          proposalDrafts[child.requestId]?.yearlyUnitPrice ?? ''
+                                        }
+                                        onChange={(e) =>
+                                          setProposalDrafts((prev) => ({
+                                            ...prev,
+                                            [child.requestId]: {
+                                              ...emptyProposalDraft(),
+                                              ...prev[child.requestId],
+                                              yearlyUnitPrice: e.target.value,
+                                            },
+                                          }))
+                                        }
+                                      />
+                                    </label>
+                                    <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
+                                      <span className="leading-snug">
+                                        Ratalna{' '}
+                                        <span className="font-normal text-zinc-400">(PLN)</span>
+                                      </span>
+                                      <input
+                                        type="text"
+                                        inputMode="decimal"
+                                        required
+                                        className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
+                                        disabled={!proposalAllowed}
+                                        placeholder="np. 150"
+                                        value={
+                                          proposalDrafts[child.requestId]?.monthlyUnitPrice ?? ''
+                                        }
+                                        onChange={(e) =>
+                                          setProposalDrafts((prev) => ({
+                                            ...prev,
+                                            [child.requestId]: {
+                                              ...emptyProposalDraft(),
+                                              ...prev[child.requestId],
+                                              monthlyUnitPrice: e.target.value,
+                                            },
+                                          }))
+                                        }
+                                      />
+                                    </label>
+                                    <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
+                                      <span className="leading-snug">
+                                        Za zajęcia{' '}
+                                        <span className="font-normal text-zinc-400">(PLN)</span>
+                                      </span>
+                                      <input
+                                        type="text"
+                                        inputMode="decimal"
+                                        required
+                                        className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
+                                        disabled={!proposalAllowed}
+                                        placeholder="np. 50"
+                                        value={
+                                          proposalDrafts[child.requestId]?.lessonUnitPrice ?? ''
+                                        }
+                                        onChange={(e) =>
+                                          setProposalDrafts((prev) => ({
+                                            ...prev,
+                                            [child.requestId]: {
+                                              ...emptyProposalDraft(),
+                                              ...prev[child.requestId],
+                                              lessonUnitPrice: e.target.value,
+                                            },
+                                          }))
+                                        }
+                                      />
+                                    </label>
+                                  </div>
+                                )}
+                                {(() => {
+                                  const selectedGroupId =
+                                    proposalDrafts[child.requestId]?.groupId ?? '';
+                                  const selectedGroup = selectedGroupId
+                                    ? groups.find((g) => g.id === selectedGroupId)
+                                    : null;
+                                  const locationMismatch =
+                                    !!selectedGroup &&
+                                    !!child.preferredLocationId?.trim() &&
+                                    !groupServesPreferredLocation(
+                                      selectedGroup,
+                                      child.preferredLocationId,
+                                    );
+                                  if (!locationMismatch) return null;
                                   return (
-                                    <option key={group.id} value={group.id} title={label}>
-                                      {label}
-                                    </option>
-                                  );
-                                })}
-                              </select>
-                              {(() => {
-                                const selectedGroupId =
-                                  proposalDrafts[child.requestId]?.groupId ?? '';
-                                const selectedGroup = selectedGroupId
-                                  ? groups.find((g) => g.id === selectedGroupId)
-                                  : null;
-                                const locationMismatch =
-                                  !!selectedGroup &&
-                                  !!child.preferredLocationId?.trim() &&
-                                  !groupServesPreferredLocation(
-                                    selectedGroup,
-                                    child.preferredLocationId,
-                                  );
-                                if (!selectedGroup) return null;
-                                return (
-                                  <>
-                                    {locationMismatch && (
-                                      <p className="rounded-xl border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
-                                        Wybrana grupa nie prowadzi zajęć w lokalizacji{' '}
-                                        {child.preferredLocation ?? 'wybranej przez rodzica'}. Możesz
-                                        mimo to wysłać propozycję.
-                                      </p>
-                                    )}
-                                    <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 p-3 text-sm">
-                                      <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                                        Cennik grupy
-                                      </p>
-                                      <div className="mt-2 space-y-1">
-                                        <p className="text-zinc-800">
-                                          <span className="font-medium">{paymentPlanLabel('monthly')}:</span>{' '}
-                                          {formatPlnFromDb(selectedGroup.price_monthly)}
-                                        </p>
-                                        <p className="text-zinc-800">
-                                          <span className="font-medium">{paymentPlanLabel('yearly')}:</span>{' '}
-                                          {formatPlnFromDb(selectedGroup.price_yearly)}
-                                        </p>
-                                        <p className="text-zinc-800">
-                                          <span className="font-medium">{paymentPlanLabel('per_lesson')}:</span>{' '}
-                                          {formatPlnFromDb(selectedGroup.price_per_lesson)}
-                                        </p>
-                                      </div>
-                                      {proposalParentIsComplimentary ? (
-                                        <p className="mt-3 text-xs text-sky-800">
-                                          Tryb bez opłat — indywidualne stawki nie są używane.
-                                        </p>
-                                      ) : (
-                                      <>
-                                      <label className="mt-3 block text-xs font-medium text-zinc-600">
-                                        {paymentRateLabel('monthly', { individualOptional: true })}
-                                        <input
-                                          type="text"
-                                          inputMode="decimal"
-                                          placeholder={
-                                            selectedGroup.price_monthly != null
-                                              ? `Domyślnie ${formatPlnFromDb(selectedGroup.price_monthly)}`
-                                              : 'np. 140,00'
-                                          }
-                                          className="mt-1 w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
-                                          disabled={!proposalAllowed}
-                                          value={proposalDrafts[child.requestId]?.monthlyUnitPrice ?? ''}
-                                          onChange={(e) =>
-                                            setProposalDrafts((prev) => ({
-                                              ...prev,
-                                              [child.requestId]: {
-                                                ...emptyProposalDraft(),
-                                                ...prev[child.requestId],
-                                                monthlyUnitPrice: e.target.value,
-                                              },
-                                            }))
-                                          }
-                                        />
-                                      </label>
-                                      <label className="mt-2 block text-xs font-medium text-zinc-600">
-                                        {paymentRateLabel('yearly', { individualOptional: true })}
-                                        <input
-                                          type="text"
-                                          inputMode="decimal"
-                                          placeholder={
-                                            selectedGroup.price_yearly != null
-                                              ? `Domyślnie ${formatPlnFromDb(selectedGroup.price_yearly)}`
-                                              : 'np. 1400,00'
-                                          }
-                                          className="mt-1 w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
-                                          disabled={!proposalAllowed}
-                                          value={proposalDrafts[child.requestId]?.yearlyUnitPrice ?? ''}
-                                          onChange={(e) =>
-                                            setProposalDrafts((prev) => ({
-                                              ...prev,
-                                              [child.requestId]: {
-                                                ...emptyProposalDraft(),
-                                                ...prev[child.requestId],
-                                                yearlyUnitPrice: e.target.value,
-                                              },
-                                            }))
-                                          }
-                                        />
-                                      </label>
-                                      <label className="mt-2 block text-xs font-medium text-zinc-600">
-                                        {paymentRateLabel('per_lesson', { individualOptional: true })}
-                                        <input
-                                          type="text"
-                                          inputMode="decimal"
-                                          placeholder={
-                                            selectedGroup.price_per_lesson != null
-                                              ? `Domyślnie ${formatPlnFromDb(selectedGroup.price_per_lesson)}`
-                                              : 'np. 45,00'
-                                          }
-                                          className="mt-1 w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
-                                          disabled={!proposalAllowed}
-                                          value={proposalDrafts[child.requestId]?.lessonUnitPrice ?? ''}
-                                          onChange={(e) =>
-                                            setProposalDrafts((prev) => ({
-                                              ...prev,
-                                              [child.requestId]: {
-                                                ...emptyProposalDraft(),
-                                                ...prev[child.requestId],
-                                                lessonUnitPrice: e.target.value,
-                                              },
-                                            }))
-                                          }
-                                        />
-                                      </label>
-                                      </>
-                                      )}
-                                    </div>
-                                  </>
-                                );
-                              })()}
-                              {(() => {
-                                const draft = proposalDrafts[child.requestId];
-                                const selectedGroupId = draft?.groupId ?? '';
-                                const selectedGroup = selectedGroupId
-                                  ? groups.find((g) => g.id === selectedGroupId)
-                                  : null;
-                                if (!selectedGroup || proposalParentIsComplimentary) return null;
-                                const monthlyBaseRaw = draft?.monthlyUnitPrice?.trim();
-                                const yearlyBaseRaw = draft?.yearlyUnitPrice?.trim();
-                                const lessonBaseRaw = draft?.lessonUnitPrice?.trim();
-                                const hasIndividualPricing = hasIndividualPriceOverride({
-                                  lesson_unit_price: lessonBaseRaw || null,
-                                  monthly_unit_price: monthlyBaseRaw || null,
-                                  yearly_unit_price: yearlyBaseRaw || null,
-                                });
-                                const monthlyBase =
-                                  monthlyBaseRaw && Number.isFinite(Number(monthlyBaseRaw.replace(',', '.')))
-                                    ? Number(monthlyBaseRaw.replace(',', '.'))
-                                    : selectedGroup.price_monthly != null
-                                      ? Number(selectedGroup.price_monthly)
-                                      : null;
-                                const yearlyBase =
-                                  yearlyBaseRaw && Number.isFinite(Number(yearlyBaseRaw.replace(',', '.')))
-                                    ? Number(yearlyBaseRaw.replace(',', '.'))
-                                    : selectedGroup.price_yearly != null
-                                      ? Number(selectedGroup.price_yearly)
-                                      : null;
-                                const monthlyAfter = applyDiscountPreview(
-                                  monthlyBase,
-                                  Boolean(proposalParent?.discountLargeFamily),
-                                  discountSettings,
-                                  hasIndividualPricing,
-                                );
-                                const yearlyAfter = applyDiscountPreview(
-                                  yearlyBase,
-                                  Boolean(proposalParent?.discountLargeFamily),
-                                  discountSettings,
-                                  hasIndividualPricing,
-                                );
-                                if (hasIndividualPricing) {
-                                  return (
-                                    <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                                      Cena indywidualna — zniżki procentowe (KDR / rodzeństwo) nie
-                                      obowiązują.
+                                    <p className="rounded-xl border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+                                      Wybrana grupa nie prowadzi zajęć w lokalizacji{' '}
+                                      {child.preferredLocation ?? 'wybranej przez rodzica'}. Możesz
+                                      mimo to wysłać propozycję.
                                     </p>
                                   );
-                                }
-                                if (
-                                  proposalParent?.discountLargeFamily &&
-                                  (monthlyAfter != null || yearlyAfter != null)
-                                ) {
-                                  return (
-                                    <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
-                                      Kwota po zniżce KDR:{' '}
-                                      {monthlyAfter != null
-                                        ? `ratalnie ${formatPlnFromDb(monthlyAfter)}`
-                                        : ''}
-                                      {monthlyAfter != null && yearlyAfter != null ? ' · ' : ''}
-                                      {yearlyAfter != null
-                                        ? `jednorazowo ${formatPlnFromDb(yearlyAfter)}`
-                                        : ''}
-                                    </p>
-                                  );
-                                }
-                                return null;
-                              })()}
+                                })()}
+                              </div>
+                              {/*
+                               * Cennik grupy + podgląd rabatów KDR — wyłączone (ceny ręczne).
+                               * Poprzednio: odczyt price_* z grupy + applyDiscountPreview.
+                               */}
                               <div className="flex flex-wrap gap-2">
                                 {child.status === 'NEGOTIATING' && (
                                   <button
@@ -883,7 +831,8 @@ export default function EnrollmentAdminPanel({
                                     disabled={
                                       submittingProposalRequestId === child.requestId ||
                                       rejectingParentResignationId === child.requestId ||
-                                      submittingBatchProposals
+                                      submittingBatchProposals ||
+                                      savingBatchProposals
                                     }
                                     className="rounded-xl bg-emerald-600 px-3 py-2 text-white disabled:cursor-not-allowed disabled:opacity-60"
                                     onClick={async () => {
@@ -891,6 +840,16 @@ export default function EnrollmentAdminPanel({
                                       const groupId = draft?.groupId ?? '';
                                       if (!groupId) {
                                         pushToast('error', 'Wybierz grupę');
+                                        return;
+                                      }
+                                      if (
+                                        !proposalParentIsComplimentary &&
+                                        !draftHasRequiredPrices(draft)
+                                      ) {
+                                        pushToast(
+                                          'error',
+                                          'Podaj wszystkie 3 stawki: jednorazową, ratalną i za pojedyncze zajęcia',
+                                        );
                                         return;
                                       }
                                       setSubmittingProposalRequestId(child.requestId);
@@ -927,17 +886,12 @@ export default function EnrollmentAdminPanel({
                                           'success',
                                           `Wysłano nową propozycję dla: ${child.firstName} ${child.lastName}`,
                                         );
-                                        if (
-                                          typeof data.parentId === 'string' &&
-                                          data.parentId.trim().length > 0
-                                        ) {
-                                          setProposalModalParentId(data.parentId.trim());
-                                        }
                                         setProposalDrafts((prev) => {
                                           const next = { ...prev };
                                           delete next[child.requestId];
                                           return next;
                                         });
+                                        setProposalModalParentId(null);
                                         await onRefresh();
                                       } catch (err) {
                                         pushToast(
@@ -964,7 +918,8 @@ export default function EnrollmentAdminPanel({
                                     disabled={
                                       submittingProposalRequestId === child.requestId ||
                                       rejectingParentResignationId === child.requestId ||
-                                      submittingBatchProposals
+                                      submittingBatchProposals ||
+                                      savingBatchProposals
                                     }
                                     className="rounded-xl border border-rose-300 bg-white px-3 py-2 text-rose-800 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
                                     onClick={async () => {
@@ -1034,92 +989,141 @@ export default function EnrollmentAdminPanel({
             </div>
             <div className="shrink-0 flex flex-wrap items-center justify-between gap-2 border-t border-emerald-100 px-5 py-3">
               {proposalNewChildren.length >= 1 ? (
-                <button
-                  type="button"
-                  disabled={
-                    !proposalBatchReady ||
-                    submittingBatchProposals ||
-                    submittingProposalRequestId != null ||
-                    rejectingParentResignationId != null
-                  }
-                  title={
-                    proposalBatchReady
-                      ? undefined
-                      : 'Wybierz grupę dla każdego dziecka ze statusem „Nowe”'
-                  }
-                  className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0c5a47] disabled:cursor-not-allowed disabled:opacity-50"
-                  onClick={async () => {
-                    setSubmittingBatchProposals(true);
-                    try {
-                      const proposals = proposalNewChildren.map((child) => {
-                        const draft = proposalDrafts[child.requestId];
-                        const groupId = draft?.groupId ?? '';
-                        return {
-                          requestId: child.requestId,
-                          groupId,
-                          lessonUnitPrice: draft?.lessonUnitPrice?.trim() || null,
-                          monthlyUnitPrice: draft?.monthlyUnitPrice?.trim() || null,
-                          yearlyUnitPrice: draft?.yearlyUnitPrice?.trim() || null,
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={
+                      !proposalBatchSaveReady ||
+                      savingBatchProposals ||
+                      submittingBatchProposals ||
+                      submittingProposalRequestId != null ||
+                      rejectingParentResignationId != null
+                    }
+                    title={
+                      proposalBatchSaveReady
+                        ? 'Zapisz grupę i stawki bez wysyłania e-maila'
+                        : 'Wybierz grupę dla każdego dziecka ze statusem „Nowe”'
+                    }
+                    className="rounded-xl border border-[#0f6e56] bg-white px-3 py-2 text-sm font-semibold text-[#0f6e56] shadow-sm transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={async () => {
+                      if (!confirmGroupChangesIfNeeded()) return;
+                      setSavingBatchProposals(true);
+                      try {
+                        const proposals = buildBatchProposalsPayload();
+                        const res = await fetch('/api/admin/enrollment/batch', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            proposals,
+                            sendEmail: false,
+                            allowEmptyPrices: true,
+                          }),
+                        });
+                        const data = (await res.json().catch(() => ({}))) as {
+                          message?: string;
+                          count?: number;
                         };
-                      });
-                      const res = await fetch('/api/admin/enrollment/batch', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ proposals }),
-                      });
-                      const data = (await res.json().catch(() => ({}))) as {
-                        message?: string;
-                        parentCreated?: boolean;
-                        parentId?: string;
-                        count?: number;
-                      };
-                      if (!res.ok) {
+                        if (!res.ok) {
+                          pushToast(
+                            'error',
+                            data?.message ?? 'Nie udało się zapisać danych propozycji',
+                          );
+                          return;
+                        }
+                        pushToast(
+                          'success',
+                          data.message ??
+                            `Zapisano dane propozycji (${data.count ?? proposals.length}) — dziecko w grupie jako niepotwierdzone`,
+                        );
+                        await onRefresh();
+                      } catch (err) {
                         pushToast(
                           'error',
-                          data?.message ?? 'Nie udało się wysłać propozycji',
+                          err instanceof Error ? err.message : 'Błąd zapisu propozycji',
                         );
-                        return;
+                      } finally {
+                        setSavingBatchProposals(false);
                       }
-                      const accountInfo = data?.parentCreated
-                        ? ' (utworzono konto rodzica)'
-                        : '';
-                      const childCount = data.count ?? proposalNewChildren.length;
-                      pushToast(
-                        'success',
-                        childCount === 1
-                          ? `Wysłano propozycję z danymi do logowania${accountInfo}`
-                          : `Wysłano zbiorczy mail (${childCount} dzieci) z danymi do logowania${accountInfo}`,
-                      );
-                      if (
-                        typeof data.parentId === 'string' &&
-                        data.parentId.trim().length > 0
-                      ) {
-                        setProposalModalParentId(data.parentId.trim());
-                      }
-                      setProposalDrafts((prev) => {
-                        const next = { ...prev };
-                        for (const child of proposalNewChildren) {
-                          delete next[child.requestId];
-                        }
-                        return next;
-                      });
-                      await onRefresh();
-                    } catch (err) {
-                      pushToast(
-                        'error',
-                        err instanceof Error ? err.message : 'Błąd wysyłania propozycji',
-                      );
-                    } finally {
-                      setSubmittingBatchProposals(false);
+                    }}
+                  >
+                    {savingBatchProposals ? 'Zapisywanie…' : 'Zapisz'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={
+                      !proposalBatchReady ||
+                      submittingBatchProposals ||
+                      savingBatchProposals ||
+                      submittingProposalRequestId != null ||
+                      rejectingParentResignationId != null
                     }
-                  }}
-                >
-                  {submittingBatchProposals
-                    ? 'Wysyłanie…'
-                    : proposalNewChildren.length === 1
-                      ? 'Wyślij propozycję z danymi do logowania'
-                      : `Wyślij zbiorczy mail (${proposalNewChildren.length} dzieci)`}
-                </button>
+                    title={
+                      proposalBatchReady
+                        ? undefined
+                        : proposalParentIsComplimentary
+                          ? 'Wybierz grupę dla każdego dziecka ze statusem „Nowe”'
+                          : 'Wybierz grupę i podaj wszystkie 3 stawki dla każdego dziecka ze statusem „Nowe”'
+                    }
+                    className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0c5a47] disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={async () => {
+                      if (!confirmGroupChangesIfNeeded()) return;
+                      setSubmittingBatchProposals(true);
+                      try {
+                        const proposals = buildBatchProposalsPayload();
+                        const res = await fetch('/api/admin/enrollment/batch', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ proposals }),
+                        });
+                        const data = (await res.json().catch(() => ({}))) as {
+                          message?: string;
+                          parentCreated?: boolean;
+                          parentId?: string;
+                          count?: number;
+                        };
+                        if (!res.ok) {
+                          pushToast(
+                            'error',
+                            data?.message ?? 'Nie udało się wysłać propozycji',
+                          );
+                          return;
+                        }
+                        const accountInfo = data?.parentCreated
+                          ? ' (utworzono konto rodzica)'
+                          : '';
+                        const childCount = data.count ?? proposalNewChildren.length;
+                        pushToast(
+                          'success',
+                          childCount === 1
+                            ? `Wysłano propozycję z danymi do logowania${accountInfo}`
+                            : `Wysłano zbiorczy mail (${childCount} dzieci) z danymi do logowania${accountInfo}`,
+                        );
+                        setProposalDrafts((prev) => {
+                          const next = { ...prev };
+                          for (const child of proposalNewChildren) {
+                            delete next[child.requestId];
+                          }
+                          return next;
+                        });
+                        setProposalModalParentId(null);
+                        await onRefresh();
+                      } catch (err) {
+                        pushToast(
+                          'error',
+                          err instanceof Error ? err.message : 'Błąd wysyłania propozycji',
+                        );
+                      } finally {
+                        setSubmittingBatchProposals(false);
+                      }
+                    }}
+                  >
+                    {submittingBatchProposals
+                      ? 'Wysyłanie…'
+                      : proposalNewChildren.length === 1
+                        ? 'Wyślij maila z danymi do logowania'
+                        : `Wyślij zbiorczy mail (${proposalNewChildren.length} dzieci)`}
+                  </button>
+                </div>
               ) : (
                 <span />
               )}

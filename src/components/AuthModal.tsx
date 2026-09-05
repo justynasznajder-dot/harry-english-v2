@@ -34,7 +34,7 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
     rodoConsent: false,
   });
   const [locations, setLocations] = useState<
-    Array<{ id: string; name: string; is_featured?: boolean }>
+    Array<{ id: string; name: string; is_featured?: boolean; is_new?: boolean; label?: string }>
   >([]);
   const [locationsLoading, setLocationsLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -80,9 +80,19 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
     setLocationsLoading(true);
     fetch("/api/public/locations")
       .then((res) => (res.ok ? res.json() : Promise.reject()))
-      .then((data: { locations?: Array<{ id: string; name: string; is_featured?: boolean }> }) => {
-        if (!cancelled) setLocations(Array.isArray(data.locations) ? data.locations : []);
-      })
+      .then(
+        (data: {
+          locations?: Array<{
+            id: string;
+            name: string;
+            is_featured?: boolean;
+            is_new?: boolean;
+            label?: string;
+          }>;
+        }) => {
+          if (!cancelled) setLocations(Array.isArray(data.locations) ? data.locations : []);
+        },
+      )
       .catch(() => {
         if (!cancelled) setLocations([]);
       })
@@ -789,7 +799,10 @@ export default function AuthModal({ isOpen, onClose, initialMode = "select" }: A
                                 : undefined
                             }
                           >
-                            {loc.is_featured ? `★ ${loc.name}` : loc.name}
+                            {loc.label ??
+                              (loc.is_featured
+                                ? `★ ${loc.name}${loc.is_new ? " (Nowość!)" : ""}`
+                                : `${loc.name}${loc.is_new ? " (Nowość!)" : ""}`)}
                           </option>
                         ))}
                       </select>

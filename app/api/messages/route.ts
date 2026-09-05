@@ -171,14 +171,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const emails = enrollmentEmailRecipients.map((r) => r.email);
-    const byEmail = await resolveUsersByEmails(actor.user.schoolId, emails);
     const senderUsers = await getUsersForEmail([actor.user.id]);
     const senderReplyTo = senderUsers[0]?.email?.trim() || undefined;
     const senderName = `${actor.user.firstName} ${actor.user.lastName}`.trim();
     const senderRole = actor.user.role as "MANAGER" | "TEACHER";
     const portalUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://www.harry-english.pl";
 
+    // E-mail ze zgłoszeń = wyłącznie skrzynka mailowa (bez wiadomości w panelu),
+    // nawet gdy odbiorca ma konto w aplikacji.
     const personalized = enrollmentEmailRecipients.map((r) => {
       const dziecko = r.childName || "dziecko";
       return {
@@ -186,69 +186,21 @@ export async function POST(request: NextRequest) {
         childName: r.childName,
         subject: fillTemplatePlaceholders(subject, { dziecko }),
         content: fillTemplatePlaceholders(content, { dziecko }),
-        user: byEmail.get(r.email) ?? null,
       };
     });
 
-    const portalRows = personalized
-      .filter((p) => p.user && p.user.id !== actor.user.id)
-      .map((p) => {
-        const user = p.user!;
-        return {
-          schoolId: actor.user.schoolId,
-          parentId: resolveParentIdForMessage(
-            actor.user.role,
-            user.role,
-            actor.user.id,
-            user.id
-          ),
-          senderId: actor.user.id,
-          senderRole: actor.user.role,
-          recipientId: user.id,
-          subject: p.subject,
-          content: p.content,
-          parentMessageId: null as string | null,
-          broadcastId: null as string | null,
-        };
-      });
-
-    const broadcastId = portalRows.length > 1 ? randomUUID() : null;
-    for (const row of portalRows) {
-      row.broadcastId = broadcastId;
-    }
-
-    let messageIds: string[] = [];
-    if (portalRows.length > 0) {
-      const validation = await validateRecipientsForSender({
-        senderId: actor.user.id,
-        senderRole: actor.user.role,
-        schoolId: actor.user.schoolId,
-        recipientIds: [...new Set(portalRows.map((r) => r.recipientId))],
-        threadRootId: null,
-      });
-      if (!validation.ok) {
-        return NextResponse.json({ message: validation.message }, { status: 403 });
-      }
-      messageIds = await runPgTransaction(async (client) => insertMessages(client, portalRows));
-    }
-
     let emailsSent = 0;
     let emailsFailed = 0;
-    let portalMsgIdx = 0;
 
     for (const item of personalized) {
-      const matchedUser = item.user && item.user.id !== actor.user.id ? item.user : null;
-      const messageId = matchedUser ? messageIds[portalMsgIdx++] : null;
-      const recipientName = matchedUser
-        ? `${matchedUser.first_name} ${matchedUser.last_name}`.trim()
-        : item.childName
-          ? `Rodzic: ${item.childName}`
-          : (() => {
-              const localPart = item.email.split("@")[0] ?? "";
-              return localPart.length > 0
-                ? localPart.charAt(0).toUpperCase() + localPart.slice(1)
-                : "Odbiorco";
-            })();
+      const recipientName = item.childName
+        ? `Rodzic: ${item.childName}`
+        : (() => {
+            const localPart = item.email.split("@")[0] ?? "";
+            return localPart.length > 0
+              ? localPart.charAt(0).toUpperCase() + localPart.slice(1)
+              : "Odbiorco";
+          })();
 
       try {
         await sendMessageNotificationEmail({
@@ -263,21 +215,14 @@ export async function POST(request: NextRequest) {
           replyTo: senderReplyTo,
         });
         emailsSent += 1;
-        if (messageId) {
-          await queryDb(`UPDATE messages SET email_status = 'SENT' WHERE id = $1`, [messageId]);
-        }
       } catch (emailErr) {
         console.error("Enrollment message notification email failed:", emailErr);
         emailsFailed += 1;
-        if (messageId) {
-          await queryDb(`UPDATE messages SET email_status = 'FAILED' WHERE id = $1`, [messageId]);
-        }
       }
     }
 
     return NextResponse.json({
-      messageIds,
-      broadcastId: broadcastId ?? undefined,
+      messageIds: [],
       emailsSent,
       emailsFailed,
       externalEmailsCount: personalized.length,
@@ -323,25 +268,32 @@ export async function POST(request: NextRequest) {
 
   let effectiveRecipientIds = [...recipientIds];
   const emailOnlyRecipients: string[] = [];
+  /** Wysyłka z sekcji „E-mail”: tylko skrzynka, bez wiadomości w panelu. */
+  const isDirectEmailCompose =
+    recipientIds.length === 0 && externalEmails.length > 0 && !parentMessageId;
 
   if (externalEmails.length > 0) {
-    const byEmail = await resolveUsersByEmails(actor.user.schoolId, externalEmails);
-    const knownEmails = new Set(
-      (await getUsersForEmail(effectiveRecipientIds))
-        .map((u) => u.email.trim().toLowerCase())
-        .filter(Boolean)
-    );
+    if (isDirectEmailCompose) {
+      emailOnlyRecipients.push(...externalEmails);
+    } else {
+      const byEmail = await resolveUsersByEmails(actor.user.schoolId, externalEmails);
+      const knownEmails = new Set(
+        (await getUsersForEmail(effectiveRecipientIds))
+          .map((u) => u.email.trim().toLowerCase())
+          .filter(Boolean)
+      );
 
-    for (const email of externalEmails) {
-      const matched = byEmail.get(email);
-      if (matched && matched.id !== actor.user.id) {
-        if (!effectiveRecipientIds.includes(matched.id)) {
-          effectiveRecipientIds.push(matched.id);
+      for (const email of externalEmails) {
+        const matched = byEmail.get(email);
+        if (matched && matched.id !== actor.user.id) {
+          if (!effectiveRecipientIds.includes(matched.id)) {
+            effectiveRecipientIds.push(matched.id);
+          }
+          continue;
         }
-        continue;
+        if (knownEmails.has(email)) continue;
+        emailOnlyRecipients.push(email);
       }
-      if (knownEmails.has(email)) continue;
-      emailOnlyRecipients.push(email);
     }
   }
 
@@ -385,11 +337,12 @@ export async function POST(request: NextRequest) {
   if (actor.user.role === "PARENT" && !parentMessageId && templateKey === "resignation") {
     const childId =
       typeof templateFields.dziecko === "string" ? templateFields.dziecko.trim() : "";
-    const reason =
+    const reasonFromField =
       typeof templateFields.powod === "string" ? templateFields.powod.trim() : "";
+    const reason = reasonFromField || content.trim();
     if (!childId || !reason) {
       return NextResponse.json(
-        { message: "Rezygnacja wymaga wyboru dziecka i podania powodu" },
+        { message: "Rezygnacja wymaga wyboru dziecka i treści wiadomości" },
         { status: 400 }
       );
     }
@@ -469,8 +422,6 @@ export async function POST(request: NextRequest) {
       const senderName = `${actor.user.firstName} ${actor.user.lastName}`.trim();
       const portalUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://www.harry-english.pl";
       const senderRole = actor.user.role as "MANAGER" | "TEACHER";
-      const isDirectEmailCompose =
-        recipientIds.length === 0 && externalEmails.length > 0;
       const senderUsers = isDirectEmailCompose
         ? await getUsersForEmail([actor.user.id])
         : [];

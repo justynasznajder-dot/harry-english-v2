@@ -53,6 +53,12 @@ function weekdayMonFirst(d: Date): number {
   return w === 0 ? 6 : w - 1;
 }
 
+/** Sobota / niedziela z YYYY-MM-DD (południe lokalne — bez dryfu strefy). */
+function isWeekendYmd(ymd: string): boolean {
+  const dow = new Date(`${ymd}T12:00:00`).getDay();
+  return dow === 0 || dow === 6;
+}
+
 export default function ParentCalendarTab({ userInfo }: { userInfo: UserInfo }) {
   const children = userInfo.children ?? [];
   const [cursor, setCursor] = useState(() => monthStart(new Date()));
@@ -116,16 +122,19 @@ export default function ParentCalendarTab({ userInfo }: { userInfo: UserInfo }) 
     return map;
   }, [lessons]);
 
-  const holidayDays = useMemo(() => {
-    const set = new Set<string>();
+  const holidayByDay = useMemo(() => {
+    const map = new Map<string, CalendarHoliday[]>();
     for (const h of holidays) {
       const start = new Date(`${h.dateFrom}T12:00:00`);
       const end = new Date(`${h.dateTo}T12:00:00`);
       for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-        set.add(toYmd(d));
+        const key = toYmd(d);
+        const list = map.get(key) ?? [];
+        list.push(h);
+        map.set(key, list);
       }
     }
-    return set;
+    return map;
   }, [holidays]);
 
   const totalDays = daysInMonth(cursor);
@@ -142,7 +151,9 @@ export default function ParentCalendarTab({ userInfo }: { userInfo: UserInfo }) 
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="text-xl font-bold text-zinc-900 md:text-2xl">Kalendarz zajęć</h2>
-          <p className="mt-1 text-sm text-zinc-600">Widok miesięczny z anulowanymi lekcjami i dniami wolnymi.</p>
+          <p className="mt-1 text-sm text-zinc-600">
+            Widok miesięczny — weekendy i święta państwowe są wyróżnione.
+          </p>
         </div>
         {children.length > 1 ? (
           <select
@@ -186,9 +197,12 @@ export default function ParentCalendarTab({ userInfo }: { userInfo: UserInfo }) 
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-7 gap-1 text-center text-xs font-semibold text-zinc-500">
-            {['Pn', 'Wt', 'Śr', 'Cz', 'Pt', 'Sb', 'Nd'].map((d) => (
-              <div key={d} className="py-1">
+          <div className="grid grid-cols-7 gap-1 text-center text-xs font-semibold">
+            {['Pn', 'Wt', 'Śr', 'Cz', 'Pt', 'Sb', 'Nd'].map((d, i) => (
+              <div
+                key={d}
+                className={`py-1 ${i >= 5 ? 'text-zinc-400' : 'text-zinc-500'}`}
+              >
                 {d}
               </div>
             ))}
@@ -199,26 +213,47 @@ export default function ParentCalendarTab({ userInfo }: { userInfo: UserInfo }) 
                 return <div key={`empty-${idx}`} className="min-h-16 rounded-lg bg-zinc-50/50" />;
               }
               const dayLessons = lessonsByDay.get(cell.ymd) ?? [];
-              const isHoliday = holidayDays.has(cell.ymd);
+              const dayHolidays = holidayByDay.get(cell.ymd) ?? [];
+              const isHoliday = dayHolidays.length > 0;
+              const weekend = isWeekendYmd(cell.ymd);
               const hasCancelled = dayLessons.some((l) => l.status === 'CANCELLED');
               const hasScheduled = dayLessons.some((l) => l.status === 'SCHEDULED');
+              const holidayLabel = dayHolidays[0]?.name ?? 'Wolne';
+
+              let cellClass = 'border-zinc-100 bg-white';
+              if (isHoliday) {
+                cellClass = 'border-amber-300 bg-amber-50';
+              } else if (weekend) {
+                cellClass = 'border-zinc-200 bg-zinc-100';
+              } else if (hasCancelled) {
+                cellClass = 'border-rose-200 bg-rose-50/60';
+              } else if (hasScheduled) {
+                cellClass = 'border-emerald-200 bg-emerald-50/60';
+              }
 
               return (
                 <div
                   key={cell.ymd}
-                  className={`min-h-16 rounded-lg border p-1 text-left ${
-                    isHoliday
-                      ? 'border-sky-200 bg-sky-50'
-                      : hasCancelled
-                        ? 'border-rose-200 bg-rose-50/60'
-                        : hasScheduled
-                          ? 'border-emerald-200 bg-emerald-50/60'
-                          : 'border-zinc-100 bg-white'
-                  }`}
+                  className={`min-h-16 rounded-lg border p-1 text-left ${cellClass}`}
+                  title={isHoliday ? holidayLabel : weekend ? 'Weekend' : undefined}
                 >
-                  <div className="text-xs font-semibold text-zinc-800">{cell.day}</div>
+                  <div
+                    className={`text-xs font-semibold ${
+                      isHoliday
+                        ? 'text-amber-900'
+                        : weekend
+                          ? 'text-zinc-500'
+                          : 'text-zinc-800'
+                    }`}
+                  >
+                    {cell.day}
+                  </div>
                   {isHoliday ? (
-                    <div className="mt-0.5 text-[10px] leading-tight text-sky-800">Wolne</div>
+                    <div className="mt-0.5 line-clamp-2 text-[10px] leading-tight font-medium text-amber-800">
+                      {holidayLabel}
+                    </div>
+                  ) : weekend ? (
+                    <div className="mt-0.5 text-[10px] leading-tight text-zinc-400">Weekend</div>
                   ) : null}
                   {dayLessons.slice(0, 2).map((l) => (
                     <div
@@ -237,8 +272,23 @@ export default function ParentCalendarTab({ userInfo }: { userInfo: UserInfo }) 
             })}
           </div>
 
+          <div className="flex flex-wrap gap-3 text-xs text-zinc-600">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="inline-block h-3 w-3 rounded border border-zinc-200 bg-zinc-100" />
+              Weekend
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="inline-block h-3 w-3 rounded border border-amber-300 bg-amber-50" />
+              Święto / dzień wolny
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="inline-block h-3 w-3 rounded border border-emerald-200 bg-emerald-50" />
+              Zajęcia
+            </span>
+          </div>
+
           {holidays.length > 0 ? (
-            <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
               <p className="font-semibold">Dni wolne w tym miesiącu</p>
               <ul className="mt-1 list-inside list-disc">
                 {holidays.map((h) => (

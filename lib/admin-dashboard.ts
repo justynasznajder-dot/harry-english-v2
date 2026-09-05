@@ -756,7 +756,7 @@ export async function fetchDashboardWarnings(
   if (unconfirmed.rows.length > 0) {
     warnings.push({
       type: "unconfirmed_schedule",
-      message: "Niepotwierdzony harmonogram na aktywny rok — cron nie generuje zajęć:",
+      message: "Niepotwierdzony harmonogram na aktywny rok — wygeneruj zajęcia:",
       groupIds: unconfirmed.rows.map((r) => r.id),
       groupNames: unconfirmed.rows.map((r) => r.name),
     });

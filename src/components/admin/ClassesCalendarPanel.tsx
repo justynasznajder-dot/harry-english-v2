@@ -270,7 +270,7 @@ export default function ClassesCalendarPanel({
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <h3 className="text-lg font-semibold text-[#0f6e56]">Zajęcia</h3>
         <p className="text-xs text-zinc-500 md:text-right">
-          Strefa czasowa: {TZ}. Żółte tło: dni wolne ze słownika szkoły.
+          Strefa czasowa: {TZ}. Szare tło: weekendy. Żółte tło: dni wolne / święta.
         </p>
       </div>
 

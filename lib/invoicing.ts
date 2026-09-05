@@ -78,6 +78,8 @@ type SchoolInvoiceSettings = {
 
 type BuyerInvoiceData = {
   parentFullName: string;
+  parentFirstName: string;
+  parentLastName: string;
   buyerName: string;
   buyerAddress: string;
   buyerNip: string | null;
@@ -323,7 +325,7 @@ export async function setContractMonthlyInvoiceHold(
 
 /**
  * Nabywca faktury — zawsze bieżące dane z „Profil i dane do faktury”:
- * `users` (imię, nazwisko) + `parent_profiles` (adres, PESEL / firma+NIP).
+ * `users` (imię, nazwisko) + `parent_profiles` (adres / firma+NIP).
  * Snapshot trafia do `invoices` dopiero w momencie wystawienia.
  */
 async function fetchBuyerInvoiceData(parentId: string): Promise<BuyerInvoiceData> {
@@ -361,7 +363,7 @@ async function fetchBuyerInvoiceData(parentId: string): Promise<BuyerInvoiceData
 
   if (!isParentContractProfileComplete(profile)) {
     throw new Error(
-      "Uzupełnij profil rodzica (Profil i dane do faktury): adres oraz PESEL albo dane firmy"
+      "Uzupełnij profil rodzica (Profil i dane do faktury): adres albo dane firmy"
     );
   }
 
@@ -374,9 +376,14 @@ async function fetchBuyerInvoiceData(parentId: string): Promise<BuyerInvoiceData
     String(row.city ?? "").trim()
   );
 
+  const parentFirstName = formatPersonName(row.first_name);
+  const parentLastName = formatPersonName(row.last_name);
+
   if (billingType === "company") {
     return {
       parentFullName,
+      parentFirstName,
+      parentLastName,
       buyerName: String(row.company_name ?? "").trim(),
       buyerAddress,
       buyerNip: String(row.nip ?? "").trim() || null,
@@ -385,6 +392,8 @@ async function fetchBuyerInvoiceData(parentId: string): Promise<BuyerInvoiceData
 
   return {
     parentFullName,
+    parentFirstName,
+    parentLastName,
     buyerName: parentFullName,
     buyerAddress,
     buyerNip: null,
@@ -674,9 +683,12 @@ async function insertPaymentWithInvoice(params: {
     try {
       uploadedKey = await storeInvoicePdfInR2({
         parentUserId: params.parentId,
+        schoolId: params.schoolId,
         issuedAt: issueDate,
         filename,
         content: pdf,
+        parentFirstName: buyer.parentFirstName,
+        parentLastName: buyer.parentLastName,
         source: "invoice.create",
       });
       await queryDb(`UPDATE invoices SET pdf_key = $2 WHERE id = $1`, [invoiceId, uploadedKey]);
@@ -685,7 +697,10 @@ async function insertPaymentWithInvoice(params: {
         try {
           await deleteR2Object(uploadedKey, { source: "invoice.orphan-cleanup" });
         } catch (cleanupErr) {
-          console.warn(`[R2] Nie udało się usunąć orphan PDF ${uploadedKey}:`, cleanupErr);
+          console.warn(
+            `[Drive] Nie udało się usunąć orphan PDF ${uploadedKey}:`,
+            cleanupErr
+          );
         }
       }
       throw err;
@@ -1975,6 +1990,7 @@ export async function createCorrectiveInvoice(
       try {
         uploadedKey = await storeInvoicePdfInR2({
           parentUserId: original.parent_id,
+          schoolId: original.school_id,
           issuedAt: issueDate,
           filename,
           content: pdf,
@@ -1986,7 +2002,10 @@ export async function createCorrectiveInvoice(
           try {
             await deleteR2Object(uploadedKey, { source: "invoice.orphan-cleanup" });
           } catch (cleanupErr) {
-            console.warn(`[R2] Nie udało się usunąć orphan PDF ${uploadedKey}:`, cleanupErr);
+            console.warn(
+              `[Drive] Nie udało się usunąć orphan PDF ${uploadedKey}:`,
+              cleanupErr
+            );
           }
         }
         throw err;

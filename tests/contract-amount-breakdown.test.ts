@@ -6,12 +6,12 @@ import {
 import { DISCOUNT_KEYS } from "@/lib/school-discounts";
 
 describe("buildContractAmountBreakdown", () => {
-  it("liczy sumę z rabatem rodzeństwa i zapisuje wszystkie stawki", () => {
+  it("liczy sumę bez rabatów (sezon cen ręcznych) i zapisuje wszystkie stawki", () => {
     const breakdown = buildContractAmountBreakdown({
       paymentType: "MONTHLY",
       billingExempt: false,
       discountKeys: [DISCOUNT_KEYS.SIBLING],
-      discountSettings: { SIBLING: 5, LARGE_FAMILY_CARD: 10 },
+      discountSettings: { SIBLING: 5, LARGE_FAMILY_CARD: 10, maxPercent: 10 },
       children: [
         {
           child_id: "c1",
@@ -31,10 +31,8 @@ describe("buildContractAmountBreakdown", () => {
     });
 
     expect(breakdown.base_total).toBe(300);
-    expect(breakdown.final_total).toBe(285);
-    expect(breakdown.discounts).toEqual([
-      { key: "SIBLING", label: "Rodzeństwo", percent: 5 },
-    ]);
+    expect(breakdown.final_total).toBe(300);
+    expect(breakdown.discounts).toEqual([]);
     expect(breakdown.children[0]?.monthly_unit_price).toBe(150);
     expect(breakdown.children[0]?.lesson_unit_price).toBe(50);
     expect(breakdown.children[0]?.yearly_unit_price).toBe(1400);
@@ -46,7 +44,7 @@ describe("buildContractAmountBreakdown", () => {
       paymentType: "PER_LESSON",
       billingExempt: false,
       discountKeys: [],
-      discountSettings: { SIBLING: 5, LARGE_FAMILY_CARD: 10 },
+      discountSettings: { SIBLING: 5, LARGE_FAMILY_CARD: 10, maxPercent: 10 },
       children: [
         {
           child_id: "c1",
@@ -64,12 +62,12 @@ describe("buildContractAmountBreakdown", () => {
     expect(breakdown.frozen_at).toBe("2026-07-19T12:00:00.000Z");
   });
 
-  it("recomputeFinalTotalFromBreakdown używa zapisanych procentów", () => {
+  it("recomputeFinalTotalFromBreakdown zwraca sumę stawek (bez rabatów)", () => {
     const breakdown = buildContractAmountBreakdown({
       paymentType: "YEARLY",
       billingExempt: false,
       discountKeys: [DISCOUNT_KEYS.SIBLING],
-      discountSettings: { SIBLING: 5, LARGE_FAMILY_CARD: 0 },
+      discountSettings: { SIBLING: 5, LARGE_FAMILY_CARD: 0, maxPercent: 10 },
       children: [
         {
           child_id: "c1",
@@ -88,6 +86,6 @@ describe("buildContractAmountBreakdown", () => {
       ],
     });
 
-    expect(recomputeFinalTotalFromBreakdown(breakdown)).toBe(1900);
+    expect(recomputeFinalTotalFromBreakdown(breakdown)).toBe(2000);
   });
 });

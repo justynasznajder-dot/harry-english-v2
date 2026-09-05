@@ -3,6 +3,7 @@ import { sendCombinedProposalEmail } from "@/lib/email";
 import { requireAdminSchoolContext } from "@/lib/admin-school-context";
 import {
   resolveProposalEmailCredentials,
+  saveEnrollmentProposalDraft,
   submitEnrollmentProposal,
   type ProposalEmailItem,
   type SharedParentState,
@@ -23,6 +24,8 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
     const proposals = (body as { proposals?: BatchProposalBody[] }).proposals;
+    const sendEmail = (body as { sendEmail?: unknown }).sendEmail !== false;
+    const allowEmptyPrices = (body as { allowEmptyPrices?: unknown }).allowEmptyPrices === true;
     if (!Array.isArray(proposals) || proposals.length < 1) {
       return NextResponse.json(
         { message: "Wybierz co najmniej jedno dziecko do propozycji" },
@@ -39,8 +42,36 @@ export async function POST(request: NextRequest) {
     const schoolRestrict =
       ctx.tenant.role === "MANAGER" ? { restrictToSchoolId: ctx.schoolId } : undefined;
 
+    /** Tylko zapis grupy/stawek — bez zmiany statusu i bez maila. */
+    if (!sendEmail) {
+      for (const p of proposals) {
+        const result = await saveEnrollmentProposalDraft(
+          {
+            requestId: p.requestId!,
+            groupId: p.groupId!,
+            lessonUnitPrice: p.lessonUnitPrice,
+            monthlyUnitPrice: p.monthlyUnitPrice,
+            yearlyUnitPrice: p.yearlyUnitPrice,
+          },
+          {
+            ...schoolRestrict,
+            allowEmptyPrices,
+          }
+        );
+        if (!result.ok) {
+          return NextResponse.json({ message: result.message }, { status: result.status });
+        }
+      }
+      return NextResponse.json({
+        message: "Zapisano dane i dodano dziecko do grupy (niepotwierdzone — bez wysyłki e-mail)",
+        saved: true,
+        count: proposals.length,
+      });
+    }
+
     let sharedParent: SharedParentState | null = null;
     const emailItems: ProposalEmailItem[] = [];
+    let complimentaryCompleted = false;
 
     for (const p of proposals) {
       const result = await submitEnrollmentProposal(
@@ -63,6 +94,7 @@ export async function POST(request: NextRequest) {
 
       sharedParent = result.sharedParent;
       emailItems.push(result.emailItem);
+      if (result.complimentaryCompleted) complimentaryCompleted = true;
     }
 
     if (!sharedParent) {
@@ -90,7 +122,8 @@ export async function POST(request: NextRequest) {
       sharedParent.parentEmail,
       `${sharedParent.parentFirstName} ${sharedParent.parentLastName}`.trim(),
       emailItems,
-      login
+      login,
+      { complimentaryCompleted }
     );
 
     return NextResponse.json({

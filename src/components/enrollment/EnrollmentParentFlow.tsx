@@ -5,7 +5,11 @@ import ContractPortal from '@/src/components/ContractPortal';
 import ParentAddChildSection from '@/src/components/parent/ParentAddChildSection';
 import RenewalParentFlowSection from '@/src/components/parent/RenewalParentFlowSection';
 import type { ContractPricingContext } from '@/lib/contract-pricing-preview';
+import { resolveChildBaseAmount } from '@/lib/enrollment-pricing';
+import { ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE } from '@/lib/enrollment-status';
+import { resolveLessonUnitPrice } from '@/lib/lesson-pricing';
 import { validateParentContractProfileInput } from '@/lib/parent-contract-profile';
+import { paymentTypeShortLabel } from '@/lib/payment-labels';
 import { PICKUP_CONSENT_PRINT_INSTRUCTIONS } from '@/lib/pickup-consent-notice';
 
 type ChildEnrollmentLevel =
@@ -102,7 +106,6 @@ interface ParentProfileForm {
   city: string;
   zipCode: string;
   billingType: 'private' | 'company';
-  pesel: string;
   companyName: string;
   nip: string;
 }
@@ -112,13 +115,42 @@ function formatPlnAmount(value: number | null | undefined): string {
   return `${value.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} PLN`;
 }
 
+function resolveProposalLessonUnitPrice(p: EnrollmentProposal): number | null {
+  return resolveLessonUnitPrice({
+    groupPricePerLesson: p.price_per_lesson,
+    enrollmentOverride: p.lesson_unit_price,
+  });
+}
+
+/** Dzieci wchodzące w umowę — kwoty z override managera, inaczej z grupy. */
+function isProposalInContractPricing(p: EnrollmentProposal): boolean {
+  const level = childAccessLevel(p);
+  if (level === 'ACCEPTED' || level === 'AWAITING_CONTRACT' || level === 'CONTRACT_READY') {
+    return true;
+  }
+  if (!ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && level === 'PROPOSED') {
+    return true;
+  }
+  return false;
+}
+
+/** Kwota dla jednego dziecka: override managera, inaczej cennik grupy. */
+function resolveProposalPaymentAmount(
+  p: EnrollmentProposal,
+  paymentType: 'MONTHLY' | 'YEARLY' | 'PER_LESSON',
+): number | null {
+  if (paymentType === 'PER_LESSON') {
+    return resolveProposalLessonUnitPrice(p);
+  }
+  return resolveChildBaseAmount(p, paymentType);
+}
+
 function validateContractProfile(profile: ParentProfileForm): string | null {
   return validateParentContractProfileInput({
     billingType: profile.billingType,
     address: profile.address,
     city: profile.city,
     zipCode: profile.zipCode,
-    pesel: profile.pesel,
     companyName: profile.companyName,
     nip: profile.nip,
   });
@@ -202,10 +234,17 @@ function deriveEnrollmentStepIndex(
 
   const hasPendingDecisions =
     contractReadiness?.hasPendingDecisions ??
-    levels.some((s) => s === 'PROPOSED' || s === 'NEGOTIATING' || s === 'NEW');
+    levels.some(
+      (s) =>
+        s === 'NEW' ||
+        s === 'NEGOTIATING' ||
+        (ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && s === 'PROPOSED'),
+    );
 
   const hasActionableProposal = levels.some(
-    (s) => s === 'PROPOSED' || s === 'NEGOTIATING',
+    (s) =>
+      s === 'NEGOTIATING' ||
+      (ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && s === 'PROPOSED'),
   );
 
   const hasFinishedChild =
@@ -238,7 +277,11 @@ function deriveEnrollmentStepIndex(
     contractReadiness?.canPrepareContract ||
     levels.some(
       (s) =>
-        s === 'ACCEPTED' || s === 'AWAITING_CONTRACT' || s === 'CONTRACT_READY' || s === 'SIGNED',
+        s === 'ACCEPTED' ||
+        s === 'AWAITING_CONTRACT' ||
+        s === 'CONTRACT_READY' ||
+        s === 'SIGNED' ||
+        (!ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && s === 'PROPOSED'),
     )
   ) {
     return contractIndex >= 0 ? contractIndex : summaryIndex;
@@ -338,12 +381,15 @@ export default function EnrollmentParentFlow({
     city: '',
     zipCode: '',
     billingType: 'private',
-    pesel: '',
     companyName: '',
     nip: '',
   });
   const [savingContract, setSavingContract] = useState(false);
   const [parentContract, setParentContract] = useState<ParentContractDocument | null>(null);
+  /** Sposób rozliczeń osobno dla każdego zgłoszenia (request_id). */
+  const [paymentTypeByRequestId, setPaymentTypeByRequestId] = useState<
+    Record<string, 'MONTHLY' | 'YEARLY' | 'PER_LESSON'>
+  >({});
   const [contractReadiness, setContractReadiness] = useState<ContractReadiness>({
     hasPendingDecisions: true,
     allDecisionsResolved: false,
@@ -356,16 +402,17 @@ export default function EnrollmentParentFlow({
   const [contractPricing, setContractPricing] = useState<ContractPricing | null>(null);
   const [discountLargeFamily, setDiscountLargeFamily] = useState(false);
   const [savedDiscountLargeFamily, setSavedDiscountLargeFamily] = useState(false);
-  const [profileLoaded, setProfileLoaded] = useState(false);
+  const [, setProfileLoaded] = useState(false);
   const [profileComplete, setProfileComplete] = useState(false);
   const [profileLocked, setProfileLocked] = useState(false);
   const [savingContractProfile, setSavingContractProfile] = useState(false);
   /** Po zapisie pola są zablokowane — odblokowanie tylko przez „Edytuj dane”. */
   const [isEditingContractProfile, setIsEditingContractProfile] = useState(true);
   /**
-   * Po wygenerowaniu (SENT) przycisk generowania jest nieaktywny, aż rodzic
-   * ponownie zapisze dane (lub zmieni kolejkę / sposób rozliczeń).
+   * Po wygenerowaniu (SENT) przycisk jest nieaktywny, aż rodzic
+   * ponownie zapisze dane (lub zmieni sposób rozliczeń).
    */
+  const [allowContractRegenerate, setAllowContractRegenerate] = useState(false);
   /** Rodzic musi zapisać dane i potwierdzić ich aktualność przed generowaniem umowy. */
   const [dataConfirmed, setDataConfirmed] = useState(false);
   const [schoolYearName, setSchoolYearName] = useState<string | null>(null);
@@ -444,6 +491,26 @@ export default function EnrollmentParentFlow({
       }
       setProposals(sortProposalsByStableOrder(incoming, proposalOrderRef.current));
       setParentContract(data.parentContract ?? null);
+      setPaymentTypeByRequestId((prev) => {
+        const next = { ...prev };
+        for (const p of incoming) {
+          if (!isProposalInContractPricing(p)) continue;
+          if (!next[p.request_id]) next[p.request_id] = 'MONTHLY';
+        }
+        const contractChildId =
+          data.parentContract?.included_children?.[0]?.request_id ??
+          data.parentContract?.child_attachments?.[0]?.request_id;
+        const contractPayment = data.parentContract?.payment_type;
+        if (
+          contractChildId &&
+          (contractPayment === 'MONTHLY' ||
+            contractPayment === 'YEARLY' ||
+            contractPayment === 'PER_LESSON')
+        ) {
+          next[contractChildId] = contractPayment;
+        }
+        return next;
+      });
       setContractPricing(data.contractPricing ?? null);
       if (data.contractPricing && !data.contractPricing.billingExempt) {
         const kdr = Boolean(data.contractPricing.discountLargeFamily);
@@ -514,7 +581,6 @@ export default function EnrollmentParentFlow({
           billingType?: 'private' | 'company';
           companyName?: string | null;
           nip?: string | null;
-          pesel?: string | null;
           discountLargeFamily?: boolean;
           complete?: boolean;
         } | null;
@@ -545,7 +611,6 @@ export default function EnrollmentParentFlow({
         city: p.city ?? prev.city,
         zipCode: p.zipCode ?? prev.zipCode,
         billingType: p.billingType ?? (p.companyName || p.nip ? 'company' : 'private'),
-        pesel: p.pesel ?? prev.pesel,
         companyName: p.companyName ?? prev.companyName,
         nip: p.nip ?? prev.nip,
       }));
@@ -602,7 +667,7 @@ export default function EnrollmentParentFlow({
           address: contractProfile.address,
           city: contractProfile.city,
           zipCode: contractProfile.zipCode,
-          pesel: contractProfile.billingType === 'private' ? contractProfile.pesel : null,
+          pesel: null,
           companyName:
             contractProfile.billingType === 'company' ? contractProfile.companyName : null,
           nip: contractProfile.billingType === 'company' ? contractProfile.nip : null,
@@ -611,7 +676,11 @@ export default function EnrollmentParentFlow({
       });
       const data = (await r.json().catch(() => ({}))) as {
         message?: string;
-        profile?: { complete?: boolean; discountLargeFamily?: boolean };
+        profile?: {
+          complete?: boolean;
+          discountLargeFamily?: boolean;
+          address?: string | null;
+        };
         profileLocked?: boolean;
         user?: { firstName?: string; lastName?: string; phone?: string | null };
       };
@@ -622,6 +691,9 @@ export default function EnrollmentParentFlow({
       setProfileComplete(Boolean(data.profile?.complete));
       setProfileLocked(Boolean(data.profileLocked));
       setIsEditingContractProfile(false);
+      if (typeof data.profile?.address === 'string') {
+        setContractProfile((prev) => ({ ...prev, address: data.profile!.address! }));
+      }
       const savedKdr = Boolean(data.profile?.discountLargeFamily ?? discountLargeFamily);
       setDiscountLargeFamily(savedKdr);
       setSavedDiscountLargeFamily(savedKdr);
@@ -639,9 +711,7 @@ export default function EnrollmentParentFlow({
       if (!opts?.silent) {
         setFlash({
           kind: 'success',
-          message: dataConfirmed
-            ? 'Dane zapisane. Potwierdź poniżej, że są aktualne, a potem wyślij je do szkoły.'
-            : 'Dane zapisane. Zaznacz potwierdzenie aktualności danych, aby wysłać je do szkoły.',
+          message: 'Dane zapisane.',
         });
       }
       return true;
@@ -651,16 +721,9 @@ export default function EnrollmentParentFlow({
     } finally {
       setSavingContractProfile(false);
     }
-  }, [contractProfile, discountLargeFamily, profileLocked, onUserInfoUpdate, dataConfirmed]);
+  }, [contractProfile, discountLargeFamily, profileLocked, onUserInfoUpdate]);
 
-  const handleSubmitContractData = useCallback(async () => {
-    if (!profileComplete) {
-      setFlash({
-        kind: 'error',
-        message: 'Najpierw zapisz dane do umowy.',
-      });
-      return;
-    }
+  const handleSaveAndSubmitContractData = useCallback(async () => {
     if (!dataConfirmed) {
       setFlash({
         kind: 'error',
@@ -673,32 +736,80 @@ export default function EnrollmentParentFlow({
         kind: 'error',
         message: contractReadiness.hasPendingDecisions
           ? 'Najpierw rozstrzygnij wszystkie propozycje grup.'
-          : 'Dane są już zgłoszone albo brak zaakceptowanych dzieci.',
+          : 'Nie można wygenerować umowy — brak dzieci z przypisaną grupą albo dane są już w innym etapie.',
       });
       return;
     }
 
-    if (discountLargeFamily !== savedDiscountLargeFamily) {
+    const needsProfileSave =
+      isEditingContractProfile ||
+      !profileComplete ||
+      discountLargeFamily !== savedDiscountLargeFamily;
+    if (needsProfileSave) {
       const saved = await handleSaveContractProfile({ silent: true });
       if (!saved) return;
     }
+
+    const priced = proposals.filter(isProposalInContractPricing);
+    if (priced.length === 0) {
+      setFlash({ kind: 'error', message: 'Brak dzieci do wygenerowania umowy.' });
+      return;
+    }
+
+    // Zawsze domykaj mapę (UI pokazuje MONTHLY przez ??, nawet gdy brak klucza w stanie).
+    const resolvedPaymentTypes: Record<string, 'MONTHLY' | 'YEARLY' | 'PER_LESSON'> = {
+      ...paymentTypeByRequestId,
+    };
+    for (const p of priced) {
+      if (!resolvedPaymentTypes[p.request_id]) {
+        resolvedPaymentTypes[p.request_id] = 'MONTHLY';
+      }
+    }
+    setPaymentTypeByRequestId(resolvedPaymentTypes);
 
     setSavingContract(true);
     try {
       const r = await fetch('/api/enrollment/contract-data/submit', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
+        body: JSON.stringify({
+          paymentTypeByRequestId: resolvedPaymentTypes,
+          includedRequestIds: priced.map((p) => p.request_id),
+        }),
       });
-      const data = (await r.json().catch(() => ({}))) as { message?: string };
+      const data = (await r.json().catch(() => ({}))) as {
+        message?: string;
+        contractGenerated?: boolean;
+        nextChildToContract?: {
+          first_name?: string;
+          last_name?: string;
+        } | null;
+      };
       if (!r.ok) {
-        setFlash({ kind: 'error', message: data.message ?? 'Nie udało się zgłosić danych' });
+        setFlash({ kind: 'error', message: data.message ?? 'Nie udało się wygenerować umowy' });
         return;
       }
+      if (data.contractGenerated === false) {
+        setFlash({
+          kind: 'error',
+          message:
+            data.message ??
+            'Dane zapisane, ale nie udało się wygenerować umowy. Spróbuj ponownie lub skontaktuj się ze szkołą.',
+        });
+        await Promise.all([loadProposals(), loadParentProfile()]);
+        return;
+      }
+      setAllowContractRegenerate(false);
+      setIsEditingContractProfile(false);
+      const next = data.nextChildToContract;
       setFlash({
         kind: 'success',
         message:
           data.message ??
-          'Dane wysłane. Poczekaj na ostateczne zatwierdzenie grupy — szkoła wygeneruje umowę.',
+          (next
+            ? `Umowa wygenerowana. Podpisz ją, a potem wygenerujesz umowę dla: ${next.first_name ?? ''} ${next.last_name ?? ''}`.trim()
+            : 'Umowa wygenerowana. Zapoznaj się z dokumentami i podpisz.'),
       });
       await Promise.all([loadProposals(), loadParentProfile()]);
     } catch {
@@ -712,9 +823,12 @@ export default function EnrollmentParentFlow({
     dataConfirmed,
     discountLargeFamily,
     handleSaveContractProfile,
+    isEditingContractProfile,
     loadParentProfile,
     loadProposals,
+    paymentTypeByRequestId,
     profileComplete,
+    proposals,
     savedDiscountLargeFamily,
   ]);
 
@@ -956,11 +1070,17 @@ export default function EnrollmentParentFlow({
     const currentStep = enrollmentStepsForUser[selectedStepIndex];
     const hasPendingProposalDecisions = proposals.some((p) => {
       const level = childAccessLevel(p);
-      return level === 'PROPOSED' || level === 'NEGOTIATING';
+      return (
+        level === 'NEGOTIATING' ||
+        (ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && level === 'PROPOSED')
+      );
     });
     const pendingProposalCount = proposals.filter((p) => {
       const level = childAccessLevel(p);
-      return level === 'PROPOSED' || level === 'NEGOTIATING';
+      return (
+        level === 'NEGOTIATING' ||
+        (ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && level === 'PROPOSED')
+      );
     }).length;
     const finishedProposalCount = proposals.filter((p) => {
       const level = childAccessLevel(p);
@@ -1074,11 +1194,6 @@ export default function EnrollmentParentFlow({
       return (
         <section className="space-y-4">
           <h3 className="text-lg font-semibold text-zinc-900">Propozycja grupy</h3>
-          {isReadOnlyPreview && (
-            <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-700">
-              Podgląd wcześniejszego etapu. Zmiany są zablokowane.
-            </div>
-          )}
 
           {proposalsLoading && proposals.length === 0 ? (
             <EmptyState message="Ładujemy szczegóły propozycji…" />
@@ -1091,11 +1206,16 @@ export default function EnrollmentParentFlow({
               {proposals.length > 1 && (
                 <p className="text-sm text-zinc-600">
                   {pendingProposalCount > 0 && finishedProposalCount > 0
-                    ? `Trwa zapis kolejnego dziecka (${pendingProposalCount}). Wcześniej zakończone zapisy (${finishedProposalCount}) pozostają widoczne poniżej — zaakceptuj nową propozycję, aby kontynuować.`
-                    : `Mamy propozycje dla ${proposals.length} dzieci. Każde dziecko ma jedną przypisaną grupę — zaakceptuj propozycję, aby przejść dalej w procesie zapisu.`}
+                    ? ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
+                      ? `Trwa zapis kolejnego dziecka (${pendingProposalCount}). Wcześniej zakończone zapisy (${finishedProposalCount}) pozostają widoczne poniżej — zaakceptuj nową propozycję, aby kontynuować.`
+                      : `Trwa zapis kolejnego dziecka (${pendingProposalCount}). Wcześniej zakończone zapisy (${finishedProposalCount}) pozostają widoczne poniżej.`
+                    : ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
+                      ? `Mamy propozycje dla ${proposals.length} dzieci. Każde dziecko ma jedną przypisaną grupę — zaakceptuj propozycję, aby przejść dalej w procesie zapisu.`
+                      : `Mamy przypisane grupy dla ${proposals.length} dzieci. Przejdź do kroku „Umowa”, aby uzupełnić dane.`}
                 </p>
               )}
-                  {proposals.some((p) => childAccessLevel(p) === 'PROPOSED') && (
+                  {proposals.some((p) => childAccessLevel(p) === 'PROPOSED') &&
+                ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && (
                 <p className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
                   Szkoła przygotowała{' '}
                   {pendingProposalCount > 1
@@ -1122,6 +1242,17 @@ export default function EnrollmentParentFlow({
                     )}
                 </p>
               )}
+              {!ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE &&
+                proposals.some(
+                  (p) =>
+                    childAccessLevel(p) === 'PROPOSED' || childAccessLevel(p) === 'ACCEPTED',
+                ) && (
+                  <p className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+                    Szkoła przypisała grupę
+                    {proposals.length > 1 ? ' dla dzieci' : ' dla Twojego dziecka'}. Przejdź do
+                    kroku „Umowa”, aby uzupełnić dane — dokument przygotuje szkoła.
+                  </p>
+                )}
               {!userInfo.complimentaryAccess &&
                 contractReadiness.allDecisionsResolved &&
                 contractReadiness.acceptedCount === 0 && (
@@ -1169,13 +1300,15 @@ export default function EnrollmentParentFlow({
                         }`}
                       >
                         {level === 'PROPOSED'
-                          ? 'Do decyzji'
+                          ? ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
+                            ? 'Do decyzji'
+                            : 'Grupa przypisana'
                           : level === 'NEGOTIATING'
                             ? 'Oczekiwanie na szkołę'
                             : level === 'ACCEPTED'
-                              ? userInfo.complimentaryAccess
+                              ? ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
                                 ? 'Zaakceptowana'
-                                : 'Zaakceptowana'
+                                : 'Grupa przypisana'
                               : level === 'REJECTED'
                                 ? 'Odrzucone przez szkołę'
                               : level === 'COMPLETED'
@@ -1203,8 +1336,9 @@ export default function EnrollmentParentFlow({
                       </div>
                     ) : null}
 
-                    {isActionable && (
+                    {isActionable && ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && (
                       <div className="mt-4 flex flex-wrap gap-3">
+                          {/* Akceptacja + kontakt — włączane flagą ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE. */}
                           <button
                             type="button"
                             onClick={() => handleAcceptProposal(p.request_id)}
@@ -1213,6 +1347,19 @@ export default function EnrollmentParentFlow({
                           >
                             {isAccepting ? 'Akceptowanie…' : 'Akceptuję propozycję'}
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => handleContactSchool(p)}
+                            disabled={buttonsDisabled}
+                            className="rounded-full border border-zinc-300 bg-white px-5 py-2.5 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {isContactStarting ? 'Przygotowanie…' : 'Kontakt ze szkołą'}
+                          </button>
+                      </div>
+                    )}
+                    {/* Gdy akceptacja wyłączona, zostaw kontakt tylko dla starych PROPOSED (opcjonalnie). */}
+                    {isActionable && !ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && (
+                      <div className="mt-4 flex flex-wrap gap-3">
                           <button
                             type="button"
                             onClick={() => handleContactSchool(p)}
@@ -1331,10 +1478,8 @@ export default function EnrollmentParentFlow({
 
     if (currentStep.key === 'contractSent') {
       const hasSentContract = parentContract?.status === 'SENT';
-      const awaitingSchoolContract =
-        contractReadiness.awaitingContractCount > 0 &&
-        !contractReadiness.canSubmitContractData &&
-        !hasSentContract;
+      const generateDisabledByExistingContract =
+        hasSentContract && !allowContractRegenerate;
       const contractPreview =
         parentContract?.content_html &&
         (parentContract.status === 'SENT' || parentContract.status === 'SIGNED')
@@ -1350,13 +1495,9 @@ export default function EnrollmentParentFlow({
       const hasUnsignedGeneratedContract = parentContract?.status === 'SENT';
       const profileFieldsLocked =
         profileLocked || isReadOnlyPreview || isContractSigned || !isEditingContractProfile;
+      // Nie blokuj formularza samym AWAITING_CONTRACT — umowę generujemy po stronie rodzica.
       const commonProfileLocked =
-        profileLocked || isReadOnlyPreview || isContractSigned || awaitingSchoolContract;
-      const formLocked =
-        isReadOnlyPreview ||
-        isContractSigned ||
-        !contractReadiness.canPrepareContract ||
-        awaitingSchoolContract;
+        profileLocked || isReadOnlyPreview || isContractSigned;
 
       return (
         <section className="space-y-4">
@@ -1374,25 +1515,24 @@ export default function EnrollmentParentFlow({
               {flash.message}
             </div>
           )}
-          {isReadOnlyPreview && (
-            <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-700">
-              Podgląd wcześniejszego etapu. Zmiany są zablokowane.
-            </div>
-          )}
           <p className="text-sm text-zinc-600">
-            Uzupełnij dane do umowy. Po ich potwierdzeniu poczekasz na ostateczne zatwierdzenie grupy
-            — szkoła wygeneruje umowę, a Ty podpiszesz ją w portalu.
+            Uzupełnij i zapisz dane do umowy — umowa wygeneruje się automatycznie. Potem podpiszesz
+            ją w portalu.
           </p>
           {contractReadiness.hasPendingDecisions && (
             <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
-              Część dzieci wciąż czeka na decyzję w kroku <strong>Propozycja grupy</strong>. Dane do
-              umowy wyślesz, gdy wszystkie dzieci będą zaakceptowane lub odrzucone przez szkołę.
-            </div>
-          )}
-          {awaitingSchoolContract && (
-            <div className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm text-violet-950">
-              Dane do umowy zostały przekazane szkole. Poczekaj na ostateczne zatwierdzenie powstania
-              grupy — wtedy szkoła wygeneruje umowę i pojawi się ona tutaj do podpisu.
+              {ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE ? (
+                <>
+                  Część dzieci wciąż czeka na decyzję w kroku <strong>Propozycja grupy</strong>. Dane
+                  do umowy zapiszesz, gdy wszystkie dzieci będą zaakceptowane lub odrzucone przez
+                  szkołę.
+                </>
+              ) : (
+                <>
+                  Część dzieci wciąż czeka na przypisanie grupy przez szkołę. Dane do umowy
+                  zapiszesz, gdy wszystkie otwarte zgłoszenia będą rozstrzygnięte.
+                </>
+              )}
             </div>
           )}
           {hasUnsignedGeneratedContract && (
@@ -1426,10 +1566,10 @@ export default function EnrollmentParentFlow({
                         <strong>Profil i dane do faktury</strong>.
                       </div>
                     )}
-                    {!profileLocked && !isContractSigned && !awaitingSchoolContract && (
+                    {!profileLocked && !isContractSigned && (
                       <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
-                        1) Sprawdź i zapisz dane. 2) Potwierdź, że są aktualne. 3) Wyślij dane do
-                        szkoły. Umowę wygeneruje szkoła po ostatecznym zatwierdzeniu grupy.
+                        Sprawdź dane rodzica poniżej, przy każdym dziecku wybierz sposób rozliczeń,
+                        potwierdź aktualność i zapisz — umowa wygeneruje się od razu.
                       </div>
                     )}
                     <div className="grid gap-4 md:grid-cols-2">
@@ -1486,7 +1626,7 @@ export default function EnrollmentParentFlow({
                             checked={contractProfile.billingType === 'private'}
                             onChange={() => patchContractProfile({ billingType: 'private' })}
                           />
-                          Osoba prywatna (PESEL)
+                          Osoba prywatna
                         </label>
                         <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
                           <input
@@ -1504,17 +1644,6 @@ export default function EnrollmentParentFlow({
 
                     {contractProfile.billingType === 'private' ? (
                       <div className="grid gap-4 md:grid-cols-2">
-                        <div className="space-y-1 md:col-span-2 max-w-sm">
-                          <label className="text-sm font-medium text-zinc-800">PESEL</label>
-                          <input
-                            type="text"
-                            maxLength={11}
-                            disabled={profileFieldsLocked}
-                            value={contractProfile.pesel}
-                            onChange={(e) => patchContractProfile({ pesel: e.target.value })}
-                            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100 disabled:text-zinc-900 disabled:opacity-100"
-                          />
-                        </div>
                         <div className="space-y-1 md:col-span-2">
                           <label className="text-sm font-medium text-zinc-800">Adres</label>
                           <input
@@ -1527,16 +1656,6 @@ export default function EnrollmentParentFlow({
                           />
                         </div>
                         <div className="space-y-1">
-                          <label className="text-sm font-medium text-zinc-800">Miasto</label>
-                          <input
-                            type="text"
-                            disabled={profileFieldsLocked}
-                            value={contractProfile.city}
-                            onChange={(e) => patchContractProfile({ city: e.target.value })}
-                            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100 disabled:text-zinc-900 disabled:opacity-100"
-                          />
-                        </div>
-                        <div className="space-y-1">
                           <label className="text-sm font-medium text-zinc-800">Kod pocztowy</label>
                           <input
                             type="text"
@@ -1544,6 +1663,16 @@ export default function EnrollmentParentFlow({
                             value={contractProfile.zipCode}
                             onChange={(e) => patchContractProfile({ zipCode: e.target.value })}
                             placeholder="00-000"
+                            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100 disabled:text-zinc-900 disabled:opacity-100"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-sm font-medium text-zinc-800">Miasto</label>
+                          <input
+                            type="text"
+                            disabled={profileFieldsLocked}
+                            value={contractProfile.city}
+                            onChange={(e) => patchContractProfile({ city: e.target.value })}
                             className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100 disabled:text-zinc-900 disabled:opacity-100"
                           />
                         </div>
@@ -1590,16 +1719,6 @@ export default function EnrollmentParentFlow({
                             />
                           </div>
                           <div className="space-y-1">
-                            <label className="text-sm font-medium text-zinc-800">Miasto</label>
-                            <input
-                              type="text"
-                              disabled={profileFieldsLocked}
-                              value={contractProfile.city}
-                              onChange={(e) => patchContractProfile({ city: e.target.value })}
-                              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100 disabled:text-zinc-900 disabled:opacity-100"
-                            />
-                          </div>
-                          <div className="space-y-1">
                             <label className="text-sm font-medium text-zinc-800">Kod pocztowy</label>
                             <input
                               type="text"
@@ -1610,12 +1729,187 @@ export default function EnrollmentParentFlow({
                               className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100 disabled:text-zinc-900 disabled:opacity-100"
                             />
                           </div>
+                          <div className="space-y-1">
+                            <label className="text-sm font-medium text-zinc-800">Miasto</label>
+                            <input
+                              type="text"
+                              disabled={profileFieldsLocked}
+                              value={contractProfile.city}
+                              onChange={(e) => patchContractProfile({ city: e.target.value })}
+                              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 disabled:bg-zinc-100 disabled:text-zinc-900 disabled:opacity-100"
+                            />
+                          </div>
                         </div>
                       </div>
                     )}
+                  </div>
+
+                  {(profileComplete || profileLocked || !commonProfileLocked) && (
+                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 space-y-4">
+                    <div>
+                      <p className="text-base font-semibold text-zinc-900">Dzieci i sposób rozliczeń</p>
+                      <p className="mt-1 text-sm text-zinc-600">
+                        Dla każdego dziecka wybierz osobno sposób płatności. Umowy generują się po
+                        kolei (jedno dziecko = jedna umowa).
+                      </p>
+                    </div>
+                    <div className="space-y-3">
+                      {proposals.map((p) => {
+                        const level = childAccessLevel(p);
+                        const isPipeline =
+                          level === 'ACCEPTED' ||
+                          level === 'AWAITING_CONTRACT' ||
+                          level === 'CONTRACT_READY' ||
+                          (!ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && level === 'PROPOSED');
+                        const isPending =
+                          level === 'NEGOTIATING' ||
+                          (ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && level === 'PROPOSED');
+                        const isSignedDone = level === 'SIGNED' || level === 'COMPLETED';
+                        const childPaymentType = paymentTypeByRequestId[p.request_id] ?? 'MONTHLY';
+                        const billingExempt = Boolean(contractPricing?.billingExempt);
+                        const paymentRadiosLocked =
+                          isSignedDone ||
+                          (profileFieldsLocked && !allowContractRegenerate) ||
+                          isReadOnlyPreview;
+                        const amountFor = (type: 'MONTHLY' | 'YEARLY' | 'PER_LESSON') =>
+                          billingExempt ? 0 : resolveProposalPaymentAmount(p, type);
+                        return (
+                          <div
+                            key={p.request_id}
+                            className={`rounded-xl border px-4 py-3 ${
+                              isSignedDone
+                                ? 'border-zinc-200 bg-zinc-100/80 opacity-80'
+                                : 'border-white bg-white'
+                            }`}
+                          >
+                            <div className="min-w-0 space-y-3">
+                              <div>
+                                <p
+                                  className={`font-semibold ${
+                                    isSignedDone ? 'text-zinc-500' : 'text-zinc-900'
+                                  }`}
+                                >
+                                  {p.child_first_name} {p.child_last_name}
+                                </p>
+                                {p.group_name ? (
+                                  <p
+                                    className={`mt-1 text-sm ${
+                                      isSignedDone ? 'text-zinc-400' : 'text-zinc-600'
+                                    }`}
+                                  >
+                                    {p.group_name}
+                                    {p.location_name ? ` · ${p.location_name}` : ''}
+                                    {p.schedule ? ` · ${p.schedule}` : ''}
+                                  </p>
+                                ) : null}
+                                {isSignedDone ? (
+                                  <span className="mt-1 inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">
+                                    Umowa podpisana
+                                    {paymentTypeByRequestId[p.request_id]
+                                      ? ` · ${paymentTypeShortLabel(paymentTypeByRequestId[p.request_id]!)}`
+                                      : ''}
+                                  </span>
+                                ) : null}
+                                {level === 'AWAITING_CONTRACT' ? (
+                                  <span className="mt-1 inline-flex rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-900">
+                                    Dane uzupełnione — umowa w procesie
+                                  </span>
+                                ) : null}
+                                {level === 'CONTRACT_READY' ? (
+                                  <span className="mt-1 inline-flex rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-semibold text-indigo-900">
+                                    Umowa gotowa do podpisu
+                                  </span>
+                                ) : null}
+                                {level === 'ACCEPTED' ||
+                                (!ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && level === 'PROPOSED') ? (
+                                  <span className="mt-1 inline-flex rounded-full bg-teal-100 px-2 py-0.5 text-xs font-semibold text-teal-900">
+                                    Uzupełnij / potwierdź dane
+                                  </span>
+                                ) : null}
+                                {isPending && (
+                                  <span className="mt-1 block text-xs text-amber-800">
+                                    {ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
+                                      ? 'Brak akceptacji propozycji grupy'
+                                      : 'Oczekuje na przypisanie grupy przez szkołę'}
+                                  </span>
+                                )}
+                                {!isPipeline && !isPending && !isSignedDone && (
+                                  <span className="mt-1 block text-xs text-zinc-500">
+                                    Status: {level}
+                                  </span>
+                                )}
+                              </div>
+
+                              {isPipeline && !isSignedDone ? (
+                                <div className="space-y-2 border-t border-emerald-100 pt-3">
+                                  <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                                    Sposób rozliczeń
+                                  </p>
+                                  <div className="flex flex-col gap-2">
+                                    {(['MONTHLY', 'YEARLY', 'PER_LESSON'] as const).map((type) => {
+                                      const amount = amountFor(type);
+                                      return (
+                                        <label
+                                          key={type}
+                                          className="inline-flex items-start gap-2 text-sm text-zinc-700"
+                                        >
+                                          <input
+                                            type="radio"
+                                            name={`paymentType-${p.request_id}`}
+                                            className="mt-0.5 accent-[#0f6e56]"
+                                            disabled={paymentRadiosLocked}
+                                            checked={childPaymentType === type}
+                                            onChange={() => {
+                                              setAllowContractRegenerate(true);
+                                              setPaymentTypeByRequestId((prev) => ({
+                                                ...prev,
+                                                [p.request_id]: type,
+                                              }));
+                                            }}
+                                          />
+                                          <span>
+                                            {paymentTypeShortLabel(type)}
+                                            <span className="ml-1.5 font-semibold text-zinc-900">
+                                              ({formatPlnAmount(amount)}
+                                              {type === 'PER_LESSON' && amount != null
+                                                ? ' / zajęcie'
+                                                : ''}
+                                              )
+                                            </span>
+                                          </span>
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
+                                  {childPaymentType === 'PER_LESSON' ? (
+                                    <p className="text-xs text-zinc-500">
+                                      Rozliczenie za zajęcia następuje co miesiąc według liczby
+                                      odbytych lekcji.
+                                    </p>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
 
                     {!commonProfileLocked && (
-                      <div className="space-y-3">
+                      <div className="space-y-3 border-t border-emerald-100 pt-4">
+                        {flash ? (
+                          <div
+                            className={`rounded-xl border px-4 py-3 text-sm ${
+                              flash.kind === 'success'
+                                ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                                : flash.kind === 'error'
+                                  ? 'border-rose-200 bg-rose-50 text-rose-900'
+                                  : 'border-sky-200 bg-sky-50 text-sky-900'
+                            }`}
+                          >
+                            {flash.message}
+                          </div>
+                        ) : null}
                         <label
                           className={`flex items-start gap-3 rounded-xl border px-4 py-3 text-sm transition ${
                             dataConfirmed
@@ -1631,29 +1925,40 @@ export default function EnrollmentParentFlow({
                             onChange={(e) => setDataConfirmed(e.target.checked)}
                           />
                           <span>
-                            Potwierdzam, że powyższe dane do umowy i faktury są{' '}
+                            Potwierdzam, że powyższe dane do umowy są{' '}
                             <strong className={dataConfirmed ? 'text-zinc-600' : undefined}>
                               aktualne i poprawne
                             </strong>
-                            . Po potwierdzeniu wyślę je do szkoły i poczekam na wygenerowanie umowy.
+                            .
                           </span>
                         </label>
                         <div className="flex flex-wrap items-center gap-3">
                           <button
                             type="button"
                             disabled={
-                              savingContractProfile || !isEditingContractProfile || profileLocked
+                              savingContractProfile ||
+                              savingContract ||
+                              profileLocked ||
+                              !dataConfirmed ||
+                              !contractReadiness.canSubmitContractData ||
+                              generateDisabledByExistingContract ||
+                              (!isEditingContractProfile && !profileComplete)
                             }
-                            onClick={() => void handleSaveContractProfile()}
+                            onClick={() => void handleSaveAndSubmitContractData()}
                             className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
                           >
-                            {savingContractProfile ? 'Zapisywanie…' : 'Zapisz dane do umowy'}
+                            {savingContractProfile || savingContract
+                              ? 'Generowanie…'
+                              : hasSentContract
+                                ? 'Wygeneruj umowę ponownie'
+                                : 'Zapisz dane i wygeneruj umowę'}
                           </button>
                           {!isEditingContractProfile && profileComplete ? (
                             <button
                               type="button"
                               onClick={() => {
                                 setIsEditingContractProfile(true);
+                                setAllowContractRegenerate(true);
                                 setDataConfirmed(false);
                               }}
                               className="rounded-full border border-[#0f6e56] bg-white px-5 py-2.5 text-sm font-semibold text-[#0f6e56] transition hover:bg-emerald-50"
@@ -1662,121 +1967,34 @@ export default function EnrollmentParentFlow({
                             </button>
                           ) : null}
                         </div>
+                        {!dataConfirmed ? (
+                          <p className="text-xs text-amber-800">
+                            Zaznacz potwierdzenie aktualności danych, aby włączyć przycisk.
+                          </p>
+                        ) : !contractReadiness.canSubmitContractData ? (
+                          <p className="text-xs text-amber-800">
+                            {contractReadiness.hasPendingDecisions
+                              ? 'Poczekaj, aż szkoła rozstrzygnie wszystkie otwarte zgłoszenia.'
+                              : 'Brak dzieci gotowych do umowy — sprawdź status propozycji grupy.'}
+                          </p>
+                        ) : generateDisabledByExistingContract ? (
+                          <p className="text-xs text-zinc-600">
+                            Umowa jest już wygenerowana. Aby wygenerować ponownie: Edytuj dane →
+                            zapisz ponownie.
+                          </p>
+                        ) : hasSentContract && !allowContractRegenerate ? (
+                          <p className="text-sm text-zinc-600">
+                            Umowa jest już wygenerowana. Aby wygenerować ponownie ze zmienionymi
+                            danymi: Edytuj dane → zapisz ponownie.
+                          </p>
+                        ) : null}
                       </div>
                     )}
-                  </div>
-
-                  {(profileComplete || profileLocked || awaitingSchoolContract) && (
-                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 space-y-4">
-                    <div>
-                      <p className="text-base font-semibold text-zinc-900">Dzieci w procesie umowy</p>
-                      <p className="mt-1 text-sm text-zinc-600">
-                        Po potwierdzeniu danych szkoła przygotuje umowę dla każdego zaakceptowanego
-                        dziecka.
-                      </p>
-                    </div>
-                    <div className="space-y-3">
-                      {proposals.map((p) => {
-                        const level = childAccessLevel(p);
-                        const isPipeline =
-                          level === 'ACCEPTED' ||
-                          level === 'AWAITING_CONTRACT' ||
-                          level === 'CONTRACT_READY';
-                        const isPending = level === 'PROPOSED' || level === 'NEGOTIATING';
-                        const isSignedDone = level === 'SIGNED' || level === 'COMPLETED';
-                        return (
-                          <div
-                            key={p.request_id}
-                            className={`rounded-xl border px-4 py-3 ${
-                              isSignedDone
-                                ? 'border-zinc-200 bg-zinc-100/80 opacity-80'
-                                : 'border-white bg-white'
-                            }`}
-                          >
-                            <div className="min-w-0">
-                              <p
-                                className={`font-semibold ${
-                                  isSignedDone ? 'text-zinc-500' : 'text-zinc-900'
-                                }`}
-                              >
-                                {p.child_first_name} {p.child_last_name}
-                              </p>
-                              {p.group_name ? (
-                                <p
-                                  className={`mt-1 text-sm ${
-                                    isSignedDone ? 'text-zinc-400' : 'text-zinc-600'
-                                  }`}
-                                >
-                                  {p.group_name}
-                                  {p.location_name ? ` · ${p.location_name}` : ''}
-                                  {p.schedule ? ` · ${p.schedule}` : ''}
-                                </p>
-                              ) : null}
-                              {isSignedDone ? (
-                                <span className="mt-1 inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">
-                                  Umowa podpisana
-                                </span>
-                              ) : null}
-                              {level === 'AWAITING_CONTRACT' ? (
-                                <span className="mt-1 inline-flex rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-900">
-                                  Oczekuje na umowę ze szkoły
-                                </span>
-                              ) : null}
-                              {level === 'CONTRACT_READY' ? (
-                                <span className="mt-1 inline-flex rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-semibold text-indigo-900">
-                                  Umowa gotowa do podpisu
-                                </span>
-                              ) : null}
-                              {level === 'ACCEPTED' ? (
-                                <span className="mt-1 inline-flex rounded-full bg-teal-100 px-2 py-0.5 text-xs font-semibold text-teal-900">
-                                  Uzupełnij / potwierdź dane
-                                </span>
-                              ) : null}
-                              {isPending && (
-                                <span className="mt-1 block text-xs text-amber-800">
-                                  Brak akceptacji propozycji grupy
-                                </span>
-                              )}
-                              {!isPipeline && !isPending && !isSignedDone && (
-                                <span className="mt-1 block text-xs text-zinc-500">
-                                  Status: {level}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
 
                     {isContractSigned && contractPreview ? (
                       <ContractPortal contract={contractPreview} readOnly />
                     ) : (
                       <div className="space-y-4">
-                        {!formLocked && !awaitingSchoolContract && !hasUnsignedGeneratedContract && (
-                          <div className="space-y-2">
-                            {!dataConfirmed && (
-                              <p className="text-sm text-amber-800">
-                                Aby wysłać dane do szkoły, zaznacz potwierdzenie aktualności danych
-                                powyżej.
-                              </p>
-                            )}
-                            <button
-                              type="button"
-                              disabled={
-                                savingContract ||
-                                !profileLoaded ||
-                                !profileComplete ||
-                                !dataConfirmed ||
-                                !contractReadiness.canSubmitContractData ||
-                                isEditingContractProfile
-                              }
-                              onClick={() => void handleSubmitContractData()}
-                              className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              {savingContract ? 'Wysyłanie…' : 'Wyślij dane do szkoły'}
-                            </button>
-                          </div>
-                        )}
                         {contractPreview && !isContractSigned ? (
                           <div className="space-y-4 border-t border-emerald-200 pt-4">
                             <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
@@ -1785,15 +2003,70 @@ export default function EnrollmentParentFlow({
                             <ContractPortal
                               contract={contractPreview}
                               onSigned={async (result) => {
+                                const next = result?.nextChildToContract;
                                 const pdfOk = result?.pdfGenerated !== false;
+                                const base = next
+                                  ? `Umowa podpisana. Generuję umowę dla: ${next.first_name} ${next.last_name}`.trim()
+                                  : 'Umowa podpisana. Dziękujemy!';
                                 setFlash({
                                   kind: pdfOk ? 'success' : 'error',
                                   message: pdfOk
-                                    ? 'Umowa podpisana. Dziękujemy!'
+                                    ? base
                                     : 'Umowa podpisana. Uwaga: nie udało się wygenerować PDF — skontaktuj się ze szkołą.',
                                 });
                                 await loadProposals();
                                 await refreshUserAccessLevel();
+                                if (next && pdfOk) {
+                                  const nextPaymentType =
+                                    (next.request_id &&
+                                      paymentTypeByRequestId[next.request_id]) ||
+                                    'MONTHLY';
+                                  setAllowContractRegenerate(true);
+                                  setDataConfirmed(true);
+                                  setSavingContract(true);
+                                  try {
+                                    const r = await fetch('/api/enrollment/contract-data/submit', {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      credentials: 'include',
+                                      body: JSON.stringify({
+                                        paymentType: nextPaymentType,
+                                        paymentTypeByRequestId,
+                                        includedRequestIds: next.request_id
+                                          ? [next.request_id]
+                                          : undefined,
+                                      }),
+                                    });
+                                    const data = (await r.json().catch(() => ({}))) as {
+                                      message?: string;
+                                    };
+                                    if (!r.ok) {
+                                      setFlash({
+                                        kind: 'error',
+                                        message:
+                                          data.message ??
+                                          'Umowa podpisana, ale nie udało się wygenerować kolejnej — użyj przycisku poniżej.',
+                                      });
+                                    } else {
+                                      setAllowContractRegenerate(false);
+                                      setFlash({
+                                        kind: 'success',
+                                        message:
+                                          data.message ??
+                                          'Kolejna umowa wygenerowana — zapoznaj się z dokumentami i podpisz.',
+                                      });
+                                      await loadProposals();
+                                    }
+                                  } catch {
+                                    setFlash({
+                                      kind: 'error',
+                                      message:
+                                        'Umowa podpisana, ale nie udało się wygenerować kolejnej — użyj przycisku poniżej.',
+                                    });
+                                  } finally {
+                                    setSavingContract(false);
+                                  }
+                                }
                               }}
                             />
                           </div>

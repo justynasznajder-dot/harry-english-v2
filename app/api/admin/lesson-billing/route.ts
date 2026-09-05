@@ -4,6 +4,10 @@ import {
   managerSchoolAndClause,
   requireAdminSchoolContext,
 } from "@/lib/admin-school-context";
+import {
+  completePastScheduledLessons,
+  ensureDefaultPresentAttendance,
+} from "@/lib/lesson-completion";
 import { parsePriceDecimal } from "@/lib/lesson-pricing";
 
 function parsePeriodMonth(raw: string | null): string | null {
@@ -30,6 +34,18 @@ export async function GET(request: NextRequest) {
   if (managerSchoolId) params.push(managerSchoolId);
 
   try {
+    await completePastScheduledLessons();
+
+    const periodLessons = await queryDb<{ id: string }>(
+      `SELECT l.id
+       FROM lessons l
+       WHERE l.status = 'COMPLETED'
+         AND DATE_TRUNC('month', l.scheduled_at) = $1::date
+         ${managerSchoolId ? "AND l.school_id = $2" : ""}`,
+      managerSchoolId ? [periodMonth, managerSchoolId] : [periodMonth]
+    );
+    await ensureDefaultPresentAttendance(periodLessons.rows.map((row) => row.id));
+
     const res = await queryDb<{
       child_id: string;
       parent_id: string;
@@ -99,7 +115,7 @@ export async function GET(request: NextRequest) {
         firstName: row.first_name,
         lastName: row.last_name,
         parentEmail: row.parent_email,
-        lessonUnitPrice: row.lesson_unit_price ?? row.group_price_per_lesson,
+        lessonUnitPrice: row.lesson_unit_price /* ?? row.group_price_per_lesson — cennik grupy wyłączony */,
         billing: row.billing_id
           ? {
               id: row.billing_id,

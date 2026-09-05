@@ -33,7 +33,6 @@ export async function GET(request: NextRequest) {
     try {
       const allPdfs = await listSignedContractPdfsForParent({
         parentUserId: parentId,
-        source: "parent.documents.list",
       });
       pdfFiles = complimentaryAccess
         ? allPdfs.filter((f) => isPickupConsentPdfFilename(f.filename))

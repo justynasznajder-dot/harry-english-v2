@@ -14,7 +14,13 @@ type ChildForm = {
   preferredLocationId: string;
 };
 
-type LocationOption = { id: string; name: string; is_featured?: boolean };
+type LocationOption = {
+  id: string;
+  name: string;
+  is_featured?: boolean;
+  is_new?: boolean;
+  label?: string;
+};
 
 type Props = {
   onSuccess: () => void | Promise<void>;
@@ -258,7 +264,10 @@ export default function ParentAddChildSection({ onSuccess }: Props) {
                   </option>
                   {locations.map((loc) => (
                     <option key={loc.id} value={loc.id}>
-                      {loc.is_featured ? `★ ${loc.name}` : loc.name}
+                      {loc.label ??
+                        (loc.is_featured
+                          ? `★ ${loc.name}${loc.is_new ? ' (Nowość!)' : ''}`
+                          : `${loc.name}${loc.is_new ? ' (Nowość!)' : ''}`)}
                     </option>
                   ))}
                 </select>

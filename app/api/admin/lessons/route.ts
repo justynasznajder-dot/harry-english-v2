@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { queryDb } from "@/lib/db";
 import { completePastScheduledLessons } from "@/lib/lesson-completion";
 import { requireAdminSchoolContext } from "@/lib/admin-school-context";
+import { ensurePolishPublicHolidaysForSchoolYear } from "@/lib/ensure-polish-public-holidays";
+import { listPolishPublicHolidays } from "@/lib/polish-public-holidays";
 import {
   SCHOOL_TIMEZONE,
   sqlSchoolTimestampAsTimestamptz,
@@ -93,6 +95,14 @@ export async function GET(request: NextRequest) {
   try {
     await completePastScheduledLessons();
 
+    if (ctx.schoolId) {
+      try {
+        await ensurePolishPublicHolidaysForSchoolYear({ schoolId: ctx.schoolId });
+      } catch (seedErr) {
+        console.error("ensurePolishPublicHolidays on admin/lessons GET:", seedErr);
+      }
+    }
+
     const lessonsSql = `SELECT
         l.id,
         l.group_id,
@@ -161,6 +171,28 @@ export async function GET(request: NextRequest) {
       date_to: String(row.date_to).slice(0, 10),
       type: row.type,
     }));
+
+    const coveredDates = new Set<string>();
+    for (const h of holidays) {
+      let ymd = h.date_from;
+      while (ymd <= h.date_to) {
+        coveredDates.add(ymd);
+        const [y, m, d] = ymd.split("-").map(Number);
+        const next = new Date(Date.UTC(y, m - 1, d + 1));
+        ymd = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}-${String(next.getUTCDate()).padStart(2, "0")}`;
+      }
+    }
+    for (const h of listPolishPublicHolidays(fromYmd, toYmd)) {
+      if (coveredDates.has(h.date)) continue;
+      holidays.push({
+        id: `pl-public-${h.date}`,
+        name: h.name,
+        date_from: h.date,
+        date_to: h.date,
+        type: "PUBLIC",
+      });
+    }
+    holidays.sort((a, b) => a.date_from.localeCompare(b.date_from));
 
     return NextResponse.json({ lessons, holidays, timezone: TZ });
   } catch (error) {

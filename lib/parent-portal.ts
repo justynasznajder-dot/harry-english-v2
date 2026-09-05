@@ -1,5 +1,7 @@
 import { extractContractNumber } from "@/lib/contract-html";
 import { POLISH_DAY_FROM_ST_SQL, queryDb } from "@/lib/db";
+import { ensurePolishPublicHolidaysForSchoolYear } from "@/lib/ensure-polish-public-holidays";
+import { listPolishPublicHolidays } from "@/lib/polish-public-holidays";
 import {
   pgDateToYmd,
   sqlSchoolTimestampAsTimestamptz,
@@ -28,6 +30,21 @@ export type ParentGroupRow = {
   paymentType: string | null;
 };
 
+/** Propozycja grupy w trakcie zapisu (przed członkostwem w group_students). */
+export type ParentProposedGroupRow = {
+  childId: string;
+  childFirstName: string;
+  childLastName: string;
+  groupId: string;
+  groupName: string;
+  level: string | null;
+  schedule: string;
+  locationName: string;
+  locationAddress: string | null;
+  teacherName: string;
+  accessLevel: string;
+};
+
 export type ParentUpcomingLesson = {
   id: string;
   groupId: string;
@@ -48,6 +65,7 @@ export type ParentAttendanceRow = {
   groupName: string;
   locationName: string | null;
   lessonStatus: string;
+  billedPerLesson: boolean;
 };
 
 export type ParentPaymentRow = {
@@ -180,6 +198,91 @@ export async function fetchParentGroups(
   }));
 }
 
+/**
+ * Propozycje grup z enrollment_requests — tylko gdy dziecko nie ma jeszcze
+ * aktywnego członkostwa w group_students na bieżący rok.
+ */
+export async function fetchParentProposedGroups(
+  parentId: string,
+  schoolId: string
+): Promise<ParentProposedGroupRow[]> {
+  const accessLevelExpr = `UPPER(BTRIM(COALESCE(c.access_level::text, 'NEW')))`;
+  const res = await queryDb<{
+    child_id: string;
+    child_first_name: string;
+    child_last_name: string;
+    group_id: string;
+    group_name: string;
+    level: string | null;
+    schedule: string;
+    location_name: string;
+    location_address: string | null;
+    teacher_first: string | null;
+    teacher_last: string | null;
+    access_level: string;
+  }>(
+    `SELECT
+       c.id AS child_id,
+       c.first_name AS child_first_name,
+       c.last_name AS child_last_name,
+       g.id AS group_id,
+       g.name AS group_name,
+       g.level,
+       COALESCE(
+         STRING_AGG(
+           DISTINCT CONCAT(${POLISH_DAY_FROM_ST_SQL}, ' ', TO_CHAR(st.start_time, 'HH24:MI')),
+           ', '
+         ),
+         'Do ustalenia'
+       ) AS schedule,
+       COALESCE(MAX(l.name), 'Do ustalenia') AS location_name,
+       MAX(l.address) AS location_address,
+       t.first_name AS teacher_first,
+       t.last_name AS teacher_last,
+       ${accessLevelExpr} AS access_level
+     FROM children c
+     JOIN enrollment_requests er ON er.id = c.enrollment_request_id
+     JOIN groups g ON g.id = er.proposed_group_id
+     LEFT JOIN schedule_templates st ON st.group_id = g.id AND st.active = TRUE
+     LEFT JOIN locations l ON l.id = st.location_id
+     LEFT JOIN users t ON t.id = g.teacher_id
+     WHERE c.parent_id = $1
+       AND c.school_id = $2
+       AND c.active = TRUE
+       AND er.proposed_group_id IS NOT NULL
+       AND ${accessLevelExpr} IN (
+         'PROPOSED', 'NEGOTIATING', 'ACCEPTED', 'AWAITING_CONTRACT', 'CONTRACT_READY'
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM group_students gs
+         JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
+         WHERE gs.child_id = c.id
+           AND gs.left_at IS NULL
+       )
+     GROUP BY
+       c.id, c.first_name, c.last_name, c.access_level,
+       g.id, g.name, g.level,
+       t.first_name, t.last_name
+     ORDER BY c.last_name, c.first_name`,
+    [parentId, schoolId]
+  );
+
+  return res.rows.map((row) => ({
+    childId: row.child_id,
+    childFirstName: row.child_first_name,
+    childLastName: row.child_last_name,
+    groupId: row.group_id,
+    groupName: row.group_name,
+    level: row.level,
+    schedule: row.schedule,
+    locationName: row.location_name,
+    locationAddress: row.location_address,
+    teacherName: `${row.teacher_first ?? ""} ${row.teacher_last ?? ""}`.trim() || "Do ustalenia",
+    accessLevel: row.access_level,
+  }));
+}
+
 export async function fetchUpcomingLessonsForGroups(
   groupIds: string[],
   limit = 5
@@ -243,6 +346,7 @@ export async function fetchParentAttendance(
     group_name: string;
     location_name: string | null;
     lesson_status: string;
+    billed_per_lesson: boolean;
   }>(
     `SELECT
        c.id AS child_id,
@@ -254,7 +358,17 @@ export async function fetchParentAttendance(
        a.note,
        g.name AS group_name,
        loc.name AS location_name,
-       l.status::text AS lesson_status
+       l.status::text AS lesson_status,
+       EXISTS (
+         SELECT 1
+         FROM contracts ct
+         JOIN contract_children cc ON cc.contract_id = ct.id
+         WHERE cc.child_id = c.id
+           AND ct.payment_type = 'PER_LESSON'
+           AND ct.status = 'SIGNED'
+           AND ct.billing_exempt = FALSE
+           AND (cc.group_id IS NULL OR cc.group_id = gs.group_id)
+       ) AS billed_per_lesson
      FROM children c
      JOIN group_students gs ON gs.child_id = c.id AND gs.left_at IS NULL
      JOIN groups g ON g.id = gs.group_id
@@ -283,6 +397,7 @@ export async function fetchParentAttendance(
     groupName: row.group_name,
     locationName: row.location_name,
     lessonStatus: row.lesson_status,
+    billedPerLesson: row.billed_per_lesson === true,
   }));
 }
 
@@ -302,6 +417,8 @@ export function computeMonthlyAttendanceSummaries(
 
   for (const row of rows) {
     if (row.lessonStatus === "CANCELLED") continue;
+    // PER_LESSON bez wpisu — jeszcze nieoznaczone przez lektora, pomiń.
+    if (row.billedPerLesson && !row.attendanceStatus) continue;
     if (row.lessonStatus === "SCHEDULED" && !row.attendanceStatus) continue;
 
     const month = row.scheduledAt.slice(0, 7);
@@ -318,7 +435,10 @@ export function computeMonthlyAttendanceSummaries(
     };
 
     existing.total += 1;
-    const status = (row.attendanceStatus ?? "PRESENT").toUpperCase();
+    // Nie-PER_LESSON: brak wpisu = obecny z założenia.
+    const status = (
+      row.attendanceStatus ?? (row.billedPerLesson ? null : "PRESENT")
+    )?.toUpperCase();
     if (status === "PRESENT" || status === "LATE") {
       existing.present += 1;
     }
@@ -496,6 +616,12 @@ export async function fetchParentCalendar(
   toYmd: string,
   childId?: string | null
 ): Promise<{ lessons: ParentCalendarLesson[]; holidays: ParentCalendarHoliday[] }> {
+  try {
+    await ensurePolishPublicHolidaysForSchoolYear({ schoolId });
+  } catch (seedErr) {
+    console.error("ensurePolishPublicHolidays on parent calendar:", seedErr);
+  }
+
   const params: unknown[] = [parentId, schoolId, fromYmd, toYmd];
   let childFilter = "";
   if (childId?.trim()) {
@@ -503,6 +629,7 @@ export async function fetchParentCalendar(
     childFilter = `AND c.id = $${params.length}`;
   }
 
+  const accessLevelExpr = `UPPER(BTRIM(COALESCE(c.access_level::text, 'NEW')))`;
   const [lessonsRes, holidaysRes] = await Promise.all([
     queryDb<{
       id: string;
@@ -516,30 +643,69 @@ export async function fetchParentCalendar(
       status: string;
       location_name: string | null;
     }>(
-      `SELECT
-         l.id,
-         c.id AS child_id,
-         c.first_name AS child_first_name,
-         c.last_name AS child_last_name,
-         g.id AS group_id,
-         g.name AS group_name,
-         ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at,
-         l.duration_min,
-         l.status::text AS status,
-         loc.name AS location_name
-       FROM children c
-       JOIN group_students gs ON gs.child_id = c.id AND gs.left_at IS NULL
-       JOIN groups g ON g.id = gs.group_id
-       JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
-       JOIN lessons l ON l.group_id = g.id
-       LEFT JOIN locations loc ON loc.id = l.location_id
-       WHERE c.parent_id = $1
-         AND c.school_id = $2
-         AND c.active = TRUE
-         ${childFilter}
-         AND l.scheduled_at >= $3::date
-         AND l.scheduled_at < ($4::date + interval '1 day')
-       ORDER BY l.scheduled_at ASC`,
+      `SELECT * FROM (
+         SELECT
+           l.id,
+           c.id AS child_id,
+           c.first_name AS child_first_name,
+           c.last_name AS child_last_name,
+           g.id AS group_id,
+           g.name AS group_name,
+           ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at,
+           l.duration_min,
+           l.status::text AS status,
+           loc.name AS location_name
+         FROM children c
+         JOIN group_students gs ON gs.child_id = c.id AND gs.left_at IS NULL
+         JOIN groups g ON g.id = gs.group_id
+         JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
+         JOIN lessons l ON l.group_id = g.id
+         LEFT JOIN locations loc ON loc.id = l.location_id
+         WHERE c.parent_id = $1
+           AND c.school_id = $2
+           AND c.active = TRUE
+           ${childFilter}
+           AND l.scheduled_at >= $3::date
+           AND l.scheduled_at < ($4::date + interval '1 day')
+
+         UNION ALL
+
+         -- Propozycja grupy (przed członkostwem w group_students)
+         SELECT
+           l.id,
+           c.id AS child_id,
+           c.first_name AS child_first_name,
+           c.last_name AS child_last_name,
+           g.id AS group_id,
+           g.name AS group_name,
+           ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at,
+           l.duration_min,
+           l.status::text AS status,
+           loc.name AS location_name
+         FROM children c
+         JOIN enrollment_requests er ON er.id = c.enrollment_request_id
+         JOIN groups g ON g.id = er.proposed_group_id
+         JOIN lessons l ON l.group_id = g.id
+         LEFT JOIN locations loc ON loc.id = l.location_id
+         WHERE c.parent_id = $1
+           AND c.school_id = $2
+           AND c.active = TRUE
+           ${childFilter}
+           AND er.proposed_group_id IS NOT NULL
+           AND ${accessLevelExpr} IN (
+             'PROPOSED', 'NEGOTIATING', 'ACCEPTED', 'AWAITING_CONTRACT', 'CONTRACT_READY'
+           )
+           AND NOT EXISTS (
+             SELECT 1
+             FROM group_students gs
+             JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
+             WHERE gs.child_id = c.id
+               AND gs.left_at IS NULL
+           )
+           AND l.scheduled_at >= $3::date
+           AND l.scheduled_at < ($4::date + interval '1 day')
+       ) calendar_lessons
+       ORDER BY scheduled_at ASC`,
       params
     ),
     queryDb<{
@@ -551,14 +717,49 @@ export async function fetchParentCalendar(
     }>(
       `SELECT h.id, h.name, h.date_from, h.date_to, h.type
        FROM school_holidays h
-       JOIN school_years sy ON sy.id = h.school_year_id AND sy.active = TRUE
+       INNER JOIN school_years sy ON sy.school_id = h.school_id AND sy.active = TRUE
        WHERE h.school_id = $1
          AND h.date_to >= $2::date
          AND h.date_from <= $3::date
+         AND (
+           h.school_year_id IS NULL
+           OR h.school_year_id = sy.id
+         )
        ORDER BY h.date_from ASC`,
       [schoolId, fromYmd, toYmd]
     ),
   ]);
+
+  const holidaysFromDb = holidaysRes.rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    dateFrom: formatYmd(row.date_from) ?? "",
+    dateTo: formatYmd(row.date_to) ?? "",
+    type: row.type,
+  }));
+
+  // Święta państwowe PL zawsze w odpowiedzi dla widocznego zakresu
+  // (nawet gdy jeszcze nie ma wpisu w DB / poza aktywnym rokiem).
+  const coveredDates = new Set<string>();
+  for (const h of holidaysFromDb) {
+    if (!h.dateFrom || !h.dateTo) continue;
+    let ymd = h.dateFrom;
+    while (ymd <= h.dateTo) {
+      coveredDates.add(ymd);
+      const [y, m, d] = ymd.split("-").map(Number);
+      const next = new Date(Date.UTC(y, m - 1, d + 1));
+      ymd = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}-${String(next.getUTCDate()).padStart(2, "0")}`;
+    }
+  }
+  const syntheticPublic = listPolishPublicHolidays(fromYmd, toYmd)
+    .filter((h) => !coveredDates.has(h.date))
+    .map((h) => ({
+      id: `pl-public-${h.date}`,
+      name: h.name,
+      dateFrom: h.date,
+      dateTo: h.date,
+      type: "PUBLIC",
+    }));
 
   return {
     lessons: lessonsRes.rows.map((row) => ({
@@ -573,13 +774,9 @@ export async function fetchParentCalendar(
       status: row.status,
       locationName: row.location_name,
     })),
-    holidays: holidaysRes.rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      dateFrom: formatYmd(row.date_from) ?? "",
-      dateTo: formatYmd(row.date_to) ?? "",
-      type: row.type,
-    })),
+    holidays: [...holidaysFromDb, ...syntheticPublic].sort((a, b) =>
+      a.dateFrom.localeCompare(b.dateFrom),
+    ),
   };
 }
 

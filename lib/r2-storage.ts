@@ -173,6 +173,10 @@ export async function storeInvoicePdfInR2(params: {
   filename: string;
   content: Buffer;
   source?: R2Source;
+  /** Ignorowane — ścieżka R2 jest po parentUserId, nie po szkole / nazwisku. */
+  schoolId?: string | null;
+  parentFirstName?: string | null;
+  parentLastName?: string | null;
 }): Promise<string> {
   const prefix = buildInvoiceR2Prefix(params);
   const key = `${prefix}/${params.filename}`;
@@ -182,6 +186,7 @@ export async function storeInvoicePdfInR2(params: {
     keyOrPrefix: key,
     source: params.source,
     run: async (client, bucket) => {
+      // Świadomie bez StorageClass — domyślny Standard R2 (nie Infrequent Access).
       await client.send(
         new PutObjectCommand({
           Bucket: bucket,
@@ -202,6 +207,10 @@ export async function storeSignedContractPdfsInR2(params: {
   signedAt: Date;
   pdfFiles: ContractPdfFile[];
   source?: R2Source;
+  /** Ignorowane — ścieżka R2 jest po parentUserId, nie po szkole / nazwisku. */
+  schoolId?: string | null;
+  parentFirstName?: string | null;
+  parentLastName?: string | null;
 }): Promise<string[]> {
   const prefix = buildSignedContractR2Prefix(params);
   const uploadedKeys: string[] = [];
@@ -213,6 +222,7 @@ export async function storeSignedContractPdfsInR2(params: {
       keyOrPrefix: key,
       source: params.source,
       run: async (client, bucket) => {
+        // Świadomie bez StorageClass — domyślny Standard R2 (nie Infrequent Access).
         await client.send(
           new PutObjectCommand({
             Bucket: bucket,

@@ -23,6 +23,7 @@ type AttendanceRow = {
   childId: string;
   firstName: string;
   lastName: string;
+  confirmed?: boolean;
   billedPerLesson: boolean;
   status: string | null;
   note: string | null;
@@ -143,7 +144,10 @@ export default function TeacherAttendanceTab() {
         (data.attendance ?? []).map((row) => ({
           ...row,
           billedPerLesson: Boolean(row.billedPerLesson),
-          status: row.billedPerLesson ? (row.status ?? 'PRESENT') : row.status,
+          // PER_LESSON: bez domyślnego PRESENT — null dopóki lektor nie wybierze.
+          status: row.billedPerLesson
+            ? row.status
+            : (row.status ?? 'PRESENT'),
         })),
       );
     } catch {
@@ -165,10 +169,17 @@ export default function TeacherAttendanceTab() {
     [attendance],
   );
 
+  const unmarkedBillable = useMemo(
+    () => billableRows.filter((row) => !row.status),
+    [billableRows],
+  );
+
   const saveAttendance = async () => {
     if (!selectedLessonId) return;
-    if (billableRows.length === 0) {
-      setStatusMessage('Brak dzieci z rozliczeniem za pojedyncze zajęcia na tej liście');
+    if (unmarkedBillable.length > 0) {
+      setStatusMessage(
+        `Oznacz obecność u wszystkich dzieci z rozliczeniem za zajęcia (${unmarkedBillable.length} bez statusu)`,
+      );
       return;
     }
     setSaving(true);
@@ -178,11 +189,13 @@ export default function TeacherAttendanceTab() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          attendance: billableRows.map((row) => ({
-            childId: row.childId,
-            status: row.status ?? 'PRESENT',
-            note: row.note,
-          })),
+          attendance: attendance
+            .filter((row) => row.status)
+            .map((row) => ({
+              childId: row.childId,
+              status: row.status,
+              note: row.note,
+            })),
         }),
       });
       const data = (await res.json().catch(() => ({}))) as { message?: string };
@@ -191,6 +204,7 @@ export default function TeacherAttendanceTab() {
         return;
       }
       setStatusMessage(data.message ?? 'Obecności zapisane');
+      await loadAttendance(selectedLessonId);
     } catch {
       setStatusMessage('Błąd zapisu obecności');
     } finally {
@@ -217,8 +231,8 @@ export default function TeacherAttendanceTab() {
         <div>
           <h2 className="text-2xl font-bold text-[#1f2933]">Obecność</h2>
           <p className="mt-1 text-sm text-zinc-600">
-            Na liście są wszyscy uczniowie grupy. Obecność oznaczasz tylko u dzieci z rozliczeniem
-            za pojedyncze zajęcia.
+            Dzieci z umową miesięczną/roczną są domyślnie obecne — oznacz tylko nieobecność.
+            Dzieci z rozliczeniem za pojedyncze zajęcia musisz oznaczyć osobno (obowiązkowo).
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -337,67 +351,69 @@ export default function TeacherAttendanceTab() {
                   <div
                     key={row.childId}
                     className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 ${
-                      row.billedPerLesson
-                        ? 'border-zinc-200 bg-white'
-                        : 'border-zinc-100 bg-zinc-50'
+                      row.billedPerLesson && !row.status
+                        ? 'border-amber-300 bg-amber-50/70'
+                        : 'border-zinc-200 bg-white'
                     }`}
                   >
                     <div>
                       <span className="text-sm font-medium text-zinc-900">
                         {row.firstName} {row.lastName}
                       </span>
-                      {!row.billedPerLesson && (
-                        <span className="mt-0.5 block text-xs text-zinc-500">
-                          Bez oznaczania — inny typ rozliczenia
+                      {row.confirmed === false ? (
+                        <span className="mt-0.5 block text-xs font-semibold text-amber-800">
+                          Niepotwierdzony (brak podpisanej umowy)
                         </span>
-                      )}
-                      {row.billedPerLesson && (
+                      ) : null}
+                      {row.billedPerLesson ? (
+                        <span className="mt-0.5 block text-xs text-amber-800">
+                          Za pojedyncze zajęcia — oznacz obowiązkowo
+                        </span>
+                      ) : (
                         <span className="mt-0.5 block text-xs text-emerald-700">
-                          Za pojedyncze zajęcia
+                          Domyślnie obecny
                         </span>
                       )}
                     </div>
-                    {row.billedPerLesson ? (
-                      <select
-                        className="rounded-lg border border-zinc-300 px-2 py-1 text-sm"
-                        value={row.status ?? 'PRESENT'}
-                        onChange={(e) =>
-                          setAttendance((prev) =>
-                            prev.map((item) =>
-                              item.childId === row.childId
-                                ? { ...item, status: e.target.value }
-                                : item,
-                            ),
-                          )
-                        }
-                      >
-                        {ATTENDANCE_OPTIONS.map((opt) => (
-                          <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <span className="rounded-lg bg-zinc-100 px-2 py-1 text-xs text-zinc-500">
-                        —
-                      </span>
-                    )}
+                    <select
+                      className="rounded-lg border border-zinc-300 px-2 py-1 text-sm"
+                      value={row.status ?? ''}
+                      onChange={(e) =>
+                        setAttendance((prev) =>
+                          prev.map((item) =>
+                            item.childId === row.childId
+                              ? { ...item, status: e.target.value || null }
+                              : item,
+                          ),
+                        )
+                      }
+                    >
+                      {row.billedPerLesson && !row.status ? (
+                        <option value="">Wybierz…</option>
+                      ) : null}
+                      {ATTENDANCE_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 ))}
               </div>
               <button
                 type="button"
-                disabled={saving || billableRows.length === 0}
+                disabled={saving || attendance.length === 0 || unmarkedBillable.length > 0}
                 onClick={() => void saveAttendance()}
                 className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {saving ? 'Zapisywanie…' : 'Zapisz obecności'}
               </button>
-              {billableRows.length === 0 && (
-                <p className="text-xs text-zinc-500">
-                  W tej grupie nie ma dzieci z rozliczeniem za pojedyncze zajęcia.
+              {unmarkedBillable.length > 0 ? (
+                <p className="text-xs text-amber-800">
+                  Oznacz obecność u {unmarkedBillable.length}{' '}
+                  {unmarkedBillable.length === 1 ? 'dziecka' : 'dzieci'} z rozliczeniem za zajęcia.
                 </p>
-              )}
+              ) : null}
             </>
           )}
         </section>

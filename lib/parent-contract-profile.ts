@@ -30,11 +30,35 @@ export function isParentContractProfileComplete(
     return companyName.length > 0 && /^\d{10}$/.test(nip);
   }
 
-  return /^\d{11}$/.test(String(profile.pesel ?? "").trim());
+  // Osoba prywatna: do umowy wystarczy adres (PESEL nie jest zbierany).
+  return true;
 }
 
 export function isExactDigits(value: string, length: number): boolean {
   return new RegExp(`^\\d{${length}}$`).test(value.trim());
+}
+
+/**
+ * Upewnia się, że ulica w adresie rodzica ma prefiks „ul. ”.
+ * Nie nadpisuje innych typów (al., pl., os. itd.).
+ */
+export function ensureStreetUlPrefix(address: string): string {
+  const trimmed = String(address ?? "")
+    .trim()
+    .replace(/\s+/g, " ");
+  if (!trimmed) return "";
+
+  if (/^ulica\s+/i.test(trimmed)) {
+    return trimmed.replace(/^ulica\s+/i, "ul. ");
+  }
+  if (/^ul\.?\s+/i.test(trimmed)) {
+    return trimmed.replace(/^ul\.?\s+/i, "ul. ");
+  }
+  if (/^(al\.?|aleja|pl\.?|plac|os\.?|osiedle|rondo|skwer)\s+/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  return `ul. ${trimmed}`;
 }
 
 export function validateParentContractProfileInput(input: {
@@ -42,7 +66,7 @@ export function validateParentContractProfileInput(input: {
   address: string;
   city: string;
   zipCode: string;
-  pesel: string;
+  pesel?: string;
   companyName: string;
   nip: string;
 }): string | null {
@@ -50,8 +74,6 @@ export function validateParentContractProfileInput(input: {
     if (!input.address.trim() || !input.city.trim() || !input.zipCode.trim()) {
       return "Uzupełnij adres, miasto i kod pocztowy.";
     }
-    if (!input.pesel.trim()) return "Podaj numer PESEL.";
-    if (!isExactDigits(input.pesel, 11)) return "PESEL musi składać się z dokładnie 11 cyfr.";
     return null;
   }
 

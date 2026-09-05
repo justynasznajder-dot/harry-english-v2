@@ -352,9 +352,18 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
   const templateFields = selectedTemplate
     ? extractTemplatePlaceholders(selectedTemplate.subject, selectedTemplate.content)
     : [];
-  const templateFieldsIncomplete =
+  const isParentSimpleCompose = props.mode === 'parent';
+  /** Rodzic edytuje temat/treść bezpośrednio; pola szablonu tylko u managera/lektorów. */
+  const useStructuredTemplateFields =
+    !isParentSimpleCompose && selectedTemplate != null && templateFields.length > 0;
+  const parentNeedsChildSelect =
+    isParentSimpleCompose &&
     selectedTemplate != null &&
-    templateFields.some((field) => !(templateFieldValues[field]?.trim()));
+    templateFields.includes('dziecko');
+  const templateFieldsIncomplete = isParentSimpleCompose
+    ? parentNeedsChildSelect && !templateFieldValues.dziecko?.trim()
+    : selectedTemplate != null &&
+      templateFields.some((field) => !(templateFieldValues[field]?.trim()));
 
   const pushTemplateIntoCompose = (
     template: { subject: string; content: string },
@@ -423,13 +432,11 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
       : adresatIds.length;
 
   const searchPlaceholder =
-    props.mode === 'parent'
-      ? 'Szukaj zarządcy po imieniu, nazwisku lub e-mailu…'
-      : props.mode === 'teacher'
-        ? 'Szukaj rodzica po imieniu, nazwisku lub e-mailu…'
-        : isTeachersAudience
-          ? 'Szukaj nauczyciela po imieniu, nazwisku lub e-mailu…'
-          : 'Szukaj rodzica po imieniu, nazwisku lub e-mailu…';
+    props.mode === 'teacher'
+      ? 'Szukaj rodzica po imieniu, nazwisku lub e-mailu…'
+      : isTeachersAudience
+        ? 'Szukaj nauczyciela po imieniu, nazwisku lub e-mailu…'
+        : 'Szukaj rodzica po imieniu, nazwisku lub e-mailu…';
 
   return (
     <div
@@ -438,7 +445,11 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
       aria-modal="true"
       aria-labelledby="compose-modal-title"
     >
-      <div className="flex h-[min(92vh,720px)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white text-zinc-900 shadow-xl [color-scheme:light]">
+      <div
+        className={`flex h-[min(92vh,720px)] w-full flex-col overflow-hidden rounded-2xl bg-white text-zinc-900 shadow-xl [color-scheme:light] ${
+          isParentSimpleCompose ? 'max-w-xl' : 'max-w-4xl'
+        }`}
+      >
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-zinc-200 px-4 py-3 md:px-5 md:py-3">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
             <h3 id="compose-modal-title" className="text-lg font-bold text-zinc-900">
@@ -518,88 +529,93 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
           </button>
         </div>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] overflow-hidden md:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] md:grid-rows-1">
-          {isEmailSection ? (
-            <ComposeEmailRecipientsColumn
-              mode={isEnrollmentEmailSection ? 'enrollment' : 'manual'}
-              recipients={externalEmailRecipients}
-              onRemoveRecipient={(key) => props.onRemoveExternalEmailRecipient?.(key)}
-              externalEmailBulkPaste={props.externalEmailBulkPaste ?? ''}
-              onExternalEmailBulkPasteChange={(v) => props.onExternalEmailBulkPasteChange?.(v)}
-              onParseExternalEmailBulk={() => props.onParseExternalEmailBulk?.()}
-              locations={
-                isEnrollmentEmailSection
-                  ? (props.enrollmentEmailLocations ?? [])
-                  : (props.filterMeta?.locations ?? [])
-              }
-              enrollmentLocationId={props.enrollmentEmailLocationId ?? ''}
-              onEnrollmentLocationIdChange={(id) =>
-                props.onEnrollmentEmailLocationIdChange?.(id)
-              }
-              birthYears={props.enrollmentEmailBirthYears ?? []}
-              enrollmentBirthYear={props.enrollmentEmailBirthYear ?? ''}
-              onEnrollmentBirthYearChange={(year) =>
-                props.onEnrollmentEmailBirthYearChange?.(year)
-              }
-              enrollmentAddLoading={props.enrollmentEmailAddLoading}
-            />
-          ) : (
-          <div className="flex min-h-0 flex-col overflow-hidden border-b border-zinc-200 bg-zinc-50/80 p-3 md:border-b-0 md:border-r md:p-4">
-            {props.canPickIndividuals &&
-              !isTeachersAudience &&
-              (props.mode === 'manager' || props.mode === 'teacher') && (
-              <div className="mb-2 shrink-0 rounded-xl border border-zinc-200 bg-white">
-                <button
-                  type="button"
-                  onClick={props.onToggleGroupFilters}
-                  className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-semibold text-zinc-700"
-                >
-                  {props.mode === 'teacher'
-                    ? 'Filtry moich grup'
-                    : 'Wysyłka do grupy (filtry masowe)'}
-                  <span className="text-zinc-400">{props.showGroupFilters ? '▲' : '▼'}</span>
-                </button>
-                {props.showGroupFilters && (
-                  <div className="max-h-48 space-y-2 overflow-y-auto border-t border-zinc-200 p-3">
-                    {props.filterMeta && (
-                      <>
-                        <ComposeFilterMultiSelect
-                          items={props.filterMeta.groups}
-                          selectedIds={props.filterGroupIds}
-                          placeholder="Wybierz grupę"
-                          emptyListMessage="Brak grup"
-                          pluralLabel="grupy"
-                          onFilterChange={props.onGroupFilterChange}
-                          onConfirm={props.onConfirmGroupFilter}
-                        />
-                        {props.mode === 'manager' && props.onFilterRenewalNoResponseChange && (
-                          <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm">
-                            <input
-                              type="checkbox"
-                              checked={props.filterRenewalNoResponse ?? false}
-                              onChange={(e) => {
-                                props.onFilterRenewalNoResponseChange?.(e.target.checked);
-                                props.onGroupFilterChange(props.filterGroupIds);
-                              }}
-                              className="rounded border-zinc-300 text-[#0f6e56]"
-                            />
-                            <span className="text-zinc-800">
-                              Tylko rodzice bez odpowiedzi na odnowienie
-                            </span>
-                          </label>
-                        )}
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {props.mode === 'parent' ? (
-              <p className="mb-1.5 shrink-0 text-sm font-semibold text-zinc-800">Adresaci</p>
+        <div
+          className={
+            isParentSimpleCompose
+              ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
+              : 'grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] overflow-hidden md:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] md:grid-rows-1'
+          }
+        >
+          {!isParentSimpleCompose &&
+            (isEmailSection ? (
+              <ComposeEmailRecipientsColumn
+                mode={isEnrollmentEmailSection ? 'enrollment' : 'manual'}
+                recipients={externalEmailRecipients}
+                onRemoveRecipient={(key) => props.onRemoveExternalEmailRecipient?.(key)}
+                externalEmailBulkPaste={props.externalEmailBulkPaste ?? ''}
+                onExternalEmailBulkPasteChange={(v) => props.onExternalEmailBulkPasteChange?.(v)}
+                onParseExternalEmailBulk={() => props.onParseExternalEmailBulk?.()}
+                locations={
+                  isEnrollmentEmailSection
+                    ? (props.enrollmentEmailLocations ?? [])
+                    : (props.filterMeta?.locations ?? [])
+                }
+                enrollmentLocationId={props.enrollmentEmailLocationId ?? ''}
+                onEnrollmentLocationIdChange={(id) =>
+                  props.onEnrollmentEmailLocationIdChange?.(id)
+                }
+                birthYears={props.enrollmentEmailBirthYears ?? []}
+                enrollmentBirthYear={props.enrollmentEmailBirthYear ?? ''}
+                onEnrollmentBirthYearChange={(year) =>
+                  props.onEnrollmentEmailBirthYearChange?.(year)
+                }
+                enrollmentAddLoading={props.enrollmentEmailAddLoading}
+              />
             ) : (
-              <>
-                <p className="mb-1.5 shrink-0 text-sm font-semibold text-zinc-800">Wyszukaj adresatów</p>
+              <div className="flex min-h-0 flex-col overflow-hidden border-b border-zinc-200 bg-zinc-50/80 p-3 md:border-b-0 md:border-r md:p-4">
+                {props.canPickIndividuals &&
+                  !isTeachersAudience &&
+                  (props.mode === 'manager' || props.mode === 'teacher') && (
+                    <div className="mb-2 shrink-0 rounded-xl border border-zinc-200 bg-white">
+                      <button
+                        type="button"
+                        onClick={props.onToggleGroupFilters}
+                        className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-semibold text-zinc-700"
+                      >
+                        {props.mode === 'teacher'
+                          ? 'Filtry moich grup'
+                          : 'Wysyłka do grupy (filtry masowe)'}
+                        <span className="text-zinc-400">{props.showGroupFilters ? '▲' : '▼'}</span>
+                      </button>
+                      {props.showGroupFilters && (
+                        <div className="max-h-48 space-y-2 overflow-y-auto border-t border-zinc-200 p-3">
+                          {props.filterMeta && (
+                            <>
+                              <ComposeFilterMultiSelect
+                                items={props.filterMeta.groups}
+                                selectedIds={props.filterGroupIds}
+                                placeholder="Wybierz grupę"
+                                emptyListMessage="Brak grup"
+                                pluralLabel="grupy"
+                                onFilterChange={props.onGroupFilterChange}
+                                onConfirm={props.onConfirmGroupFilter}
+                              />
+                              {props.mode === 'manager' && props.onFilterRenewalNoResponseChange && (
+                                <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm">
+                                  <input
+                                    type="checkbox"
+                                    checked={props.filterRenewalNoResponse ?? false}
+                                    onChange={(e) => {
+                                      props.onFilterRenewalNoResponseChange?.(e.target.checked);
+                                      props.onGroupFilterChange(props.filterGroupIds);
+                                    }}
+                                    className="rounded border-zinc-300 text-[#0f6e56]"
+                                  />
+                                  <span className="text-zinc-800">
+                                    Tylko rodzice bez odpowiedzi na odnowienie
+                                  </span>
+                                </label>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                <p className="mb-1.5 shrink-0 text-sm font-semibold text-zinc-800">
+                  Wyszukaj adresatów
+                </p>
                 <input
                   type="search"
                   value={props.recipientSearch}
@@ -607,100 +623,96 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
                   placeholder={searchPlaceholder}
                   className={`mb-2 w-full shrink-0 ${COMPOSE_INPUT}`}
                 />
-              </>
-            )}
-            <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-zinc-200 bg-white">
-              {props.recipientsLoading ? (
-                <p className="px-3 py-4 text-xs text-zinc-500">Ładowanie listy…</p>
-              ) : props.recipients.length === 0 ? (
-                <p className="px-3 py-4 text-xs text-zinc-500">
-                  {props.mode === 'parent'
-                    ? 'Brak dostępnych odbiorców.'
-                    : props.recipientSearchDebounced
-                      ? 'Brak wyników — zmień wyszukiwanie'
-                      : props.mode === 'teacher'
-                        ? 'Brak rodziców w Twoich grupach. Użyj filtrów lub poczekaj na przypisanie uczniów.'
-                        : isTeachersAudience
-                          ? 'Brak nauczycieli w szkole.'
-                          : 'Wybierz filtry lub wyszukaj rodzica.'}
-                </p>
-              ) : (
-                props.recipients.map((r) => {
-                  const picked = props.canPickIndividuals
-                    ? props.selectedRecipientIds.includes(r.id)
-                    : props.singleRecipientId === r.id;
-                  return (
-                    <div
-                      key={r.id}
-                      className="flex items-center justify-between gap-2 border-b border-zinc-100 px-3 py-2 last:border-0"
-                    >
-                      <span className="min-w-0 truncate text-sm text-zinc-800">
-                        {props.recipientLabel(r)}
-                      </span>
+                <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-zinc-200 bg-white">
+                  {props.recipientsLoading ? (
+                    <p className="px-3 py-4 text-xs text-zinc-500">Ładowanie listy…</p>
+                  ) : props.recipients.length === 0 ? (
+                    <p className="px-3 py-4 text-xs text-zinc-500">
+                      {props.recipientSearchDebounced
+                        ? 'Brak wyników — zmień wyszukiwanie'
+                        : props.mode === 'teacher'
+                          ? 'Brak rodziców w Twoich grupach. Użyj filtrów lub poczekaj na przypisanie uczniów.'
+                          : isTeachersAudience
+                            ? 'Brak nauczycieli w szkole.'
+                            : 'Wybierz filtry lub wyszukaj rodzica.'}
+                    </p>
+                  ) : (
+                    props.recipients.map((r) => {
+                      const picked = props.canPickIndividuals
+                        ? props.selectedRecipientIds.includes(r.id)
+                        : props.singleRecipientId === r.id;
+                      return (
+                        <div
+                          key={r.id}
+                          className="flex items-center justify-between gap-2 border-b border-zinc-100 px-3 py-2 last:border-0"
+                        >
+                          <span className="min-w-0 truncate text-sm text-zinc-800">
+                            {props.recipientLabel(r)}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={picked}
+                            onClick={() => {
+                              if (props.canPickIndividuals) {
+                                props.onAddRecipient(r);
+                              } else {
+                                props.onSelectSingleRecipient(r);
+                              }
+                            }}
+                            className="shrink-0 rounded-full border border-[#0f6e56] px-3 py-1 text-xs font-semibold text-[#0f6e56] disabled:border-zinc-200 disabled:text-zinc-400"
+                          >
+                            {picked ? 'Dodano' : 'Dodaj'}
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {props.canPickIndividuals &&
+                  !isTeachersAudience &&
+                  (props.showBulkParentAddButtons ? (
+                    <div className="mt-2 flex shrink-0 flex-col gap-1.5 border-t border-zinc-200/80 pt-2 md:flex-row">
                       <button
                         type="button"
-                        disabled={picked}
-                        onClick={() => {
-                          if (props.canPickIndividuals) {
-                            props.onAddRecipient(r);
-                          } else {
-                            props.onSelectSingleRecipient(r);
-                          }
-                        }}
-                        className="shrink-0 rounded-full border border-[#0f6e56] px-3 py-1 text-xs font-semibold text-[#0f6e56] disabled:border-zinc-200 disabled:text-zinc-400"
+                        disabled={!!props.bulkAddLoading}
+                        onClick={props.onAddAllFromDatabase}
+                        className="flex-1 rounded-lg bg-emerald-50 px-2 py-1.5 text-[11px] font-semibold leading-tight text-[#0f6e56] hover:bg-emerald-100 disabled:opacity-50 md:text-xs"
                       >
-                        {picked ? 'Dodano' : 'Dodaj'}
+                        {props.bulkAddLoading === 'all' ? 'Ładowanie…' : 'Dodaj wszystkich z bazy'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!!props.bulkAddLoading}
+                        onClick={props.onAddAllActiveClients}
+                        className="flex-1 rounded-lg bg-emerald-50 px-2 py-1.5 text-[11px] font-semibold leading-tight text-[#0f6e56] hover:bg-emerald-100 disabled:opacity-50 md:text-xs"
+                      >
+                        {props.bulkAddLoading === 'active'
+                          ? 'Ładowanie…'
+                          : 'Dodaj aktualnych klientów'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={props.recipients.length === 0}
+                        onClick={props.onAddAllFromList}
+                        className="flex-1 rounded-lg bg-emerald-50 px-2 py-1.5 text-[11px] font-semibold leading-tight text-[#0f6e56] hover:bg-emerald-100 disabled:opacity-50 md:text-xs"
+                      >
+                        Z listy ({props.recipients.length})
                       </button>
                     </div>
-                  );
-                })
-              )}
-            </div>
-
-            {props.canPickIndividuals && !isTeachersAudience && (
-              props.showBulkParentAddButtons ? (
-                <div className="mt-2 flex shrink-0 flex-col gap-1.5 border-t border-zinc-200/80 pt-2 md:flex-row">
-                  <button
-                    type="button"
-                    disabled={!!props.bulkAddLoading}
-                    onClick={props.onAddAllFromDatabase}
-                    className="flex-1 rounded-lg bg-emerald-50 px-2 py-1.5 text-[11px] font-semibold leading-tight text-[#0f6e56] hover:bg-emerald-100 disabled:opacity-50 md:text-xs"
-                  >
-                    {props.bulkAddLoading === 'all' ? 'Ładowanie…' : 'Dodaj wszystkich z bazy'}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!!props.bulkAddLoading}
-                    onClick={props.onAddAllActiveClients}
-                    className="flex-1 rounded-lg bg-emerald-50 px-2 py-1.5 text-[11px] font-semibold leading-tight text-[#0f6e56] hover:bg-emerald-100 disabled:opacity-50 md:text-xs"
-                  >
-                    {props.bulkAddLoading === 'active'
-                      ? 'Ładowanie…'
-                      : 'Dodaj aktualnych klientów'}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={props.recipients.length === 0}
-                    onClick={props.onAddAllFromList}
-                    className="flex-1 rounded-lg bg-emerald-50 px-2 py-1.5 text-[11px] font-semibold leading-tight text-[#0f6e56] hover:bg-emerald-100 disabled:opacity-50 md:text-xs"
-                  >
-                    Z listy ({props.recipients.length})
-                  </button>
-                </div>
-              ) : (
-                props.recipients.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={props.onAddAllFromList}
-                    className="mt-3 w-full shrink-0 rounded-lg bg-emerald-50 py-2 text-sm font-semibold text-[#0f6e56] hover:bg-emerald-100"
-                  >
-                    Dodaj wszystkich z listy ({props.recipients.length})
-                  </button>
-                )
-              )
-            )}
-          </div>
-          )}
+                  ) : (
+                    props.recipients.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={props.onAddAllFromList}
+                        className="mt-3 w-full shrink-0 rounded-lg bg-emerald-50 py-2 text-sm font-semibold text-[#0f6e56] hover:bg-emerald-100"
+                      >
+                        Dodaj wszystkich z listy ({props.recipients.length})
+                      </button>
+                    )
+                  ))}
+              </div>
+            ))}
 
           {/* Prawa kolumna — treść wiadomości */}
           <div className="flex min-h-0 flex-col overflow-hidden p-3 md:p-4">
@@ -731,47 +743,112 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
 
               {!isEmailSection && (
                 <div className="shrink-0">
-                  <label className="mb-1 block text-sm font-medium text-zinc-800">
-                    Adresat / Adresaci
-                  </label>
-                  <div className="max-h-20 overflow-y-auto rounded-xl border border-zinc-300 bg-zinc-50/50 px-3 py-2 md:max-h-24">
-                    {adresatIds.length === 0 ? (
-                      <p className="text-sm text-zinc-400">
-                        Wybierz odbiorców z listy po lewej stronie
-                      </p>
-                    ) : (
-                      <div className="flex flex-wrap gap-1.5">
-                        {adresatIds.map((id) => (
-                          <span
-                            key={id}
-                            className="inline-flex max-w-full items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-900"
-                          >
-                            <span className="truncate">
-                              {props.selectedRecipientLabels[id] ?? id}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (props.canPickIndividuals) {
-                                  props.onRemoveRecipient(id);
-                                } else {
-                                  props.onClearSingleRecipient();
-                                }
-                              }}
-                              className="shrink-0 font-bold leading-none hover:text-emerald-700"
-                              aria-label="Usuń odbiorcę"
-                            >
-                              ×
-                            </button>
-                          </span>
+                  {isParentSimpleCompose ? (
+                    <>
+                      <label
+                        htmlFor="compose-recipient"
+                        className="mb-1 block text-sm font-medium text-zinc-800"
+                      >
+                        Adresat
+                      </label>
+                      <select
+                        id="compose-recipient"
+                        value={adresatIds[0] ?? ''}
+                        disabled={props.recipientsLoading}
+                        onChange={(e) => {
+                          const id = e.target.value;
+                          if (!id) {
+                            props.onClearSingleRecipient();
+                            return;
+                          }
+                          const r = props.recipients.find((x) => x.id === id);
+                          if (r) props.onSelectSingleRecipient(r);
+                        }}
+                        className={`w-full ${COMPOSE_INPUT}`}
+                      >
+                        <option value="">
+                          {props.recipientsLoading
+                            ? 'Ładowanie…'
+                            : props.recipients.length === 0
+                              ? 'Brak dostępnych odbiorców'
+                              : 'Wybierz odbiorcę…'}
+                        </option>
+                        {props.recipients.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {props.recipientLabel(r)}
+                          </option>
                         ))}
+                      </select>
+                    </>
+                  ) : (
+                    <>
+                      <label className="mb-1 block text-sm font-medium text-zinc-800">
+                        Adresat / Adresaci
+                      </label>
+                      <div className="max-h-20 overflow-y-auto rounded-xl border border-zinc-300 bg-zinc-50/50 px-3 py-2 md:max-h-24">
+                        {adresatIds.length === 0 ? (
+                          <p className="text-sm text-zinc-400">
+                            Wybierz odbiorców z listy po lewej stronie
+                          </p>
+                        ) : (
+                          <div className="flex flex-wrap gap-1.5">
+                            {adresatIds.map((id) => (
+                              <span
+                                key={id}
+                                className="inline-flex max-w-full items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-900"
+                              >
+                                <span className="truncate">
+                                  {props.selectedRecipientLabels[id] ?? id}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (props.canPickIndividuals) {
+                                      props.onRemoveRecipient(id);
+                                    } else {
+                                      props.onClearSingleRecipient();
+                                    }
+                                  }}
+                                  className="shrink-0 font-bold leading-none hover:text-emerald-700"
+                                  aria-label="Usuń odbiorcę"
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
+                    </>
+                  )}
                 </div>
               )}
 
-              {selectedTemplate && templateFields.length > 0 ? (
+              {parentNeedsChildSelect && (
+                <div className="shrink-0">
+                  <label htmlFor="compose-tpl-dziecko" className="mb-1 block text-sm font-medium text-zinc-800">
+                    Imię i nazwisko dziecka
+                  </label>
+                  <select
+                    id="compose-tpl-dziecko"
+                    value={templateFieldValues.dziecko ?? ''}
+                    onChange={(e) => handleTemplateFieldChange('dziecko', e.target.value)}
+                    className={`w-full ${COMPOSE_INPUT}`}
+                  >
+                    <option value="">Wybierz dziecko…</option>
+                    {(props.parentChildren ?? []).map((child) => {
+                      const name = `${child.firstName} ${child.lastName}`.trim();
+                      return (
+                        <option key={child.id} value={child.id}>
+                          {name}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              )}
+
+              {useStructuredTemplateFields ? (
                 <div className="flex min-h-0 flex-1 flex-col gap-3">
                   {templateFields.map((field) => {
                     const meta = getTemplateFieldMeta(field);
@@ -846,7 +923,11 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
                     />
                   </div>
 
-                  <div className="flex min-h-0 flex-1 flex-col">
+                  <div
+                    className={`flex min-h-0 flex-1 flex-col ${
+                      isParentSimpleCompose ? 'min-h-[280px]' : ''
+                    }`}
+                  >
                     <label htmlFor="compose-body" className="mb-1 block shrink-0 text-sm font-medium text-zinc-800">
                       Treść wiadomości
                     </label>
@@ -854,7 +935,9 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
                       id="compose-body"
                       value={props.composeContent}
                       onChange={(e) => props.onComposeContentChange(e.target.value)}
-                      className={`min-h-0 w-full flex-1 resize-none ${COMPOSE_INPUT}`}
+                      className={`min-h-0 w-full flex-1 resize-none ${
+                        isParentSimpleCompose ? 'min-h-[240px]' : ''
+                      } ${COMPOSE_INPUT}`}
                       placeholder={isEnrollmentEmailSection ? undefined : 'Napisz wiadomość…'}
                     />
                   </div>
@@ -879,7 +962,13 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
                     section === 'parents' && selectedTemplateKey
                       ? {
                           templateKey: selectedTemplateKey,
-                          templateFieldValues,
+                          templateFieldValues:
+                            isParentSimpleCompose && selectedTemplateKey === 'resignation'
+                              ? {
+                                  ...templateFieldValues,
+                                  powod: props.composeContent,
+                                }
+                              : templateFieldValues,
                         }
                       : undefined
                   )

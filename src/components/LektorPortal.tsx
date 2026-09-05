@@ -15,7 +15,7 @@ type TeacherGroup = {
   name: string;
   level: string | null;
   schedule: string;
-  students: Array<{ childId: string; firstName: string; lastName: string }>;
+  students: Array<{ childId: string; firstName: string; lastName: string; confirmed?: boolean }>;
 };
 
 type TeacherLesson = {
@@ -30,6 +30,7 @@ type AttendanceRow = {
   childId: string;
   firstName: string;
   lastName: string;
+  confirmed?: boolean;
   billedPerLesson?: boolean;
   status: string | null;
   note: string | null;
@@ -141,7 +142,7 @@ export default function LektorPortal() {
         (data.attendance ?? []).map((row) => ({
           ...row,
           billedPerLesson: Boolean(row.billedPerLesson),
-          status: row.billedPerLesson ? (row.status ?? 'PRESENT') : row.status,
+          status: row.billedPerLesson ? row.status : (row.status ?? 'PRESENT'),
         })),
       );
     } catch {
@@ -173,9 +174,11 @@ export default function LektorPortal() {
 
   const saveAttendance = async () => {
     if (!selectedLessonId) return;
-    const billable = attendance.filter((row) => row.billedPerLesson);
-    if (billable.length === 0) {
-      setStatusMessage('Brak dzieci z rozliczeniem za pojedyncze zajęcia do zapisania');
+    const unmarkedBillable = attendance.filter((row) => row.billedPerLesson && !row.status);
+    if (unmarkedBillable.length > 0) {
+      setStatusMessage(
+        `Oznacz obecność u wszystkich dzieci z rozliczeniem za zajęcia (${unmarkedBillable.length} bez statusu)`,
+      );
       return;
     }
     setSavingAttendance(true);
@@ -185,11 +188,13 @@ export default function LektorPortal() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          attendance: billable.map((row) => ({
-            childId: row.childId,
-            status: row.status ?? 'PRESENT',
-            note: row.note,
-          })),
+          attendance: attendance
+            .filter((row) => row.status)
+            .map((row) => ({
+              childId: row.childId,
+              status: row.status,
+              note: row.note,
+            })),
         }),
       });
       const data = (await res.json().catch(() => ({}))) as { message?: string };
@@ -197,7 +202,8 @@ export default function LektorPortal() {
         setStatusMessage(data.message ?? 'Nie udało się zapisać obecności');
         return;
       }
-      setStatusMessage('Obecności zapisane');
+      setStatusMessage(data.message ?? 'Obecności zapisane');
+      await loadAttendance(selectedLessonId);
     } catch {
       setStatusMessage('Błąd zapisu obecności');
     } finally {
@@ -331,8 +337,8 @@ export default function LektorPortal() {
               <div className="space-y-3 rounded-2xl border border-emerald-100 bg-white p-4">
                 <p className="text-sm font-semibold text-zinc-800">Obecności</p>
                 <p className="text-xs text-zinc-500">
-                  Obecność oznaczasz tylko u dzieci z rozliczeniem za pojedyncze zajęcia. Pełny
-                  widok tygodnia: zakładka „Obecność”.
+                  Miesięczna/roczna: domyślnie obecni. Za pojedyncze zajęcia: oznacz obowiązkowo.
+                  Pełny widok tygodnia: zakładka „Obecność”.
                 </p>
                 {!selectedLessonId ? (
                   <p className="text-sm text-zinc-500">Wybierz lekcję.</p>
@@ -347,53 +353,61 @@ export default function LektorPortal() {
                         <div
                           key={row.childId}
                           className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 ${
-                            row.billedPerLesson
-                              ? 'border-zinc-200'
-                              : 'border-zinc-100 bg-zinc-50'
+                            row.billedPerLesson && !row.status
+                              ? 'border-amber-300 bg-amber-50/70'
+                              : 'border-zinc-200'
                           }`}
                         >
                           <div>
                             <span className="text-sm font-medium text-zinc-900">
                               {row.firstName} {row.lastName}
                             </span>
-                            {!row.billedPerLesson && (
-                              <span className="mt-0.5 block text-xs text-zinc-500">
-                                Bez oznaczania — inny typ rozliczenia
+                            {row.confirmed === false ? (
+                              <span className="mt-0.5 block text-xs font-semibold text-amber-800">
+                                Niepotwierdzony (brak podpisanej umowy)
+                              </span>
+                            ) : null}
+                            {row.billedPerLesson ? (
+                              <span className="mt-0.5 block text-xs text-amber-800">
+                                Za pojedyncze zajęcia — oznacz obowiązkowo
+                              </span>
+                            ) : (
+                              <span className="mt-0.5 block text-xs text-emerald-700">
+                                Domyślnie obecny
                               </span>
                             )}
                           </div>
-                          {row.billedPerLesson ? (
-                            <select
-                              className="rounded-lg border border-zinc-300 px-2 py-1 text-sm"
-                              value={row.status ?? 'PRESENT'}
-                              onChange={(e) =>
-                                setAttendance((prev) =>
-                                  prev.map((item) =>
-                                    item.childId === row.childId
-                                      ? { ...item, status: e.target.value }
-                                      : item,
-                                  ),
-                                )
-                              }
-                            >
-                              {ATTENDANCE_OPTIONS.map((opt) => (
-                                <option key={opt.value} value={opt.value}>
-                                  {opt.label}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <span className="rounded-lg bg-zinc-100 px-2 py-1 text-xs text-zinc-500">
-                              —
-                            </span>
-                          )}
+                          <select
+                            className="rounded-lg border border-zinc-300 px-2 py-1 text-sm"
+                            value={row.status ?? ''}
+                            onChange={(e) =>
+                              setAttendance((prev) =>
+                                prev.map((item) =>
+                                  item.childId === row.childId
+                                    ? { ...item, status: e.target.value || null }
+                                    : item,
+                                ),
+                              )
+                            }
+                          >
+                            {row.billedPerLesson && !row.status ? (
+                              <option value="">Wybierz…</option>
+                            ) : null}
+                            {ATTENDANCE_OPTIONS.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
                         </div>
                       ))}
                     </div>
                     <button
                       type="button"
                       disabled={
-                        savingAttendance || !attendance.some((row) => row.billedPerLesson)
+                        savingAttendance ||
+                        attendance.length === 0 ||
+                        attendance.some((row) => row.billedPerLesson && !row.status)
                       }
                       onClick={() => void saveAttendance()}
                       className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"

@@ -5,7 +5,7 @@ import {
   queryDb,
   syncParentIdentityFromEnrollments,
 } from "@/lib/db";
-import { getTokenFromRequest } from "@/lib/auth";
+import { getOriginalTokenFromRequest, getTokenFromRequest } from "@/lib/auth";
 import { isComplimentaryForParent } from "@/lib/school-discounts";
 
 async function resolveSchoolName(schoolId: string | null | undefined): Promise<string | null> {
@@ -113,6 +113,30 @@ export async function GET(request: NextRequest) {
       });
     }
 
+    let impersonation:
+      | {
+          active: true;
+          adminId: string;
+          adminEmail: string;
+          adminFirstName: string;
+          adminLastName: string;
+        }
+      | { active: false } = { active: false };
+
+    const originalPayload = await getOriginalTokenFromRequest(request);
+    if (originalPayload?.userId) {
+      const admin = await getUserById(originalPayload.userId);
+      if (admin && admin.role === "ADMIN") {
+        impersonation = {
+          active: true,
+          adminId: admin.id,
+          adminEmail: admin.email,
+          adminFirstName: admin.first_name,
+          adminLastName: admin.last_name,
+        };
+      }
+    }
+
     return NextResponse.json({
       user: {
         id: user.id,
@@ -128,6 +152,7 @@ export async function GET(request: NextRequest) {
         complimentaryAccess,
         clientNumber: user.client_number,
         children,
+        impersonation,
       },
     });
   } catch (error) {

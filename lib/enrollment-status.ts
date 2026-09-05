@@ -12,12 +12,23 @@ export const ENROLLMENT_STATUSES = [
 
 export type EnrollmentStatus = (typeof ENROLLMENT_STATUSES)[number];
 
+/**
+ * Gdy `true` — rodzic musi kliknąć „Akceptuję propozycję” (status PROPOSED).
+ * Gdy `false` — po wysłaniu grupy przez managera od razu ACCEPTED / dane do umowy.
+ * Kod akceptacji zostaje w UI/API, żeby dało się szybko włączyć z powrotem.
+ */
+export const ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE = false;
+
 export const ENROLLMENT_STATUS_LABELS: Record<EnrollmentStatus, string> = {
   NEW: "Nowe zgłoszenie",
-  PROPOSED: "Propozycja wysłana — oczekuje na rodzica",
+  PROPOSED: ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
+    ? "Propozycja wysłana — oczekuje na rodzica"
+    : "Propozycja wysłana (stare) — rodzic może uzupełnić dane",
   NEGOTIATING: "Rodzic nie zaakceptował terminu zajęć",
-  ACCEPTED: "Zaakceptowane — uzupełnij dane do umowy",
-  AWAITING_CONTRACT: "Dane uzupełnione — oczekuje na umowę ze szkoły",
+  ACCEPTED: ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
+    ? "Zaakceptowane — uzupełnij dane do umowy"
+    : "Grupa przypisana — uzupełnij dane do umowy",
+  AWAITING_CONTRACT: "Dane uzupełnione — umowa w trakcie generowania / podpisu",
   CONTRACT_READY: "Umowa gotowa — oczekuje na podpis",
   SIGNED: "Umowa podpisana",
   COMPLETED: "Zakończone",
@@ -55,7 +66,7 @@ export const ENROLLMENT_LIST_FILTERS = [
   { value: "NEW", label: "Nowe" },
   { value: "PROPOSED", label: "Zaproponowane" },
   { value: "NEGOTIATING", label: "Negocjacje" },
-  { value: "ACCEPTED", label: "Zaakceptowane" },
+  { value: "ACCEPTED", label: "Grupa przypisana" },
   { value: "AWAITING_CONTRACT", label: "Czeka na umowę" },
   { value: "CONTRACT_READY", label: "Umowa do podpisu" },
   { value: "REJECTED", label: "Odrzucone" },
@@ -93,9 +104,21 @@ export const ENROLLMENT_CONTRACT_PIPELINE_STATUSES: ReadonlySet<string> = new Se
 ]);
 
 export function isEnrollmentContractPipelineStatus(status: string | null | undefined): boolean {
-  return ENROLLMENT_CONTRACT_PIPELINE_STATUSES.has(
-    String(status ?? "")
-      .trim()
-      .toUpperCase(),
-  );
+  const key = String(status ?? "")
+    .trim()
+    .toUpperCase();
+  if (ENROLLMENT_CONTRACT_PIPELINE_STATUSES.has(key)) return true;
+  // Stare zgłoszenia PROPOSED przy wyłączonej akceptacji — traktuj jak gotowe do umowy.
+  if (!ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && key === "PROPOSED") return true;
+  return false;
+}
+
+/** Statusy, które jeszcze blokują przygotowanie umowy (decyzja rodzica / nowe zgłoszenie). */
+export function isEnrollmentDecisionPendingStatus(status: string | null | undefined): boolean {
+  const key = String(status ?? "")
+    .trim()
+    .toUpperCase();
+  if (key === "NEW" || key === "NEGOTIATING") return true;
+  if (ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && key === "PROPOSED") return true;
+  return false;
 }

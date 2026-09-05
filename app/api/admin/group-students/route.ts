@@ -7,6 +7,7 @@ import {
   requireAdminSchoolContext,
   tenantNotFoundResponse,
 } from "@/lib/admin-school-context";
+import { childHasSignedContract } from "@/lib/enrollment-sync";
 
 export async function POST(request: NextRequest) {
   const ctx = await requireAdminSchoolContext(request);
@@ -40,13 +41,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const hasSignedContract = await childHasSignedContract(childId);
+    await queryDb(`UPDATE children SET confirmed = $2 WHERE id = $1`, [
+      childId,
+      hasSignedContract,
+    ]);
+
     const activeYear = await getActiveSchoolYear(ctx.schoolId);
     await queryDb(
       `INSERT INTO group_students (id, school_id, group_id, child_id, enrolled_at, school_year_id)
        VALUES ($1, $2, $3, $4, NOW(), $5)`,
       [randomUUID(), ctx.schoolId, groupId, childId, activeYear?.id ?? null]
     );
-    return NextResponse.json({ message: "Uczeń został dodany do grupy" });
+    return NextResponse.json({
+      message: hasSignedContract
+        ? "Uczeń został dodany do grupy (potwierdzony — podpisana umowa)"
+        : "Uczeń został dodany do grupy (niepotwierdzony — brak podpisanej umowy)",
+      confirmed: hasSignedContract,
+    });
   } catch (error) {
     console.error("POST group-students error:", error);
     return NextResponse.json({ message: "Błąd dodawania ucznia do grupy" }, { status: 500 });

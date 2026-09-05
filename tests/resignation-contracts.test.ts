@@ -3,12 +3,12 @@ import { buildContractAmountBreakdown } from "@/lib/contract-amount-breakdown";
 import { DISCOUNT_KEYS } from "@/lib/school-discounts";
 
 describe("resignation pricing expectation", () => {
-  it("po odejściu jednego dziecka znika rabat rodzeństwa", () => {
+  it("po odejściu jednego dziecka kwota to stawka pozostałego (bez rabatów %)", () => {
     const withSibling = buildContractAmountBreakdown({
       paymentType: "MONTHLY",
       billingExempt: false,
       discountKeys: [DISCOUNT_KEYS.SIBLING],
-      discountSettings: { SIBLING: 5, LARGE_FAMILY_CARD: 0 },
+      discountSettings: { SIBLING: 5, LARGE_FAMILY_CARD: 0, maxPercent: 10 },
       children: [
         {
           child_id: "a",
@@ -31,7 +31,7 @@ describe("resignation pricing expectation", () => {
       paymentType: "MONTHLY",
       billingExempt: false,
       discountKeys: [], // jedno dziecko — bez SIBLING
-      discountSettings: { SIBLING: 5, LARGE_FAMILY_CARD: 0 },
+      discountSettings: { SIBLING: 5, LARGE_FAMILY_CARD: 0, maxPercent: 10 },
       children: [
         {
           child_id: "b",
@@ -43,7 +43,7 @@ describe("resignation pricing expectation", () => {
       ],
     });
 
-    expect(withSibling.final_total).toBe(285);
+    expect(withSibling.final_total).toBe(300);
     expect(afterResignation.final_total).toBe(150);
     expect(afterResignation.discounts).toEqual([]);
   });

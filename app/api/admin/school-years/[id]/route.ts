@@ -21,6 +21,12 @@ export async function PUT(request: NextRequest, context: RouteCtx) {
     if (!name?.trim() || !date_from || !date_to) {
       return NextResponse.json({ message: "Brak nazwy lub zakresu dat" }, { status: 400 });
     }
+    if (String(date_to).slice(0, 10) < String(date_from).slice(0, 10)) {
+      return NextResponse.json(
+        { message: "Data końca nie może być wcześniejsza niż data początku" },
+        { status: 400 }
+      );
+    }
 
     const result = await runPgTransaction(async (c) => {
       const cur = await c.query<{ active: boolean }>(

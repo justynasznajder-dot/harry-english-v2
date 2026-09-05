@@ -245,12 +245,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: result.message }, { status: result.status });
     }
 
-    const { sharedParent, emailItem } = result;
+    const { sharedParent, emailItem, complimentaryCompleted } = result;
 
     await sendProposalEmail(
       sharedParent.parentEmail,
       `${sharedParent.parentFirstName} ${sharedParent.parentLastName}`.trim(),
-      emailItem
+      emailItem,
+      { complimentaryCompleted }
     );
 
     return NextResponse.json({

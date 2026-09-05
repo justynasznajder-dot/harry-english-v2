@@ -3,20 +3,22 @@ import { Readable } from "node:stream";
 import { google, type drive_v3 } from "googleapis";
 
 /**
- * Google Drive — eksporty + odczyt wyciągów bankowych (faktury/umowy zostają na R2).
+ * Google Drive — dokumenty (umowy/faktury), eksporty, wyciągi bankowe.
  *
  * Wymagane env (auth):
  * - GOOGLE_SERVICE_ACCOUNT_EMAIL
  * - GOOGLE_PRIVATE_KEY  (z JSON; \n jako literal "\\n" OK)
  *
- * Upload / domyślny folder:
+ * Dokumenty rodziców (Umowy / rok / Nazwisko_Imię):
+ * - GOOGLE_DRIVE_UMOWA_FOLDER_ID
+ * - GOOGLE_DRIVE_SHARED_DRIVE_ID  (WYMAGANE do uploadu plików — SA nie ma limitu
+ *   miejsca na zwykłym Dysku; bez Shared Drive powstają puste foldery)
+ *
+ * Upload / domyślny folder (eksporty itp.):
  * - GOOGLE_DRIVE_FOLDER_ID
  *
  * Wyciągi bankowe (foldery lat kalendarzowych):
  * - GOOGLE_DRIVE_BANK_STATEMENTS_FOLDER_ID  (opcjonalnie; domyślnie folder wyciągów)
- *
- * Opcjonalnie:
- * - GOOGLE_DRIVE_SHARED_DRIVE_ID  (gdy folder jest na Shared Drive)
  */
 
 /** Domyślny folder wyciągów: lata kalendarzowe → pliki CSV ING. */
@@ -89,11 +91,33 @@ export function getBankStatementsFolderId(): string {
   );
 }
 
+export function getUmowyFolderId(): string {
+  const folderId =
+    process.env.GOOGLE_DRIVE_UMOWA_FOLDER_ID?.trim() ||
+    // fallback na literówkę z wcześniejszej konfiguracji
+    process.env.OOGLE_DRIVE_UMOWA_FOLDER_ID?.trim();
+  if (!folderId) {
+    throw new Error(
+      "Google Drive not configured — brak zmiennej: GOOGLE_DRIVE_UMOWA_FOLDER_ID. Dodaj ją do .env.local / Vercel i zrestartuj serwer."
+    );
+  }
+  return folderId;
+}
+
 export function isGoogleDriveConfigured(): boolean {
   return Boolean(
     process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim() &&
       process.env.GOOGLE_PRIVATE_KEY?.trim() &&
       process.env.GOOGLE_DRIVE_FOLDER_ID?.trim()
+  );
+}
+
+export function isUmowyDriveConfigured(): boolean {
+  return Boolean(
+    process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim() &&
+      process.env.GOOGLE_PRIVATE_KEY?.trim() &&
+      (process.env.GOOGLE_DRIVE_UMOWA_FOLDER_ID?.trim() ||
+        process.env.OOGLE_DRIVE_UMOWA_FOLDER_ID?.trim())
   );
 }
 
@@ -129,6 +153,14 @@ function driveListSupports(creds: GoogleDriveCredentials) {
   };
 }
 
+/** SA nie ma limitu miejsca na zwykłym My Drive — upload PDF wymaga Shared Drive. */
+function assertSharedDriveForFileUpload(creds: GoogleDriveCredentials): void {
+  if (creds.sharedDriveId) return;
+  throw new Error(
+    "Google Drive: brak GOOGLE_DRIVE_SHARED_DRIVE_ID. Service account nie może zapisywać plików na zwykłym Dysku (storageQuotaExceeded) — foldery powstają, ale PDF-y nie. Przenieś folder Umowy na Dysk współdzielony (Shared Drive), dodaj service account jako członka i ustaw GOOGLE_DRIVE_SHARED_DRIVE_ID."
+  );
+}
+
 function toReadable(body: Buffer | Readable | string): Readable {
   if (typeof body === "string" || Buffer.isBuffer(body)) {
     return Readable.from(body);
@@ -146,36 +178,51 @@ export async function uploadFileToGoogleDrive(params: {
   body: Buffer | Readable | string;
   /** Nadpisuje domyślny GOOGLE_DRIVE_FOLDER_ID (np. podfolder eksportu). */
   folderId?: string;
+  appProperties?: Record<string, string>;
 }): Promise<GoogleDriveUploadResult> {
-  const config = getGoogleDriveConfig();
-  const drive = getDriveClient(config);
-  const parentId = params.folderId?.trim() || config.folderId;
-  const supportsAllDrives = Boolean(config.sharedDriveId);
+  const creds = getGoogleDriveCredentials();
+  assertSharedDriveForFileUpload(creds);
+  const drive = getDriveClient(creds);
+  const parentId = params.folderId?.trim()
+    ? params.folderId.trim()
+    : getGoogleDriveConfig().folderId;
+  const supportsAllDrives = Boolean(creds.sharedDriveId);
 
-  const res = await drive.files.create({
-    requestBody: {
-      name: params.name,
-      parents: [parentId],
-    },
-    media: {
-      mimeType: params.mimeType,
-      body: toReadable(params.body),
-    },
-    fields: "id, name, webViewLink, webContentLink",
-    supportsAllDrives,
-  });
+  try {
+    const res = await drive.files.create({
+      requestBody: {
+        name: params.name,
+        parents: [parentId],
+        ...(params.appProperties ? { appProperties: params.appProperties } : {}),
+      },
+      media: {
+        mimeType: params.mimeType,
+        body: toReadable(params.body),
+      },
+      fields: "id, name, webViewLink, webContentLink",
+      supportsAllDrives,
+    });
 
-  const file = res.data;
-  if (!file.id || !file.name) {
-    throw new Error("Google Drive upload failed — brak id/name w odpowiedzi API.");
+    const file = res.data;
+    if (!file.id || !file.name) {
+      throw new Error("Google Drive upload failed — brak id/name w odpowiedzi API.");
+    }
+
+    return {
+      fileId: file.id,
+      name: file.name,
+      webViewLink: file.webViewLink ?? null,
+      webContentLink: file.webContentLink ?? null,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/storageQuotaExceeded|do not have storage quota/i.test(msg)) {
+      throw new Error(
+        "Google Drive: service account nie ma limitu miejsca. Folder Umowy musi być na Shared Drive z ustawionym GOOGLE_DRIVE_SHARED_DRIVE_ID."
+      );
+    }
+    throw err;
   }
-
-  return {
-    fileId: file.id,
-    name: file.name,
-    webViewLink: file.webViewLink ?? null,
-    webContentLink: file.webContentLink ?? null,
-  };
 }
 
 /**
@@ -183,10 +230,10 @@ export async function uploadFileToGoogleDrive(params: {
  * Jeśli folder o tej nazwie już istnieje — zwraca jego id.
  */
 export async function ensureGoogleDriveSubfolder(name: string, parentFolderId?: string): Promise<string> {
-  const config = getGoogleDriveConfig();
-  const drive = getDriveClient(config);
-  const parentId = parentFolderId?.trim() || config.folderId;
-  const supportsAllDrives = Boolean(config.sharedDriveId);
+  const creds = getGoogleDriveCredentials();
+  const drive = getDriveClient(creds);
+  const parentId = parentFolderId?.trim() || getGoogleDriveConfig().folderId;
+  const listOpts = driveListSupports(creds);
 
   const escapedName = name.replace(/'/g, "\\'");
   const q = [
@@ -200,10 +247,7 @@ export async function ensureGoogleDriveSubfolder(name: string, parentFolderId?: 
     q,
     fields: "files(id, name)",
     pageSize: 1,
-    supportsAllDrives,
-    includeItemsFromAllDrives: supportsAllDrives,
-    corpora: supportsAllDrives ? "drive" : undefined,
-    driveId: config.sharedDriveId,
+    ...listOpts,
   });
 
   const found = existing.data.files?.[0]?.id;
@@ -216,13 +260,81 @@ export async function ensureGoogleDriveSubfolder(name: string, parentFolderId?: 
       parents: [parentId],
     },
     fields: "id",
-    supportsAllDrives,
+    supportsAllDrives: Boolean(creds.sharedDriveId),
   });
 
   if (!created.data.id) {
     throw new Error(`Google Drive: nie udało się utworzyć folderu "${name}".`);
   }
   return created.data.id;
+}
+
+/** Best-effort usunięcie pliku z Drive. */
+export async function deleteGoogleDriveFile(fileId: string): Promise<void> {
+  const creds = getGoogleDriveCredentials();
+  const drive = getDriveClient(creds);
+  await drive.files.delete({
+    fileId,
+    supportsAllDrives: Boolean(creds.sharedDriveId),
+  });
+}
+
+export type GoogleDriveFileMeta = {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number | null;
+  modifiedTime: string | null;
+  appProperties: Record<string, string>;
+};
+
+/** Lista plików PDF z appProperties heParentId (+ opcjonalnie heKind). */
+export async function listGoogleDriveFilesByParentAppProperty(params: {
+  parentUserId: string;
+  kind?: "umowy" | "faktury";
+}): Promise<GoogleDriveFileMeta[]> {
+  const creds = getGoogleDriveCredentials();
+  const drive = getDriveClient(creds);
+  const listOpts = driveListSupports(creds);
+  const escapedId = params.parentUserId.replace(/'/g, "\\'");
+  const parts = [
+    `appProperties has { key='heParentId' and value='${escapedId}' }`,
+    "mimeType = 'application/pdf'",
+    "trashed = false",
+  ];
+  if (params.kind) {
+    parts.push(
+      `appProperties has { key='heKind' and value='${params.kind}' }`
+    );
+  }
+  const q = parts.join(" and ");
+  const out: GoogleDriveFileMeta[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const res = await drive.files.list({
+      q,
+      fields:
+        "nextPageToken, files(id, name, mimeType, size, modifiedTime, appProperties)",
+      pageSize: 100,
+      pageToken,
+      ...listOpts,
+    });
+    for (const f of res.data.files ?? []) {
+      if (!f.id || !f.name) continue;
+      out.push({
+        id: f.id,
+        name: f.name,
+        mimeType: f.mimeType ?? "application/pdf",
+        size: f.size != null ? Number(f.size) : null,
+        modifiedTime: f.modifiedTime ?? null,
+        appProperties: (f.appProperties as Record<string, string>) ?? {},
+      });
+    }
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken);
+
+  return out;
 }
 
 /** Lista dzieci (pliki/foldery) w folderze Drive. */

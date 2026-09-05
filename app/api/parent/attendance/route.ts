@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { completePastScheduledLessons } from "@/lib/lesson-completion";
+import {
+  backfillDefaultPresentAttendance,
+  completePastScheduledLessons,
+} from "@/lib/lesson-completion";
 import {
   computeMonthlyAttendanceSummaries,
   fetchParentAttendance,
@@ -23,6 +26,7 @@ export async function GET(request: NextRequest) {
 
   try {
     await completePastScheduledLessons();
+    await backfillDefaultPresentAttendance(120, schoolId);
 
     const records = await fetchParentAttendance(parentId, schoolId, childId);
     const monthlySummary = computeMonthlyAttendanceSummaries(records);
@@ -38,6 +42,7 @@ export async function GET(request: NextRequest) {
         groupName: r.groupName,
         locationName: r.locationName,
         lessonStatus: r.lessonStatus,
+        billedPerLesson: r.billedPerLesson,
       })),
       monthlySummary,
     });

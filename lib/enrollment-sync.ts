@@ -193,6 +193,53 @@ export async function updateChildPriceOverrides(
   return true;
 }
 
+/** Kończy aktywne członkostwo dziecka w danej grupie (`left_at = NOW()`). */
+export async function leaveChildFromGroup(
+  childId: string,
+  groupId: string
+): Promise<boolean> {
+  if (!childId || !groupId) return false;
+  const res = await queryDb<{ id: string }>(
+    `UPDATE group_students
+     SET left_at = NOW()
+     WHERE child_id = $1
+       AND group_id = $2
+       AND left_at IS NULL
+     RETURNING id`,
+    [childId, groupId]
+  );
+  return Boolean(res.rows[0]);
+}
+
+/** Czy dziecko ma podpisaną umowę (status SIGNED). */
+export async function childHasSignedContract(childId: string): Promise<boolean> {
+  if (!childId) return false;
+  const res = await queryDb<{ ok: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1
+       FROM contracts ct
+       JOIN contract_children cc ON cc.contract_id = ct.id
+       WHERE cc.child_id = $1
+         AND UPPER(BTRIM(COALESCE(ct.status::text, ''))) = 'SIGNED'
+     ) AS ok`,
+    [childId]
+  );
+  return res.rows[0]?.ok === true;
+}
+
+/** Przypisuje dziecko do grupy; przy zmianie grupy zamyka poprzednie członkostwo. */
+export async function assignChildToProposedGroup(
+  childId: string,
+  newGroupId: string,
+  options?: GroupStudentPriceOverrides & { previousGroupId?: string | null }
+): Promise<void> {
+  const previous = options?.previousGroupId?.trim() || null;
+  if (previous && previous !== newGroupId) {
+    await leaveChildFromGroup(childId, previous);
+  }
+  await enrollChildInGroup(childId, newGroupId, options);
+}
+
 /** Dodaje dziecko do grupy (`group_students`) w danym roku, jeśli nie jest już aktywnie przypisane. */
 export async function enrollChildInGroup(
   childId: string,
@@ -223,7 +270,22 @@ export async function enrollChildInGroup(
      LIMIT 1`,
     [groupId, childId, schoolYearId]
   );
-  if (active.rows[0]) return false;
+  if (active.rows[0]) {
+    const { lessonUnitPrice, monthlyUnitPrice, yearlyUnitPrice, persistPrices } =
+      await resolveMembershipPrices(childId, options);
+    if (persistPrices) {
+      await updateChildPriceOverrides(childId, schoolId, persistPrices);
+    }
+    await queryDb(
+      `UPDATE group_students
+       SET lesson_unit_price = $2,
+           monthly_unit_price = $3,
+           yearly_unit_price = $4
+       WHERE id = $1`,
+      [active.rows[0].id, lessonUnitPrice, monthlyUnitPrice, yearlyUnitPrice]
+    );
+    return false;
+  }
 
   const { lessonUnitPrice, monthlyUnitPrice, yearlyUnitPrice, persistPrices } =
     await resolveMembershipPrices(childId, options);

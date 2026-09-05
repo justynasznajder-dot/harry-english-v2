@@ -361,8 +361,11 @@ export async function POST(request: NextRequest) {
       try {
         await storeSignedContractPdfsInR2({
           parentUserId: parentId,
+          schoolId: SCHOOL_ID,
           signedAt,
           pdfFiles,
+          parentFirstName: parent.first_name,
+          parentLastName: parent.last_name,
           source: "enrollment.sign",
         });
         pdfStored = true;
@@ -390,14 +393,14 @@ export async function POST(request: NextRequest) {
 
 
     const enrollmentChildren = await fetchParentEnrollmentChildren(parentId, SCHOOL_ID);
-    const acceptedQueue = enrollmentChildren
-      .filter((c) => String(c.access_level).toUpperCase() === "ACCEPTED")
+    const awaitingQueue = enrollmentChildren
+      .filter((c) => String(c.access_level).toUpperCase() === "AWAITING_CONTRACT")
       .map((c) => c.request_id);
     const nextChild = await findNextQueuedChildWithoutContract(
       parentId,
       SCHOOL_ID,
       enrollmentChildren,
-      acceptedQueue
+      awaitingQueue
     );
 
     return NextResponse.json({

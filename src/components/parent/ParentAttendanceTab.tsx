@@ -19,6 +19,7 @@ type AttendanceRecord = {
   groupName: string;
   locationName: string | null;
   lessonStatus: string;
+  billedPerLesson?: boolean;
 };
 
 type MonthlySummary = {
@@ -79,6 +80,8 @@ export default function ParentAttendanceTab({ userInfo }: { userInfo: UserInfo }
   const visibleRecords = useMemo(() => {
     return records.filter((r) => {
       if (r.lessonStatus === 'CANCELLED') return true;
+      // PER_LESSON bez oznaczenia — jeszcze nie ma wpisu od lektora.
+      if (r.billedPerLesson && !r.status) return false;
       if (r.lessonStatus === 'SCHEDULED' && !r.status) return false;
       return true;
     });
@@ -162,7 +165,7 @@ export default function ParentAttendanceTab({ userInfo }: { userInfo: UserInfo }
                     const displayStatus =
                       r.lessonStatus === 'CANCELLED'
                         ? 'ANULOWANA'
-                        : (r.status ?? 'PRESENT');
+                        : (r.status ?? (r.billedPerLesson ? 'UNMARKED' : 'PRESENT'));
                     return (
                       <tr key={`${r.lessonId}-${r.childId}`} className="border-t border-zinc-100">
                         <td className="px-4 py-3">

@@ -36,7 +36,8 @@ export async function GET(request: NextRequest) {
              DISTINCT JSONB_BUILD_OBJECT(
                'childId', c.id,
                'firstName', c.first_name,
-               'lastName', c.last_name
+               'lastName', c.last_name,
+               'confirmed', c.confirmed
              )
            ) FILTER (WHERE c.id IS NOT NULL AND gs.left_at IS NULL),
            '[]'::json
@@ -60,6 +61,7 @@ export async function GET(request: NextRequest) {
         childId: string;
         firstName: string;
         lastName: string;
+        confirmed?: boolean;
       }>,
     }));
 

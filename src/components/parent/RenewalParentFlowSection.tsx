@@ -63,6 +63,7 @@ export default function RenewalParentFlowSection({
   const [rejectOpen, setRejectOpen] = useState<Record<string, boolean>>({});
   const [rejectComments, setRejectComments] = useState<Record<string, string>>({});
   const [declineOpen, setDeclineOpen] = useState<Record<string, boolean>>({});
+  const [dataConfirmed, setDataConfirmed] = useState<Record<string, boolean>>({});
   const [contractPreview, setContractPreview] = useState<ParentContractDocument | null>(null);
   const busyRef = useRef(false);
 
@@ -356,15 +357,37 @@ export default function RenewalParentFlowSection({
             {r.status === 'ACCEPTED' && (
               <div className="mt-3 space-y-3">
                 <p className="text-sm text-emerald-800">
-                  Propozycja zaakceptowana. Potwierdź dane do umowy — szkoła wygeneruje dokument po
-                  ostatecznym zatwierdzeniu grupy.
+                  Propozycja zaakceptowana. Potwierdź i zapisz dane do umowy — szkoła wygeneruje
+                  dokument po ostatecznym zatwierdzeniu grupy.
                 </p>
+                <label className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 accent-[#0f6e56]"
+                    checked={Boolean(dataConfirmed[r.id])}
+                    onChange={(e) =>
+                      setDataConfirmed((p) => ({ ...p, [r.id]: e.target.checked }))
+                    }
+                  />
+                  <span>
+                    Potwierdzam, że dane do umowy i faktury są{' '}
+                    <strong>aktualne i poprawne</strong>. Po zapisaniu poczekam na wygenerowanie
+                    umowy przez szkołę.
+                  </span>
+                </label>
                 <button
                   type="button"
-                  disabled={busyId === r.id}
+                  disabled={busyId === r.id || !dataConfirmed[r.id]}
                   className="rounded-full bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
                   onClick={() =>
                     void runAction(r.id, async () => {
+                      if (!dataConfirmed[r.id]) {
+                        onFlash({
+                          kind: 'error',
+                          message: 'Potwierdź, że dane do umowy i faktury są aktualne.',
+                        });
+                        return false;
+                      }
                       const res = await fetch('/api/renewals/contract-data/submit', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -375,7 +398,7 @@ export default function RenewalParentFlowSection({
                       if (!res.ok) {
                         onFlash({
                           kind: 'error',
-                          message: data.message ?? 'Nie udało się potwierdzić danych',
+                          message: data.message ?? 'Nie udało się zapisać danych',
                         });
                         return false;
                       }
@@ -383,20 +406,20 @@ export default function RenewalParentFlowSection({
                         kind: 'success',
                         message:
                           data.message ??
-                          'Dane potwierdzone. Poczekaj na wygenerowanie umowy przez szkołę.',
+                          'Dane zapisane. Poczekaj na wygenerowanie umowy przez szkołę.',
                       });
                       return true;
                     })
                   }
                 >
-                  Potwierdzam dane — czekam na umowę
+                  Zapisz dane do umowy
                 </button>
               </div>
             )}
 
             {r.status === 'AWAITING_CONTRACT' && (
               <p className="mt-2 text-sm text-violet-900">
-                Dane do umowy zostały przekazane. Poczekaj na ostateczne zatwierdzenie grupy — szkoła
+                Dane do umowy zostały zapisane. Poczekaj na ostateczne zatwierdzenie grupy — szkoła
                 wygeneruje umowę na rok {r.season}.
               </p>
             )}

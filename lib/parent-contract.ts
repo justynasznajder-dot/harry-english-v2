@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { formatPersonName } from "@/lib/format-person-name";
 import {
-  applyDiscountsToAmount,
+  // applyDiscountsToAmount, // wyłączone — sezon cen ręcznych
   DISCOUNT_KEYS,
   getSchoolDiscountSettings,
   hasIndividualPriceOverride,
@@ -36,7 +36,7 @@ import {
 import { ensureChildClientNumber, isAnnexContractNumber } from "@/lib/client-numbers";
 import {
   buildContractAmountBreakdown,
-  parseContractAmountBreakdown,
+  // parseContractAmountBreakdown, // wyłączone przy finalize — rabaty z breakdownu nie są odtwarzane
   type ContractAmountBreakdown,
 } from "@/lib/contract-amount-breakdown";
 import { resolveLessonUnitPrice, resolveMonthlyUnitPrice, resolveYearlyUnitPrice, type PaymentType } from "@/lib/lesson-pricing";
@@ -360,7 +360,11 @@ export function computeParentContractAmount(
   const total = sumChildrenBaseAmounts(included, paymentType);
   if (total == null || total <= 0) return null;
 
-  return applyDiscountsToAmount(total, options.discountKeys, options.discountSettings);
+  // Rabaty % wyłączone — kwota = suma stawek ręcznych.
+  void options.discountKeys;
+  void options.discountSettings;
+  return total;
+  // return applyDiscountsToAmount(total, options.discountKeys, options.discountSettings);
 }
 
 export function buildChildRateSnapshots(
@@ -1083,6 +1087,10 @@ export async function finalizeContractPricingAtSign(
   }));
 
   const paymentType = parsePaymentType(contract.payment_type);
+  // Rabaty % wyłączone — nie odtwarzamy zniżek z breakdownu / flag umowy.
+  const discountKeys: DiscountKey[] = [];
+  const discountSettings = await getSchoolDiscountSettings(contract.school_id);
+  /*
   const existing = parseContractAmountBreakdown(contract.amount_breakdown);
 
   let discountKeys: DiscountKey[];
@@ -1105,6 +1113,10 @@ export async function finalizeContractPricingAtSign(
     }
     discountSettings = await getSchoolDiscountSettings(contract.school_id);
   }
+  */
+  void contract.discount_sibling;
+  void contract.discount_large_family;
+  void contract.amount_breakdown;
 
   const breakdown = buildContractAmountBreakdown({
     paymentType,

@@ -16,7 +16,6 @@ type ProfileForm = {
   billingType: BillingType;
   companyName: string;
   nip: string;
-  pesel: string;
 };
 
 type Flash = { kind: 'success' | 'error'; message: string };
@@ -41,7 +40,6 @@ const emptyForm = (): ProfileForm => ({
   billingType: 'private',
   companyName: '',
   nip: '',
-  pesel: '',
 });
 
 function childActivityLabel(child: ProfileChild): { label: string; className: string } {
@@ -99,7 +97,6 @@ export default function ParentProfileSection({
           billingType?: string;
           companyName?: string | null;
           nip?: string | null;
-          pesel?: string | null;
         } | null;
         user?: {
           firstName?: string;
@@ -122,7 +119,6 @@ export default function ParentProfileSection({
         billingType: p?.billingType === 'company' ? 'company' : 'private',
         companyName: p?.companyName ?? '',
         nip: p?.nip ?? '',
-        pesel: p?.pesel ?? '',
       });
     } finally {
       setLoading(false);
@@ -143,7 +139,6 @@ export default function ParentProfileSection({
       address: form.address,
       city: form.city,
       zipCode: form.zipCode,
-      pesel: form.pesel,
       companyName: form.companyName,
       nip: form.nip,
     });
@@ -171,7 +166,7 @@ export default function ParentProfileSection({
           address: form.address,
           city: form.city,
           zipCode: form.zipCode,
-          pesel: form.billingType === 'private' ? form.pesel : null,
+          pesel: null,
           companyName: form.billingType === 'company' ? form.companyName : null,
           nip: form.billingType === 'company' ? form.nip : null,
         }),
@@ -327,7 +322,7 @@ export default function ParentProfileSection({
                     onChange={() => patch({ billingType: 'private' })}
                     className="accent-[#0f6e56] disabled:opacity-60"
                   />
-                  Osoba prywatna (PESEL)
+                  Osoba prywatna
                 </label>
                 <label
                   className={`inline-flex items-center gap-2 text-sm ${
@@ -355,17 +350,6 @@ export default function ParentProfileSection({
             {form.billingType === 'private' ? (
               <>
                 <div className="space-y-1 md:col-span-2">
-                  <label className="text-sm font-medium text-zinc-800">PESEL</label>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={11}
-                    value={form.pesel}
-                    onChange={(e) => patch({ pesel: e.target.value })}
-                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 [color-scheme:light] placeholder:text-zinc-400"
-                  />
-                </div>
-                <div className="space-y-1 md:col-span-2">
                   <label className="text-sm font-medium text-zinc-800">Adres</label>
                   <input
                     type="text"
@@ -376,21 +360,21 @@ export default function ParentProfileSection({
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-sm font-medium text-zinc-800">Miasto</label>
-                  <input
-                    type="text"
-                    value={form.city}
-                    onChange={(e) => patch({ city: e.target.value })}
-                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 [color-scheme:light] placeholder:text-zinc-400"
-                  />
-                </div>
-                <div className="space-y-1">
                   <label className="text-sm font-medium text-zinc-800">Kod pocztowy</label>
                   <input
                     type="text"
                     value={form.zipCode}
                     onChange={(e) => patch({ zipCode: e.target.value })}
                     placeholder="00-000"
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 [color-scheme:light] placeholder:text-zinc-400"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-zinc-800">Miasto</label>
+                  <input
+                    type="text"
+                    value={form.city}
+                    onChange={(e) => patch({ city: e.target.value })}
                     className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 [color-scheme:light] placeholder:text-zinc-400"
                   />
                 </div>
@@ -430,21 +414,21 @@ export default function ParentProfileSection({
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-sm font-medium text-zinc-800">Miasto</label>
-                  <input
-                    type="text"
-                    value={form.city}
-                    onChange={(e) => patch({ city: e.target.value })}
-                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 [color-scheme:light] placeholder:text-zinc-400"
-                  />
-                </div>
-                <div className="space-y-1">
                   <label className="text-sm font-medium text-zinc-800">Kod pocztowy</label>
                   <input
                     type="text"
                     value={form.zipCode}
                     onChange={(e) => patch({ zipCode: e.target.value })}
                     placeholder="00-000"
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 [color-scheme:light] placeholder:text-zinc-400"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-zinc-800">Miasto</label>
+                  <input
+                    type="text"
+                    value={form.city}
+                    onChange={(e) => patch({ city: e.target.value })}
                     className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 [color-scheme:light] placeholder:text-zinc-400"
                   />
                 </div>

@@ -1,18 +1,12 @@
 import { NextResponse } from "next/server";
+import { clearAllAuthCookies } from "@/lib/auth";
 
 export async function POST() {
   const response = NextResponse.json({
-    message: "Wylogowano pomyślnie"
+    message: "Wylogowano pomyślnie",
   });
 
-  // Usuń cookie z tokenem
-  response.cookies.set('auth-token', '', {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    maxAge: 0, // Natychmiastowe wygaśnięcie
-    path: '/',
-  });
+  clearAllAuthCookies(response);
 
   return response;
 }

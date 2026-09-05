@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { completePastScheduledLessons } from "@/lib/lesson-completion";
 import {
   fetchParentGroups,
+  fetchParentProposedGroups,
   fetchUpcomingLessonsForGroups,
 } from "@/lib/parent-portal";
 import { requireParentContext } from "@/lib/parent-portal-auth";
@@ -26,11 +27,15 @@ export async function GET(request: NextRequest) {
       lessonsByGroup.set(lesson.groupId, list);
     }
 
+    const proposedGroups =
+      groups.length === 0 ? await fetchParentProposedGroups(parentId, schoolId) : [];
+
     return NextResponse.json({
       groups: groups.map((g) => ({
         ...g,
         upcomingLessons: (lessonsByGroup.get(g.groupId) ?? []).slice(0, 5),
       })),
+      proposedGroups,
     });
   } catch (error) {
     console.error("GET /api/parent/groups:", error);

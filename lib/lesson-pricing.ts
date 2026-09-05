@@ -14,7 +14,7 @@ export function parsePriceDecimal(
   return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
-/** Efektywna stawka za jedno zajęcie: override enrollment/child > cennik grupy. */
+/** Efektywna stawka za jedno zajęcie: override enrollment/child (bez cennika grupy w tym sezonie). */
 export function resolveLessonUnitPrice(params: {
   groupPricePerLesson?: string | number | null;
   enrollmentOverride?: string | number | null;
@@ -24,10 +24,13 @@ export function resolveLessonUnitPrice(params: {
   if (stored != null) return stored;
   const enrollment = parsePriceDecimal(params.enrollmentOverride);
   if (enrollment != null) return enrollment;
-  return parsePriceDecimal(params.groupPricePerLesson);
+  // Cennik grupy wyłączony — ceny ręczne per dziecko. Przywrócić przy automatyzacji:
+  // return parsePriceDecimal(params.groupPricePerLesson);
+  void params.groupPricePerLesson;
+  return null;
 }
 
-/** Efektywna stawka ratalna: override enrollment/child > cennik grupy. */
+/** Efektywna stawka ratalna: override enrollment/child (bez cennika grupy w tym sezonie). */
 export function resolveMonthlyUnitPrice(params: {
   groupPriceMonthly?: string | number | null;
   enrollmentOverride?: string | number | null;
@@ -37,10 +40,13 @@ export function resolveMonthlyUnitPrice(params: {
   if (stored != null) return stored;
   const enrollment = parsePriceDecimal(params.enrollmentOverride);
   if (enrollment != null) return enrollment;
-  return parsePriceDecimal(params.groupPriceMonthly);
+  // Cennik grupy wyłączony — ceny ręczne per dziecko. Przywrócić przy automatyzacji:
+  // return parsePriceDecimal(params.groupPriceMonthly);
+  void params.groupPriceMonthly;
+  return null;
 }
 
-/** Efektywna stawka jednorazowa: override enrollment/child > cennik grupy. */
+/** Efektywna stawka jednorazowa: override enrollment/child (bez cennika grupy w tym sezonie). */
 export function resolveYearlyUnitPrice(params: {
   groupPriceYearly?: string | number | null;
   enrollmentOverride?: string | number | null;
@@ -50,5 +56,8 @@ export function resolveYearlyUnitPrice(params: {
   if (stored != null) return stored;
   const enrollment = parsePriceDecimal(params.enrollmentOverride);
   if (enrollment != null) return enrollment;
-  return parsePriceDecimal(params.groupPriceYearly);
+  // Cennik grupy wyłączony — ceny ręczne per dziecko. Przywrócić przy automatyzacji:
+  // return parsePriceDecimal(params.groupPriceYearly);
+  void params.groupPriceYearly;
+  return null;
 }

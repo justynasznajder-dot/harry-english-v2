@@ -188,7 +188,7 @@ export default function MessagesPanel({
     templateFieldValues?: Record<string, string>;
   } | null>(null);
 
-  const canPickIndividuals = mode === 'manager' || mode === 'teacher' || mode === 'parent';
+  const canPickIndividuals = mode === 'manager' || mode === 'teacher';
   const canUseExternalEmails = mode === 'manager' || mode === 'teacher';
 
   const clearComposeFields = useCallback((options?: {
@@ -631,6 +631,16 @@ export default function MessagesPanel({
     return name;
   };
 
+  // Rodzic: jeden adresat (zarządca) — wybierz automatycznie, gdy jest dokładnie jeden.
+  useEffect(() => {
+    if (!composeOpen || mode !== 'parent') return;
+    if (recipients.length === 1 && !singleRecipientId) {
+      const r = recipients[0];
+      setSingleRecipientId(r.id);
+      setSelectedRecipientLabels({ [r.id]: recipientLabel(r) });
+    }
+  }, [composeOpen, mode, recipients, singleRecipientId]);
+
   const parseExternalEmailBulk = () => {
     const parsed = parseEmailList(externalEmailBulkPaste);
     if (parsed.length === 0) {
@@ -961,6 +971,13 @@ export default function MessagesPanel({
           Nowa wiadomość
         </button>
       </div>
+
+      {mode === 'parent' && (
+        <p className="text-sm leading-relaxed text-zinc-600">
+          Tutaj możesz skontaktować się ze szkołą bezpośrednio przez portal — napisz wiadomość, a
+          odpowiedź zobaczysz w tej skrzynce.
+        </p>
+      )}
 
       {error && (
         <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">

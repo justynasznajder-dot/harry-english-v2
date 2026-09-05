@@ -27,8 +27,40 @@ type GroupInfo = {
   upcomingLessons: UpcomingLesson[];
 };
 
+type ProposedGroupInfo = {
+  childId: string;
+  childFirstName: string;
+  childLastName: string;
+  groupId: string;
+  groupName: string;
+  level: string | null;
+  schedule: string;
+  locationName: string;
+  locationAddress: string | null;
+  teacherName: string;
+  accessLevel: string;
+};
+
+function proposedStatusLabel(accessLevel: string): string {
+  switch (accessLevel) {
+    case 'PROPOSED':
+      return 'Propozycja grupy — czekamy na Twoją decyzję';
+    case 'NEGOTIATING':
+      return 'Negocjacja terminu — szkoła przygotuje nową propozycję';
+    case 'ACCEPTED':
+      return 'Grupa przypisana — uzupełnij dane do umowy';
+    case 'AWAITING_CONTRACT':
+      return 'Oczekuje na wygenerowanie umowy przez szkołę';
+    case 'CONTRACT_READY':
+      return 'Umowa gotowa do podpisu';
+    default:
+      return 'Propozycja grupy w trakcie zapisu';
+  }
+}
+
 export default function ParentGroupTab() {
   const [groups, setGroups] = useState<GroupInfo[]>([]);
+  const [proposedGroups, setProposedGroups] = useState<ProposedGroupInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,17 +71,21 @@ export default function ParentGroupTab() {
       const r = await fetch('/api/parent/groups', { cache: 'no-store', credentials: 'include' });
       const data = (await r.json().catch(() => ({}))) as {
         groups?: GroupInfo[];
+        proposedGroups?: ProposedGroupInfo[];
         message?: string;
       };
       if (!r.ok) {
         setError(data.message ?? 'Nie udało się pobrać danych grupy');
         setGroups([]);
+        setProposedGroups([]);
         return;
       }
       setGroups(data.groups ?? []);
+      setProposedGroups(data.proposedGroups ?? []);
     } catch {
       setError('Błąd połączenia z serwerem');
       setGroups([]);
+      setProposedGroups([]);
     } finally {
       setLoading(false);
     }
@@ -74,6 +110,57 @@ export default function ParentGroupTab() {
         <h2 className="text-xl font-bold text-zinc-900 md:text-2xl">Moja grupa</h2>
         <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
           {error}
+        </div>
+      </section>
+    );
+  }
+
+  if (groups.length === 0 && proposedGroups.length > 0) {
+    return (
+      <section className="space-y-4 rounded-3xl border border-emerald-100 bg-white p-5 md:p-6">
+        <header>
+          <h2 className="text-xl font-bold text-zinc-900 md:text-2xl">Moja grupa</h2>
+          <p className="mt-1 text-sm text-zinc-600">
+            Propozycja grupy z procesu zapisu. Pełne informacje o zajęciach pojawią się po
+            zakończeniu zapisu.
+          </p>
+        </header>
+
+        <div className="space-y-4">
+          {proposedGroups.map((g) => (
+            <article
+              key={`${g.childId}-${g.groupId}`}
+              className="rounded-2xl border border-sky-200 bg-sky-50/50 p-4 md:p-5"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <p className="text-base font-semibold text-zinc-900">
+                  {g.childFirstName} {g.childLastName}
+                </p>
+                <span className="rounded-full bg-sky-100 px-2.5 py-0.5 text-xs font-semibold text-sky-900">
+                  Propozycja
+                </span>
+              </div>
+              <p className="mt-2 text-sm text-sky-900">{proposedStatusLabel(g.accessLevel)}</p>
+
+              <div className="mt-4 grid gap-2 text-sm sm:grid-cols-[max-content_1fr]">
+                <span className="font-semibold text-zinc-800">Grupa:</span>
+                <span>{g.groupName}</span>
+                <span className="font-semibold text-zinc-800">Poziom:</span>
+                <span>{g.level ?? '—'}</span>
+                <span className="font-semibold text-zinc-800">Harmonogram:</span>
+                <span>{g.schedule}</span>
+                <span className="font-semibold text-zinc-800">Lokalizacja:</span>
+                <span>
+                  {g.locationName}
+                  {g.locationAddress ? (
+                    <span className="block text-zinc-600">{g.locationAddress}</span>
+                  ) : null}
+                </span>
+                <span className="font-semibold text-zinc-800">Lektor:</span>
+                <span>{g.teacherName}</span>
+              </div>
+            </article>
+          ))}
         </div>
       </section>
     );

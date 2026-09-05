@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import nodemailer, { type SendMailOptions } from "nodemailer";
+import { ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE } from "@/lib/enrollment-status";
 
 const EMAIL_IMAGES_DIR = path.join(process.cwd(), "public", "images");
 
@@ -888,7 +889,7 @@ export async function sendProposalEmail(
     childFirstName?: string;
     childLastName?: string;
   },
-  /** Mail uzupełniający po negocjacji — bez danych logowania (rodzic ma już konto). */
+  options?: { complimentaryCompleted?: boolean },
 ) {
   const portalUrl = `${getAppBaseUrl()}/portal/login`;
   const p = getEmailPalette();
@@ -903,7 +904,13 @@ export async function sendProposalEmail(
 
   const loginHtml = `
       <p style="margin:16px 0 8px 0;font-size:15px;line-height:1.6;color:${p.text};">
-        Aby zobaczyć szczegóły propozycji i podjąć decyzję, zaloguj się do portalu danymi, których używasz na co dzień.
+        ${
+          options?.complimentaryCompleted
+            ? "Zaloguj się do portalu danymi, których używasz na co dzień — zapis jest już zakończony."
+            : ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
+              ? "Aby zobaczyć szczegóły propozycji i podjąć decyzję, zaloguj się do portalu danymi, których używasz na co dzień."
+              : "Zaloguj się do portalu danymi, których używasz na co dzień — uzupełnij dane do umowy. Dokument przygotuje szkoła."
+        }
       </p>
       <p style="margin:0 0 12px 0;font-size:14px;line-height:1.6;color:${p.text};opacity:0.85;">
         Nie pamiętasz hasła? Skorzystaj z opcji „Zapomniałem hasła" na stronie logowania.
@@ -915,6 +922,17 @@ Zaloguj się do portalu danymi, których używasz na co dzień.
 Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logowania.
 `;
 
+  const introHtml = options?.complimentaryCompleted
+    ? `Przygotowaliśmy grupę dla ${safeChildName}. Zapis został zakończony (tryb bez opłat) — zaloguj się do portalu, aby zobaczyć szczegóły.`
+    : ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
+      ? `Przygotowaliśmy nową propozycję grupy dla ${safeChildName}. Zaakceptuj ją w portalu, a następnie uzupełnij dane do umowy. Umowę przygotuje szkoła.`
+      : `Przygotowaliśmy grupę dla ${safeChildName}. Zaloguj się do portalu i uzupełnij dane do umowy — dokument przygotuje szkoła.`;
+  const introText = options?.complimentaryCompleted
+    ? `Przygotowaliśmy grupę dla ${childNameText}. Zapis został zakończony (tryb bez opłat) — zaloguj się do portalu, aby zobaczyć szczegóły:`
+    : ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
+      ? `Przygotowaliśmy nową propozycję grupy dla ${childNameText}. Zaakceptuj ją w portalu, a następnie uzupełnij dane do umowy. Umowę przygotuje szkoła:`
+      : `Przygotowaliśmy grupę dla ${childNameText}. Zaloguj się do portalu i uzupełnij dane do umowy — dokument przygotuje szkoła:`;
+
   await sendHarryMail({
     from: {
       name: "Harry English",
@@ -924,7 +942,7 @@ Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logow
     subject: "Nowa propozycja grupy - Harry English",
     html: buildEmailShell({
       title: `Dzień dobry ${escapeHtmlForEmail(parentName)},`,
-      intro: `Przygotowaliśmy nową propozycję grupy dla ${safeChildName}. Zaakceptuj ją w portalu, a następnie uzupełnij dane do umowy. Umowę przygotuje szkoła.`,
+      intro: introHtml,
       contentHtml: `
         <ul style="margin:0 0 12px 18px;padding:0;font-size:15px;line-height:1.6;color:${p.text};">
           <li><strong>Grupa:</strong> ${escapeHtmlForEmail(proposal.groupName)}</li>
@@ -940,7 +958,7 @@ Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logow
     }),
     text: `Dzień dobry ${parentName},
 
-Przygotowaliśmy nową propozycję grupy dla ${childNameText}. Zaakceptuj ją w portalu, a następnie uzupełnij dane do umowy. Umowę przygotuje szkoła:
+${introText}
 - Grupa: ${proposal.groupName}
 - Lokalizacja: ${proposal.locationName}
 - Termin: ${proposal.schedule}
@@ -964,7 +982,8 @@ export async function sendCombinedProposalEmail(
     loginEmail: string;
     /** null = istniejące konto — nie podajemy nowego hasła */
     tempPassword: string | null;
-  }
+  },
+  options?: { complimentaryCompleted?: boolean },
 ) {
   const portalUrl = `${getAppBaseUrl()}/portal/login`;
   const p = getEmailPalette();
@@ -1054,6 +1073,11 @@ ${
     childCount === 1
       ? "Przygotowaliśmy propozycję grupy dla Twojego dziecka."
       : `Przygotowaliśmy propozycje grup dla ${childCount} dzieci.`;
+  const introAction = options?.complimentaryCompleted
+    ? "Zapis został zakończony (tryb bez opłat) — zaloguj się do portalu, aby zobaczyć szczegóły."
+    : ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
+      ? "Zaakceptuj je w portalu, uzupełnij dane do umowy — dokument przygotuje szkoła po zatwierdzeniu grupy."
+      : "Zaloguj się do portalu i uzupełnij dane do umowy — dokument przygotuje szkoła po zatwierdzeniu grupy.";
 
   await sendHarryMail({
     from: {
@@ -1067,7 +1091,7 @@ ${
         : `Propozycje grup (${childCount} dzieci) - Harry English`,
     html: buildEmailShell({
       title: `Dzień dobry ${escapeHtmlForEmail(parentName)},`,
-      intro: `${introPlural} Zaakceptuj je w portalu, uzupełnij dane do umowy — dokument przygotuje szkoła po zatwierdzeniu grupy.`,
+      intro: `${introPlural} ${introAction}`,
       contentHtml: `
         ${proposalsHtml}
         ${credentialsHtml}
@@ -1079,7 +1103,7 @@ ${
     }),
     text: `Dzień dobry ${parentName},
 
-${introPlural} Zaakceptuj je w portalu, uzupełnij dane do umowy — dokument przygotuje szkoła po zatwierdzeniu grupy.
+${introPlural} ${introAction}
 
 ${proposalsText}
 ${credentialsText}
