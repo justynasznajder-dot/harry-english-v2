@@ -374,15 +374,23 @@ export async function ensureLessonsThroughActiveSchoolYear(opts: {
 
 /**
  * Przypina aktywne terminy grupy do aktywnego roku (= potwierdzenie) i generuje zajęcia.
+ * `lessonCount` = docelowa liczba zajęć w aktywnym roku (SCHEDULED+COMPLETED);
+ * system dokłada tylko brakujące, w datach roku (od dziś / początku roku do końca).
  * Święta państwowe PL są dopinane automatycznie przed generowaniem.
  */
 export async function confirmScheduleAndGenerateLessons(opts: {
   schoolId: string;
   groupId: string;
   teacherId: string | null;
-  /** Dokładnie tyle nowych zajęć wygenerować (chronologicznie od dziś). */
+  /** Docelowa liczba zajęć w aktywnym roku — dopełnij brakujące. */
   lessonCount: number;
-}): Promise<GenerateLessonsOutcome & { templatesConfirmed?: number }> {
+}): Promise<
+  GenerateLessonsOutcome & {
+    templatesConfirmed?: number;
+    targetCount?: number;
+    existingCount?: number;
+  }
+> {
   const { schoolId, groupId, teacherId, lessonCount } = opts;
   const activeYear = await getActiveSchoolYear(schoolId);
   if (!activeYear) {
@@ -400,6 +408,8 @@ export async function confirmScheduleAndGenerateLessons(opts: {
   }
 
   const yearId = String((activeYear as { id: string }).id);
+  const targetCount = Math.floor(lessonCount);
+
   const updated = await queryDb<{ id: string }>(
     `UPDATE schedule_templates
      SET school_year_id = $2
@@ -414,14 +424,48 @@ export async function confirmScheduleAndGenerateLessons(opts: {
     return { ok: false, reason: "NO_TEMPLATES", message: "Brak aktywnych terminów w harmonogramie" };
   }
 
+  const existingRes = await queryDb<{ cnt: number }>(
+    `SELECT COUNT(*)::int AS cnt
+     FROM lessons
+     WHERE group_id = $1
+       AND school_year_id = $2
+       AND status IN ('SCHEDULED', 'COMPLETED')`,
+    [groupId, yearId],
+  );
+  const existingCount = existingRes.rows[0]?.cnt ?? 0;
+  const missing = Math.max(0, targetCount - existingCount);
+
+  if (missing === 0) {
+    return {
+      ok: true,
+      created: 0,
+      retroactive: false,
+      templatesConfirmed: updated.rows.length,
+      targetCount,
+      existingCount,
+      message: `Cel na rok szkolny już osiągnięty (${existingCount}/${targetCount} zajęć). Nie dodano nowych.`,
+    };
+  }
+
   const result = await ensureLessonsThroughActiveSchoolYear({
     schoolId,
     groupId,
     teacherId,
-    limit: Math.floor(lessonCount),
+    limit: missing,
   });
   if (!result.ok) return result;
-  return { ...result, templatesConfirmed: updated.rows.length };
+  return {
+    ...result,
+    templatesConfirmed: updated.rows.length,
+    targetCount,
+    existingCount,
+    message:
+      result.created > 0
+        ? `Dodano ${result.created} brakując${
+            result.created === 1 ? "e zajęcie" : result.created < 5 ? "e zajęcia" : "ych zajęć"
+          } (łącznie ${existingCount + result.created}/${targetCount} w aktywnym roku).`
+        : `Nie dodano nowych zajęć — brak wolnych terminów w zakresie aktywnego roku (obecnie ${existingCount}/${targetCount}).`,
+  };
 }
 
 export type LessonBackfillBatchResult = {

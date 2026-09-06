@@ -255,6 +255,8 @@ model group_students {
   lesson_unit_price Decimal?      @db.Decimal(10, 2)
   monthly_unit_price Decimal?     @db.Decimal(10, 2)
   yearly_unit_price Decimal?      @db.Decimal(10, 2)
+  /// Ile razy w tygodniu dziecko uczęszcza w tej grupie (1 lub 2). NULL = jak pełna frekwencja (2).
+  lessons_per_week  Int?
   children          children      @relation(fields: [child_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   groups            groups        @relation(fields: [group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   schools           schools       @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -282,6 +284,8 @@ model groups {
   price_yearly           Decimal?              @db.Decimal(10, 2)
   price_per_lesson       Decimal?              @db.Decimal(10, 2)
   teacher_pickup_consent Boolean               @default(false)
+  /// Ile razy w tygodniu grupa ma zajęcia (1 lub 2). Cel zajęć/rok = wartość × 33.
+  lessons_per_week       Int                   @default(1)
   contract_children      contract_children[]
   contracts              contracts[]
   enrollment_requests    enrollment_requests[]
@@ -549,6 +553,8 @@ model schedule_templates {
   duration_min   Int           @default(60)
   school_year_id String?
   active         Boolean       @default(true)
+  /// Dla grup 2×: ten termin jest dniem zajęć dla dzieci chodzących 1× w tygodniu.
+  once_weekly_day Boolean      @default(false)
   schools        schools       @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   lessons        lessons[]
   groups         groups        @relation(fields: [group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)

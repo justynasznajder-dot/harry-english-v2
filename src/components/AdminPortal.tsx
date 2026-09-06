@@ -108,6 +108,7 @@ interface GroupRow {
   price_monthly?: string | number | null;
   price_yearly?: string | number | null;
   price_per_lesson?: string | number | null;
+  lessons_per_week?: number | null;
   has_schedule?: boolean;
   future_lessons_count?: number;
   missing_generated_lessons?: boolean;
@@ -205,6 +206,7 @@ interface GroupDetail {
     price_yearly?: string | number | null;
     price_per_lesson?: string | number | null;
     teacher_pickup_consent?: boolean;
+    lessons_per_week?: number | null;
   };
   scheduleTemplates: Array<{
     id: string;
@@ -213,6 +215,7 @@ interface GroupDetail {
     duration_min: number;
     location_id: string;
     location_name: string | null;
+    once_weekly_day?: boolean;
     future_lessons_count?: number;
     completed_lessons_count?: number;
   }>;
@@ -224,6 +227,7 @@ interface GroupDetail {
     birth_date: string;
     left_at: string | null;
     confirmed: boolean;
+    lessons_per_week?: number | null;
     lesson_unit_price?: string | null;
     monthly_unit_price?: string | null;
     yearly_unit_price?: string | null;
@@ -590,7 +594,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [children, setChildren] = useState<ChildRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [generateLessonsCount, setGenerateLessonsCount] = useState('30');
+  const [generateLessonsCount, setGenerateLessonsCount] = useState('33');
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [search, setSearch] = useState('');
   const [showInactive, setShowInactive] = useState(false);
@@ -758,12 +762,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     name: '',
     level: '',
     teacherId: '',
-    maxStudents: 12,
+    maxStudents: 8,
     active: true,
+    lessonsPerWeek: 1 as 1 | 2,
     priceMonthly: '',
     priceYearly: '',
     pricePerLesson: '',
-    teacherPickupConsent: false,
+    teacherPickupConsent: true,
   });
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [groupDetail, setGroupDetail] = useState<GroupDetail | null>(null);
@@ -815,8 +820,15 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     dayOfWeek: 1,
     startTime: '16:00',
     locationId: '',
-    durationMin: 60,
+    durationMin: 45,
+    onceWeeklyDay: false,
   });
+  const [addStudentLessonsPerWeek, setAddStudentLessonsPerWeek] = useState<1 | 2>(2);
+  const [deleteLessonModal, setDeleteLessonModal] = useState<{
+    id: string;
+    groupId: string;
+    label: string;
+  } | null>(null);
   const [addStudentModalOpen, setAddStudentModalOpen] = useState(false);
   const [studentSearch, setStudentSearch] = useState('');
   const [selectedChildId, setSelectedChildId] = useState('');
@@ -1898,11 +1910,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         teacherId: g.teacher_id ?? '',
         maxStudents: g.max_students,
         active: g.active,
+        lessonsPerWeek: Number(g.lessons_per_week) === 2 ? 2 : 1,
         priceMonthly: priceFieldFromDb(g.price_monthly),
         priceYearly: priceFieldFromDb(g.price_yearly),
         pricePerLesson: priceFieldFromDb(g.price_per_lesson),
         teacherPickupConsent: Boolean(g.teacher_pickup_consent),
       });
+      setGenerateLessonsCount(String(Number(g.lessons_per_week) === 2 ? 66 : 33));
     },
     [sessionSchoolId],
   );
@@ -2018,6 +2032,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           priceYearly: null,
           pricePerLesson: null,
           teacherPickupConsent: groupForm.teacherPickupConsent,
+          lessonsPerWeek: groupForm.lessonsPerWeek,
         }),
       });
       const data = await res.json();
@@ -2055,9 +2070,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const openAddStudentModal = useCallback(() => {
     setStudentSearch('');
     setSelectedChildId('');
+    const groupLpw = Number(groupDetail?.group.lessons_per_week) === 2 ? 2 : 1;
+    setAddStudentLessonsPerWeek(groupLpw === 1 ? 1 : 2);
     setAddStudentModalOpen(true);
     void loadChildren();
-  }, [loadChildren]);
+  }, [loadChildren, groupDetail?.group.lessons_per_week]);
 
   const openScheduleModal = useCallback(() => {
     const defaultLocationId =
@@ -2066,7 +2083,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       dayOfWeek: 1,
       startTime: '16:00',
       locationId: defaultLocationId,
-      durationMin: 60,
+      durationMin: 45,
+      onceWeeklyDay: false,
     });
     setScheduleModalOpen(true);
   }, [groupForm.locationId, groupDetail?.group.location_id]);
@@ -4847,9 +4865,24 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               min="1"
               value={groupForm.maxStudents}
               onChange={(e) =>
-                setGroupForm((p) => ({ ...p, maxStudents: Number(e.target.value || 12) }))
+                setGroupForm((p) => ({ ...p, maxStudents: Number(e.target.value || 8) }))
               }
             />
+          </div>
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-zinc-700">Zajęcia w tygodniu</label>
+            <select
+              className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+              value={groupForm.lessonsPerWeek}
+              onChange={(e) => {
+                const lpw = Number(e.target.value) === 2 ? 2 : 1;
+                setGroupForm((p) => ({ ...p, lessonsPerWeek: lpw }));
+                setGenerateLessonsCount(String(lpw === 2 ? 66 : 33));
+              }}
+            >
+              <option value={1}>1× w tygodniu (33 zajęć/rok)</option>
+              <option value={2}>2× w tygodniu (66 zajęć/rok)</option>
+            </select>
           </div>
           {renderParentContractConsentFields()}
           {/*
@@ -4915,6 +4948,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       ? () => loadGroupDetail(groupId, quietReload ? { quiet: true } : getGroupDetailReloadOptions(groupId))
       : () => Promise.resolve();
     const scheduleTemplates = detail?.scheduleTemplates ?? [];
+    const groupIsTwiceWeekly =
+      Number(detail?.group.lessons_per_week ?? groupForm.lessonsPerWeek) === 2;
+    const hasOnceWeeklyDay = scheduleTemplates.some((st) => st.once_weekly_day);
     const schoolYearLessons = detail?.schoolYearLessons ?? [];
     const futureLessonsCount = detail?.generatedLessons?.futureCount ?? 0;
     const completedLessonsCount = detail?.generatedLessons?.completedCount ?? 0;
@@ -4980,8 +5016,15 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               scheduleTemplates.map((st) => (
                 <div key={st.id} className="flex items-center justify-between rounded-xl border border-emerald-100 p-3">
                   <div>
-                    <p>
-                      {dayNames[st.day_of_week] ?? `Dzień ${st.day_of_week}`} · {st.start_time.slice(0, 5)} · {st.duration_min} min
+                    <p className="flex flex-wrap items-center gap-2">
+                      <span>
+                        {dayNames[st.day_of_week] ?? `Dzień ${st.day_of_week}`} · {st.start_time.slice(0, 5)} · {st.duration_min} min
+                      </span>
+                      {st.once_weekly_day ? (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
+                          dzień dla dzieci 1×
+                        </span>
+                      ) : null}
                     </p>
                     <p className="text-zinc-600">{st.location_name ?? '-'}</p>
                     {(st.future_lessons_count ?? 0) > 0 || (st.completed_lessons_count ?? 0) > 0 ? (
@@ -5005,26 +5048,65 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       )
                     )}
                   </div>
-                  <button
-                    type="button"
-                    disabled={!hasActiveSchoolYear}
-                    className="rounded-lg bg-red-600 px-3 py-1 text-white disabled:cursor-not-allowed disabled:opacity-50"
-                    onClick={async () => {
-                      const res = await fetch(`/api/admin/schedule-templates/${st.id}`, { method: 'DELETE' });
-                      if (!res.ok) {
-                        pushToast('error', 'Nie udało się usunąć terminu');
-                        return;
-                      }
-                      pushToast('success', 'Termin usunięty');
-                      await reloadDetail();
-                    }}
-                  >
-                    Usuń
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {groupIsTwiceWeekly && hasActiveSchoolYear ? (
+                      <button
+                        type="button"
+                        className={`rounded-lg px-3 py-1 text-sm font-medium ${
+                          st.once_weekly_day
+                            ? 'bg-amber-200 text-amber-900'
+                            : 'bg-zinc-100 text-zinc-700 hover:bg-amber-50'
+                        }`}
+                        onClick={async () => {
+                          const res = await fetch(`/api/admin/schedule-templates/${st.id}`, {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ onceWeeklyDay: !st.once_weekly_day }),
+                          });
+                          if (!res.ok) {
+                            const data = await res.json().catch(() => ({}));
+                            pushToast('error', data.message ?? 'Nie udało się oznaczyć dnia');
+                            return;
+                          }
+                          pushToast(
+                            'success',
+                            !st.once_weekly_day
+                              ? 'Oznaczono dzień dla dzieci 1×'
+                              : 'Usunięto oznaczenie dnia 1×',
+                          );
+                          await reloadDetail();
+                        }}
+                      >
+                        {st.once_weekly_day ? 'Dzień 1×' : 'Ustaw jako dzień 1×'}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      disabled={!hasActiveSchoolYear}
+                      className="rounded-lg bg-red-600 px-3 py-1 text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={async () => {
+                        const res = await fetch(`/api/admin/schedule-templates/${st.id}`, { method: 'DELETE' });
+                        if (!res.ok) {
+                          pushToast('error', 'Nie udało się usunąć terminu');
+                          return;
+                        }
+                        pushToast('success', 'Termin usunięty');
+                        await reloadDetail();
+                      }}
+                    >
+                      Usuń
+                    </button>
+                  </div>
                 </div>
               ))
             )}
           </div>
+          {groupIsTwiceWeekly && scheduleTemplates.length > 0 && !hasOnceWeeklyDay ? (
+            <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              Grupa ma zajęcia 2× w tygodniu — oznacz, który termin jest dniem dla dzieci chodzących
+              tylko 1×.
+            </p>
+          ) : null}
         </section>
 
         <section className="rounded-2xl border border-emerald-100 bg-white p-4 md:p-5">
@@ -5032,8 +5114,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             <div>
               <h4 className="font-semibold text-zinc-900">Zajęcia w kalendarzu</h4>
               <p className="text-sm text-zinc-600">
-                Lista zajęć wygenerowanych z harmonogramu na aktywny rok szkolny. Zajęcia powstają
-                po kliknięciu „Wygeneruj zajęcia” (z pominięciem dni wolnych).
+                Lista zajęć wygenerowanych z harmonogramu na aktywny rok szkolny. „Liczba zajęć” to
+                cel na rok — system doda tylko brakujące (w datach aktywnego roku, z pominięciem dni
+                wolnych).
               </p>
               {disabled && (
                 <p className="mt-1 text-xs text-amber-700">Najpierw zapisz grupę, aby zobaczyć zajęcia.</p>
@@ -5041,8 +5124,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               {!disabled && detail?.scheduleNeedsConfirmation && (
                 <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
                   Harmonogram nie jest potwierdzony na rok{' '}
-                  {detail.activeSchoolYear?.name ?? 'aktywny'}. Uzupełnij dni wolne, wpisz liczbę zajęć
-                  i kliknij Wygeneruj zajęcia.
+                  {detail.activeSchoolYear?.name ?? 'aktywny'}. Uzupełnij dni wolne, ustaw cel liczby
+                  zajęć na rok i kliknij Wygeneruj zajęcia.
                 </p>
               )}
               {!disabled &&
@@ -5050,7 +5133,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 scheduleTemplates.length > 0 &&
                 detail?.missingGeneratedLessons === true && (
                 <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
-                  Brak wygenerowanych zajęć dla tej grupy w aktywnym roku szkolnym.
+                  Brak zdefiniowanej liczby zajęć na aktywny rok szkolny.
                 </p>
               )}
               {!disabled && schoolYearLessonCount > 0 && (
@@ -5075,7 +5158,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               scheduleTemplates.length > 0 && (
               <div className="flex shrink-0 flex-col items-stretch gap-2 sm:items-end">
                 <label className="block text-sm">
-                  <span className="mb-1 block font-semibold text-zinc-700">Liczba zajęć</span>
+                  <span className="mb-1 block font-semibold text-zinc-700">
+                    Liczba zajęć (cel na rok)
+                  </span>
                   <input
                     type="number"
                     min={1}
@@ -5083,6 +5168,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     className="w-full rounded-xl border border-emerald-200 px-3 py-2 sm:w-28"
                     value={generateLessonsCount}
                     onChange={(e) => setGenerateLessonsCount(e.target.value)}
+                    title="Docelowa liczba zajęć w aktywnym roku — system doda tylko brakujące"
                   />
                 </label>
                 <button
@@ -5133,51 +5219,70 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
 
           {!disabled && (
             <div className="mt-3">
-              {schoolYearLessons.length === 0 ? (
-                <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-600">
-                  {!detail?.activeSchoolYear && !detail?.lessonsSchoolYear
-                    ? 'Brak aktywnego roku szkolnego — nie ma listy zajęć do wyświetlenia.'
-                    : 'Brak zajęć w planie na ten rok szkolny.'}
-                </p>
-              ) : (
+              {(() => {
+                const visibleLessons = schoolYearLessons.filter(
+                  (lesson) => lesson.status !== 'CANCELLED',
+                );
+                if (visibleLessons.length === 0) {
+                  return (
+                    <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-600">
+                      {!detail?.activeSchoolYear && !detail?.lessonsSchoolYear
+                        ? 'Brak aktywnego roku szkolnego — nie ma listy zajęć do wyświetlenia.'
+                        : 'Brak zajęć w planie na ten rok szkolny.'}
+                    </p>
+                  );
+                }
+                return (
                 <ul className="max-h-80 space-y-1.5 overflow-y-auto text-sm">
-                  {schoolYearLessons.map((lesson) => {
+                  {visibleLessons.map((lesson, index) => {
                     const isCompleted = lesson.status === 'COMPLETED';
-                    const isCancelled = lesson.status === 'CANCELLED';
-                    const statusLabel = isCompleted
-                      ? 'zakończone'
-                      : isCancelled
-                        ? 'anulowane'
-                        : 'zaplanowane';
+                    const statusLabel = isCompleted ? 'zakończone' : 'zaplanowane';
                     const statusClass = isCompleted
                       ? 'bg-zinc-200 text-zinc-700'
-                      : isCancelled
-                        ? 'bg-rose-100 text-rose-800'
-                        : 'bg-emerald-100 text-emerald-800';
+                      : 'bg-emerald-100 text-emerald-800';
                     const rowClass = isCompleted
                       ? 'border-zinc-200 bg-zinc-50'
-                      : isCancelled
-                        ? 'border-rose-100 bg-rose-50/50'
-                        : 'border-emerald-100 bg-emerald-50/40';
+                      : 'border-emerald-100 bg-emerald-50/40';
                     return (
                       <li
                         key={lesson.id}
                         className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 ${rowClass}`}
                       >
-                        <span className={`font-medium ${isCompleted || isCancelled ? 'text-zinc-600' : 'text-zinc-900'}`}>
+                        <span className={`font-medium ${isCompleted ? 'text-zinc-600' : 'text-zinc-900'}`}>
+                          <span className="mr-2 inline-block min-w-[1.5rem] text-zinc-500">
+                            {index + 1}.
+                          </span>
                           {formatSchoolDateTime(lesson.scheduled_at)}
                           {lesson.duration_min ? (
                             <span className="ml-2 font-normal text-zinc-500">· {lesson.duration_min} min</span>
                           ) : null}
                         </span>
-                        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusClass}`}>
-                          {statusLabel}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusClass}`}>
+                            {statusLabel}
+                          </span>
+                          {!isCompleted && !disabled && groupId ? (
+                            <button
+                              type="button"
+                              className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-semibold text-red-800 hover:bg-red-100"
+                              onClick={() => {
+                                setDeleteLessonModal({
+                                  id: lesson.id,
+                                  groupId,
+                                  label: formatSchoolDateTime(lesson.scheduled_at),
+                                });
+                              }}
+                            >
+                              Usuń
+                            </button>
+                          ) : null}
+                        </div>
                       </li>
                     );
                   })}
                 </ul>
-              )}
+                );
+              })()}
             </div>
           )}
         </section>
@@ -5229,6 +5334,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       >
                         {st.confirmed ? 'potwierdzony' : 'niepotwierdzony'}
                       </span>
+                      {Number(detail.group.lessons_per_week) === 2 ? (
+                        <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-semibold text-zinc-700">
+                          {Number(st.lessons_per_week) === 1 ? '1× / tydz.' : '2× / tydz.'}
+                        </span>
+                      ) : null}
                     </p>
                     <p className="text-zinc-600">{st.birth_date}</p>
                   </div>
@@ -5292,13 +5402,15 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             name: '',
             level: '',
             teacherId: '',
-            maxStudents: 12,
+            maxStudents: 8,
             active: true,
+            lessonsPerWeek: 1,
             priceMonthly: '',
             priceYearly: '',
             pricePerLesson: '',
-            teacherPickupConsent: false,
+            teacherPickupConsent: true,
           });
+          setGenerateLessonsCount('33');
           void loadLocations();
         }}
       />
@@ -5633,7 +5745,22 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               </div>
               <div className="space-y-1">
                 <label className="block text-sm font-medium text-zinc-700">Maksymalna liczba uczniów</label>
-                <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="number" min="1" value={groupForm.maxStudents} onChange={(e) => setGroupForm((p) => ({ ...p, maxStudents: Number(e.target.value || 12) }))} />
+                <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="number" min="1" value={groupForm.maxStudents} onChange={(e) => setGroupForm((p) => ({ ...p, maxStudents: Number(e.target.value || 8) }))} />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-zinc-700">Zajęcia w tygodniu</label>
+                <select
+                  className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                  value={groupForm.lessonsPerWeek}
+                  onChange={(e) => {
+                    const lpw = Number(e.target.value) === 2 ? 2 : 1;
+                    setGroupForm((p) => ({ ...p, lessonsPerWeek: lpw }));
+                    setGenerateLessonsCount(String(lpw === 2 ? 66 : 33));
+                  }}
+                >
+                  <option value={1}>1× w tygodniu (33 zajęć/rok)</option>
+                  <option value={2}>2× w tygodniu (66 zajęć/rok)</option>
+                </select>
               </div>
               {renderParentContractConsentFields()}
               {/*
@@ -5707,6 +5834,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                           priceYearly: null,
                           pricePerLesson: null,
                           teacherPickupConsent: groupForm.teacherPickupConsent,
+                          lessonsPerWeek: groupForm.lessonsPerWeek,
                         }),
                       });
                       const data = await res.json();
@@ -7208,6 +7336,64 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         ))}
       </div>
 
+      {deleteLessonModal && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-emerald-100 bg-white p-5 shadow-xl">
+            <h3 className="text-lg font-semibold text-zinc-900">Usuń zajęcia</h3>
+            <p className="mt-3 text-sm text-zinc-600">
+              Czy na pewno chcesz usunąć te zajęcia z kalendarza?
+            </p>
+            <p className="mt-2 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2 text-sm font-medium text-zinc-900">
+              {deleteLessonModal.label}
+            </p>
+            <p className="mt-2 text-xs text-zinc-500">
+              Zajęcia znikną z listy. Później możesz je ponownie wygenerować do celu na rok.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-xl bg-zinc-200 px-4 py-2 text-sm font-semibold text-zinc-800"
+                disabled={busy}
+                onClick={() => setDeleteLessonModal(null)}
+              >
+                Anuluj
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                onClick={async () => {
+                  const lessonId = deleteLessonModal.id;
+                  const groupIdForReload = deleteLessonModal.groupId;
+                  setBusy(true);
+                  try {
+                    const res = await fetch(`/api/admin/lessons/${lessonId}`, {
+                      method: 'DELETE',
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) {
+                      pushToast('error', data.message ?? 'Nie udało się usunąć zajęć');
+                      return;
+                    }
+                    pushToast('success', data.message ?? 'Zajęcia usunięte');
+                    setDeleteLessonModal(null);
+                    setClassesCalRefreshSignal((s) => s + 1);
+                    await loadGroupDetail(
+                      groupIdForReload,
+                      getGroupDetailReloadOptions(groupIdForReload),
+                    );
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                {busy ? 'Usuwanie…' : 'Usuń zajęcia'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {closeYearModal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
@@ -7578,11 +7764,43 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 <label className="block text-sm font-medium text-zinc-700">Czas trwania (minuty)</label>
                 <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="number" min="15" value={scheduleForm.durationMin} onChange={(e) => setScheduleForm((p) => ({ ...p, durationMin: Number(e.target.value || 60) }))} />
               </div>
+              {Number(groupDetail.group.lessons_per_week) === 2 ? (
+                <label className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 accent-amber-700"
+                    checked={scheduleForm.onceWeeklyDay}
+                    onChange={(e) =>
+                      setScheduleForm((p) => ({ ...p, onceWeeklyDay: e.target.checked }))
+                    }
+                  />
+                  <span>
+                    To jest dzień dla dzieci chodzących tylko <strong>1× w tygodniu</strong>
+                    (w grupie 2× tylko jeden termin może mieć to oznaczenie).
+                  </span>
+                </label>
+              ) : null}
               <div className="flex justify-end gap-2">
                 <button className="rounded-xl bg-zinc-200 px-3 py-2" onClick={() => setScheduleModalOpen(false)}>Anuluj</button>
                 <button
                   className="rounded-xl bg-emerald-600 px-3 py-2 text-white"
                   onClick={async () => {
+                    if (!selectedGroupId) return;
+                    const existing = groupDetail?.scheduleTemplates ?? [];
+                    const dup = existing.some((st) => {
+                      const stTime = String(st.start_time ?? '').slice(0, 5);
+                      return (
+                        Number(st.day_of_week) === Number(scheduleForm.dayOfWeek) &&
+                        stTime === scheduleForm.startTime
+                      );
+                    });
+                    if (dup) {
+                      pushToast(
+                        'error',
+                        'Ten termin już jest w harmonogramie grupy (ten sam dzień i godzina).',
+                      );
+                      return;
+                    }
                     const res = await fetch('/api/admin/schedule-templates', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
@@ -7626,6 +7844,23 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   </option>
                 ))}
               </select>
+              {Number(groupDetail?.group.lessons_per_week) === 2 ? (
+                <div className="space-y-1">
+                  <label className="block text-sm font-medium text-zinc-700">
+                    Frekwencja w tej grupie
+                  </label>
+                  <select
+                    className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                    value={addStudentLessonsPerWeek}
+                    onChange={(e) =>
+                      setAddStudentLessonsPerWeek(Number(e.target.value) === 1 ? 1 : 2)
+                    }
+                  >
+                    <option value={2}>2× w tygodniu (oba dni)</option>
+                    <option value={1}>1× w tygodniu (tylko oznaczony dzień)</option>
+                  </select>
+                </div>
+              ) : null}
               {availableChildren.length === 0 ? (
                 <p className="text-sm text-zinc-600">
                   Brak dostępnych dzieci do przypisania (aktywne, spoza tej grupy). Odśwież stronę lub
@@ -7644,7 +7879,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     const res = await fetch('/api/admin/group-students', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ groupId: selectedGroupId, childId: selectedChildId }),
+                      body: JSON.stringify({
+                        groupId: selectedGroupId,
+                        childId: selectedChildId,
+                        lessonsPerWeek: addStudentLessonsPerWeek,
+                      }),
                     });
                     const data = await res.json();
                     if (!res.ok) {

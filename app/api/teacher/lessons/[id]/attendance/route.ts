@@ -5,6 +5,7 @@ import {
   completePastScheduledLessons,
   ensureDefaultPresentAttendance,
 } from "@/lib/lesson-completion";
+import { sqlStudentAttendsLesson } from "@/lib/lessons-per-week";
 import { sqlSchoolTimestampAsTimestamptz, toIsoUtc } from "@/lib/school-timezone";
 
 const ATTENDANCE_STATUSES = new Set(["PRESENT", "ABSENT", "EXCUSED", "LATE"]);
@@ -100,11 +101,14 @@ export async function GET(
              AND (cc.group_id IS NULL OR cc.group_id = gs.group_id)
          ) AS billed_per_lesson
        FROM group_students gs
+       JOIN groups g ON g.id = gs.group_id
+       JOIN lessons l ON l.id = $1 AND l.group_id = g.id
        JOIN children c ON c.id = gs.child_id
-       LEFT JOIN attendance a ON a.lesson_id = $1 AND a.child_id = c.id
+       LEFT JOIN attendance a ON a.lesson_id = l.id AND a.child_id = c.id
        WHERE gs.group_id = $2
          AND gs.left_at IS NULL
          AND c.active = TRUE
+         AND ${sqlStudentAttendsLesson("gs", "g", "l")}
        ORDER BY c.last_name, c.first_name`,
       [lessonId, lesson.group_id]
     );
@@ -191,9 +195,14 @@ export async function PUT(
       const memberRes = await queryDb<{ id: string }>(
         `SELECT gs.id
          FROM group_students gs
-         WHERE gs.group_id = $1 AND gs.child_id = $2 AND gs.left_at IS NULL
+         JOIN groups g ON g.id = gs.group_id
+         JOIN lessons l ON l.id = $3 AND l.group_id = g.id
+         WHERE gs.group_id = $1
+           AND gs.child_id = $2
+           AND gs.left_at IS NULL
+           AND ${sqlStudentAttendsLesson("gs", "g", "l")}
          LIMIT 1`,
-        [groupId, childId]
+        [groupId, childId, lessonId]
       );
       if (!memberRes.rows[0]) continue;
 

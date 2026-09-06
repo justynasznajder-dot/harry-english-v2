@@ -1,4 +1,5 @@
 import { queryDb } from "@/lib/db";
+import { sqlStudentAttendsLesson } from "@/lib/lessons-per-week";
 import { sqlSchoolTimestampAsTimestamptz } from "@/lib/school-timezone";
 
 /** Umowa PER_LESSON — obecność tylko po ręcznym oznaczeniu przez lektora. */
@@ -31,12 +32,14 @@ export async function ensureDefaultPresentAttendance(
     `INSERT INTO attendance (lesson_id, child_id, status)
      SELECT l.id, c.id, 'PRESENT'::"AttendanceStatus"
      FROM lessons l
+     JOIN groups g ON g.id = l.group_id
      JOIN group_students gs
        ON gs.group_id = l.group_id
       AND gs.left_at IS NULL
      JOIN children c ON c.id = gs.child_id AND c.active = TRUE
      WHERE l.id = ANY($1::text[])
        AND l.status = 'COMPLETED'
+       AND ${sqlStudentAttendsLesson("gs", "g", "l")}
        AND NOT (${PER_LESSON_CONTRACT_EXISTS})
        AND NOT EXISTS (
          SELECT 1

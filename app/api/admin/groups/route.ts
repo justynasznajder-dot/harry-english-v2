@@ -7,6 +7,7 @@ import {
   resolveInsertSchoolId,
 } from "@/lib/admin-school-context";
 import { sqlExistsUnfilledFutureScheduleSlot } from "@/lib/lesson-generation";
+import { normalizeLessonsPerWeek } from "@/lib/lessons-per-week";
 import { sqlSchoolTimestampAsTimestamptz } from "@/lib/school-timezone";
 import {
   findActiveGroupNameConflict,
@@ -41,6 +42,7 @@ export async function GET(request: NextRequest) {
       price_monthly: string | null;
       price_yearly: string | null;
       price_per_lesson: string | null;
+      lessons_per_week: number;
       has_schedule: boolean;
       future_lessons_count: number;
       missing_generated_lessons: boolean;
@@ -57,6 +59,7 @@ export async function GET(request: NextRequest) {
          g.price_monthly::text AS price_monthly,
          g.price_yearly::text AS price_yearly,
          g.price_per_lesson::text AS price_per_lesson,
+         g.lessons_per_week,
          CASE WHEN t.id IS NULL THEN NULL ELSE CONCAT(t.first_name, ' ', t.last_name) END AS teacher_name,
          COALESCE(gl.name, MAX(l.name)) AS location_name,
          COALESCE(
@@ -138,7 +141,7 @@ export async function POST(request: NextRequest) {
       name: bodyName,
       level,
       teacherId,
-      maxStudents = 12,
+      maxStudents = 8,
       active = true,
       locationId,
       school_id: bodySchoolId,
@@ -147,6 +150,7 @@ export async function POST(request: NextRequest) {
       priceYearly,
       pricePerLesson,
       teacherPickupConsent,
+      lessonsPerWeek,
     }: {
       name?: string | null;
       level?: string;
@@ -160,6 +164,7 @@ export async function POST(request: NextRequest) {
       priceYearly?: number | string | null;
       pricePerLesson?: number | string | null;
       teacherPickupConsent?: boolean;
+      lessonsPerWeek?: number | string | null;
     } = body;
 
     if (!teacherId) {
@@ -247,13 +252,15 @@ export async function POST(request: NextRequest) {
       groupName = uniqueName.name;
     }
 
+    const groupLessonsPerWeek = normalizeLessonsPerWeek(lessonsPerWeek) ?? 1;
+
     const inserted = await queryDb<{ id: string }>(
       `INSERT INTO groups (
          id, school_id, teacher_id, name, level, max_students, active,
          created_at, location_id, price_monthly, price_yearly,
-         price_per_lesson, teacher_pickup_consent
+         price_per_lesson, teacher_pickup_consent, lessons_per_week
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, $9, $10, $11, $12)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, $9, $10, $11, $12, $13)
        RETURNING id`,
       [
         randomUUID(),
@@ -268,6 +275,7 @@ export async function POST(request: NextRequest) {
         priceYearly != null && priceYearly !== "" ? Number(priceYearly) : null,
         pricePerLesson != null && pricePerLesson !== "" ? Number(pricePerLesson) : null,
         Boolean(teacherPickupConsent),
+        groupLessonsPerWeek,
       ]
     );
 

@@ -7,7 +7,6 @@ import {
   requireAdminSchoolContext,
   tenantNotFoundResponse,
 } from "@/lib/admin-school-context";
-import { ensureLessonsThroughActiveSchoolYear } from "@/lib/lesson-generation";
 
 export async function POST(request: NextRequest) {
   const ctx = await requireAdminSchoolContext(request);
@@ -15,7 +14,14 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { groupId, dayOfWeek, startTime, locationId, durationMin = 60 } = body;
+    const {
+      groupId,
+      dayOfWeek,
+      startTime,
+      locationId,
+      durationMin = 45,
+      onceWeeklyDay = false,
+    } = body;
     if (!groupId || !dayOfWeek || !startTime || !locationId) {
       return NextResponse.json({ message: "Brak wymaganych pól" }, { status: 400 });
     }
@@ -23,8 +29,35 @@ export async function POST(request: NextRequest) {
     const group = await assertGroupInSchool(String(groupId), ctx.schoolId);
     if (!group.ok) return tenantNotFoundResponse("Nie znaleziono grupy");
 
+    const groupMeta = await queryDb<{ lessons_per_week: number | null }>(
+      `SELECT lessons_per_week FROM groups WHERE id = $1 LIMIT 1`,
+      [groupId]
+    );
+    const groupIsTwiceWeekly = Number(groupMeta.rows[0]?.lessons_per_week) === 2;
+    const markOnceWeekly = groupIsTwiceWeekly && Boolean(onceWeeklyDay);
+
     const location = await assertLocationInSchool(String(locationId), ctx.schoolId);
     if (!location.ok) return tenantNotFoundResponse("Nie znaleziono lokalizacji");
+
+    const duplicate = await queryDb<{ id: string }>(
+      `SELECT id
+       FROM schedule_templates
+       WHERE group_id = $1
+         AND active = TRUE
+         AND day_of_week = $2
+         AND start_time = $3::time
+       LIMIT 1`,
+      [groupId, dayOfWeek, startTime]
+    );
+    if (duplicate.rows[0]) {
+      return NextResponse.json(
+        {
+          message:
+            "Ten termin już jest w harmonogramie grupy (ten sam dzień i godzina). Usuń istniejący albo wybierz inny termin.",
+        },
+        { status: 409 }
+      );
+    }
 
     const teacherConflict = await queryDb<{ name: string; start_time: string }>(
       `SELECT g.name, st.start_time::text
@@ -67,41 +100,41 @@ export async function POST(request: NextRequest) {
     }
 
     const activeYear = await getActiveSchoolYear(ctx.schoolId);
+    const templateId = randomUUID();
+
+    if (markOnceWeekly) {
+      await queryDb(
+        `UPDATE schedule_templates
+         SET once_weekly_day = FALSE
+         WHERE group_id = $1 AND once_weekly_day = TRUE`,
+        [groupId]
+      );
+    }
+
     await queryDb(
-      `INSERT INTO schedule_templates (school_id, id, group_id, location_id, day_of_week, start_time, duration_min, school_year_id)
-       VALUES ($1, $2, $3, $4, $5, $6::time, $7, $8)`,
+      `INSERT INTO schedule_templates (
+         school_id, id, group_id, location_id, day_of_week, start_time,
+         duration_min, school_year_id, once_weekly_day
+       )
+       VALUES ($1, $2, $3, $4, $5, $6::time, $7, $8, $9)`,
       [
         ctx.schoolId,
-        randomUUID(),
+        templateId,
         groupId,
         locationId,
         dayOfWeek,
         startTime,
         durationMin,
         activeYear?.id ?? null,
+        markOnceWeekly,
       ]
     );
 
-    const lessons = await ensureLessonsThroughActiveSchoolYear({
-      schoolId: ctx.schoolId,
-      groupId: String(groupId),
-      teacherId: group.teacherId,
-    });
-
-    if (!lessons.ok) {
-      return NextResponse.json({
-        message: `Termin został dodany. Zajęcia nie zostały wygenerowane automatycznie: ${lessons.message}`,
-        lessonsCreated: 0,
-        lessonsWarning: lessons.message,
-      });
-    }
-
     return NextResponse.json({
       message:
-        lessons.created > 0
-          ? `Termin został dodany. Automatycznie wygenerowano ${lessons.created} zajęć do końca roku szkolnego.`
-          : "Termin został dodany. Kalendarz zajęć jest już kompletny w zakresie roku szkolnego.",
-      lessonsCreated: lessons.created,
+        "Termin został dodany. Zajęcia wygenerujesz osobno przyciskiem „Wygeneruj zajęcia”.",
+      lessonsCreated: 0,
+      id: templateId,
     });
   } catch (error) {
     console.error("POST schedule template error:", error);

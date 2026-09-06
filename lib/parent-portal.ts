@@ -1,6 +1,7 @@
 import { extractContractNumber } from "@/lib/contract-html";
 import { POLISH_DAY_FROM_ST_SQL, queryDb } from "@/lib/db";
 import { ensurePolishPublicHolidaysForSchoolYear } from "@/lib/ensure-polish-public-holidays";
+import { sqlStudentAttendsLesson } from "@/lib/lessons-per-week";
 import { listPolishPublicHolidays } from "@/lib/polish-public-holidays";
 import {
   pgDateToYmd,
@@ -382,6 +383,7 @@ export async function fetchParentAttendance(
        AND c.school_id = $2
        AND c.active = TRUE
        AND l.status IN ('COMPLETED', 'SCHEDULED', 'CANCELLED')
+       AND ${sqlStudentAttendsLesson("gs", "g", "l")}
        ${childFilter}
      ORDER BY l.scheduled_at DESC
      LIMIT 300`,
@@ -667,6 +669,7 @@ export async function fetchParentCalendar(
            AND c.school_id = $2
            AND c.active = TRUE
            ${childFilter}
+           AND ${sqlStudentAttendsLesson("gs", "g", "l")}
            AND l.scheduled_at >= $3::date
            AND l.scheduled_at < ($4::date + interval '1 day')
 

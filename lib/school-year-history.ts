@@ -124,6 +124,7 @@ type MembershipCarryRow = {
   lesson_unit_price: string | null;
   monthly_unit_price: string | null;
   yearly_unit_price: string | null;
+  lessons_per_week: number | null;
 };
 
 /** Tworzy/otwiera członkostwa na nextYearId na podstawie zamkniętych wierszy (ten sam group_id). */
@@ -160,7 +161,8 @@ async function carryMembershipRowsToYear(
              school_id = $2,
              lesson_unit_price = $3,
              monthly_unit_price = $4,
-             yearly_unit_price = $5
+             yearly_unit_price = $5,
+             lessons_per_week = $6
          WHERE id = $1`,
         [
           prior.rows[0].id,
@@ -168,14 +170,15 @@ async function carryMembershipRowsToYear(
           m.lesson_unit_price,
           m.monthly_unit_price,
           m.yearly_unit_price,
+          m.lessons_per_week,
         ]
       );
     } else {
       await client.query(
         `INSERT INTO group_students (
            id, school_id, group_id, child_id, enrolled_at, school_year_id,
-           lesson_unit_price, monthly_unit_price, yearly_unit_price
-         ) VALUES ($1, $2, $3, $4, CURRENT_DATE, $5, $6, $7, $8)`,
+           lesson_unit_price, monthly_unit_price, yearly_unit_price, lessons_per_week
+         ) VALUES ($1, $2, $3, $4, CURRENT_DATE, $5, $6, $7, $8, $9)`,
         [
           randomUUID(),
           schoolId,
@@ -185,6 +188,7 @@ async function carryMembershipRowsToYear(
           m.lesson_unit_price,
           m.monthly_unit_price,
           m.yearly_unit_price,
+          m.lessons_per_week,
         ]
       );
     }
@@ -215,7 +219,8 @@ export async function attachOpenMembershipsToYear(
      RETURNING gs.id, gs.group_id, gs.child_id,
                COALESCE(c.lesson_unit_price, gs.lesson_unit_price)::text AS lesson_unit_price,
                COALESCE(c.monthly_unit_price, gs.monthly_unit_price)::text AS monthly_unit_price,
-               COALESCE(c.yearly_unit_price, gs.yearly_unit_price)::text AS yearly_unit_price`,
+               COALESCE(c.yearly_unit_price, gs.yearly_unit_price)::text AS yearly_unit_price,
+               gs.lessons_per_week`,
     [schoolId, leftAtDate, nextYearId]
   );
   const membershipsCarried = await carryMembershipRowsToYear(
@@ -260,7 +265,8 @@ export async function runSchoolYearCloseSteps(
        RETURNING gs.id, gs.group_id, gs.child_id,
                  COALESCE(c.lesson_unit_price, gs.lesson_unit_price)::text AS lesson_unit_price,
                  COALESCE(c.monthly_unit_price, gs.monthly_unit_price)::text AS monthly_unit_price,
-                 COALESCE(c.yearly_unit_price, gs.yearly_unit_price)::text AS yearly_unit_price`,
+                 COALESCE(c.yearly_unit_price, gs.yearly_unit_price)::text AS yearly_unit_price,
+                 gs.lessons_per_week`,
       [schoolId, yearId, dateTo]
     );
     membershipsClosed = memberships.rowCount ?? 0;

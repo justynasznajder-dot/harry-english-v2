@@ -2,10 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { queryDb } from "@/lib/db";
 import { requireAdminSchoolContext } from "@/lib/admin-school-context";
 import { completePastScheduledLessons } from "@/lib/lesson-completion";
-import {
-  ensureLessonsThroughActiveSchoolYear,
-  sqlExistsUnfilledFutureScheduleSlot,
-} from "@/lib/lesson-generation";
+import { sqlExistsUnfilledFutureScheduleSlot } from "@/lib/lesson-generation";
+import { normalizeLessonsPerWeek } from "@/lib/lessons-per-week";
 import { sqlSchoolTimestampAsTimestamptz, toIsoUtc } from "@/lib/school-timezone";
 import {
   findActiveGroupNameConflict,
@@ -76,12 +74,9 @@ export async function GET(
         (st) => String((st as { school_year_id?: string | null }).school_year_id ?? "") === activeYearId,
       );
 
-    if (scheduleConfirmedForActiveYear && groupRow.teacher_id) {
-      await ensureLessonsThroughActiveSchoolYear({
-        schoolId: groupSchoolId,
-        groupId: id,
-        teacherId: groupRow.teacher_id,
-      });
+    // Nie dopełniaj tu zajęć — po usunięciu z listy GET odtwarzałby luki.
+    // Generowanie tylko przez „Wygeneruj zajęcia” (i cron).
+    if (scheduleConfirmedForActiveYear) {
       await completePastScheduledLessons();
     }
 
@@ -148,6 +143,7 @@ export async function GET(
          gs.id,
          gs.enrolled_at,
          gs.left_at,
+         gs.lessons_per_week,
          c.lesson_unit_price::text AS lesson_unit_price,
          c.monthly_unit_price::text AS monthly_unit_price,
          c.yearly_unit_price::text AS yearly_unit_price,
@@ -200,6 +196,8 @@ export async function GET(
 
     const futureCount = schoolYearLessons.filter((l) => l.status === "SCHEDULED").length;
     const completedCount = schoolYearLessons.filter((l) => l.status === "COMPLETED").length;
+    // Licznik u góry: aktualne zajęcia (bez anulowanych)
+    const schoolYearCount = futureCount + completedCount;
 
     const missingGeneratedRes =
       scheduleConfirmedForActiveYear && activeYearId
@@ -218,7 +216,7 @@ export async function GET(
       generatedLessons: {
         futureCount,
         completedCount,
-        schoolYearCount: schoolYearLessons.length,
+        schoolYearCount,
       },
       missingGeneratedLessons: Boolean(missingGeneratedRes.rows[0]?.missing),
       activeSchoolYear: activeYearId
@@ -257,6 +255,7 @@ export async function PUT(
       priceYearly,
       pricePerLesson,
       teacherPickupConsent,
+      lessonsPerWeek,
     } = body;
 
     const existingRes = await queryDb<{
@@ -314,6 +313,11 @@ export async function PUT(
       }
     }
 
+    const nextLessonsPerWeek =
+      lessonsPerWeek === undefined
+        ? null
+        : normalizeLessonsPerWeek(lessonsPerWeek);
+
     await queryDb(
       `UPDATE groups
        SET name = $2,
@@ -323,8 +327,9 @@ export async function PUT(
            price_monthly = $6,
            price_yearly = $7,
            price_per_lesson = $8,
-           teacher_pickup_consent = COALESCE($9, teacher_pickup_consent)
-       WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $10" : ""}`,
+           teacher_pickup_consent = COALESCE($9, teacher_pickup_consent),
+           lessons_per_week = COALESCE($10, lessons_per_week)
+       WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $11" : ""}`,
       tenant.role === "MANAGER"
         ? [
             id,
@@ -336,6 +341,7 @@ export async function PUT(
             priceYearly != null && priceYearly !== "" ? Number(priceYearly) : null,
             pricePerLesson != null && pricePerLesson !== "" ? Number(pricePerLesson) : null,
             teacherPickupConsent ?? null,
+            nextLessonsPerWeek,
             ctx.schoolId,
           ]
         : [
@@ -348,6 +354,7 @@ export async function PUT(
             priceYearly != null && priceYearly !== "" ? Number(priceYearly) : null,
             pricePerLesson != null && pricePerLesson !== "" ? Number(pricePerLesson) : null,
             teacherPickupConsent ?? null,
+            nextLessonsPerWeek,
           ]
     );
     return NextResponse.json({ message: "Grupa została zaktualizowana" });

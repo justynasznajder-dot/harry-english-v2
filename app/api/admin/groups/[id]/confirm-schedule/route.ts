@@ -6,7 +6,7 @@ import {
 } from "@/lib/admin-school-context";
 import { confirmScheduleAndGenerateLessons } from "@/lib/lesson-generation";
 
-/** Potwierdza harmonogram grupy na aktywny rok i generuje podaną liczbę zajęć. */
+/** Potwierdza harmonogram grupy na aktywny rok i dopełnia zajęcia do podanej liczby docelowej. */
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -44,12 +44,9 @@ export async function POST(
     return NextResponse.json({
       created: result.created,
       templatesConfirmed: result.templatesConfirmed ?? 0,
-      message:
-        result.created > 0
-          ? `Wygenerowano ${result.created} ${
-              result.created === 1 ? "zajęcie" : result.created < 5 ? "zajęcia" : "zajęć"
-            }. Harmonogram potwierdzony na aktywny rok.`
-          : "Harmonogram potwierdzony. Nie dodano nowych zajęć (brak wolnych terminów w zakresie roku lub wszystkie już istnieją).",
+      targetCount: result.targetCount,
+      existingCount: result.existingCount,
+      message: result.message,
     });
   } catch (error) {
     console.error("POST groups/[id]/confirm-schedule:", error);

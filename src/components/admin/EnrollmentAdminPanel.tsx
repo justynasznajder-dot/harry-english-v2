@@ -69,6 +69,13 @@ function draftIsSaveable(draft?: ProposalDraft): boolean {
   return Boolean((draft?.groupId ?? '').trim()) || draftHasRequiredPrices(draft);
 }
 
+/** W trybie bez opłat: grupa i stawki opcjonalne. */
+function draftIsComplimentarySaveable(draft?: ProposalDraft): boolean {
+  // Puste też OK — zapis potwierdza tryb; grupę można dopisać później.
+  void draft;
+  return true;
+}
+
 /*
  * Rabaty procentowe (KDR) — wyłączone na ten sezon (ceny ręczne per dziecko).
  * function applyDiscountPreview(...) { ... applyDiscountsToAmount ... }
@@ -281,12 +288,23 @@ export default function EnrollmentAdminPanel({
   /**
    * Zapisz: wystarczy pełne dane u jednego dziecka; pozostałe mogą być puste.
    * Częściowe stawki (1–2 z 3) u któregokolwiek dziecka blokują zapis.
+   * Tryb bez opłat: można zapisać bez grupy i bez stawek.
    */
   const proposalBatchSaveReady =
     proposalNewChildren.length >= 1 &&
-    proposalNewChildren.every((c) => !draftHasPartialPrices(proposalDrafts[c.requestId])) &&
-    proposalNewChildren.some((c) => draftIsSaveable(proposalDrafts[c.requestId]));
+    (proposalParentIsComplimentary
+      ? true
+      : proposalNewChildren.every((c) => !draftHasPartialPrices(proposalDrafts[c.requestId])) &&
+        proposalNewChildren.some((c) => draftIsSaveable(proposalDrafts[c.requestId])));
   const proposalBatchSaveTitle = (() => {
+    if (proposalParentIsComplimentary) {
+      const anyGroup = proposalNewChildren.some((c) =>
+        Boolean((proposalDrafts[c.requestId]?.groupId ?? '').trim()),
+      );
+      return anyGroup
+        ? 'Zapisz przydział grupy (bez opłat, bez e-maila) — grupa opcjonalna'
+        : 'Zapisz tryb bez opłat — grupę możesz przypisać później';
+    }
     if (proposalBatchSaveReady) {
       const allHaveGroup = proposalNewChildren
         .filter((c) => draftIsSaveable(proposalDrafts[c.requestId]))
@@ -305,6 +323,9 @@ export default function EnrollmentAdminPanel({
     proposalNewChildren
       .filter((child) => {
         if (!opts?.saveOnly) return true;
+        if (proposalParentIsComplimentary) {
+          return draftIsComplimentarySaveable(proposalDrafts[child.requestId]);
+        }
         return draftIsSaveable(proposalDrafts[child.requestId]);
       })
       .map((child) => {
@@ -312,9 +333,15 @@ export default function EnrollmentAdminPanel({
         return {
           requestId: child.requestId,
           groupId: draft?.groupId ?? '',
-          lessonUnitPrice: draft?.lessonUnitPrice?.trim() || null,
-          monthlyUnitPrice: draft?.monthlyUnitPrice?.trim() || null,
-          yearlyUnitPrice: draft?.yearlyUnitPrice?.trim() || null,
+          lessonUnitPrice: proposalParentIsComplimentary
+            ? null
+            : draft?.lessonUnitPrice?.trim() || null,
+          monthlyUnitPrice: proposalParentIsComplimentary
+            ? null
+            : draft?.monthlyUnitPrice?.trim() || null,
+          yearlyUnitPrice: proposalParentIsComplimentary
+            ? null
+            : draft?.yearlyUnitPrice?.trim() || null,
         };
       });
 
@@ -557,7 +584,8 @@ export default function EnrollmentAdminPanel({
                     </label>
                     <p className="mt-1 text-xs text-zinc-500">
                       Po akceptacji grupy zapis kończy się bez umowy, faktur i płatności. Działa
-                      też przed utworzeniem konta (po e-mailu zgłoszenia).
+                      też przed utworzeniem konta (po e-mailu zgłoszenia). W tym trybie stawki są
+                      ukryte, a grupę możesz przypisać później — Zapisz działa od razu.
                     </p>
                     {/*
                      * KDR / zniżki procentowe — wyłączone (sezon cen ręcznych).
@@ -764,7 +792,11 @@ export default function EnrollmentAdminPanel({
                                     }))
                                   }
                                 >
-                                  <option value="">Wybierz grupę</option>
+                                  <option value="">
+                                    {proposalParentIsComplimentary
+                                      ? 'Wybierz grupę (opcjonalnie)'
+                                      : 'Wybierz grupę'}
+                                  </option>
                                   {groups.map((group) => {
                                     const label = `${group.name} · ${group.location_name} · ${group.schedule}`;
                                     return (
@@ -1072,6 +1104,15 @@ export default function EnrollmentAdminPanel({
                           pushToast('error', 'Brak danych do zapisu');
                           return;
                         }
+                        const hasAnyGroup = proposals.some((p) => Boolean(p.groupId?.trim()));
+                        if (proposalParentIsComplimentary && !hasAnyGroup) {
+                          pushToast(
+                            'success',
+                            'Tryb bez opłat aktywny — grupę możesz przypisać później',
+                          );
+                          await onRefresh();
+                          return;
+                        }
                         const res = await fetch('/api/admin/enrollment/batch', {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
@@ -1079,6 +1120,7 @@ export default function EnrollmentAdminPanel({
                             proposals,
                             sendEmail: false,
                             allowEmptyPrices: true,
+                            complimentaryMode: proposalParentIsComplimentary,
                           }),
                         });
                         const data = (await res.json().catch(() => ({}))) as {
@@ -1095,7 +1137,9 @@ export default function EnrollmentAdminPanel({
                         pushToast(
                           'success',
                           data.message ??
-                            `Zapisano dane propozycji (${data.count ?? proposals.length}) — dziecko w grupie jako niepotwierdzone`,
+                            (proposalParentIsComplimentary
+                              ? `Zapisano (${data.count ?? proposals.length}) — bez opłat`
+                              : `Zapisano dane propozycji (${data.count ?? proposals.length}) — dziecko w grupie jako niepotwierdzone`),
                         );
                         await onRefresh();
                       } catch (err) {

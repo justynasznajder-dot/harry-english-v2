@@ -121,6 +121,8 @@ export async function POST(request: NextRequest) {
       monthly_unit_price: string | null;
       yearly_unit_price: string | null;
 
+      lessons_per_week: number | null;
+
       first_name: string;
 
       last_name: string;
@@ -135,6 +137,7 @@ export async function POST(request: NextRequest) {
               cc.lesson_unit_price::text AS lesson_unit_price,
               cc.monthly_unit_price::text AS monthly_unit_price,
               cc.yearly_unit_price::text AS yearly_unit_price,
+              er.lessons_per_week,
               ch.first_name, ch.last_name,
 
               cc.attachment_1_html, cc.attachment_2_html
@@ -142,6 +145,7 @@ export async function POST(request: NextRequest) {
        FROM contract_children cc
 
        JOIN children ch ON ch.id = cc.child_id
+       LEFT JOIN enrollment_requests er ON er.id = cc.enrollment_request_id
 
        WHERE cc.contract_id = $1
 
@@ -294,6 +298,7 @@ export async function POST(request: NextRequest) {
           monthlyUnitPrice: row.monthly_unit_price,
           yearlyUnitPrice: row.yearly_unit_price,
           schoolYearId: contract.school_year_id,
+          lessonsPerWeek: row.lessons_per_week,
         });
       }
 

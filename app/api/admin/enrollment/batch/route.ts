@@ -32,6 +32,7 @@ export async function POST(request: NextRequest) {
     const proposals = (body as { proposals?: BatchProposalBody[] }).proposals;
     const sendEmail = (body as { sendEmail?: unknown }).sendEmail !== false;
     const allowEmptyPrices = (body as { allowEmptyPrices?: unknown }).allowEmptyPrices === true;
+    const complimentaryMode = (body as { complimentaryMode?: unknown }).complimentaryMode === true;
     if (!Array.isArray(proposals) || proposals.length < 1) {
       return NextResponse.json(
         { message: "Wybierz co najmniej jedno dziecko do propozycji" },
@@ -50,6 +51,10 @@ export async function POST(request: NextRequest) {
         }
         const groupId = typeof p.groupId === "string" ? p.groupId.trim() : "";
         if (!groupId) {
+          // Tryb bez opłat: grupa i stawki opcjonalne — nic do zapisania na zgłoszeniu.
+          if (complimentaryMode && allowEmptyPrices && !hasAllPriceInputs(p)) {
+            continue;
+          }
           if (!hasAllPriceInputs(p)) {
             return NextResponse.json(
               { message: "Podaj wszystkie 3 stawki albo wybierz grupę dla każdego dziecka" },
@@ -75,13 +80,13 @@ export async function POST(request: NextRequest) {
           {
             requestId: p.requestId,
             groupId,
-            lessonUnitPrice: p.lessonUnitPrice,
-            monthlyUnitPrice: p.monthlyUnitPrice,
-            yearlyUnitPrice: p.yearlyUnitPrice,
+            lessonUnitPrice: complimentaryMode ? null : p.lessonUnitPrice,
+            monthlyUnitPrice: complimentaryMode ? null : p.monthlyUnitPrice,
+            yearlyUnitPrice: complimentaryMode ? null : p.yearlyUnitPrice,
           },
           {
             ...schoolRestrict,
-            allowEmptyPrices,
+            allowEmptyPrices: allowEmptyPrices || complimentaryMode,
           }
         );
         if (!result.ok) {
@@ -92,9 +97,13 @@ export async function POST(request: NextRequest) {
         (p) => typeof p.groupId === "string" && p.groupId.trim().length > 0
       );
       return NextResponse.json({
-        message: anyWithGroup
-          ? "Zapisano dane i dodano dziecko do grupy (niepotwierdzone — bez wysyłki e-mail)"
-          : "Zapisano stawki (bez grupy — możesz uzupełnić później)",
+        message: complimentaryMode
+          ? anyWithGroup
+            ? "Zapisano przydział grupy (tryb bez opłat, bez e-maila)"
+            : "Tryb bez opłat — grupę możesz przypisać później"
+          : anyWithGroup
+            ? "Zapisano dane i dodano dziecko do grupy (niepotwierdzone — bez wysyłki e-mail)"
+            : "Zapisano stawki (bez grupy — możesz uzupełnić później)",
         saved: true,
         count: proposals.length,
       });
