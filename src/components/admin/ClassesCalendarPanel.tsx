@@ -467,6 +467,8 @@ export default function ClassesCalendarPanel({
             </div>
             <p className="mt-3 text-sm text-zinc-500">
               Rodzice dzieci z tej grupy otrzymają wiadomość w panelu oraz powiadomienie e-mail.
+              System automatycznie doda kolejny termin w harmonogramie grupy (jeśli jest wolny slot
+              do końca roku).
             </p>
             <label className="mt-4 block text-sm">
               <span className="mb-1 block font-semibold text-zinc-700">Wiadomość do rodziców</span>

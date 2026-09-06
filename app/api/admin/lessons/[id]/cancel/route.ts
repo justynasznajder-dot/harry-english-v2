@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryDb } from "@/lib/db";
 import { requireAdminSchoolContext } from "@/lib/admin-school-context";
+import { topUpLessonsAfterCancellation } from "@/lib/lesson-generation";
 import { requireMessageActor } from "@/lib/messages";
 import { notifyParents } from "@/lib/parent-notifications";
 
@@ -84,6 +85,8 @@ export async function POST(request: NextRequest, context: RouteCtx) {
       [lessonId],
     );
 
+    const topUp = await topUpLessonsAfterCancellation(lesson.school_id, lesson.group_id);
+
     const parentsRes = await queryDb<{
       id: string;
       first_name: string;
@@ -123,6 +126,11 @@ export async function POST(request: NextRequest, context: RouteCtx) {
 
     const { parentsNotified, emailsSent, emailsFailed } = notifyResult;
     let message = "Zajęcia anulowane.";
+    if (topUp.created > 0) {
+      message += " Dodano kolejny termin w harmonogramie grupy.";
+    } else if (topUp.eligible) {
+      message += " Nie udało się dodać kolejnego terminu (brak wolnych slotów do końca roku).";
+    }
     if (parentsNotified > 0) {
       message += ` Wysłano powiadomienia do ${parentsNotified} rodziców`;
       if (emailsSent > 0) message += ` (e-mail: ${emailsSent})`;
@@ -137,6 +145,8 @@ export async function POST(request: NextRequest, context: RouteCtx) {
       parentsNotified,
       emailsSent,
       emailsFailed,
+      topUpCreated: topUp.created,
+      topUpEligible: topUp.eligible,
     });
   } catch (error) {
     console.error("POST lessons/[id]/cancel error:", error);

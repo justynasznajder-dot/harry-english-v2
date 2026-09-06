@@ -520,6 +520,52 @@ export async function confirmScheduleAndGenerateLessons(opts: {
 }
 
 /**
+ * Dokłada brakujące terminy dla grupy z potwierdzonym harmonogramem i nauczycielem
+ * (przedłużając kalendarz do końca aktywnego roku). Zwraca liczbę utworzonych zajęć
+ * albo null, gdy grupa nie kwalifikuje się do top-upu.
+ */
+async function topUpLessonsForGroup(
+  schoolId: string,
+  groupId: string,
+  count: number,
+): Promise<number | null> {
+  if (count < 1) return 0;
+
+  const groupRes = await queryDb<{
+    teacher_id: string | null;
+    has_confirmed: boolean;
+  }>(
+    `SELECT g.teacher_id,
+            EXISTS (
+              SELECT 1
+              FROM schedule_templates st
+              JOIN school_years sy ON sy.id = st.school_year_id
+                AND sy.school_id = g.school_id
+                AND sy.active = TRUE
+              WHERE st.group_id = g.id
+                AND st.active = TRUE
+            ) AS has_confirmed
+     FROM groups g
+     WHERE g.id = $1
+       AND g.school_id = $2
+       AND g.active = TRUE
+     LIMIT 1`,
+    [groupId, schoolId],
+  );
+  const group = groupRes.rows[0];
+  if (!group?.teacher_id || !group.has_confirmed) return null;
+
+  const result = await ensureLessonsThroughActiveSchoolYear({
+    schoolId,
+    groupId,
+    teacherId: group.teacher_id,
+    limit: count,
+    skipHolidayEnsure: true,
+  });
+  return result.ok ? result.created : 0;
+}
+
+/**
  * Po usunięciu zajęć na dzień wolny — dokłada tyle samo nowych terminów
  * (przedłużając kalendarz do końca aktywnego roku), dla grup z potwierdzonym
  * harmonogramem i nauczycielem.
@@ -537,43 +583,26 @@ export async function topUpLessonsAfterHolidayDeletion(
 
   for (const { groupId, deletedCount } of byGroup) {
     if (deletedCount < 1) continue;
-
-    const groupRes = await queryDb<{
-      teacher_id: string | null;
-      has_confirmed: boolean;
-    }>(
-      `SELECT g.teacher_id,
-              EXISTS (
-                SELECT 1
-                FROM schedule_templates st
-                JOIN school_years sy ON sy.id = st.school_year_id
-                  AND sy.school_id = g.school_id
-                  AND sy.active = TRUE
-                WHERE st.group_id = g.id
-                  AND st.active = TRUE
-              ) AS has_confirmed
-       FROM groups g
-       WHERE g.id = $1
-         AND g.school_id = $2
-         AND g.active = TRUE
-       LIMIT 1`,
-      [groupId, schoolId],
-    );
-    const group = groupRes.rows[0];
-    if (!group?.teacher_id || !group.has_confirmed) continue;
-
-    const result = await ensureLessonsThroughActiveSchoolYear({
-      schoolId,
-      groupId,
-      teacherId: group.teacher_id,
-      limit: deletedCount,
-      skipHolidayEnsure: true,
-    });
+    const added = await topUpLessonsForGroup(schoolId, groupId, deletedCount);
+    if (added == null) continue;
     groupsProcessed += 1;
-    if (result.ok) created += result.created;
+    created += added;
   }
 
   return { groupsProcessed, created };
+}
+
+/**
+ * Po anulowaniu jednych zajęć — dokłada 1 nowy termin w harmonogramie
+ * (jak top-up po dniu wolnym), jeśli grupa ma potwierdzony harmonogram i nauczyciela.
+ */
+export async function topUpLessonsAfterCancellation(
+  schoolId: string,
+  groupId: string,
+): Promise<{ created: number; eligible: boolean }> {
+  const added = await topUpLessonsForGroup(schoolId, groupId, 1);
+  if (added == null) return { created: 0, eligible: false };
+  return { created: added, eligible: true };
 }
 
 export type LessonBackfillBatchResult = {

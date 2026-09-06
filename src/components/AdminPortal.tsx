@@ -18,6 +18,7 @@ import { usePendingEnrollmentsCount } from '@/src/components/admin/usePendingEnr
 import {
   formatSchoolDateTime,
   periodMonthKey,
+  SCHOOL_TIMEZONE,
   todayYmdSchool,
 } from '@/lib/school-timezone';
 import { defaultLessonsPerWeekForLevel, defaultTargetLessonsPerYear } from '@/lib/lessons-per-week';
@@ -850,6 +851,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     date_to: string;
   } | null>(null);
   const [yearLessonsExpandedGroupId, setYearLessonsExpandedGroupId] = useState<string | null>(null);
+  const [yearLessonsCancelModal, setYearLessonsCancelModal] = useState<{
+    id: string;
+    title: string;
+    whenLabel: string;
+  } | null>(null);
+  const [yearLessonsCancelParentMessage, setYearLessonsCancelParentMessage] = useState('');
+  const [yearLessonsCancelBusy, setYearLessonsCancelBusy] = useState(false);
   const [lessonBillingMonth, setLessonBillingMonth] = useState(() => periodMonthKey());
   const [lessonBillingRows, setLessonBillingRows] = useState<
     Array<{
@@ -5804,9 +5812,12 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 <div key={st.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-100 p-3">
                   <div>
                     <p className="flex flex-wrap items-center gap-2">
-                      <span>
+                      <Link
+                        href={`/portal/children/${st.child_id}`}
+                        className="font-medium text-[#0f6e56] underline-offset-2 hover:underline"
+                      >
                         {st.first_name} {st.last_name}
-                      </span>
+                      </Link>
                       <span
                         className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
                           st.confirmed
@@ -7743,6 +7754,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                   {g.lessons.map((lesson) => {
                                     const isCompleted = lesson.status === 'COMPLETED';
                                     const isCancelled = lesson.status === 'CANCELLED';
+                                    const isScheduled = lesson.status === 'SCHEDULED';
                                     const statusLabel = isCompleted
                                       ? 'zakończone'
                                       : isCancelled
@@ -7758,6 +7770,28 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                       : isCancelled
                                         ? 'border-rose-100 bg-rose-50/50'
                                         : 'border-emerald-100 bg-emerald-50/40';
+                                    const whenLong = (() => {
+                                      const d = new Date(lesson.scheduled_at);
+                                      if (Number.isNaN(d.getTime())) {
+                                        return formatSchoolDateTime(lesson.scheduled_at);
+                                      }
+                                      return d.toLocaleString('pl-PL', {
+                                        timeZone: SCHOOL_TIMEZONE,
+                                        weekday: 'long',
+                                        year: 'numeric',
+                                        month: 'long',
+                                        day: 'numeric',
+                                        hour: '2-digit',
+                                        minute: '2-digit',
+                                      });
+                                    })();
+                                    const cancelTitle = [
+                                      g.name,
+                                      g.location_name,
+                                      g.teacher_name,
+                                    ]
+                                      .filter((x) => Boolean(x && String(x).trim()))
+                                      .join(' · ');
                                     return (
                                       <li
                                         key={lesson.id}
@@ -7773,10 +7807,28 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                             </span>
                                           ) : null}
                                         </span>
-                                        <span
-                                          className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusClass}`}
-                                        >
-                                          {statusLabel}
+                                        <span className="flex flex-wrap items-center gap-2">
+                                          <span
+                                            className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusClass}`}
+                                          >
+                                            {statusLabel}
+                                          </span>
+                                          {isScheduled ? (
+                                            <button
+                                              type="button"
+                                              className="rounded-lg border border-rose-200 bg-white px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                                              onClick={() => {
+                                                setYearLessonsCancelParentMessage('');
+                                                setYearLessonsCancelModal({
+                                                  id: lesson.id,
+                                                  title: cancelTitle || g.name,
+                                                  whenLabel: whenLong,
+                                                });
+                                              }}
+                                            >
+                                              Anuluj
+                                            </button>
+                                          ) : null}
                                         </span>
                                       </li>
                                     );
@@ -7842,6 +7894,92 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             {renderYearLessonsList()}
           </section>
         )}
+
+        {yearLessonsCancelModal ? (
+          <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+            <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
+              <h3 className="text-lg font-semibold text-zinc-900">Anuluj zajęcia</h3>
+              <p className="mt-3 text-sm text-zinc-600">
+                Czy na pewno chcesz anulować te zajęcia?
+              </p>
+              <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2.5 text-sm text-zinc-800">
+                <p className="font-semibold">{yearLessonsCancelModal.title}</p>
+                <p className="mt-1 capitalize text-zinc-600">
+                  {yearLessonsCancelModal.whenLabel}
+                </p>
+              </div>
+              <p className="mt-3 text-sm text-zinc-500">
+                Rodzice dzieci z tej grupy otrzymają wiadomość w panelu oraz powiadomienie e-mail.
+                System automatycznie doda kolejny termin w harmonogramie grupy (jeśli jest wolny slot
+                do końca roku).
+              </p>
+              <label className="mt-4 block text-sm">
+                <span className="mb-1 block font-semibold text-zinc-700">Wiadomość do rodziców</span>
+                <span className="mb-2 block text-xs text-zinc-500">
+                  Opcjonalna treść dołączona do powiadomienia. Jeśli zostawisz puste, wysłany zostanie
+                  domyślny tekst.
+                </span>
+                <textarea
+                  className="min-h-[100px] w-full rounded-xl border border-emerald-200 px-3 py-2"
+                  value={yearLessonsCancelParentMessage}
+                  onChange={(e) => setYearLessonsCancelParentMessage(e.target.value)}
+                  placeholder="Np. Zajęcia odbędą się w innym terminie — informacja wkrótce."
+                />
+              </label>
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded-xl bg-zinc-200 px-4 py-2 text-sm font-semibold"
+                  disabled={yearLessonsCancelBusy}
+                  onClick={() => {
+                    setYearLessonsCancelModal(null);
+                    setYearLessonsCancelParentMessage('');
+                  }}
+                >
+                  Zamknij
+                </button>
+                <button
+                  type="button"
+                  disabled={yearLessonsCancelBusy}
+                  className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  onClick={async () => {
+                    setYearLessonsCancelBusy(true);
+                    try {
+                      const res = await fetch(
+                        `/api/admin/lessons/${yearLessonsCancelModal.id}/cancel`,
+                        {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            parent_message: yearLessonsCancelParentMessage.trim() || undefined,
+                          }),
+                        },
+                      );
+                      const data = await res.json().catch(() => ({}));
+                      if (!res.ok) {
+                        pushToast('error', data.message ?? 'Nie udało się anulować zajęć');
+                        return;
+                      }
+                      pushToast('success', data.message ?? 'Zajęcia anulowane');
+                      setYearLessonsCancelModal(null);
+                      setYearLessonsCancelParentMessage('');
+                      setClassesCalRefreshSignal((s) => s + 1);
+                      if (yearLessonsYearId) {
+                        void loadYearLessons(yearLessonsYearId);
+                      }
+                    } catch {
+                      pushToast('error', 'Nie udało się anulować zajęć');
+                    } finally {
+                      setYearLessonsCancelBusy(false);
+                    }
+                  }}
+                >
+                  {yearLessonsCancelBusy ? 'Anulowanie…' : 'Anuluj i powiadom rodziców'}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     );
   };
