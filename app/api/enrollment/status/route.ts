@@ -199,6 +199,10 @@ export async function GET(request: NextRequest) {
 
       created_at: Date | string;
 
+      monthly_unit_price: number | null;
+
+      yearly_unit_price: number | null;
+
     }>(
 
       `SELECT
@@ -223,7 +227,11 @@ export async function GET(request: NextRequest) {
 
          l.name AS preferred_location_name,
 
-         er.created_at
+         er.created_at,
+
+         er.monthly_unit_price,
+
+         er.yearly_unit_price
 
        FROM enrollment_requests er
 
@@ -392,6 +400,10 @@ export async function GET(request: NextRequest) {
                     : "— (nie podano)"),
 
                 submittedAt: row.created_at,
+
+                monthlyUnitPrice: row.monthly_unit_price,
+
+                yearlyUnitPrice: row.yearly_unit_price,
 
               })),
 

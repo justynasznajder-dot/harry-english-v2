@@ -112,6 +112,8 @@ export async function submitEnrollmentProposal(
     draftOnly?: boolean;
     /** Przy draftOnly — puste stawki jako NULL. */
     allowEmptyPrices?: boolean;
+    /** Tryb bez opłat: wymagane tylko jednorazowa + ratalna (za zajęcia = NULL). */
+    complimentaryPrices?: boolean;
   }
 ): Promise<
   | {
@@ -351,8 +353,14 @@ export async function submitEnrollmentProposal(
   let parsedMonthly: number | null = null;
   let parsedYearly: number | null = null;
 
-  if (complimentary) {
-    // tryb bez opłat — stawki NULL
+  if (options?.complimentaryPrices || complimentary) {
+    const monthly = parseUnitPrice(monthlyUnitPrice, "ratalna", true);
+    if (!monthly.ok) return { ok: false, status: 400, message: monthly.message };
+    const yearly = parseUnitPrice(yearlyUnitPrice, "jednorazowa", true);
+    if (!yearly.ok) return { ok: false, status: 400, message: yearly.message };
+    parsedLesson = null;
+    parsedMonthly = monthly.value;
+    parsedYearly = yearly.value;
   } else if (draftOnly && options?.allowEmptyPrices) {
     const lesson = parseUnitPrice(lessonUnitPrice, "za pojedyncze zajęcia", false);
     if (!lesson.ok) return { ok: false, status: 400, message: lesson.message };
@@ -558,6 +566,7 @@ export async function saveEnrollmentProposalDraft(
   options?: {
     restrictToSchoolId?: string;
     allowEmptyPrices?: boolean;
+    complimentaryPrices?: boolean;
   }
 ): Promise<
   | { ok: true; childId: string; parentCreated: boolean; groupChanged: boolean }
@@ -568,6 +577,7 @@ export async function saveEnrollmentProposalDraft(
     allowedStatuses: ["NEW"],
     draftOnly: true,
     allowEmptyPrices: options?.allowEmptyPrices ?? true,
+    complimentaryPrices: options?.complimentaryPrices,
   });
   if (!result.ok) return result;
   return {
@@ -601,7 +611,7 @@ export async function saveEnrollmentRequestPrices(
     monthlyUnitPrice?: number | string | null;
     yearlyUnitPrice?: number | string | null;
   },
-  options?: { restrictToSchoolId?: string }
+  options?: { restrictToSchoolId?: string; complimentaryPrices?: boolean }
 ): Promise<{ ok: true } | { ok: false; status: number; message: string }> {
   const enrollmentRes = await queryDb<{ id: string }>(
     `SELECT er.id
@@ -618,6 +628,37 @@ export async function saveEnrollmentRequestPrices(
       status: 409,
       message: "Stawki można zapisać tylko dla zgłoszenia „Nowe”.",
     };
+  }
+
+  if (options?.complimentaryPrices) {
+    const monthly = parseOptionalUnitPrice(input.monthlyUnitPrice, "ratalna");
+    if (!monthly.ok) return { ok: false, status: 400, message: monthly.message };
+    const yearly = parseOptionalUnitPrice(input.yearlyUnitPrice, "jednorazowa");
+    if (!yearly.ok) return { ok: false, status: 400, message: yearly.message };
+    if (monthly.value == null || yearly.value == null) {
+      return {
+        ok: false,
+        status: 400,
+        message: "Podaj stawkę jednorazową i ratalną",
+      };
+    }
+    await queryDb(
+      `UPDATE enrollment_requests
+       SET lesson_unit_price = NULL,
+           monthly_unit_price = $2,
+           yearly_unit_price = $3
+       WHERE id = $1`,
+      [input.requestId, monthly.value, yearly.value]
+    );
+    await queryDb(
+      `UPDATE children
+       SET lesson_unit_price = NULL,
+           monthly_unit_price = $2,
+           yearly_unit_price = $3
+       WHERE enrollment_request_id = $1`,
+      [input.requestId, monthly.value, yearly.value]
+    );
+    return { ok: true };
   }
 
   const lesson = parseOptionalUnitPrice(input.lessonUnitPrice, "za pojedyncze zajęcia");
@@ -641,6 +682,15 @@ export async function saveEnrollmentRequestPrices(
          monthly_unit_price = $3,
          yearly_unit_price = $4
      WHERE id = $1`,
+    [input.requestId, lesson.value, monthly.value, yearly.value]
+  );
+
+  await queryDb(
+    `UPDATE children
+     SET lesson_unit_price = $2,
+         monthly_unit_price = $3,
+         yearly_unit_price = $4
+     WHERE enrollment_request_id = $1`,
     [input.requestId, lesson.value, monthly.value, yearly.value]
   );
 

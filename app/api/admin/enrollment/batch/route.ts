@@ -23,6 +23,15 @@ function hasAllPriceInputs(p: BatchProposalBody): boolean {
   return vals.every((v) => v != null && String(v).trim() !== "");
 }
 
+function hasComplimentaryPriceInputs(p: BatchProposalBody): boolean {
+  return (
+    p.monthlyUnitPrice != null &&
+    String(p.monthlyUnitPrice).trim() !== "" &&
+    p.yearlyUnitPrice != null &&
+    String(p.yearlyUnitPrice).trim() !== ""
+  );
+}
+
 export async function POST(request: NextRequest) {
   try {
     const ctx = await requireAdminSchoolContext(request);
@@ -51,8 +60,25 @@ export async function POST(request: NextRequest) {
         }
         const groupId = typeof p.groupId === "string" ? p.groupId.trim() : "";
         if (!groupId) {
-          // Tryb bez opłat: grupa i stawki opcjonalne — nic do zapisania na zgłoszeniu.
-          if (complimentaryMode && allowEmptyPrices && !hasAllPriceInputs(p)) {
+          if (complimentaryMode) {
+            if (!hasComplimentaryPriceInputs(p)) {
+              return NextResponse.json(
+                { message: "Podaj stawkę jednorazową i ratalną dla każdego dziecka" },
+                { status: 400 }
+              );
+            }
+            const result = await saveEnrollmentRequestPrices(
+              {
+                requestId: p.requestId,
+                lessonUnitPrice: null,
+                monthlyUnitPrice: p.monthlyUnitPrice,
+                yearlyUnitPrice: p.yearlyUnitPrice,
+              },
+              { ...schoolRestrict, complimentaryPrices: true }
+            );
+            if (!result.ok) {
+              return NextResponse.json({ message: result.message }, { status: result.status });
+            }
             continue;
           }
           if (!hasAllPriceInputs(p)) {
@@ -76,17 +102,25 @@ export async function POST(request: NextRequest) {
           continue;
         }
 
+        if (complimentaryMode && !hasComplimentaryPriceInputs(p)) {
+          return NextResponse.json(
+            { message: "Podaj stawkę jednorazową i ratalną dla każdego dziecka" },
+            { status: 400 }
+          );
+        }
+
         const result = await saveEnrollmentProposalDraft(
           {
             requestId: p.requestId,
             groupId,
             lessonUnitPrice: complimentaryMode ? null : p.lessonUnitPrice,
-            monthlyUnitPrice: complimentaryMode ? null : p.monthlyUnitPrice,
-            yearlyUnitPrice: complimentaryMode ? null : p.yearlyUnitPrice,
+            monthlyUnitPrice: p.monthlyUnitPrice,
+            yearlyUnitPrice: p.yearlyUnitPrice,
           },
           {
             ...schoolRestrict,
             allowEmptyPrices: allowEmptyPrices || complimentaryMode,
+            complimentaryPrices: complimentaryMode,
           }
         );
         if (!result.ok) {
@@ -99,8 +133,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         message: complimentaryMode
           ? anyWithGroup
-            ? "Zapisano przydział grupy (tryb bez opłat, bez e-maila)"
-            : "Tryb bez opłat — grupę możesz przypisać później"
+            ? "Zapisano grupę i stawki (tryb bez opłat, bez e-maila)"
+            : "Zapisano stawki (tryb bez opłat) — grupę możesz przypisać później"
           : anyWithGroup
             ? "Zapisano dane i dodano dziecko do grupy (niepotwierdzone — bez wysyłki e-mail)"
             : "Zapisano stawki (bez grupy — możesz uzupełnić później)",

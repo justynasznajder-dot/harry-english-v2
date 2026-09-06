@@ -4,10 +4,10 @@ import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
+import luxonPlugin from '@fullcalendar/luxon3';
 import plLocale from '@fullcalendar/core/locales/pl';
 import type { DatesSetArg, EventClickArg, EventInput } from '@fullcalendar/core';
-
-const SCHOOL_TZ = 'Europe/Warsaw';
+import { SCHOOL_TIMEZONE } from '@/lib/school-timezone';
 
 export type ClassesCalendarInnerProps = {
   events: EventInput[];
@@ -25,10 +25,10 @@ export default function ClassesCalendarInner({
   return (
     <div className="classes-fc min-h-[520px] w-full text-sm">
       <FullCalendar
-        plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+        plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin, luxonPlugin]}
         initialView={initialView}
         locale={plLocale}
-        timeZone={SCHOOL_TZ}
+        timeZone={SCHOOL_TIMEZONE}
         headerToolbar={{
           left: 'prev,next today',
           center: 'title',

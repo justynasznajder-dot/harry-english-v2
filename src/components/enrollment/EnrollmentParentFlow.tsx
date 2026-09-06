@@ -176,6 +176,8 @@ interface EnrollmentRequestSummary {
     birthDate: string;
     preferredLocation: string;
     submittedAt: string;
+    monthlyUnitPrice?: number | null;
+    yearlyUnitPrice?: number | null;
   }>;
 }
 
@@ -2239,6 +2241,14 @@ export default function EnrollmentParentFlow({
                   <span>{p.location_name}</span>
                   <span className="font-semibold text-zinc-900">Termin zajęć:</span>
                   <span>{p.schedule}</span>
+                  {userInfo.complimentaryAccess ? (
+                    <>
+                      <span className="font-semibold text-zinc-900">Jednorazowa:</span>
+                      <span>{formatPlnAmount(p.yearly_unit_price)}</span>
+                      <span className="font-semibold text-zinc-900">Ratalna:</span>
+                      <span>{formatPlnAmount(p.monthly_unit_price)}</span>
+                    </>
+                  ) : null}
                 </div>
               </div>
             ))}

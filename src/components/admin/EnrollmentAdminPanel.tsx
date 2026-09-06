@@ -89,11 +89,17 @@ function draftIsSaveable(draft?: ProposalDraft): boolean {
   return Boolean((draft?.groupId ?? '').trim()) || draftHasRequiredPrices(draft);
 }
 
-/** W trybie bez opłat: grupa i stawki opcjonalne. */
+function draftHasComplimentaryRequiredPrices(draft?: ProposalDraft): boolean {
+  if (!draft) return false;
+  return (
+    parsePriceDecimal(draft.yearlyUnitPrice) != null &&
+    parsePriceDecimal(draft.monthlyUnitPrice) != null
+  );
+}
+
+/** W trybie bez opłat: wymagane jednorazowa + ratalna; grupa opcjonalna. */
 function draftIsComplimentarySaveable(draft?: ProposalDraft): boolean {
-  // Puste też OK — zapis potwierdza tryb; grupę można dopisać później.
-  void draft;
-  return true;
+  return draftHasComplimentaryRequiredPrices(draft);
 }
 
 /*
@@ -305,28 +311,35 @@ export default function EnrollmentAdminPanel({
     proposalNewChildren.every((c) => {
       const draft = proposalDrafts[c.requestId];
       if (!(draft?.groupId ?? '').trim()) return false;
-      if (proposalParentIsComplimentary) return true;
+      if (proposalParentIsComplimentary) {
+        return draftHasComplimentaryRequiredPrices(draft);
+      }
       return draftHasRequiredPrices(draft);
     });
   /**
    * Zapisz: wystarczy pełne dane u jednego dziecka; pozostałe mogą być puste.
    * Częściowe stawki (1–2 z 3) u któregokolwiek dziecka blokują zapis.
-   * Tryb bez opłat: można zapisać bez grupy i bez stawek.
+   * Tryb bez opłat: wymagane jednorazowa + ratalna u każdego dziecka NEW; grupa opcjonalna.
    */
   const proposalBatchSaveReady =
     proposalNewChildren.length >= 1 &&
     (proposalParentIsComplimentary
-      ? true
+      ? proposalNewChildren.every((c) =>
+          draftHasComplimentaryRequiredPrices(proposalDrafts[c.requestId]),
+        )
       : proposalNewChildren.every((c) => !draftHasPartialPrices(proposalDrafts[c.requestId])) &&
         proposalNewChildren.some((c) => draftIsSaveable(proposalDrafts[c.requestId])));
   const proposalBatchSaveTitle = (() => {
     if (proposalParentIsComplimentary) {
+      if (!proposalBatchSaveReady) {
+        return 'Podaj stawkę jednorazową i ratalną dla każdego dziecka';
+      }
       const anyGroup = proposalNewChildren.some((c) =>
         Boolean((proposalDrafts[c.requestId]?.groupId ?? '').trim()),
       );
       return anyGroup
-        ? 'Zapisz przydział grupy (bez opłat, bez e-maila) — grupa opcjonalna'
-        : 'Zapisz tryb bez opłat — grupę możesz przypisać później';
+        ? 'Zapisz grupę oraz stawki (bez opłat, bez e-maila)'
+        : 'Zapisz stawki (tryb bez opłat) — grupę możesz przypisać później';
     }
     if (proposalBatchSaveReady) {
       const allHaveGroup = proposalNewChildren
@@ -359,12 +372,8 @@ export default function EnrollmentAdminPanel({
           lessonUnitPrice: proposalParentIsComplimentary
             ? null
             : draft?.lessonUnitPrice?.trim() || null,
-          monthlyUnitPrice: proposalParentIsComplimentary
-            ? null
-            : draft?.monthlyUnitPrice?.trim() || null,
-          yearlyUnitPrice: proposalParentIsComplimentary
-            ? null
-            : draft?.yearlyUnitPrice?.trim() || null,
+          monthlyUnitPrice: draft?.monthlyUnitPrice?.trim() || null,
+          yearlyUnitPrice: draft?.yearlyUnitPrice?.trim() || null,
         };
       });
 
@@ -621,8 +630,9 @@ export default function EnrollmentAdminPanel({
                     </label>
                     <p className="mt-1 text-xs text-zinc-500">
                       Po akceptacji grupy zapis kończy się bez umowy, faktur i płatności. Działa
-                      też przed utworzeniem konta (po e-mailu zgłoszenia). W tym trybie stawki są
-                      ukryte, a grupę możesz przypisać później — Zapisz działa od razu.
+                      też przed utworzeniem konta (po e-mailu zgłoszenia). Podaj stawkę
+                      jednorazową i ratalną — będą widoczne w panelu rodzica; grupę możesz
+                      przypisać później.
                     </p>
                     {/*
                      * KDR / zniżki procentowe — wyłączone (sezon cen ręcznych).
@@ -637,8 +647,8 @@ export default function EnrollmentAdminPanel({
                   </div>
                   {proposalParentIsComplimentary && (
                     <p className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
-                      Rodzic jest w trybie bez opłat — wyślij propozycję grupy; rodzic tylko
-                      zatwierdzi grupę po zalogowaniu (bez umowy).
+                      Rodzic jest w trybie bez opłat — wyślij potwierdzenie o przypisaniu do
+                      grupy i terminie zajęć.
                     </p>
                   )}
                 </div>
@@ -926,7 +936,64 @@ export default function EnrollmentAdminPanel({
                                     </>
                                   );
                                 })()}
-                                {!proposalParentIsComplimentary && (
+                                {proposalParentIsComplimentary ? (
+                                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:items-end">
+                                    <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
+                                      <span className="leading-snug">
+                                        Jednorazowa{' '}
+                                        <span className="font-normal text-zinc-400">(PLN)</span>
+                                      </span>
+                                      <input
+                                        type="text"
+                                        inputMode="decimal"
+                                        required
+                                        className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
+                                        disabled={!proposalAllowed}
+                                        placeholder="np. 1200"
+                                        value={
+                                          proposalDrafts[child.requestId]?.yearlyUnitPrice ?? ''
+                                        }
+                                        onChange={(e) =>
+                                          setProposalDrafts((prev) => ({
+                                            ...prev,
+                                            [child.requestId]: {
+                                              ...emptyProposalDraft(),
+                                              ...prev[child.requestId],
+                                              yearlyUnitPrice: e.target.value,
+                                            },
+                                          }))
+                                        }
+                                      />
+                                    </label>
+                                    <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
+                                      <span className="leading-snug">
+                                        Ratalna{' '}
+                                        <span className="font-normal text-zinc-400">(PLN)</span>
+                                      </span>
+                                      <input
+                                        type="text"
+                                        inputMode="decimal"
+                                        required
+                                        className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
+                                        disabled={!proposalAllowed}
+                                        placeholder="np. 150"
+                                        value={
+                                          proposalDrafts[child.requestId]?.monthlyUnitPrice ?? ''
+                                        }
+                                        onChange={(e) =>
+                                          setProposalDrafts((prev) => ({
+                                            ...prev,
+                                            [child.requestId]: {
+                                              ...emptyProposalDraft(),
+                                              ...prev[child.requestId],
+                                              monthlyUnitPrice: e.target.value,
+                                            },
+                                          }))
+                                        }
+                                      />
+                                    </label>
+                                  </div>
+                                ) : (
                                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:items-end">
                                     <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
                                       <span className="leading-snug">
@@ -1066,6 +1133,16 @@ export default function EnrollmentAdminPanel({
                                         );
                                         return;
                                       }
+                                      if (
+                                        proposalParentIsComplimentary &&
+                                        !draftHasComplimentaryRequiredPrices(draft)
+                                      ) {
+                                        pushToast(
+                                          'error',
+                                          'Podaj stawkę jednorazową i ratalną',
+                                        );
+                                        return;
+                                      }
                                       setSubmittingProposalRequestId(child.requestId);
                                       try {
                                         const res = await fetch('/api/admin/enrollment', {
@@ -1074,9 +1151,10 @@ export default function EnrollmentAdminPanel({
                                           body: JSON.stringify({
                                             requestId: child.requestId,
                                             groupId,
-                                            lessonUnitPrice:
-                                              proposalDrafts[child.requestId]?.lessonUnitPrice?.trim() ||
-                                              null,
+                                            lessonUnitPrice: proposalParentIsComplimentary
+                                              ? null
+                                              : proposalDrafts[child.requestId]?.lessonUnitPrice?.trim() ||
+                                                null,
                                             monthlyUnitPrice:
                                               proposalDrafts[child.requestId]?.monthlyUnitPrice?.trim() ||
                                               null,
@@ -1221,16 +1299,12 @@ export default function EnrollmentAdminPanel({
                       try {
                         const proposals = buildBatchProposalsPayload({ saveOnly: true });
                         if (proposals.length === 0) {
-                          pushToast('error', 'Brak danych do zapisu');
-                          return;
-                        }
-                        const hasAnyGroup = proposals.some((p) => Boolean(p.groupId?.trim()));
-                        if (proposalParentIsComplimentary && !hasAnyGroup) {
                           pushToast(
-                            'success',
-                            'Tryb bez opłat aktywny — grupę możesz przypisać później',
+                            'error',
+                            proposalParentIsComplimentary
+                              ? 'Podaj stawkę jednorazową i ratalną dla każdego dziecka'
+                              : 'Brak danych do zapisu',
                           );
-                          await onRefresh();
                           return;
                         }
                         const res = await fetch('/api/admin/enrollment/batch', {
@@ -1261,6 +1335,7 @@ export default function EnrollmentAdminPanel({
                               ? `Zapisano (${data.count ?? proposals.length}) — bez opłat`
                               : `Zapisano dane propozycji (${data.count ?? proposals.length}) — dziecko w grupie jako niepotwierdzone`),
                         );
+                        setProposalModalParentId(null);
                         await onRefresh();
                       } catch (err) {
                         pushToast(

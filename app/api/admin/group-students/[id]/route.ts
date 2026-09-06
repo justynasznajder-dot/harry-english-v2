@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryDb } from "@/lib/db";
 import { requireAdminSchoolContext, tenantNotFoundResponse } from "@/lib/admin-school-context";
-import { updateChildPriceOverrides } from "@/lib/enrollment-sync";
+import {
+  clearEnrollmentGroupAssignmentAfterLeave,
+  updateChildPriceOverrides,
+} from "@/lib/enrollment-sync";
 import { parsePriceDecimal } from "@/lib/lesson-pricing";
 import { normalizeLessonsPerWeek } from "@/lib/lessons-per-week";
 
@@ -148,7 +151,7 @@ export async function DELETE(
 
   const { id } = await params;
   try {
-    const res = await queryDb<{ id: string }>(
+    const res = await queryDb<{ id: string; child_id: string; group_id: string }>(
       `UPDATE group_students gs
        SET left_at = NOW()
        FROM groups g
@@ -156,12 +159,16 @@ export async function DELETE(
          AND gs.group_id = g.id
          AND g.school_id = $2
          AND gs.left_at IS NULL
-       RETURNING gs.id`,
+       RETURNING gs.id, gs.child_id, gs.group_id`,
       [id, ctx.schoolId]
     );
     if (!res.rows[0]) {
       return tenantNotFoundResponse("Nie znaleziono aktywnego ucznia w grupie");
     }
+
+    const { child_id: childId, group_id: groupId } = res.rows[0];
+    await clearEnrollmentGroupAssignmentAfterLeave(childId, groupId, ctx.schoolId);
+
     return NextResponse.json({ message: "Uczeń został usunięty z grupy" });
   } catch (error) {
     console.error("DELETE group-student error:", error);

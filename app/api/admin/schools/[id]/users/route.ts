@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAllUsers, queryDb } from "@/lib/db";
+import { ensureChildrenFromEnrollmentRequests } from "@/lib/enrollment-sync";
+import { ensureComplimentaryParentUserAccounts } from "@/lib/school-discounts";
 import { requireSuperAdmin } from "@/lib/superadmin-auth";
 
 type RouteContext = { params: Promise<{ id: string }> };
@@ -21,6 +23,11 @@ export async function GET(request: NextRequest, context: RouteContext) {
     if (!school.rows[0]) {
       return NextResponse.json({ message: "Szkoła nie istnieje" }, { status: 404 });
     }
+
+    // Complimentary tylko po e-mailu → utwórz/podlinkuj konto, żeby było na liście do impersonacji.
+    await ensureComplimentaryParentUserAccounts(schoolId);
+    // Zgłoszenia bez kart dzieci → utwórz children (licznik „Dzieci” + portal).
+    await ensureChildrenFromEnrollmentRequests(schoolId);
 
     const users = await getAllUsers(schoolId);
     const withoutAdmins = users.filter((u) => u.role !== "ADMIN");

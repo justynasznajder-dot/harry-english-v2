@@ -1,8 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryDb, runPgTransaction } from "@/lib/db";
-import { requireAdminSchoolContext, tenantNotFoundResponse } from "@/lib/admin-school-context";
+import {
+  assertLocationInSchool,
+  requireAdminSchoolContext,
+  tenantNotFoundResponse,
+} from "@/lib/admin-school-context";
 import { purgeFutureOrphanScheduledLessons } from "@/lib/lesson-generation";
 import { sqlSchoolTimestampAsTimestamptz } from "@/lib/school-timezone";
+
+async function countGeneratedLessonsForTemplate(
+  templateId: string,
+  groupId: string,
+  dayOfWeek: number,
+  startTime: string,
+): Promise<number> {
+  const res = await queryDb<{ cnt: number }>(
+    `SELECT COUNT(*)::int AS cnt
+     FROM lessons l
+     WHERE l.group_id = $1
+       AND l.status IN ('SCHEDULED', 'COMPLETED')
+       AND (
+         l.schedule_template_id = $2
+         OR (
+           EXTRACT(ISODOW FROM l.scheduled_at)::int = $3
+           AND TO_CHAR(l.scheduled_at, 'HH24:MI:SS') = $4
+         )
+       )`,
+    [groupId, templateId, dayOfWeek, startTime],
+  );
+  return res.rows[0]?.cnt ?? 0;
+}
 
 export async function PATCH(
   request: NextRequest,
@@ -14,19 +41,31 @@ export async function PATCH(
   const { id } = await params;
   try {
     const body = await request.json();
-    if (typeof body.onceWeeklyDay !== "boolean") {
-      return NextResponse.json(
-        { message: "Podaj onceWeeklyDay (true/false)" },
-        { status: 400 }
-      );
-    }
+    const hasScheduleFields =
+      body.dayOfWeek != null ||
+      body.startTime != null ||
+      body.locationId != null ||
+      body.durationMin != null;
 
     const existing = await queryDb<{
       id: string;
       group_id: string;
+      day_of_week: number;
+      start_time: string;
+      location_id: string;
+      duration_min: number;
+      once_weekly_day: boolean;
       lessons_per_week: number | null;
     }>(
-      `SELECT st.id, st.group_id, g.lessons_per_week
+      `SELECT
+         st.id,
+         st.group_id,
+         st.day_of_week,
+         TO_CHAR(st.start_time, 'HH24:MI:SS') AS start_time,
+         st.location_id,
+         st.duration_min,
+         st.once_weekly_day,
+         g.lessons_per_week
        FROM schedule_templates st
        JOIN groups g ON g.id = st.group_id
        WHERE st.id = $1 AND g.school_id = $2
@@ -38,7 +77,86 @@ export async function PATCH(
       return tenantNotFoundResponse("Nie znaleziono terminu");
     }
 
-    if (Number(row.lessons_per_week) !== 2 && body.onceWeeklyDay) {
+    // Tylko oznaczenie dnia 1× — dozwolone także gdy są zajęcia.
+    if (!hasScheduleFields) {
+      if (typeof body.onceWeeklyDay !== "boolean") {
+        return NextResponse.json(
+          { message: "Podaj onceWeeklyDay (true/false) albo pola terminu do edycji" },
+          { status: 400 }
+        );
+      }
+
+      if (Number(row.lessons_per_week) !== 2 && body.onceWeeklyDay) {
+        return NextResponse.json(
+          {
+            message:
+              "Dzień dla dzieci 1× można oznaczyć tylko w grupie z zajęciami 2× w tygodniu",
+          },
+          { status: 400 }
+        );
+      }
+
+      if (body.onceWeeklyDay) {
+        await queryDb(
+          `UPDATE schedule_templates
+           SET once_weekly_day = FALSE
+           WHERE group_id = $1 AND once_weekly_day = TRUE AND id <> $2`,
+          [row.group_id, id]
+        );
+      }
+
+      await queryDb(
+        `UPDATE schedule_templates
+         SET once_weekly_day = $2
+         WHERE id = $1`,
+        [id, body.onceWeeklyDay]
+      );
+
+      return NextResponse.json({ message: "Zaktualizowano termin" });
+    }
+
+    const dayOfWeek = Number(body.dayOfWeek ?? row.day_of_week);
+    const startTimeRaw = String(body.startTime ?? row.start_time.slice(0, 5));
+    const startTime =
+      startTimeRaw.length === 5 ? `${startTimeRaw}:00` : startTimeRaw;
+    const locationId = String(body.locationId ?? row.location_id);
+    const durationMin = Number(body.durationMin ?? row.duration_min);
+    const onceWeeklyDay =
+      typeof body.onceWeeklyDay === "boolean"
+        ? body.onceWeeklyDay
+        : Boolean(row.once_weekly_day);
+
+    if (![1, 2, 3, 4, 5, 6, 7].includes(dayOfWeek)) {
+      return NextResponse.json({ message: "Nieprawidłowy dzień tygodnia" }, { status: 400 });
+    }
+    if (!Number.isFinite(durationMin) || durationMin < 15) {
+      return NextResponse.json(
+        { message: "Czas trwania musi wynosić co najmniej 15 minut" },
+        { status: 400 }
+      );
+    }
+
+    const generatedCount = await countGeneratedLessonsForTemplate(
+      id,
+      row.group_id,
+      row.day_of_week,
+      row.start_time,
+    );
+    if (generatedCount > 0) {
+      return NextResponse.json(
+        {
+          message:
+            "Nie można edytować terminu — są już wygenerowane zajęcia. Usuń termin albo zajęcia, a potem dodaj nowy.",
+        },
+        { status: 409 }
+      );
+    }
+
+    const location = await assertLocationInSchool(locationId, ctx.schoolId);
+    if (!location.ok) return tenantNotFoundResponse("Nie znaleziono lokalizacji");
+
+    const groupIsTwiceWeekly = Number(row.lessons_per_week) === 2;
+    if (!groupIsTwiceWeekly && onceWeeklyDay) {
       return NextResponse.json(
         {
           message:
@@ -47,8 +165,70 @@ export async function PATCH(
         { status: 400 }
       );
     }
+    const markOnceWeekly = groupIsTwiceWeekly && onceWeeklyDay;
 
-    if (body.onceWeeklyDay) {
+    const duplicate = await queryDb<{ id: string }>(
+      `SELECT id
+       FROM schedule_templates
+       WHERE group_id = $1
+         AND active = TRUE
+         AND day_of_week = $2
+         AND start_time = $3::time
+         AND id <> $4
+       LIMIT 1`,
+      [row.group_id, dayOfWeek, startTime, id]
+    );
+    if (duplicate.rows[0]) {
+      return NextResponse.json(
+        {
+          message:
+            "Ten termin już jest w harmonogramie grupy (ten sam dzień i godzina). Usuń istniejący albo wybierz inny termin.",
+        },
+        { status: 409 }
+      );
+    }
+
+    const teacherConflict = await queryDb<{ name: string; start_time: string }>(
+      `SELECT g.name, st.start_time::text
+       FROM schedule_templates st
+       JOIN groups g ON g.id = st.group_id AND g.school_id = $4
+       WHERE g.teacher_id = (SELECT teacher_id FROM groups WHERE id = $1 AND school_id = $4)
+         AND st.day_of_week = $2
+         AND st.start_time = $3::time
+         AND st.group_id != $1
+       LIMIT 1`,
+      [row.group_id, dayOfWeek, startTime, ctx.schoolId]
+    );
+    if (teacherConflict.rows[0]) {
+      return NextResponse.json(
+        {
+          message: `Nauczyciel zajęty: ${teacherConflict.rows[0].name}, ${teacherConflict.rows[0].start_time}`,
+        },
+        { status: 409 }
+      );
+    }
+
+    const roomConflict = await queryDb<{ name: string; start_time: string }>(
+      `SELECT g.name, st.start_time::text
+       FROM schedule_templates st
+       JOIN groups g ON g.id = st.group_id AND g.school_id = $5
+       WHERE st.location_id = $1
+         AND st.day_of_week = $2
+         AND st.start_time = $3::time
+         AND st.group_id != $4
+       LIMIT 1`,
+      [locationId, dayOfWeek, startTime, row.group_id, ctx.schoolId]
+    );
+    if (roomConflict.rows[0]) {
+      return NextResponse.json(
+        {
+          message: `Sala zajęta: ${roomConflict.rows[0].name}, ${roomConflict.rows[0].start_time}`,
+        },
+        { status: 409 }
+      );
+    }
+
+    if (markOnceWeekly) {
       await queryDb(
         `UPDATE schedule_templates
          SET once_weekly_day = FALSE
@@ -59,12 +239,16 @@ export async function PATCH(
 
     await queryDb(
       `UPDATE schedule_templates
-       SET once_weekly_day = $2
+       SET location_id = $2,
+           day_of_week = $3,
+           start_time = $4::time,
+           duration_min = $5,
+           once_weekly_day = $6
        WHERE id = $1`,
-      [id, body.onceWeeklyDay]
+      [id, locationId, dayOfWeek, startTime, durationMin, markOnceWeekly]
     );
 
-    return NextResponse.json({ message: "Zaktualizowano termin" });
+    return NextResponse.json({ message: "Termin zaktualizowany" });
   } catch (error) {
     console.error("PATCH schedule template error:", error);
     return NextResponse.json({ message: "Błąd aktualizacji terminu" }, { status: 500 });

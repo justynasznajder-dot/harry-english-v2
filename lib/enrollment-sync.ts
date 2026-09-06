@@ -1,6 +1,8 @@
 import { randomUUID } from "crypto";
 import type { EnrollmentStatus } from "@/lib/enrollment-status";
-import { getActiveSchoolYear, queryDb } from "@/lib/db";
+import { getActiveSchoolYear, queryDb, runPgTransaction } from "@/lib/db";
+import { allocateChildClientNumber } from "@/lib/client-numbers";
+import { formatPersonName } from "@/lib/format-person-name";
 import { parsePriceDecimal } from "@/lib/lesson-pricing";
 import { normalizeLessonsPerWeek } from "@/lib/lessons-per-week";
 
@@ -46,6 +48,92 @@ export async function syncChildrenAccessLevelForEnrollment(
      WHERE enrollment_request_id = $1`,
     [enrollmentRequestId, accessLevel]
   );
+}
+
+/**
+ * Tworzy brakujące rekordy `children` ze zgłoszeń (`enrollment_requests`),
+ * które mają już `user_id`, ale nie mają jeszcze dziecka w bazie.
+ * Potrzebne m.in. gdy konto rodzica powstało z trybu bez opłat przed propozycją grupy.
+ */
+export async function ensureChildrenFromEnrollmentRequests(
+  schoolId: string,
+  parentUserId?: string | null
+): Promise<number> {
+  const parentFilter = String(parentUserId ?? "").trim();
+  const pending = await queryDb<{
+    er_id: string;
+    parent_user_id: string;
+    child_first_name: string;
+    child_last_name: string;
+    child_birth_date: string;
+    status: string;
+  }>(
+    `SELECT
+       er.id AS er_id,
+       er.user_id AS parent_user_id,
+       er.child_first_name,
+       er.child_last_name,
+       er.child_birth_date::date::text AS child_birth_date,
+       UPPER(BTRIM(COALESCE(er.status::text, 'NEW'))) AS status
+     FROM enrollment_requests er
+     WHERE er.school_id = $1
+       AND er.user_id IS NOT NULL
+       AND BTRIM(COALESCE(er.child_first_name, '')) <> ''
+       AND BTRIM(COALESCE(er.child_last_name, '')) <> ''
+       AND ($2 = '' OR er.user_id = $2)
+       AND NOT EXISTS (
+         SELECT 1 FROM children c
+         WHERE c.school_id = er.school_id
+           AND (
+             c.enrollment_request_id = er.id
+             OR (
+               c.parent_id = er.user_id
+               AND LOWER(BTRIM(c.first_name)) = LOWER(BTRIM(er.child_first_name))
+               AND LOWER(BTRIM(c.last_name)) = LOWER(BTRIM(er.child_last_name))
+             )
+           )
+       )`,
+    [schoolId, parentFilter]
+  );
+
+  let created = 0;
+  for (const row of pending.rows) {
+    const childFirst = formatPersonName(row.child_first_name);
+    const childLast = formatPersonName(row.child_last_name);
+    const birth = String(row.child_birth_date ?? "").slice(0, 10);
+    if (!childFirst || !childLast || !birth) continue;
+
+    const accessLevel = row.status || "NEW";
+    const childId = randomUUID();
+
+    await runPgTransaction(async (client) => {
+      const childClientNumber = await allocateChildClientNumber(
+        client,
+        schoolId,
+        row.parent_user_id
+      );
+      await client.query(
+        `INSERT INTO children (
+           id, school_id, parent_id, client_number, first_name, last_name, birth_date,
+           active, confirmed, enrollment_request_id, access_level
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7::date, TRUE, FALSE, $8, $9)`,
+        [
+          childId,
+          schoolId,
+          row.parent_user_id,
+          childClientNumber,
+          childFirst,
+          childLast,
+          birth,
+          row.er_id,
+          accessLevel,
+        ]
+      );
+    });
+    created += 1;
+  }
+
+  return created;
 }
 
 async function resolveMembershipPrices(
@@ -212,6 +300,50 @@ export async function leaveChildFromGroup(
     [childId, groupId]
   );
   return Boolean(res.rows[0]);
+}
+
+/**
+ * Po usunięciu ucznia z grupy: jeśli zgłoszenie wskazuje tę samą grupę
+ * i proces zapisu nie jest zakończony — cofnij na „Nowe zgłoszenie”.
+ * Nie rusza SIGNED / COMPLETED / REJECTED.
+ */
+export async function clearEnrollmentGroupAssignmentAfterLeave(
+  childId: string,
+  groupId: string,
+  schoolId: string
+): Promise<boolean> {
+  if (!childId || !groupId || !schoolId) return false;
+
+  const res = await queryDb<{ id: string }>(
+    `UPDATE enrollment_requests er
+     SET status = 'NEW'::enrollment_status,
+         proposed_group_id = NULL,
+         proposed_at = NULL
+     FROM children c
+     WHERE c.id = $1
+       AND c.school_id = $3
+       AND er.id = c.enrollment_request_id
+       AND er.school_id = $3
+       AND er.proposed_group_id = $2
+       AND UPPER(BTRIM(COALESCE(er.status::text, ''))) NOT IN (
+         'SIGNED', 'COMPLETED', 'REJECTED'
+       )
+     RETURNING er.id`,
+    [childId, groupId, schoolId]
+  );
+
+  const enrollmentId = res.rows[0]?.id;
+  if (!enrollmentId) return false;
+
+  await syncChildrenAccessLevelForEnrollment(enrollmentId, "NEW");
+  await queryDb(
+    `UPDATE children
+     SET confirmed = FALSE
+     WHERE id = $1
+       AND school_id = $2`,
+    [childId, schoolId]
+  );
+  return true;
 }
 
 /** Czy dziecko ma podpisaną umowę (status SIGNED). */

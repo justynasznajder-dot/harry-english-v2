@@ -845,6 +845,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [groupLoading, setGroupLoading] = useState(false);
   const [initialGroupLoaded, setInitialGroupLoaded] = useState(false);
   const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
+  const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
   const [scheduleForm, setScheduleForm] = useState({
     dayOfWeek: 1,
     startTime: '16:00',
@@ -2229,6 +2230,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const openScheduleModal = useCallback(() => {
     const defaultLocationId =
       groupForm.locationId || groupDetail?.group.location_id || '';
+    setEditingScheduleId(null);
     setScheduleForm({
       dayOfWeek: 1,
       startTime: '16:00',
@@ -2238,6 +2240,21 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     });
     setScheduleModalOpen(true);
   }, [groupForm.locationId, groupDetail?.group.location_id]);
+
+  const openEditScheduleModal = useCallback(
+    (st: GroupDetail['scheduleTemplates'][number]) => {
+      setEditingScheduleId(st.id);
+      setScheduleForm({
+        dayOfWeek: Number(st.day_of_week) || 1,
+        startTime: String(st.start_time).slice(0, 5),
+        locationId: st.location_id || groupForm.locationId || '',
+        durationMin: Number(st.duration_min) || 45,
+        onceWeeklyDay: Boolean(st.once_weekly_day),
+      });
+      setScheduleModalOpen(true);
+    },
+    [groupForm.locationId],
+  );
 
   const activeSchoolYear = useMemo(
     () => schoolYears.find((y) => y.isActive ?? y.active) ?? null,
@@ -5187,7 +5204,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   : 'Brak zdefiniowanych terminów.'}
               </p>
             ) : (
-              scheduleTemplates.map((st) => (
+              scheduleTemplates.map((st) => {
+                const hasGeneratedLessons =
+                  (st.future_lessons_count ?? 0) > 0 ||
+                  (st.completed_lessons_count ?? 0) > 0;
+                const canEditSchedule =
+                  !disabled && hasActiveSchoolYear && Boolean(groupId) && !hasGeneratedLessons;
+                return (
                 <div key={st.id} className="flex items-center justify-between rounded-xl border border-emerald-100 p-3">
                   <div>
                     <p className="flex flex-wrap items-center gap-2">
@@ -5201,7 +5224,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       ) : null}
                     </p>
                     <p className="text-zinc-600">{st.location_name ?? '-'}</p>
-                    {(st.future_lessons_count ?? 0) > 0 || (st.completed_lessons_count ?? 0) > 0 ? (
+                    {hasGeneratedLessons ? (
                       <p className="mt-1 text-xs font-medium text-emerald-700">
                         Z tego terminu:{" "}
                         {[
@@ -5222,7 +5245,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     )}
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    {groupIsTwiceWeekly && hasActiveSchoolYear ? (
+                    {groupIsTwiceWeekly && hasActiveSchoolYear && !hasGeneratedLessons ? (
                       <button
                         type="button"
                         className={`rounded-lg px-3 py-1 text-sm font-semibold ${
@@ -5255,6 +5278,21 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     ) : null}
                     <button
                       type="button"
+                      disabled={!canEditSchedule}
+                      className="rounded-lg bg-emerald-600 px-3 py-1 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      title={
+                        hasGeneratedLessons
+                          ? 'Edycja niedostępna — są już wygenerowane zajęcia. Możesz tylko usunąć termin.'
+                          : !hasActiveSchoolYear
+                            ? 'Harmonogram można edytować tylko przy aktywnym roku szkolnym'
+                            : undefined
+                      }
+                      onClick={() => openEditScheduleModal(st)}
+                    >
+                      Edytuj
+                    </button>
+                    <button
+                      type="button"
                       disabled={!hasActiveSchoolYear || !groupId}
                       className="rounded-lg bg-red-600 px-3 py-1 text-white disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={() => {
@@ -5275,7 +5313,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     </button>
                   </div>
                 </div>
-              ))
+                );
+              })
             )}
           </div>
           {!disabled && groupIsTwiceWeekly && scheduleTemplates.length < 2 ? (
@@ -8285,7 +8324,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       {scheduleModalOpen && selectedGroupId && groupDetail && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white p-5">
-            <h3 className="text-lg font-semibold">Dodaj termin</h3>
+            <h3 className="text-lg font-semibold">
+              {editingScheduleId ? 'Edytuj termin' : 'Dodaj termin'}
+            </h3>
             <div className="mt-4 space-y-3">
               <div className="space-y-1">
                 <label className="block text-sm font-medium text-zinc-700">Dzień tygodnia</label>
@@ -8325,13 +8366,26 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 </label>
               ) : null}
               <div className="flex justify-end gap-2">
-                <button className="rounded-xl bg-zinc-200 px-3 py-2" onClick={() => setScheduleModalOpen(false)}>Anuluj</button>
+                <button
+                  className="rounded-xl bg-zinc-200 px-3 py-2"
+                  onClick={() => {
+                    setScheduleModalOpen(false);
+                    setEditingScheduleId(null);
+                  }}
+                >
+                  Anuluj
+                </button>
                 <button
                   className="rounded-xl bg-emerald-600 px-3 py-2 text-white"
                   onClick={async () => {
                     if (!selectedGroupId) return;
+                    if (!scheduleForm.locationId) {
+                      pushToast('error', 'Wybierz lokalizację');
+                      return;
+                    }
                     const existing = groupDetail?.scheduleTemplates ?? [];
                     const dup = existing.some((st) => {
+                      if (editingScheduleId && st.id === editingScheduleId) return false;
                       const stTime = String(st.start_time ?? '').slice(0, 5);
                       return (
                         Number(st.day_of_week) === Number(scheduleForm.dayOfWeek) &&
@@ -8345,18 +8399,37 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       );
                       return;
                     }
-                    const res = await fetch('/api/admin/schedule-templates', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ groupId: selectedGroupId, ...scheduleForm }),
-                    });
+                    const res = await fetch(
+                      editingScheduleId
+                        ? `/api/admin/schedule-templates/${editingScheduleId}`
+                        : '/api/admin/schedule-templates',
+                      {
+                        method: editingScheduleId ? 'PATCH' : 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(
+                          editingScheduleId
+                            ? { ...scheduleForm }
+                            : { groupId: selectedGroupId, ...scheduleForm },
+                        ),
+                      },
+                    );
                     const data = await res.json();
                     if (!res.ok) {
-                      pushToast('error', data.message ?? 'Konflikt harmonogramu');
+                      pushToast(
+                        'error',
+                        data.message ??
+                          (editingScheduleId
+                            ? 'Nie udało się zaktualizować terminu'
+                            : 'Konflikt harmonogramu'),
+                      );
                       return;
                     }
-                    pushToast('success', data.message ?? 'Termin dodany');
+                    pushToast(
+                      'success',
+                      data.message ?? (editingScheduleId ? 'Termin zaktualizowany' : 'Termin dodany'),
+                    );
                     setScheduleModalOpen(false);
+                    setEditingScheduleId(null);
                     setClassesCalRefreshSignal((s) => s + 1);
                     await loadGroupDetail(selectedGroupId, getGroupDetailReloadOptions(selectedGroupId));
                     const gRes = await fetch('/api/admin/groups');
