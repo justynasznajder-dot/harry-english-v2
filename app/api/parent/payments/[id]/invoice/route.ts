@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { queryDb } from "@/lib/db";
+import { getUserById, queryDb } from "@/lib/db";
 import { requireParentContext } from "@/lib/parent-portal-auth";
 import { getR2ObjectBuffer } from "@/lib/r2-storage";
+import { isComplimentaryForParent } from "@/lib/school-discounts";
 
 export async function GET(
   request: NextRequest,
@@ -19,6 +20,18 @@ export async function GET(
   const { parentId, schoolId } = auth.ctx;
 
   try {
+    const parentUser = await getUserById(parentId);
+    const complimentary = await isComplimentaryForParent(schoolId, {
+      parentId,
+      parentEmail: parentUser?.email,
+    });
+    if (complimentary) {
+      return NextResponse.json(
+        { message: "Tryb bez opłat — faktury nie są dostępne do pobrania" },
+        { status: 403 },
+      );
+    }
+
     const res = await queryDb<{
       payment_id: string;
       invoice_number: string | null;

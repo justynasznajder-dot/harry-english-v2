@@ -24,6 +24,10 @@ import { promotePendingLargeFamilyCardToParent } from "@/lib/parent-profile-disc
 import { completeComplimentaryEnrollment } from "@/lib/complimentary-enrollment";
 import { ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE } from "@/lib/enrollment-status";
 import { isComplimentaryForParent } from "@/lib/school-discounts";
+import {
+  normalizeLessonsPerWeek,
+  sqlScheduleTemplateVisibleForStudent,
+} from "@/lib/lessons-per-week";
 
 export type EnrollmentRow = {
   id: string;
@@ -39,6 +43,7 @@ export type EnrollmentRow = {
   preferred_location: string | null;
   proposed_group_id: string | null;
   status: string;
+  lessons_per_week: number | null;
 };
 
 export type ProposalEmailItem = {
@@ -137,6 +142,7 @@ export async function submitEnrollmentProposal(
             er.child_birth_date::text AS child_birth_date,
             er.preferred_location,
             er.proposed_group_id,
+            er.lessons_per_week,
             UPPER(BTRIM(COALESCE(er.status::text, ''))) AS status
      FROM enrollment_requests er
      WHERE er.id = $1
@@ -159,6 +165,8 @@ export async function submitEnrollmentProposal(
           : "Propozycję można wysłać tylko dla zgłoszenia „Nowe”.",
     };
   }
+
+  const studentLessonsPerWeek = normalizeLessonsPerWeek(enrollment.lessons_per_week);
 
   const previousGroupId = enrollment.proposed_group_id?.trim() || null;
   const groupChanged = Boolean(previousGroupId && previousGroupId !== groupId);
@@ -203,10 +211,11 @@ export async function submitEnrollmentProposal(
      FROM groups g
      LEFT JOIN locations gl ON gl.id = g.location_id
      LEFT JOIN schedule_templates st ON st.group_id = g.id AND st.active = TRUE
+       AND ${sqlScheduleTemplateVisibleForStudent("COALESCE($3::int, 2)")}
      LEFT JOIN locations sl ON sl.id = st.location_id
      WHERE g.id = $1 AND g.school_id = $2
-     GROUP BY g.id, g.name, g.price_monthly, g.price_yearly, gl.name`,
-    [groupId, parentSchoolId]
+     GROUP BY g.id, g.name, g.price_monthly, g.price_yearly, g.lessons_per_week, gl.name`,
+    [groupId, parentSchoolId, studentLessonsPerWeek]
   );
   const group = groupRes.rows[0];
   if (!group) return { ok: false, status: 404, message: "Nie znaleziono grupy" };
@@ -504,6 +513,7 @@ export async function submitEnrollmentProposal(
     lessonUnitPrice: parsedLesson,
     monthlyUnitPrice: parsedMonthly,
     yearlyUnitPrice: parsedYearly,
+    lessonsPerWeek: studentLessonsPerWeek,
     persistToChild: true,
   });
 

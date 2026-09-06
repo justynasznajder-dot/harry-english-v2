@@ -9,7 +9,7 @@ import {
   ENROLLMENT_STATUS_COLORS,
   ENROLLMENT_STATUS_LABELS,
   filterEnrollmentChildrenByStatus,
-  formatEnrollmentStatusLabel,
+  resolveEnrollmentListBadge,
 } from '@/lib/enrollment-status';
 import { parsePriceDecimal } from '@/lib/lesson-pricing';
 import { isParentInComplimentaryList } from '@/lib/complimentary-parent-list';
@@ -364,14 +364,22 @@ export default function EnrollmentAdminPanel({
   };
 
   const enrollmentStatusCounts = useMemo(() => {
-    const children = parents.flatMap((parent) => parent.children);
-    const counts: Record<string, number> = { '': children.length };
+    const counts: Record<string, number> = {};
     for (const filter of ENROLLMENT_LIST_FILTERS) {
-      if (!filter.value) continue;
-      counts[filter.value] = filterEnrollmentChildrenByStatus(children, filter.value).length;
+      counts[filter.value] = 0;
+    }
+    for (const parent of parents) {
+      const parentIsComplimentary = isParentInComplimentaryList(parent, complimentaryParents);
+      for (const filter of ENROLLMENT_LIST_FILTERS) {
+        counts[filter.value] += filterEnrollmentChildrenByStatus(
+          parent.children,
+          filter.value,
+          { parentIsComplimentary },
+        ).length;
+      }
     }
     return counts;
-  }, [parents]);
+  }, [parents, complimentaryParents]);
 
   const renderList = () => {
     const isPipeline = enrollmentStatusFilter === 'pipeline';
@@ -379,7 +387,12 @@ export default function EnrollmentAdminPanel({
     const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
     const filteredEnrollmentRows = enrollmentRows
       .map((parent) => {
-        let children = filterEnrollmentChildrenByStatus(parent.children, enrollmentStatusFilter);
+        const parentIsComplimentary = isParentInComplimentaryList(parent, complimentaryParents);
+        let children = filterEnrollmentChildrenByStatus(
+          parent.children,
+          enrollmentStatusFilter,
+          { parentIsComplimentary },
+        );
         if (studentQuery) {
           children = children.filter((child) => {
             const first = (child.firstName ?? '').toLowerCase();
@@ -443,7 +456,10 @@ export default function EnrollmentAdminPanel({
             <p className="text-sm text-zinc-600">
               Zgłoszenie → przypisany do grupy → czeka na umowę → umowa podpisana
             </p>
-            <StudentPipelinePanel embedded />
+            <StudentPipelinePanel
+              embedded
+              complimentaryParents={complimentaryParents}
+            />
           </div>
         ) : enrollmentRows.length === 0 ? (
           <EmptyDataPanel title="Zgłoszenia" />
@@ -512,7 +528,7 @@ export default function EnrollmentAdminPanel({
                 </p>
                 <ul className="space-y-2">
                   {parent.children.map((child) => {
-                    const childStatus = child.status ?? 'NEW';
+                    const badge = resolveEnrollmentListBadge(child);
                     return (
                       <li
                         key={child.requestId}
@@ -522,11 +538,9 @@ export default function EnrollmentAdminPanel({
                           {child.firstName} {child.lastName}
                         </span>
                         <span
-                          className={`${ENROLLMENT_STATUS_BADGE_BASE} ${
-                            ENROLLMENT_STATUS_COLORS[childStatus] ?? 'bg-zinc-100 text-zinc-700'
-                          }`}
+                          className={`${ENROLLMENT_STATUS_BADGE_BASE} ${badge.colorClass}`}
                         >
-                          {formatEnrollmentStatusLabel(childStatus)}
+                          {badge.label}
                         </span>
                       </li>
                     );
@@ -609,6 +623,7 @@ export default function EnrollmentAdminPanel({
                   {proposalParent.children.map((child) => {
                     const proposalAllowed =
                       child.status === 'NEW' || child.status === 'NEGOTIATING';
+                    const listBadge = resolveEnrollmentListBadge(child);
                     const proposedGroup =
                       child.proposedGroupId
                         ? groups.find((g) => g.id === child.proposedGroupId)
@@ -633,9 +648,9 @@ export default function EnrollmentAdminPanel({
                           </p>
                           <p className="mt-1 flex flex-wrap gap-2">
                             <span
-                              className={`${ENROLLMENT_STATUS_BADGE_BASE} ${ENROLLMENT_STATUS_COLORS[child.status] ?? 'bg-zinc-100 text-zinc-700'}`}
+                              className={`${ENROLLMENT_STATUS_BADGE_BASE} ${listBadge.colorClass}`}
                             >
-                              Zgłoszenie: {ENROLLMENT_STATUS_LABELS[child.status] ?? child.status}
+                              Zgłoszenie: {listBadge.label}
                             </span>
                             {child.childAccessLevel && child.childAccessLevel !== child.status && (
                               <span

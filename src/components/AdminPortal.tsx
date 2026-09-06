@@ -19,6 +19,7 @@ import {
   periodMonthKey,
   todayYmdSchool,
 } from '@/lib/school-timezone';
+import { defaultTargetLessonsPerYear } from '@/lib/lessons-per-week';
 import {
   detectLevelFromGroupName,
   isHarryEnglishLevelCode,
@@ -182,6 +183,25 @@ function formatSchoolYearEndDatePl(dateTo: string): string {
   return parsed.toLocaleDateString('pl-PL', { year: 'numeric', month: 'long', day: 'numeric' });
 }
 
+function formatHolidayLessonWhen(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString('pl-PL', {
+    timeZone: 'Europe/Warsaw',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+type HolidayConflictLesson = {
+  id: string;
+  group_name: string;
+  scheduled_at: string;
+};
+
 function formatSettlementMonthPl(periodMonth: string): string {
   const parsed = new Date(`${periodMonth}-01T12:00:00`);
   if (Number.isNaN(parsed.getTime())) return periodMonth;
@@ -238,11 +258,14 @@ interface GroupDetail {
     scheduled_at: string;
     status: string;
     duration_min?: number;
+    schedule_template_id?: string | null;
+    orphan_from_schedule?: boolean;
   }>;
   generatedLessons?: {
     futureCount: number;
     completedCount: number;
     schoolYearCount?: number;
+    orphanLessonsCount?: number;
   };
   missingGeneratedLessons?: boolean;
   locations: Array<{ id: string; name: string }>;
@@ -594,7 +617,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [children, setChildren] = useState<ChildRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [generateLessonsCount, setGenerateLessonsCount] = useState('33');
+  const [generateLessonsCount, setGenerateLessonsCount] = useState(() =>
+    String(defaultTargetLessonsPerYear(1)),
+  );
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [search, setSearch] = useState('');
   const [showInactive, setShowInactive] = useState(false);
@@ -755,6 +780,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [complimentarySearch, setComplimentarySearch] = useState('');
   const [groups, setGroups] = useState<GroupRow[]>([]);
   const [groupSaving, setGroupSaving] = useState(false);
+  const [removeGroupConfirm, setRemoveGroupConfirm] = useState<{ id: string; name: string } | null>(
+    null,
+  );
   const [groupForm, setGroupForm] = useState({
     id: '',
     schoolId: '',
@@ -829,6 +857,12 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     groupId: string;
     label: string;
   } | null>(null);
+  const [deleteScheduleModal, setDeleteScheduleModal] = useState<{
+    id: string;
+    groupId: string;
+    label: string;
+    futureLessonsCount: number;
+  } | null>(null);
   const [addStudentModalOpen, setAddStudentModalOpen] = useState(false);
   const [studentSearch, setStudentSearch] = useState('');
   const [selectedChildId, setSelectedChildId] = useState('');
@@ -853,8 +887,14 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     dateFrom: '',
     dateTo: '',
     type: 'HOLIDAY' as 'HOLIDAY' | 'PUBLIC' | 'SCHOOL' | 'CANCELLED',
+    notifyParents: false,
     parentMessage: '',
   });
+  const [holidayCancelConfirm, setHolidayCancelConfirm] = useState<HolidayConflictLesson[] | null>(
+    null,
+  );
+  const [holidayNotifyPrompt, setHolidayNotifyPrompt] = useState(false);
+  const [holidayNotifyDraft, setHolidayNotifyDraft] = useState('');
   const [newYearModalOpen, setNewYearModalOpen] = useState(false);
   const [newYearForm, setNewYearForm] = useState({ name: '', dateFrom: '', dateTo: '' });
   const [closeYearModal, setCloseYearModal] = useState<{ id: string; name: string } | null>(null);
@@ -1102,6 +1142,83 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       setSchoolYearLoading(false);
     }
   }, [pushToast]);
+
+  const submitHolidaySave = useCallback(
+    async (opts: { notifyParents: boolean; parentMessage: string }) => {
+      setBusy(true);
+      try {
+        const res = await fetch('/api/admin/school-holidays', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: holidayForm.name.trim(),
+            date_from: holidayForm.dateFrom,
+            date_to: holidayForm.dateTo,
+            type: holidayForm.type,
+            notify_parents: opts.notifyParents,
+            parent_message: opts.notifyParents
+              ? opts.parentMessage.trim() || undefined
+              : undefined,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.message ?? 'Błąd');
+        pushToast('success', data.message ?? 'Dodano dzień wolny');
+        setHolidayCancelConfirm(null);
+        setHolidayNotifyPrompt(false);
+        setHolidayNotifyDraft('');
+        setHolidayModalOpen(false);
+        setClassesCalRefreshSignal((s) => s + 1);
+        await loadSchoolYearData();
+      } catch (e) {
+        pushToast('error', e instanceof Error ? e.message : 'Błąd');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [holidayForm, loadSchoolYearData, pushToast],
+  );
+
+  const startHolidaySave = useCallback(async () => {
+    if (!holidayForm.name.trim() || !holidayForm.dateFrom || !holidayForm.dateTo) {
+      pushToast('error', 'Uzupełnij pola');
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await fetch(
+        `/api/admin/lessons?from=${encodeURIComponent(holidayForm.dateFrom)}&to=${encodeURIComponent(holidayForm.dateTo)}`,
+      );
+      const data = (await res.json().catch(() => ({}))) as {
+        lessons?: Array<{ id: string; group_name: string; scheduled_at: string; status: string }>;
+        message?: string;
+      };
+      if (!res.ok) throw new Error(data.message ?? 'Nie udało się sprawdzić zajęć');
+
+      const conflicts = (data.lessons ?? [])
+        .filter((l) => l.status === 'SCHEDULED')
+        .map((l) => ({
+          id: l.id,
+          group_name: l.group_name,
+          scheduled_at: l.scheduled_at,
+        }));
+
+      if (conflicts.length > 0) {
+        setHolidayCancelConfirm(conflicts);
+        setBusy(false);
+        return;
+      }
+
+      setBusy(false);
+      await submitHolidaySave({
+        notifyParents: holidayForm.notifyParents,
+        parentMessage: holidayForm.parentMessage,
+      });
+    } catch (e) {
+      setBusy(false);
+      pushToast('error', e instanceof Error ? e.message : 'Błąd');
+    }
+  }, [holidayForm, pushToast, submitHolidaySave]);
 
   const loadHistoryData = useCallback(async (yearId: string) => {
     if (!yearId) {
@@ -1869,34 +1986,27 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     setGroupsSubTab('list');
   }, []);
 
-  const removeGroupFromSchoolView = useCallback(
-    async (groupId: string, groupName: string) => {
-      const ok = window.confirm(
-        `Usunąć grupę „${groupName}” z widoku szkoły?\n\nZniknie z listy grup (także jako nieaktywna). W bazie pozostanie do historii.`,
-      );
-      if (!ok) return;
-      setGroupSaving(true);
-      try {
-        const res = await fetch(`/api/admin/groups/${groupId}`, { method: 'DELETE' });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          pushToast('error', data.message ?? 'Nie udało się usunąć grupy');
-          return;
-        }
-        pushToast(
-          'success',
-          data.message ?? 'Grupa usunięta z widoku szkoły',
-        );
-        resetGroupsToList();
-        await loadData();
-      } catch {
-        pushToast('error', 'Nie udało się usunąć grupy');
-      } finally {
-        setGroupSaving(false);
+  const confirmRemoveGroupFromSchoolView = useCallback(async () => {
+    if (!removeGroupConfirm) return;
+    const { id: groupId } = removeGroupConfirm;
+    setGroupSaving(true);
+    try {
+      const res = await fetch(`/api/admin/groups/${groupId}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        pushToast('error', data.message ?? 'Nie udało się usunąć grupy');
+        return;
       }
-    },
-    [loadData, pushToast, resetGroupsToList],
-  );
+      pushToast('success', data.message ?? 'Grupa usunięta z widoku szkoły');
+      setRemoveGroupConfirm(null);
+      resetGroupsToList();
+      await loadData();
+    } catch {
+      pushToast('error', 'Nie udało się usunąć grupy');
+    } finally {
+      setGroupSaving(false);
+    }
+  }, [loadData, pushToast, removeGroupConfirm, resetGroupsToList]);
 
   const populateGroupFormFromGroup = useCallback(
     (g: GroupDetail['group']) => {
@@ -1916,7 +2026,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         pricePerLesson: priceFieldFromDb(g.price_per_lesson),
         teacherPickupConsent: Boolean(g.teacher_pickup_consent),
       });
-      setGenerateLessonsCount(String(Number(g.lessons_per_week) === 2 ? 66 : 33));
+      setGenerateLessonsCount(
+        String(defaultTargetLessonsPerYear(Number(g.lessons_per_week) === 2 ? 2 : 1)),
+      );
     },
     [sessionSchoolId],
   );
@@ -2050,11 +2162,31 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     }
   }, [groupForm, pushToast, loadData, loadGroupDetail, getGroupDetailReloadOptions]);
 
+  const groupFormDirty = useMemo(() => {
+    if (!groupForm.id || !groupDetail?.group || groupDetail.group.id !== groupForm.id) {
+      return false;
+    }
+    const g = groupDetail.group;
+    return (
+      groupForm.name.trim() !== String(g.name ?? '').trim() ||
+      (groupForm.teacherId || '') !== (g.teacher_id ?? '') ||
+      Number(groupForm.maxStudents) !== Number(g.max_students) ||
+      Boolean(groupForm.active) !== Boolean(g.active) ||
+      groupForm.lessonsPerWeek !== (Number(g.lessons_per_week) === 2 ? 2 : 1) ||
+      Boolean(groupForm.teacherPickupConsent) !== Boolean(g.teacher_pickup_consent)
+    );
+  }, [groupForm, groupDetail]);
+
   useEffect(() => {
     if (!initialGroupId || initialGroupLoaded) return;
     void loadGroupDetail(initialGroupId);
     setInitialGroupLoaded(true);
   }, [initialGroupId, initialGroupLoaded, loadGroupDetail]);
+
+  /** Cel generowania = 33 × częstotliwość z pola „Zajęcia w tygodniu”. */
+  useEffect(() => {
+    setGenerateLessonsCount(String(defaultTargetLessonsPerYear(groupForm.lessonsPerWeek)));
+  }, [groupForm.id, groupForm.lessonsPerWeek]);
 
   const loadChildren = useCallback(async () => {
     try {
@@ -2805,8 +2937,12 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                 dateFrom: active?.date_from ?? '',
                                 dateTo: active?.date_from ?? '',
                                 type: 'HOLIDAY',
+                                notifyParents: false,
                                 parentMessage: '',
                               });
+                              setHolidayCancelConfirm(null);
+                              setHolidayNotifyPrompt(false);
+                              setHolidayNotifyDraft('');
                               setHolidayModalOpen(true);
                             }}
                             className="rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm font-semibold text-[#0f6e56] shadow-sm transition hover:bg-emerald-50 disabled:opacity-50"
@@ -4877,7 +5013,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               onChange={(e) => {
                 const lpw = Number(e.target.value) === 2 ? 2 : 1;
                 setGroupForm((p) => ({ ...p, lessonsPerWeek: lpw }));
-                setGenerateLessonsCount(String(lpw === 2 ? 66 : 33));
+                setGenerateLessonsCount(String(defaultTargetLessonsPerYear(lpw)));
               }}
             >
               <option value={1}>1× w tygodniu (33 zajęć/rok)</option>
@@ -4903,8 +5039,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               Aktywna grupa
             </label>
             <p className="text-xs text-zinc-500">
-                  Błędnie utworzoną grupę usuń przyciskiem „Usuń z widoku szkoły” — zniknie z listy
-                  (aktywne i nieaktywne zostają). W bazie pozostanie do historii.
+              Błędnie utworzoną grupę usuń przyciskiem „Usuń z widoku szkoły” — zniknie z listy
+              (także jako nieaktywna).
             </p>
           </div>
         </div>
@@ -4918,19 +5054,31 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-800 hover:bg-red-100 disabled:opacity-60"
             onClick={() => {
               if (!groupForm.id) return;
-              void removeGroupFromSchoolView(groupForm.id, groupForm.name.trim() || 'bez nazwy');
+              setRemoveGroupConfirm({
+                id: groupForm.id,
+                name: groupForm.name.trim() || 'bez nazwy',
+              });
             }}
-            title="Grupa zniknie z panelu, ale zostanie w bazie jako nieaktywna"
+            title="Grupa zniknie z listy w panelu"
           >
             Usuń z widoku szkoły
           </button>
           <button
             type="button"
             disabled={groupSaving}
-            className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            className={
+              groupFormDirty
+                ? 'rounded-xl bg-amber-500 px-4 py-2 text-sm font-bold text-white shadow-md ring-2 ring-amber-300 ring-offset-2 animate-pulse disabled:opacity-60'
+                : 'rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60'
+            }
             onClick={() => void saveGroupForm()}
+            title={groupFormDirty ? 'Masz niezapisane zmiany' : undefined}
           >
-            {groupSaving ? 'Zapisywanie…' : 'Zapisz zmiany'}
+            {groupSaving
+              ? 'Zapisywanie…'
+              : groupFormDirty
+                ? 'Zapisz niezapisane zmiany'
+                : 'Zapisz zmiany'}
           </button>
         </div>
       </section>
@@ -4949,7 +5097,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       : () => Promise.resolve();
     const scheduleTemplates = detail?.scheduleTemplates ?? [];
     const groupIsTwiceWeekly =
-      Number(detail?.group.lessons_per_week ?? groupForm.lessonsPerWeek) === 2;
+      Number(
+        groupForm.id && groupId && groupForm.id === groupId
+          ? groupForm.lessonsPerWeek
+          : (detail?.group.lessons_per_week ?? groupForm.lessonsPerWeek),
+      ) === 2;
     const hasOnceWeeklyDay = scheduleTemplates.some((st) => st.once_weekly_day);
     const schoolYearLessons = detail?.schoolYearLessons ?? [];
     const futureLessonsCount = detail?.generatedLessons?.futureCount ?? 0;
@@ -4976,7 +5128,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           <div className="mb-3 flex items-center justify-between">
             <div>
               <h4 className="font-semibold text-zinc-900">Harmonogram</h4>
-              <p className="text-sm text-zinc-500">Stałe terminy grupy (dzień, godzina, czas trwania, lokalizacja).</p>
+              <p className="text-sm text-zinc-500">
+                {groupIsTwiceWeekly
+                  ? 'Ustal 2 dni, kiedy będą odbywać się zajęcia.'
+                  : 'Ustal 1 dzień i godzinę, kiedy będą odbywać się zajęcia.'}
+              </p>
               {disabled && (
                 <p className="mt-1 text-xs text-amber-700">Najpierw zapisz grupę, aby dodać terminy.</p>
               )}
@@ -5021,7 +5177,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         {dayNames[st.day_of_week] ?? `Dzień ${st.day_of_week}`} · {st.start_time.slice(0, 5)} · {st.duration_min} min
                       </span>
                       {st.once_weekly_day ? (
-                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
+                        <span className="rounded-full bg-amber-500 px-2 py-0.5 text-xs font-semibold text-white">
                           dzień dla dzieci 1×
                         </span>
                       ) : null}
@@ -5029,7 +5185,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     <p className="text-zinc-600">{st.location_name ?? '-'}</p>
                     {(st.future_lessons_count ?? 0) > 0 || (st.completed_lessons_count ?? 0) > 0 ? (
                       <p className="mt-1 text-xs font-medium text-emerald-700">
-                        Zajęcia wygenerowane (
+                        Z tego terminu:{" "}
                         {[
                           (st.future_lessons_count ?? 0) > 0
                             ? `${st.future_lessons_count} nadchodzących`
@@ -5039,8 +5195,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                             : null,
                         ]
                           .filter(Boolean)
-                          .join(', ')}
-                        )
+                          .join(", ")}
                       </p>
                     ) : (
                       !disabled && (
@@ -5052,10 +5207,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     {groupIsTwiceWeekly && hasActiveSchoolYear ? (
                       <button
                         type="button"
-                        className={`rounded-lg px-3 py-1 text-sm font-medium ${
+                        className={`rounded-lg px-3 py-1 text-sm font-semibold ${
                           st.once_weekly_day
-                            ? 'bg-amber-200 text-amber-900'
-                            : 'bg-zinc-100 text-zinc-700 hover:bg-amber-50'
+                            ? 'bg-amber-500 text-white hover:bg-amber-600'
+                            : 'bg-zinc-200 text-zinc-800 hover:bg-zinc-300'
                         }`}
                         onClick={async () => {
                           const res = await fetch(`/api/admin/schedule-templates/${st.id}`, {
@@ -5077,21 +5232,25 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                           await reloadDetail();
                         }}
                       >
-                        {st.once_weekly_day ? 'Dzień 1×' : 'Ustaw jako dzień 1×'}
+                        {st.once_weekly_day ? 'Dzień 1×' : 'Ustaw jako dzień dla dzieci 1×'}
                       </button>
                     ) : null}
                     <button
                       type="button"
-                      disabled={!hasActiveSchoolYear}
+                      disabled={!hasActiveSchoolYear || !groupId}
                       className="rounded-lg bg-red-600 px-3 py-1 text-white disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={async () => {
-                        const res = await fetch(`/api/admin/schedule-templates/${st.id}`, { method: 'DELETE' });
-                        if (!res.ok) {
-                          pushToast('error', 'Nie udało się usunąć terminu');
-                          return;
-                        }
-                        pushToast('success', 'Termin usunięty');
-                        await reloadDetail();
+                      onClick={() => {
+                        if (!groupId) return;
+                        const dayLabel =
+                          dayNames[st.day_of_week] ?? `Dzień ${st.day_of_week}`;
+                        setDeleteScheduleModal({
+                          id: st.id,
+                          groupId,
+                          label: `${dayLabel} · ${String(st.start_time).slice(0, 5)} · ${st.duration_min} min${
+                            st.location_name ? ` · ${st.location_name}` : ''
+                          }`,
+                          futureLessonsCount: st.future_lessons_count ?? 0,
+                        });
                       }}
                     >
                       Usuń
@@ -5101,7 +5260,31 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               ))
             )}
           </div>
-          {groupIsTwiceWeekly && scheduleTemplates.length > 0 && !hasOnceWeeklyDay ? (
+          {!disabled && groupIsTwiceWeekly && scheduleTemplates.length < 2 ? (
+            <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              <p className="font-semibold">
+                Grupa ma zajęcia 2× w tygodniu, a w harmonogramie{' '}
+                {scheduleTemplates.length === 0
+                  ? 'nie ma jeszcze żadnego terminu'
+                  : 'jest tylko 1 termin'}
+                .
+              </p>
+              <p className="mt-1 text-red-700/90">
+                Dodaj brakujący termin przyciskiem „+ Dodaj termin”, żeby pokryć oba dni tygodnia.
+              </p>
+            </div>
+          ) : null}
+          {!disabled && !groupIsTwiceWeekly && scheduleTemplates.length === 0 ? (
+            <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              <p className="font-semibold">
+                Grupa ma zajęcia 1× w tygodniu, a w harmonogramie nie ma jeszcze żadnego terminu.
+              </p>
+              <p className="mt-1 text-red-700/90">
+                Dodaj termin przyciskiem „+ Dodaj termin” u góry.
+              </p>
+            </div>
+          ) : null}
+          {groupIsTwiceWeekly && scheduleTemplates.length >= 2 && !hasOnceWeeklyDay ? (
             <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
               Grupa ma zajęcia 2× w tygodniu — oznacz, który termin jest dniem dla dzieci chodzących
               tylko 1×.
@@ -5113,11 +5296,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h4 className="font-semibold text-zinc-900">Zajęcia w kalendarzu</h4>
-              <p className="text-sm text-zinc-600">
-                Lista zajęć wygenerowanych z harmonogramu na aktywny rok szkolny. „Liczba zajęć” to
-                cel na rok — system doda tylko brakujące (w datach aktywnego roku, z pominięciem dni
-                wolnych).
-              </p>
               {disabled && (
                 <p className="mt-1 text-xs text-amber-700">Najpierw zapisz grupę, aby zobaczyć zajęcia.</p>
               )}
@@ -5133,12 +5311,49 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 scheduleTemplates.length > 0 &&
                 detail?.missingGeneratedLessons === true && (
                 <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
-                  Brak zdefiniowanej liczby zajęć na aktywny rok szkolny.
+                  W kalendarzu brakuje zajęć względem bieżącego harmonogramu — kliknij „Wygeneruj
+                  zajęcia”, żeby dopełnić rok (cel: {generateLessonsCount}).
                 </p>
+              )}
+              {!disabled && (detail?.generatedLessons?.orphanLessonsCount ?? 0) > 0 && (
+                <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  <p className="font-medium">
+                    {detail!.generatedLessons!.orphanLessonsCount}{" "}
+                    {detail!.generatedLessons!.orphanLessonsCount === 1
+                      ? "zajęcie nie należy"
+                      : detail!.generatedLessons!.orphanLessonsCount! < 5
+                        ? "zajęcia nie należą"
+                        : "zajęć nie należy"}{" "}
+                    do aktualnego harmonogramu (np. po usunięciu terminu).
+                  </p>
+                  <button
+                    type="button"
+                    className="mt-2 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
+                    onClick={async () => {
+                      const res = await fetch(
+                        `/api/admin/groups/${groupId}/purge-orphan-lessons`,
+                        { method: 'POST' },
+                      );
+                      const data = await res.json().catch(() => ({}));
+                      if (!res.ok) {
+                        pushToast(
+                          'error',
+                          data.message ?? 'Nie udało się usunąć zajęć poza harmonogramem',
+                        );
+                        return;
+                      }
+                      pushToast('success', data.message ?? 'Usunięto zajęcia poza harmonogramem');
+                      await reloadDetail();
+                    }}
+                  >
+                    Usuń zajęcia poza harmonogramem
+                  </button>
+                </div>
               )}
               {!disabled && schoolYearLessonCount > 0 && (
                 <p className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
-                  W roku szkolnym{lessonsYearLabel ? ` ${lessonsYearLabel}` : ''}:{' '}
+                  W roku szkolnym{lessonsYearLabel ? ` ${lessonsYearLabel}` : ''} łącznie w
+                  kalendarzu grupy:{' '}
                   <strong>{schoolYearLessonCount}</strong>{' '}
                   {schoolYearLessonCount === 1 ? 'zajęcie' : schoolYearLessonCount < 5 ? 'zajęcia' : 'zajęć'}
                   {futureLessonsCount > 0 || completedLessonsCount > 0
@@ -5168,8 +5383,17 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     className="w-full rounded-xl border border-emerald-200 px-3 py-2 sm:w-28"
                     value={generateLessonsCount}
                     onChange={(e) => setGenerateLessonsCount(e.target.value)}
-                    title="Docelowa liczba zajęć w aktywnym roku — system doda tylko brakujące"
+                    title={`Domyślnie ${defaultTargetLessonsPerYear(
+                      groupForm.id === groupId ? groupForm.lessonsPerWeek : groupIsTwiceWeekly ? 2 : 1,
+                    )} z ustawienia „Zajęcia w tygodniu” — możesz zmienić przed generowaniem`}
                   />
+                  <span className="mt-1 block text-xs text-zinc-500">
+                    Domyślnie z „Zajęcia w tygodniu” (
+                    {defaultTargetLessonsPerYear(
+                      groupForm.id === groupId ? groupForm.lessonsPerWeek : groupIsTwiceWeekly ? 2 : 1,
+                    )}
+                    )
+                  </span>
                 </label>
                 <button
                   type="button"
@@ -5236,13 +5460,22 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 <ul className="max-h-80 space-y-1.5 overflow-y-auto text-sm">
                   {visibleLessons.map((lesson, index) => {
                     const isCompleted = lesson.status === 'COMPLETED';
-                    const statusLabel = isCompleted ? 'zakończone' : 'zaplanowane';
+                    const isOrphan = lesson.orphan_from_schedule === true;
+                    const statusLabel = isCompleted
+                      ? 'zakończone'
+                      : isOrphan
+                        ? 'poza harmonogramem'
+                        : 'zaplanowane';
                     const statusClass = isCompleted
                       ? 'bg-zinc-200 text-zinc-700'
-                      : 'bg-emerald-100 text-emerald-800';
+                      : isOrphan
+                        ? 'bg-amber-100 text-amber-900'
+                        : 'bg-emerald-100 text-emerald-800';
                     const rowClass = isCompleted
                       ? 'border-zinc-200 bg-zinc-50'
-                      : 'border-emerald-100 bg-emerald-50/40';
+                      : isOrphan
+                        ? 'border-amber-200 bg-amber-50/50'
+                        : 'border-emerald-100 bg-emerald-50/40';
                     return (
                       <li
                         key={lesson.id}
@@ -5318,7 +5551,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 Brak uczniów w grupie.
               </p>
             ) : (
-              activeStudents.map((st) => (
+              activeStudents.map((st) => {
+                const groupIsTwiceWeekly = Number(detail.group.lessons_per_week) === 2;
+                const studentIsOnceWeekly = Number(st.lessons_per_week) === 1;
+                return (
                 <div key={st.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-100 p-3">
                   <div>
                     <p className="flex flex-wrap items-center gap-2">
@@ -5334,31 +5570,74 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       >
                         {st.confirmed ? 'potwierdzony' : 'niepotwierdzony'}
                       </span>
-                      {Number(detail.group.lessons_per_week) === 2 ? (
-                        <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-semibold text-zinc-700">
-                          {Number(st.lessons_per_week) === 1 ? '1× / tydz.' : '2× / tydz.'}
+                      {groupIsTwiceWeekly ? (
+                        <span
+                          className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                            studentIsOnceWeekly
+                              ? 'bg-amber-500 text-white'
+                              : 'bg-zinc-700 text-white'
+                          }`}
+                          title={
+                            studentIsOnceWeekly
+                              ? 'Uczeń chodzi tylko w dzień oznaczony jako 1×'
+                              : 'Uczeń chodzi w oba dni tygodnia'
+                          }
+                        >
+                          {studentIsOnceWeekly ? 'chodzi 1× / tydz.' : 'chodzi 2× / tydz.'}
                         </span>
                       ) : null}
                     </p>
                     <p className="text-zinc-600">{st.birth_date}</p>
                   </div>
-                  <button
-                    type="button"
-                    className="rounded-lg bg-red-600 px-3 py-1 text-white"
-                    onClick={async () => {
-                      const res = await fetch(`/api/admin/group-students/${st.id}`, { method: 'DELETE' });
-                      if (!res.ok) {
-                        pushToast('error', 'Nie udało się usunąć ucznia z grupy');
-                        return;
-                      }
-                      pushToast('success', 'Uczeń usunięty z grupy');
-                      await reloadDetail();
-                    }}
-                  >
-                    Usuń z grupy
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {groupIsTwiceWeekly ? (
+                      <button
+                        type="button"
+                        className="rounded-lg border border-zinc-300 bg-white px-3 py-1 text-sm font-semibold text-zinc-800 hover:bg-zinc-50"
+                        onClick={async () => {
+                          const next = studentIsOnceWeekly ? 2 : 1;
+                          const res = await fetch(`/api/admin/group-students/${st.id}`, {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ lessonsPerWeek: next }),
+                          });
+                          const data = await res.json().catch(() => ({}));
+                          if (!res.ok) {
+                            pushToast('error', data.message ?? 'Nie udało się zmienić frekwencji');
+                            return;
+                          }
+                          pushToast(
+                            'success',
+                            data.message ??
+                              (next === 1
+                                ? 'Oznaczono frekwencję 1× w tygodniu'
+                                : 'Oznaczono frekwencję 2× w tygodniu'),
+                          );
+                          await reloadDetail();
+                        }}
+                      >
+                        {studentIsOnceWeekly ? 'Zmień na 2×' : 'Zmień na 1×'}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="rounded-lg bg-red-600 px-3 py-1 text-white"
+                      onClick={async () => {
+                        const res = await fetch(`/api/admin/group-students/${st.id}`, { method: 'DELETE' });
+                        if (!res.ok) {
+                          pushToast('error', 'Nie udało się usunąć ucznia z grupy');
+                          return;
+                        }
+                        pushToast('success', 'Uczeń usunięty z grupy');
+                        await reloadDetail();
+                      }}
+                    >
+                      Usuń z grupy
+                    </button>
+                  </div>
                 </div>
-              ))
+                );
+              })
             )}
           </div>
         </section>
@@ -5410,7 +5689,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             pricePerLesson: '',
             teacherPickupConsent: true,
           });
-          setGenerateLessonsCount('33');
+          setGenerateLessonsCount(String(defaultTargetLessonsPerYear(1)));
           void loadLocations();
         }}
       />
@@ -5650,7 +5929,17 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       <td className="px-4 py-3">{g.level ?? '-'}</td>
                       <td className="px-4 py-3">{g.teacher_name ?? '-'}</td>
                       <td className="px-4 py-3">{g.location_name ?? '-'}</td>
-                      <td className="px-4 py-3 whitespace-normal text-zinc-700">{g.schedule ?? '-'}</td>
+                      <td className="px-4 py-3 whitespace-normal text-zinc-700">
+                        {g.schedule && g.schedule !== '-' ? (
+                          <span className="flex flex-col gap-0.5">
+                            {g.schedule.split(/,\s*/).map((line) => (
+                              <span key={line}>{line}</span>
+                            ))}
+                          </span>
+                        ) : (
+                          '-'
+                        )}
+                      </td>
                       {/*
                       <td className="px-4 py-3 whitespace-nowrap text-xs text-zinc-700">
                         {priceLines...}
@@ -5755,7 +6044,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   onChange={(e) => {
                     const lpw = Number(e.target.value) === 2 ? 2 : 1;
                     setGroupForm((p) => ({ ...p, lessonsPerWeek: lpw }));
-                    setGenerateLessonsCount(String(lpw === 2 ? 66 : 33));
+                    setGenerateLessonsCount(String(defaultTargetLessonsPerYear(lpw)));
                   }}
                 >
                   <option value={1}>1× w tygodniu (33 zajęć/rok)</option>
@@ -7394,6 +7683,82 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         </div>
       )}
 
+      {deleteScheduleModal && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-emerald-100 bg-white p-5 shadow-xl">
+            <h3 className="text-lg font-semibold text-zinc-900">Usuń termin z harmonogramu</h3>
+            <p className="mt-3 text-sm text-zinc-600">
+              Czy na pewno chcesz usunąć ten termin z harmonogramu grupy?
+            </p>
+            <p className="mt-2 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2 text-sm font-medium text-zinc-900">
+              {deleteScheduleModal.label}
+            </p>
+            {deleteScheduleModal.futureLessonsCount > 0 ? (
+              <p className="mt-2 text-xs text-amber-800">
+                Ten termin ma {deleteScheduleModal.futureLessonsCount}{' '}
+                {deleteScheduleModal.futureLessonsCount === 1
+                  ? 'nadchodzące zajęcie'
+                  : deleteScheduleModal.futureLessonsCount < 5
+                    ? 'nadchodzące zajęcia'
+                    : 'nadchodzących zajęć'}
+                — zostaną usunięte z kalendarza razem z terminem. Zakończone zajęcia zostaną w
+                historii.
+              </p>
+            ) : (
+              <p className="mt-2 text-xs text-zinc-500">
+                Termin zniknie z harmonogramu. Możesz później dodać inny.
+              </p>
+            )}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-xl bg-zinc-200 px-4 py-2 text-sm font-semibold text-zinc-800"
+                disabled={busy}
+                onClick={() => setDeleteScheduleModal(null)}
+              >
+                Anuluj
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                onClick={async () => {
+                  const templateId = deleteScheduleModal.id;
+                  const groupIdForReload = deleteScheduleModal.groupId;
+                  setBusy(true);
+                  try {
+                    const res = await fetch(`/api/admin/schedule-templates/${templateId}`, {
+                      method: 'DELETE',
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) {
+                      pushToast('error', data.message ?? 'Nie udało się usunąć terminu');
+                      return;
+                    }
+                    pushToast('success', data.message ?? 'Termin usunięty');
+                    setDeleteScheduleModal(null);
+                    setClassesCalRefreshSignal((s) => s + 1);
+                    await loadGroupDetail(
+                      groupIdForReload,
+                      getGroupDetailReloadOptions(groupIdForReload),
+                    );
+                    const gRes = await fetch('/api/admin/groups');
+                    if (gRes.ok) {
+                      const gJson = await gRes.json();
+                      setGroups((gJson.groups ?? []) as GroupRow[]);
+                    }
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                {busy ? 'Usuwanie…' : 'Usuń termin'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {closeYearModal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
@@ -7549,13 +7914,44 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         </div>
       )}
 
+      {removeGroupConfirm && (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+            <h3 className="text-lg font-semibold text-zinc-900">Usunąć grupę z widoku szkoły?</h3>
+            <p className="mt-2 text-sm text-zinc-600">
+              Grupa{' '}
+              <span className="font-semibold text-zinc-900">„{removeGroupConfirm.name}”</span>{' '}
+              zniknie z listy grup (także jako nieaktywna).
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-xl bg-zinc-200 px-4 py-2 text-sm font-semibold"
+                disabled={groupSaving}
+                onClick={() => setRemoveGroupConfirm(null)}
+              >
+                Anuluj
+              </button>
+              <button
+                type="button"
+                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                disabled={groupSaving}
+                onClick={() => void confirmRemoveGroupFromSchoolView()}
+              >
+                {groupSaving ? 'Usuwanie…' : 'Usuń'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {holidayModalOpen && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
             <h3 className="text-lg font-semibold">Dzień wolny</h3>
             <p className="mt-1 text-sm text-zinc-500">
-              Zaplanowane zajęcia w tym okresie zostaną odwołane. Rodzice dzieci z tymi zajęciami
-              otrzymają wiadomość w panelu oraz e-mail.
+              Zaplanowane zajęcia w tym okresie zostaną odwołane. Domyślnie rodzice nie dostaną
+              powiadomienia — możesz je wysłać poniżej.
             </p>
             <div className="mt-4 space-y-3">
               <label className="block text-sm">
@@ -7604,60 +8000,161 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   <option value="CANCELLED">CANCELLED</option>
                 </select>
               </label>
-              <label className="block text-sm">
-                <span className="mb-1 block font-semibold text-zinc-700">Wiadomość do rodziców</span>
-                <span className="mb-2 block text-xs text-zinc-500">
-                  Opcjonalna treść dołączona do powiadomienia o odwołanych zajęciach. Jeśli
-                  zostawisz puste, wysłany zostanie domyślny tekst.
-                </span>
-                <textarea
-                  className="min-h-[100px] w-full rounded-xl border border-emerald-200 px-3 py-2"
-                  value={holidayForm.parentMessage}
-                  onChange={(e) => setHolidayForm((p) => ({ ...p, parentMessage: e.target.value }))}
-                  placeholder="Np. Szkoła jest zamknięta z powodu święta państwowego. Zajęcia odbędą się w innym terminie."
+              <label className="flex items-start gap-2 text-sm text-zinc-800">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 accent-[#0f6e56]"
+                  checked={holidayForm.notifyParents}
+                  onChange={(e) =>
+                    setHolidayForm((p) => ({
+                      ...p,
+                      notifyParents: e.target.checked,
+                      parentMessage: e.target.checked ? p.parentMessage : '',
+                    }))
+                  }
                 />
+                <span>
+                  <span className="font-semibold text-zinc-700">Wyślij wiadomość do rodziców</span>
+                  <span className="mt-0.5 block text-xs text-zinc-500">
+                    Powiadomienie w panelu oraz e-mail do rodziców dzieci z odwołanymi zajęciami.
+                  </span>
+                </span>
               </label>
+              {holidayForm.notifyParents ? (
+                <label className="block text-sm">
+                  <span className="mb-1 block font-semibold text-zinc-700">Treść wiadomości</span>
+                  <span className="mb-2 block text-xs text-zinc-500">
+                    Opcjonalnie. Jeśli zostawisz puste, wysłany zostanie domyślny tekst o dniu wolnym.
+                  </span>
+                  <textarea
+                    className="min-h-[100px] w-full rounded-xl border border-emerald-200 px-3 py-2"
+                    value={holidayForm.parentMessage}
+                    onChange={(e) => setHolidayForm((p) => ({ ...p, parentMessage: e.target.value }))}
+                    placeholder="Np. Szkoła jest zamknięta z powodu święta państwowego. Zajęcia odbędą się w innym terminie."
+                  />
+                </label>
+              ) : null}
             </div>
             <div className="mt-5 flex justify-end gap-2">
-              <button type="button" className="rounded-xl bg-zinc-200 px-4 py-2" onClick={() => setHolidayModalOpen(false)}>
+              <button
+                type="button"
+                className="rounded-xl bg-zinc-200 px-4 py-2"
+                onClick={() => {
+                  setHolidayCancelConfirm(null);
+                  setHolidayNotifyPrompt(false);
+                  setHolidayNotifyDraft('');
+                  setHolidayModalOpen(false);
+                }}
+              >
                 Anuluj
               </button>
               <button
                 type="button"
                 disabled={busy}
                 className="rounded-xl bg-[#0f6e56] px-4 py-2 text-white disabled:opacity-50"
-                onClick={async () => {
-                  if (!holidayForm.name.trim() || !holidayForm.dateFrom || !holidayForm.dateTo) {
-                    pushToast('error', 'Uzupełnij pola');
-                    return;
-                  }
-                  setBusy(true);
-                  try {
-                    const res = await fetch('/api/admin/school-holidays', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        name: holidayForm.name.trim(),
-                        date_from: holidayForm.dateFrom,
-                        date_to: holidayForm.dateTo,
-                        type: holidayForm.type,
-                        parent_message: holidayForm.parentMessage.trim() || undefined,
-                      }),
-                    });
-                    const data = await res.json().catch(() => ({}));
-                    if (!res.ok) throw new Error(data.message ?? 'Błąd');
-                    pushToast('success', data.message ?? 'Dodano dzień wolny');
-                    setHolidayModalOpen(false);
-                    setClassesCalRefreshSignal((s) => s + 1);
-                    await loadSchoolYearData();
-                  } catch (e) {
-                    pushToast('error', e instanceof Error ? e.message : 'Błąd');
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
+                onClick={() => void startHolidaySave()}
               >
                 Zapisz
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {holidayCancelConfirm && (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-black/50 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
+            <h3 className="text-lg font-semibold text-zinc-900">Anulować zaplanowane zajęcia?</h3>
+            <p className="mt-2 text-sm text-zinc-600">
+              W wybranym okresie są zaplanowane zajęcia. Potwierdź, czy mają zostać anulowane
+              razem z dodaniem dnia wolnego.
+            </p>
+            <ul className="mt-4 max-h-64 space-y-2 overflow-y-auto rounded-xl border border-emerald-100 bg-emerald-50/40 p-3 text-sm text-zinc-800">
+              {holidayCancelConfirm.map((l) => (
+                <li key={l.id} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+                  <span className="font-semibold">{l.group_name}</span>
+                  <span className="text-zinc-600">{formatHolidayLessonWhen(l.scheduled_at)}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-xl bg-zinc-200 px-4 py-2 text-sm font-semibold"
+                disabled={busy}
+                onClick={() => setHolidayCancelConfirm(null)}
+              >
+                Wróć
+              </button>
+              <button
+                type="button"
+                className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                disabled={busy}
+                onClick={() => {
+                  setHolidayCancelConfirm(null);
+                  if (!holidayForm.notifyParents) {
+                    setHolidayNotifyDraft('');
+                    setHolidayNotifyPrompt(true);
+                    return;
+                  }
+                  void submitHolidaySave({
+                    notifyParents: true,
+                    parentMessage: holidayForm.parentMessage,
+                  });
+                }}
+              >
+                Tak, anuluj zajęcia
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {holidayNotifyPrompt && (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-black/50 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
+            <h3 className="text-lg font-semibold text-zinc-900">Wysłać wiadomość do rodziców?</h3>
+            <p className="mt-2 text-sm text-zinc-600">
+              Checkbox powiadomienia nie był zaznaczony. Możesz teraz wysłać wiadomość w panelu
+              oraz e-mail do rodziców dzieci z odwołanymi zajęciami.
+            </p>
+            <label className="mt-4 block text-sm">
+              <span className="mb-1 block font-semibold text-zinc-700">Treść wiadomości</span>
+              <span className="mb-2 block text-xs text-zinc-500">
+                Opcjonalnie. Jeśli zostawisz puste, wysłany zostanie domyślny tekst o dniu wolnym.
+              </span>
+              <textarea
+                className="min-h-[100px] w-full rounded-xl border border-emerald-200 px-3 py-2"
+                value={holidayNotifyDraft}
+                onChange={(e) => setHolidayNotifyDraft(e.target.value)}
+                placeholder="Np. Szkoła jest zamknięta z powodu święta państwowego. Zajęcia odbędą się w innym terminie."
+              />
+            </label>
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-xl bg-zinc-200 px-4 py-2 text-sm font-semibold disabled:opacity-50"
+                disabled={busy}
+                onClick={() => {
+                  setHolidayNotifyPrompt(false);
+                  void submitHolidaySave({ notifyParents: false, parentMessage: '' });
+                }}
+              >
+                Nie wysyłaj
+              </button>
+              <button
+                type="button"
+                className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                disabled={busy}
+                onClick={() => {
+                  setHolidayNotifyPrompt(false);
+                  void submitHolidaySave({
+                    notifyParents: true,
+                    parentMessage: holidayNotifyDraft,
+                  });
+                }}
+              >
+                Tak, wyślij
               </button>
             </div>
           </div>

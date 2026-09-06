@@ -80,6 +80,8 @@ export async function GET(
       group_price_monthly: string | null;
       group_price_yearly: string | null;
       group_price_per_lesson: string | null;
+      lessons_per_week: number | null;
+      group_lessons_per_week: number | null;
     }>(
       `SELECT
          gs.id,
@@ -87,7 +89,9 @@ export async function GET(
          g.name AS group_name,
          g.price_monthly::text AS group_price_monthly,
          g.price_yearly::text AS group_price_yearly,
-         g.price_per_lesson::text AS group_price_per_lesson
+         g.price_per_lesson::text AS group_price_per_lesson,
+         gs.lessons_per_week,
+         g.lessons_per_week AS group_lessons_per_week
        FROM group_students gs
        JOIN groups g ON g.id = gs.group_id
        WHERE gs.child_id = $1

@@ -1,9 +1,50 @@
 import { randomUUID } from "crypto";
 import { getActiveSchoolYear, queryDb } from "@/lib/db";
 import { ensurePolishPublicHolidaysForSchoolYear } from "@/lib/ensure-polish-public-holidays";
-import { SCHOOL_TIMEZONE, sqlSchoolWallTimestamp } from "@/lib/school-timezone";
+import { SCHOOL_TIMEZONE, sqlSchoolTimestampAsTimestamptz, sqlSchoolWallTimestamp } from "@/lib/school-timezone";
 
 const TZ = SCHOOL_TIMEZONE;
+
+/**
+ * Usuwa przyszłe SCHEDULED, które nie pasują do żadnego aktywnego terminu grupy
+ * (np. po usunięciu dnia z harmonogramu). Zakończone zostają w historii.
+ */
+export async function purgeFutureOrphanScheduledLessons(groupId: string): Promise<number> {
+  const orphanFuture = await queryDb<{ id: string }>(
+    `SELECT l.id
+     FROM lessons l
+     WHERE l.group_id = $1
+       AND l.status = 'SCHEDULED'
+       AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} > NOW()
+       AND NOT EXISTS (
+         SELECT 1
+         FROM schedule_templates st
+         WHERE st.group_id = l.group_id
+           AND st.active = TRUE
+           AND (
+             l.schedule_template_id = st.id
+             OR (
+               EXTRACT(ISODOW FROM l.scheduled_at)::int = st.day_of_week
+               AND TO_CHAR(l.scheduled_at, 'HH24:MI:SS') = TO_CHAR(st.start_time, 'HH24:MI:SS')
+             )
+           )
+       )`,
+    [groupId]
+  );
+  const orphanIds = orphanFuture.rows.map((r) => r.id);
+  if (orphanIds.length === 0) return 0;
+
+  await queryDb(`DELETE FROM attendance WHERE lesson_id = ANY($1::text[])`, [orphanIds]);
+  await queryDb(`DELETE FROM progress_notes WHERE lesson_id = ANY($1::text[])`, [orphanIds]);
+  const deleted = await queryDb<{ id: string }>(
+    `DELETE FROM lessons
+     WHERE id = ANY($1::text[])
+       AND status = 'SCHEDULED'
+     RETURNING id`,
+    [orphanIds]
+  );
+  return deleted.rowCount ?? 0;
+}
 
 /**
  * SQL EXISTS: grupa ma przyszły termin z potwierdzonego harmonogramu aktywnego roku
@@ -423,6 +464,8 @@ export async function confirmScheduleAndGenerateLessons(opts: {
   if (updated.rows.length === 0) {
     return { ok: false, reason: "NO_TEMPLATES", message: "Brak aktywnych terminów w harmonogramie" };
   }
+
+  await purgeFutureOrphanScheduledLessons(groupId);
 
   const existingRes = await queryDb<{ cnt: number }>(
     `SELECT COUNT(*)::int AS cnt

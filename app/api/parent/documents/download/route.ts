@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getUserById } from "@/lib/db";
+import { isPickupConsentPdfFilename } from "@/lib/pickup-consent-notice";
 import { requireParentContext } from "@/lib/parent-portal-auth";
 import { getR2ObjectBuffer, isParentDokumentyKeyAllowed } from "@/lib/r2-storage";
+import { isComplimentaryForParent } from "@/lib/school-discounts";
 
 export async function GET(request: NextRequest) {
   const auth = await requireParentContext(request);
@@ -22,6 +25,21 @@ export async function GET(request: NextRequest) {
       })
     ) {
       return NextResponse.json({ message: "Brak dostępu do pliku" }, { status: 403 });
+    }
+
+    const parentUser = await getUserById(parentId);
+    const complimentary = await isComplimentaryForParent(schoolId, {
+      parentId,
+      parentEmail: parentUser?.email,
+    });
+    if (complimentary) {
+      const filename = key.split("/").pop() ?? "";
+      if (!isPickupConsentPdfFilename(filename)) {
+        return NextResponse.json(
+          { message: "Tryb bez opłat — wcześniejsze dokumenty nie są dostępne do pobrania" },
+          { status: 403 },
+        );
+      }
     }
 
     const { buffer, contentType } = await getR2ObjectBuffer(key, {

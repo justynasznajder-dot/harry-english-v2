@@ -41,6 +41,7 @@ import {
 } from "@/lib/contract-amount-breakdown";
 import { resolveLessonUnitPrice, resolveMonthlyUnitPrice, resolveYearlyUnitPrice, type PaymentType } from "@/lib/lesson-pricing";
 import {
+  filterScheduleForStudentAttendance,
   lessonsPerWeekLabel,
   normalizeLessonsPerWeek,
   scaleAmountByLessonsPerWeek,
@@ -625,6 +626,17 @@ export async function generateParentContract(
   let lessonsPerWeek =
     normalizeLessonsPerWeek(ctx.lessonsPerWeek) ??
     null;
+  if (!lessonsPerWeek && child.group_id) {
+    const membershipFreq = await queryDb<{ lessons_per_week: number | null }>(
+      `SELECT lessons_per_week
+       FROM group_students
+       WHERE child_id = $1 AND group_id = $2 AND left_at IS NULL
+       ORDER BY enrolled_at DESC
+       LIMIT 1`,
+      [child.child_id, child.group_id]
+    );
+    lessonsPerWeek = normalizeLessonsPerWeek(membershipFreq.rows[0]?.lessons_per_week);
+  }
   if (!lessonsPerWeek && child.request_id) {
     const freqRes = await queryDb<{ lessons_per_week: number | null }>(
       `SELECT lessons_per_week
@@ -715,16 +727,31 @@ export async function generateParentContract(
       day_of_week: number;
       start_time: Date | string;
       duration_min: number;
+      once_weekly_day: boolean;
+      group_lessons_per_week: number | null;
     }>(
-      `SELECT day_of_week, start_time, duration_min
-       FROM schedule_templates
-       WHERE group_id = $1
-       ORDER BY day_of_week ASC, start_time ASC`,
+      `SELECT
+         st.day_of_week,
+         st.start_time,
+         st.duration_min,
+         st.once_weekly_day,
+         g.lessons_per_week AS group_lessons_per_week
+       FROM schedule_templates st
+       JOIN groups g ON g.id = st.group_id
+       WHERE st.group_id = $1
+         AND st.active = TRUE
+       ORDER BY st.day_of_week ASC, st.start_time ASC`,
       [child.group_id]
     );
-    const schedule = buildGroupSchedule(scheduleRes.rows);
+    const filtered = filterScheduleForStudentAttendance(scheduleRes.rows, {
+      groupLessonsPerWeek: scheduleRes.rows[0]?.group_lessons_per_week,
+      studentLessonsPerWeek: lessonsPerWeek,
+    });
+    const schedule = buildGroupSchedule(filtered);
     groupSchedule = schedule || "Do ustalenia";
-    if (scheduleRes.rows[0]) {
+    if (filtered[0]) {
+      lessonDuration = formatLessonDuration(filtered[0].duration_min);
+    } else if (scheduleRes.rows[0]) {
       lessonDuration = formatLessonDuration(scheduleRes.rows[0].duration_min);
     }
   }

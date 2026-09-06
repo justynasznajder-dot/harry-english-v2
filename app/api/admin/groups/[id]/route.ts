@@ -103,14 +103,23 @@ export async function GET(
 
     const futureLessonsByTemplate = lessonsYearId
       ? await queryDb<{ schedule_template_id: string; cnt: number }>(
-          `SELECT schedule_template_id, COUNT(*)::int AS cnt
-           FROM lessons
-           WHERE group_id = $1
-             AND school_year_id = $2
-             AND schedule_template_id IS NOT NULL
-             AND ${sqlSchoolTimestampAsTimestamptz("scheduled_at")} > NOW()
-             AND status = 'SCHEDULED'
-           GROUP BY schedule_template_id`,
+          `SELECT st.id AS schedule_template_id, COUNT(l.id)::int AS cnt
+           FROM schedule_templates st
+           LEFT JOIN lessons l
+             ON l.group_id = st.group_id
+            AND l.school_year_id = $2
+            AND l.status = 'SCHEDULED'
+            AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} > NOW()
+            AND (
+              l.schedule_template_id = st.id
+              OR (
+                EXTRACT(ISODOW FROM l.scheduled_at)::int = st.day_of_week
+                AND TO_CHAR(l.scheduled_at, 'HH24:MI:SS') = TO_CHAR(st.start_time, 'HH24:MI:SS')
+              )
+            )
+           WHERE st.group_id = $1
+             AND st.active = TRUE
+           GROUP BY st.id`,
           [id, lessonsYearId],
         )
       : { rows: [] as Array<{ schedule_template_id: string; cnt: number }> };
@@ -172,12 +181,14 @@ export async function GET(
           scheduled_at: Date | string;
           status: string;
           duration_min: number;
+          schedule_template_id: string | null;
         }>(
           `SELECT
              l.id,
              ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at,
              l.status,
-             l.duration_min
+             l.duration_min,
+             l.schedule_template_id
            FROM lessons l
            WHERE l.group_id = $1
              AND l.school_year_id = $2
@@ -185,19 +196,44 @@ export async function GET(
            ORDER BY l.scheduled_at ASC`,
           [id, lessonsYearId],
         )
-      : { rows: [] as Array<{ id: string; scheduled_at: Date | string; status: string; duration_min: number }> };
+      : {
+          rows: [] as Array<{
+            id: string;
+            scheduled_at: Date | string;
+            status: string;
+            duration_min: number;
+            schedule_template_id: string | null;
+          }>,
+        };
 
-    const schoolYearLessons = schoolYearLessonsRes.rows.map((row) => ({
-      id: row.id,
-      scheduled_at: toIsoUtc(row.scheduled_at),
-      status: row.status,
-      duration_min: row.duration_min,
-    }));
+    const activeTemplateIds = new Set(
+      scheduleTemplatesRaw.rows.map((st) => String((st as { id: string }).id)),
+    );
+
+    const schoolYearLessons = schoolYearLessonsRes.rows.map((row) => {
+      const templateId = row.schedule_template_id
+        ? String(row.schedule_template_id)
+        : null;
+      const orphanFromSchedule =
+        row.status !== "CANCELLED" &&
+        (templateId == null || !activeTemplateIds.has(templateId));
+      return {
+        id: row.id,
+        scheduled_at: toIsoUtc(row.scheduled_at),
+        status: row.status,
+        duration_min: row.duration_min,
+        schedule_template_id: templateId,
+        orphan_from_schedule: orphanFromSchedule,
+      };
+    });
 
     const futureCount = schoolYearLessons.filter((l) => l.status === "SCHEDULED").length;
     const completedCount = schoolYearLessons.filter((l) => l.status === "COMPLETED").length;
     // Licznik u góry: aktualne zajęcia (bez anulowanych)
     const schoolYearCount = futureCount + completedCount;
+    const orphanLessonsCount = schoolYearLessons.filter(
+      (l) => l.orphan_from_schedule,
+    ).length;
 
     const missingGeneratedRes =
       scheduleConfirmedForActiveYear && activeYearId
@@ -217,6 +253,7 @@ export async function GET(
         futureCount,
         completedCount,
         schoolYearCount,
+        orphanLessonsCount,
       },
       missingGeneratedLessons: Boolean(missingGeneratedRes.rows[0]?.missing),
       activeSchoolYear: activeYearId
@@ -289,7 +326,8 @@ export async function PUT(
     const naming = validateHarryEnglishGroupNaming({
       name: nextNameRaw,
       level: existing.level ?? "",
-      requireLevel: true,
+      requireLevel: Boolean(existing.level),
+      allowLegacyLevel: true,
     });
     if (!naming.ok) {
       return NextResponse.json({ message: naming.message }, { status: 400 });

@@ -1,16 +1,20 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   resolveStudentListPipelineStage,
   STUDENT_LIST_PIPELINE_STAGES,
   type StudentListPipelineStage,
 } from '@/lib/enrollment-status';
+import { isParentInComplimentaryList } from '@/lib/complimentary-parent-list';
+import type { ComplimentaryParentRow } from '@/lib/complimentary-parent-list';
 
 type PipelineRow = {
   childId: string;
   childName: string;
+  parentId: string;
   parentName: string;
+  parentEmail: string;
   enrollmentStatus: string;
   proposalGroup: string | null;
   contractStatus: string | null;
@@ -58,7 +62,104 @@ function stageTone(
   return 'neutral';
 }
 
-export default function StudentPipelinePanel({ embedded = false }: { embedded?: boolean }) {
+function PipelineTable({
+  rows,
+  complimentaryMode = false,
+}: {
+  rows: PipelineRow[];
+  /** Tryb bez opłat — bez kolumn umowy; flow kończy się na grupie. */
+  complimentaryMode?: boolean;
+}) {
+  if (rows.length === 0) {
+    return <p className="py-6 text-center text-sm text-zinc-500">Brak uczniów.</p>;
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <table
+        className={`text-left text-xs sm:text-sm ${complimentaryMode ? 'min-w-[520px]' : 'min-w-[820px]'}`}
+      >
+        <thead className="bg-zinc-50 text-zinc-700">
+          <tr>
+            <th className="px-2 py-2 font-semibold">Uczeń</th>
+            <th className="px-2 py-2 font-semibold">Rodzic</th>
+            <th className="px-2 py-2 font-semibold">Zgłoszenie</th>
+            <th className="px-2 py-2 font-semibold">Przypisany do grupy</th>
+            {!complimentaryMode && (
+              <>
+                <th className="px-2 py-2 font-semibold">Czeka na umowę</th>
+                <th className="px-2 py-2 font-semibold">Umowa podpisana</th>
+              </>
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => {
+            const groupLabel = row.groupName || row.proposalGroup;
+            const current = resolveStudentListPipelineStage({
+              enrollmentStatus: row.enrollmentStatus,
+              hasGroup: Boolean(groupLabel),
+              contractStatus: complimentaryMode ? null : row.contractStatus,
+              complimentary: complimentaryMode,
+            });
+            const waitingLabel =
+              !complimentaryMode &&
+              (current === 'Czeka na umowę' ||
+                STAGE_ORDER[current] > STAGE_ORDER['Czeka na umowę'])
+                ? row.contractStatus?.trim() || 'Czeka na umowę'
+                : null;
+            const signedLabel =
+              !complimentaryMode && current === 'Umowa podpisana' ? 'Tak' : null;
+
+            return (
+              <tr key={row.childId} className="border-t border-zinc-100">
+                <td className="px-2 py-2 font-medium">{row.childName}</td>
+                <td className="px-2 py-2">{row.parentName}</td>
+                <td className="px-2 py-2">
+                  <PipelineBadge value="Tak" tone={stageTone('Zgłoszenie', current)} />
+                </td>
+                <td className="px-2 py-2">
+                  <PipelineBadge
+                    value={
+                      STAGE_ORDER[current] >= STAGE_ORDER['Przypisany do grupy']
+                        ? groupLabel || 'Tak'
+                        : null
+                    }
+                    tone={stageTone('Przypisany do grupy', current)}
+                  />
+                </td>
+                {!complimentaryMode && (
+                  <>
+                    <td className="px-2 py-2">
+                      <PipelineBadge
+                        value={waitingLabel}
+                        tone={stageTone('Czeka na umowę', current)}
+                      />
+                    </td>
+                    <td className="px-2 py-2">
+                      <PipelineBadge
+                        value={signedLabel}
+                        tone={stageTone('Umowa podpisana', current)}
+                      />
+                    </td>
+                  </>
+                )}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export default function StudentPipelinePanel({
+  embedded = false,
+  complimentaryParents = [],
+}: {
+  embedded?: boolean;
+  complimentaryParents?: ComplimentaryParentRow[];
+}) {
   const [pipeline, setPipeline] = useState<PipelineRow[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -86,6 +187,20 @@ export default function StudentPipelinePanel({ embedded = false }: { embedded?: 
     return () => clearTimeout(t);
   }, [load, search]);
 
+  const { withContracts, withoutContracts } = useMemo(() => {
+    const withContracts: PipelineRow[] = [];
+    const withoutContracts: PipelineRow[] = [];
+    for (const row of pipeline) {
+      const complimentary = isParentInComplimentaryList(
+        { id: row.parentId, email: row.parentEmail },
+        complimentaryParents,
+      );
+      if (complimentary) withoutContracts.push(row);
+      else withContracts.push(row);
+    }
+    return { withContracts, withoutContracts };
+  }, [pipeline, complimentaryParents]);
+
   const flowLabel = STUDENT_LIST_PIPELINE_STAGES.join(' → ');
 
   const content = (
@@ -106,74 +221,27 @@ export default function StudentPipelinePanel({ embedded = false }: { embedded?: 
 
       {loading ? (
         <p className="text-sm text-zinc-500">Ładowanie…</p>
+      ) : pipeline.length === 0 ? (
+        <p className="py-8 text-center text-sm text-zinc-500">Brak uczniów.</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="min-w-[820px] text-left text-xs sm:text-sm">
-            <thead className="bg-zinc-50 text-zinc-700">
-              <tr>
-                <th className="px-2 py-2 font-semibold">Uczeń</th>
-                <th className="px-2 py-2 font-semibold">Rodzic</th>
-                <th className="px-2 py-2 font-semibold">Zgłoszenie</th>
-                <th className="px-2 py-2 font-semibold">Przypisany do grupy</th>
-                <th className="px-2 py-2 font-semibold">Czeka na umowę</th>
-                <th className="px-2 py-2 font-semibold">Umowa podpisana</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pipeline.map((row) => {
-                const groupLabel = row.groupName || row.proposalGroup;
-                const current = resolveStudentListPipelineStage({
-                  enrollmentStatus: row.enrollmentStatus,
-                  hasGroup: Boolean(groupLabel),
-                  contractStatus: row.contractStatus,
-                });
-                const waitingLabel =
-                  current === 'Czeka na umowę' || STAGE_ORDER[current] > STAGE_ORDER['Czeka na umowę']
-                    ? row.contractStatus?.trim() || 'Czeka na umowę'
-                    : null;
-                const signedLabel =
-                  current === 'Umowa podpisana' ? 'Tak' : null;
-
-                return (
-                  <tr key={row.childId} className="border-t border-zinc-100">
-                    <td className="px-2 py-2 font-medium">{row.childName}</td>
-                    <td className="px-2 py-2">{row.parentName}</td>
-                    <td className="px-2 py-2">
-                      <PipelineBadge
-                        value="Tak"
-                        tone={stageTone('Zgłoszenie', current)}
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <PipelineBadge
-                        value={
-                          STAGE_ORDER[current] >= STAGE_ORDER['Przypisany do grupy']
-                            ? groupLabel || 'Tak'
-                            : null
-                        }
-                        tone={stageTone('Przypisany do grupy', current)}
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <PipelineBadge
-                        value={waitingLabel}
-                        tone={stageTone('Czeka na umowę', current)}
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <PipelineBadge
-                        value={signedLabel}
-                        tone={stageTone('Umowa podpisana', current)}
-                      />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {pipeline.length === 0 && (
-            <p className="py-8 text-center text-sm text-zinc-500">Brak uczniów.</p>
-          )}
+        <div className="space-y-6">
+          <section className="space-y-2">
+            <h3 className="text-sm font-semibold text-zinc-800">
+              Z umowami{' '}
+              <span className="font-normal text-zinc-500">({withContracts.length})</span>
+            </h3>
+            <PipelineTable rows={withContracts} />
+          </section>
+          <section className="space-y-2">
+            <h3 className="text-sm font-semibold text-zinc-800">
+              Bez umów{' '}
+              <span className="font-normal text-zinc-500">({withoutContracts.length})</span>
+            </h3>
+            <p className="text-xs text-zinc-500">
+              Tryb bez opłat — zgłoszenie → przypisany do grupy (bez umowy).
+            </p>
+            <PipelineTable rows={withoutContracts} complimentaryMode />
+          </section>
         </div>
       )}
     </>

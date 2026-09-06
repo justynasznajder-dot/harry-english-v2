@@ -59,3 +59,42 @@ export function sqlStudentAttendsLesson(
     )
   )`;
 }
+
+/**
+ * SQL: czy wiersz `schedule_templates` (alias `st`) ma być pokazany rodzicowi / w umowie
+ * dla frekwencji dziecka. `studentLpwExpr` — np. `gs.lessons_per_week` lub `er.lessons_per_week`.
+ * Wymaga aliasu `g` (groups).
+ */
+export function sqlScheduleTemplateVisibleForStudent(
+  studentLpwExpr: string,
+  gAlias = "g",
+  stAlias = "st"
+): string {
+  return `(
+    COALESCE(${gAlias}.lessons_per_week, 1) <= 1
+    OR COALESCE((${studentLpwExpr}), 2) >= 2
+    OR ${stAlias}.once_weekly_day = TRUE
+  )`;
+}
+
+/**
+ * Dla dziecka 1× w grupie 2× zostawia tylko termin oznaczony jako dzień 1×.
+ * Gdy grupa jest 1× — wszystkie terminy (zwykle jeden).
+ * Gdy dziecko 2× (lub brak oznaczenia) — wszystkie terminy.
+ */
+export function filterScheduleForStudentAttendance<
+  T extends { once_weekly_day?: boolean | null },
+>(
+  rows: T[],
+  opts: {
+    groupLessonsPerWeek?: number | null;
+    studentLessonsPerWeek?: number | null;
+  }
+): T[] {
+  const groupLpw = normalizeLessonsPerWeek(opts.groupLessonsPerWeek) ?? 1;
+  if (groupLpw <= 1) return rows;
+  const studentLpw = normalizeLessonsPerWeek(opts.studentLessonsPerWeek) ?? 2;
+  if (studentLpw >= 2) return rows;
+  return rows.filter((r) => r.once_weekly_day === true);
+}
+

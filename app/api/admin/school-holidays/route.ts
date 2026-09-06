@@ -192,6 +192,7 @@ export async function POST(request: NextRequest) {
       date_from,
       date_to,
       type = "HOLIDAY",
+      notify_parents: notifyParentsRaw,
       parent_message,
       school_id: bodySchoolId,
       schoolId: bodySchoolIdCamel,
@@ -200,10 +201,12 @@ export async function POST(request: NextRequest) {
       date_from?: string;
       date_to?: string;
       type?: string;
+      notify_parents?: boolean;
       parent_message?: string;
       school_id?: string;
       schoolId?: string;
     };
+    const shouldNotifyParents = notifyParentsRaw === true;
     if (!name?.trim() || !date_from || !date_to) {
       return NextResponse.json({ message: "Brak nazwy lub zakresu dat" }, { status: 400 });
     }
@@ -245,10 +248,12 @@ export async function POST(request: NextRequest) {
     }
 
     const id = randomUUID();
-    const parentsToNotify = await getParentsWithScheduledLessonsInRange(insertSchoolId, df, dt);
+    const parentsToNotify = shouldNotifyParents
+      ? await getParentsWithScheduledLessonsInRange(insertSchoolId, df, dt)
+      : [];
 
     let messageActor: Awaited<ReturnType<typeof requireMessageActor>> | null = null;
-    if (parentsToNotify.length > 0) {
+    if (shouldNotifyParents && parentsToNotify.length > 0) {
       messageActor = await requireMessageActor(ctx.userId);
       if (!messageActor.ok) {
         return NextResponse.json({ message: messageActor.message }, { status: messageActor.status });
@@ -268,7 +273,7 @@ export async function POST(request: NextRequest) {
     let emailsSent = 0;
     let emailsFailed = 0;
 
-    if (parentsToNotify.length > 0 && messageActor?.ok) {
+    if (shouldNotifyParents && parentsToNotify.length > 0 && messageActor?.ok) {
       const dateRangeLabel =
         df === dt ? formatDatePl(df) : `${formatDatePl(df)} — ${formatDatePl(dt)}`;
       const holidayName = name.trim();

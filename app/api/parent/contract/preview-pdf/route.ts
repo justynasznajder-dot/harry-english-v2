@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { buildContractPdfFilename, renderHtmlToPdf } from "@/lib/contract-pdf";
 import { extractContractNumber } from "@/lib/contract-html";
+import { getUserById } from "@/lib/db";
 import { fetchParentContractForPortal } from "@/lib/parent-contract";
 import { requireParentContext } from "@/lib/parent-portal-auth";
 import { buildPickupConsentPdfFilename } from "@/lib/pickup-consent-notice";
+import { isComplimentaryForParent } from "@/lib/school-discounts";
 
 /** Chromium PDF — dłużej niż domyślne 10 s. */
 export const maxDuration = 60;
@@ -28,8 +30,21 @@ export async function GET(request: NextRequest) {
   const childId = request.nextUrl.searchParams.get("childId")?.trim() ?? "";
 
   try {
+    const parentUser = await getUserById(parentId);
+    const complimentary = await isComplimentaryForParent(schoolId, {
+      parentId,
+      parentEmail: parentUser?.email,
+    });
+    // W trybie bez opłat: tylko zgoda na odbiór; umowa i wizerunek niedostępne.
+    if (complimentary && doc !== "attachment2") {
+      return NextResponse.json(
+        { message: "Tryb bez opłat — wcześniejsze dokumenty nie są dostępne do pobrania" },
+        { status: 403 },
+      );
+    }
+
     const contract = await fetchParentContractForPortal(parentId, schoolId);
-    if (!contract?.content_html) {
+    if (!contract) {
       return NextResponse.json({ message: "Brak umowy do podglądu" }, { status: 404 });
     }
 
@@ -38,10 +53,14 @@ export async function GET(request: NextRequest) {
     let filename = "umowa-podglad.pdf";
 
     if (doc === "contract") {
-      html = withUnsignedPreviewBanner(contract.content_html, isSigned);
+      const contentHtml = contract.content_html;
+      if (!contentHtml) {
+        return NextResponse.json({ message: "Brak umowy do podglądu" }, { status: 404 });
+      }
+      html = withUnsignedPreviewBanner(contentHtml, isSigned);
       filename = buildContractPdfFilename(
         isSigned ? "Umowa" : "Umowa-podglad",
-        extractContractNumber(contract.content_html),
+        extractContractNumber(contentHtml),
       );
     } else if (doc === "attachment1" || doc === "attachment2") {
       if (!childId) {
@@ -60,7 +79,7 @@ export async function GET(request: NextRequest) {
         html = withUnsignedPreviewBanner(html, isSigned);
         filename = buildContractPdfFilename(
           isSigned ? `Zalacznik-1-wizerunek` : `Zalacznik-1-podglad`,
-          extractContractNumber(contract.content_html),
+          extractContractNumber(contract.content_html ?? ""),
         );
       } else {
         html = child.attachment_2_html;
@@ -74,6 +93,10 @@ export async function GET(request: NextRequest) {
       }
     } else {
       return NextResponse.json({ message: "Nieznany typ dokumentu" }, { status: 400 });
+    }
+
+    if (!html) {
+      return NextResponse.json({ message: "Brak treści dokumentu" }, { status: 404 });
     }
 
     const pdf = await renderHtmlToPdf(html);

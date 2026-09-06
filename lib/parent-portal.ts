@@ -1,7 +1,10 @@
 import { extractContractNumber } from "@/lib/contract-html";
 import { POLISH_DAY_FROM_ST_SQL, queryDb } from "@/lib/db";
 import { ensurePolishPublicHolidaysForSchoolYear } from "@/lib/ensure-polish-public-holidays";
-import { sqlStudentAttendsLesson } from "@/lib/lessons-per-week";
+import {
+  sqlScheduleTemplateVisibleForStudent,
+  sqlStudentAttendsLesson,
+} from "@/lib/lessons-per-week";
 import { listPolishPublicHolidays } from "@/lib/polish-public-holidays";
 import {
   pgDateToYmd,
@@ -49,6 +52,7 @@ export type ParentProposedGroupRow = {
 export type ParentUpcomingLesson = {
   id: string;
   groupId: string;
+  childId?: string;
   scheduledAt: string;
   durationMin: number;
   status: string;
@@ -174,12 +178,13 @@ export async function fetchParentGroups(
      JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
      LEFT JOIN locations gl ON gl.id = g.location_id
      LEFT JOIN schedule_templates st ON st.group_id = g.id AND st.active = TRUE
+       AND ${sqlScheduleTemplateVisibleForStudent("gs.lessons_per_week")}
      LEFT JOIN locations sl ON sl.id = st.location_id
      LEFT JOIN users t ON t.id = g.teacher_id
      WHERE c.parent_id = $1 AND c.school_id = $2 AND c.active = TRUE
      GROUP BY
        c.id, c.first_name, c.last_name,
-       g.id, g.name, g.level,
+       g.id, g.name, g.level, g.lessons_per_week,
        t.first_name, t.last_name
      ORDER BY c.last_name, c.first_name`,
     [parentId, schoolId]
@@ -247,6 +252,7 @@ export async function fetchParentProposedGroups(
      JOIN groups g ON g.id = er.proposed_group_id
      LEFT JOIN locations gl ON gl.id = g.location_id
      LEFT JOIN schedule_templates st ON st.group_id = g.id AND st.active = TRUE
+       AND ${sqlScheduleTemplateVisibleForStudent("er.lessons_per_week")}
      LEFT JOIN locations sl ON sl.id = st.location_id
      LEFT JOIN users t ON t.id = g.teacher_id
      WHERE c.parent_id = $1
@@ -265,7 +271,7 @@ export async function fetchParentProposedGroups(
        )
      GROUP BY
        c.id, c.first_name, c.last_name, c.access_level,
-       g.id, g.name, g.level,
+       g.id, g.name, g.level, g.lessons_per_week,
        t.first_name, t.last_name
      ORDER BY c.last_name, c.first_name`,
     [parentId, schoolId]
@@ -288,9 +294,58 @@ export async function fetchParentProposedGroups(
 
 export async function fetchUpcomingLessonsForGroups(
   groupIds: string[],
-  limit = 5
+  limit = 5,
+  opts?: { parentId?: string; schoolId?: string }
 ): Promise<ParentUpcomingLesson[]> {
   if (groupIds.length === 0) return [];
+
+  const parentId = opts?.parentId;
+  const schoolId = opts?.schoolId;
+
+  if (parentId && schoolId) {
+    const res = await queryDb<{
+      id: string;
+      group_id: string;
+      child_id: string;
+      scheduled_at: Date | string;
+      duration_min: number;
+      status: string;
+      location_name: string | null;
+    }>(
+      `SELECT l.id,
+              l.group_id,
+              gs.child_id,
+              ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at,
+              l.duration_min,
+              l.status::text AS status,
+              loc.name AS location_name
+       FROM lessons l
+       JOIN group_students gs ON gs.group_id = l.group_id AND gs.left_at IS NULL
+       JOIN groups g ON g.id = gs.group_id
+       JOIN children c ON c.id = gs.child_id
+       LEFT JOIN locations loc ON loc.id = l.location_id
+       WHERE l.group_id = ANY($1::text[])
+         AND l.status IN ('SCHEDULED', 'COMPLETED')
+         AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} >= NOW()
+         AND c.parent_id = $2
+         AND c.school_id = $3
+         AND c.active = TRUE
+         AND ${sqlStudentAttendsLesson("gs", "g", "l")}
+       ORDER BY l.scheduled_at ASC
+       LIMIT $4`,
+      [groupIds, parentId, schoolId, Math.max(limit * 10, 50)]
+    );
+
+    return res.rows.map((row) => ({
+      id: row.id,
+      groupId: row.group_id,
+      childId: row.child_id,
+      scheduledAt: toIso(row.scheduled_at),
+      durationMin: row.duration_min,
+      status: row.status,
+      locationName: row.location_name,
+    }));
+  }
 
   const res = await queryDb<{
     id: string;

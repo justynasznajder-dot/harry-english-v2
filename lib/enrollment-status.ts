@@ -61,6 +61,30 @@ export function formatEnrollmentStatusLabel(status: string | null | undefined): 
 }
 
 /**
+ * Etykieta/kolor badge na liście zgłoszeń.
+ * Szkic NEW z już wybraną grupą pokazuje „Grupa przypisana” (jak filtr ACCEPTED),
+ * a nie „Nowe zgłoszenie”.
+ */
+export function resolveEnrollmentListBadge(child: {
+  status?: string | null;
+  proposedGroupId?: string | null;
+}): { label: string; colorClass: string } {
+  const key = String(child.status ?? "NEW")
+    .trim()
+    .toUpperCase() as EnrollmentStatus;
+  if (key === "NEW" && hasProposedGroup(child)) {
+    return {
+      label: "Grupa przypisana",
+      colorClass: ENROLLMENT_STATUS_COLORS.ACCEPTED,
+    };
+  }
+  return {
+    label: formatEnrollmentStatusLabel(key),
+    colorClass: ENROLLMENT_STATUS_COLORS[key] ?? "bg-zinc-100 text-zinc-700",
+  };
+}
+
+/**
  * Uproszczony etap listy uczniów (bez akceptacji rodzica / PROPOSED):
  * Zgłoszenie → przypisany do grupy → czeka na umowę → umowa podpisana
  */
@@ -77,6 +101,8 @@ export function resolveStudentListPipelineStage(input: {
   enrollmentStatus?: string | null;
   hasGroup?: boolean;
   contractStatus?: string | null;
+  /** Tryb bez opłat — flow kończy się na przypisaniu do grupy (bez etapów umowy). */
+  complimentary?: boolean;
 }): StudentListPipelineStage {
   const level = String(input.enrollmentStatus ?? "")
     .trim()
@@ -85,6 +111,21 @@ export function resolveStudentListPipelineStage(input: {
     .trim()
     .toUpperCase();
   const hasGroup = Boolean(input.hasGroup);
+
+  if (input.complimentary) {
+    if (
+      hasGroup ||
+      level === "ACCEPTED" ||
+      level === "PROPOSED" ||
+      level === "COMPLETED" ||
+      level === "SIGNED" ||
+      level === "AWAITING_CONTRACT" ||
+      level === "CONTRACT_READY"
+    ) {
+      return "Przypisany do grupy";
+    }
+    return "Zgłoszenie";
+  }
 
   if (
     level === "SIGNED" ||
@@ -114,6 +155,7 @@ export function resolveStudentListPipelineStage(input: {
 export const ENROLLMENT_LIST_FILTERS = [
   { value: "", label: "Wszystkie" },
   { value: "NEW", label: "Nowe" },
+  { value: "COMPLIMENTARY", label: "Tryb bez opłat" },
   /** Dzieci z przypisaną grupą (szkic NEW + proposed_group / legacy ACCEPTED). */
   { value: "ACCEPTED", label: "Grupa przypisana" },
   { value: "CONTRACT_READY", label: "Umowa do podpisu" },
@@ -129,18 +171,31 @@ function hasProposedGroup(child: { proposedGroupId?: string | null }): boolean {
   return Boolean(child.proposedGroupId && String(child.proposedGroupId).trim());
 }
 
+export type EnrollmentStatusFilterOptions = {
+  /** Rodzic na liście school_complimentary_parents — wyklucza z „Nowe”, włącza do „Tryb bez opłat”. */
+  parentIsComplimentary?: boolean;
+};
+
 /**
  * Filtr listy zgłoszeń.
  * „Grupa przypisana” = status ACCEPTED albo szkic NEW z już wybraną grupą (Zapisz bez wysyłki).
- * „Nowe” = NEW bez przypisanej grupy.
+ * „Nowe” = NEW bez przypisanej grupy i bez trybu bez opłat.
+ * „Tryb bez opłat” = dzieci rodzica w trybie complimentary (widoczne statusy).
  */
 export function filterEnrollmentChildrenByStatus<
   T extends { status: EnrollmentStatus; proposedGroupId?: string | null },
->(children: T[], filter: string): T[] {
+>(children: T[], filter: string, options?: EnrollmentStatusFilterOptions): T[] {
   const visible = children.filter((child) => !ENROLLMENT_LIST_HIDDEN_STATUSES.has(child.status));
+  const parentIsComplimentary = Boolean(options?.parentIsComplimentary);
+
+  if (filter === "COMPLIMENTARY") {
+    return parentIsComplimentary ? visible : [];
+  }
+
   if (!filter) return visible;
 
   if (filter === "NEW") {
+    if (parentIsComplimentary) return [];
     return visible.filter((child) => child.status === "NEW" && !hasProposedGroup(child));
   }
   if (filter === "ACCEPTED") {
@@ -158,8 +213,9 @@ export function filterEnrollmentChildrenByStatus<
 export function enrollmentMatchesStatusFilter(
   children: Array<{ status: EnrollmentStatus; proposedGroupId?: string | null }>,
   filter: string,
+  options?: EnrollmentStatusFilterOptions,
 ): boolean {
-  return filterEnrollmentChildrenByStatus(children, filter).length > 0;
+  return filterEnrollmentChildrenByStatus(children, filter, options).length > 0;
 }
 
 /** Statusy w pipeline umowy (po akceptacji grupy, przed / w trakcie umowy). */

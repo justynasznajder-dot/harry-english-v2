@@ -21,13 +21,15 @@ export type ComplimentaryCandidate = {
 };
 
 export function isParentInComplimentaryList(
-  parent: { id: string; email: string },
+  parent: { id: string; email: string; parentUserId?: string | null },
   complimentaryParents: ComplimentaryParentRow[]
 ): boolean {
   const parentEmail = (parent.email ?? "").trim().toLowerCase();
+  const userId = (parent.parentUserId ?? "").trim();
   return complimentaryParents.some(
     (p) =>
-      (p.parentId && p.parentId === parent.id) ||
+      (p.parentId &&
+        (p.parentId === parent.id || (userId.length > 0 && p.parentId === userId))) ||
       (parentEmail.length > 0 &&
         (p.email.trim().toLowerCase() === parentEmail ||
           (p.parentEmail ?? "").trim().toLowerCase() === parentEmail))

@@ -11,6 +11,11 @@ export function validateHarryEnglishGroupNaming(input: {
   level?: string | null;
   /** Przy tworzeniu poziom i nazwa są wymagane. */
   requireLevel?: boolean;
+  /**
+   * Przy edycji istniejącej grupy: pozwól zachować poziom spoza nowej listy
+   * (np. „Podstawowy”), bez wymuszania migracji przy każdej zmianie pól.
+   */
+  allowLegacyLevel?: boolean;
 }): { ok: true; level: string | null; name: string } | { ok: false; message: string } {
   const name = String(input.name ?? "").trim();
   if (!name) {
@@ -30,6 +35,9 @@ export function validateHarryEnglishGroupNaming(input: {
 
   const level = normalizeHarryEnglishLevel(rawLevel);
   if (!level) {
+    if (input.allowLegacyLevel) {
+      return { ok: true, level: rawLevel, name };
+    }
     return {
       ok: false,
       message: "Nieprawidłowy poziom. Dozwolone: P3–P6, Sz1–Sz8, Sz8E",

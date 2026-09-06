@@ -48,45 +48,6 @@ export default function GroupNamingFields({
 
   return (
     <div className={className}>
-      <div className="md:col-span-2 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2.5 text-xs leading-relaxed text-zinc-700">
-        <p className="font-semibold text-zinc-800">Jak nazywać grupy</p>
-        <p className="mt-1">
-          Nazwa powstaje automatycznie:{' '}
-          <span className="font-medium">
-            poziom{GROUP_NAME_SEP}lokalizacja
-          </span>
-          {' '}
-          — np. <span className="font-medium">P4{GROUP_NAME_SEP}Mokotów</span>
-          {' '}
-          lub <span className="font-medium">Sz1{GROUP_NAME_SEP}Bemowo</span>.
-          {' '}
-          Możesz ją dowolnie zmienić (dodać tekst na początku lub na końcu).
-        </p>
-        <ul className="mt-1.5 list-disc space-y-0.5 pl-4">
-          <li>
-            <span className="font-medium">P</span> = przedszkole + wiek (
-            <span className="font-medium">P3</span>–
-            <span className="font-medium">P6</span>)
-          </li>
-          <li>
-            <span className="font-medium">Sz</span> = szkoła + klasa (
-            <span className="font-medium">Sz1</span>–
-            <span className="font-medium">Sz8</span>), egzamin:{' '}
-            <span className="font-medium">Sz8E</span>
-          </li>
-          <li>
-            Lista lokalizacji zależy od poziomu: P* → przedszkola, Sz* → szkoły
-          </li>
-          <li>
-            Druga aktywna grupa o tej samej bazie: sufiks{' '}
-            <span className="font-medium">(2)</span>, <span className="font-medium">(3)</span>…
-          </li>
-          <li>
-            Po pierwszym zapisie poziom i lokalizacja są tylko do odczytu — błąd = dezaktywacja
-            grupy i otwarcie nowej. Nazwa jest tymczasowo edytowalna także po zapisie.
-          </li>
-        </ul>
-      </div>
       <div className="space-y-1">
         <label className="block text-sm font-medium text-zinc-700">Poziom</label>
         <select

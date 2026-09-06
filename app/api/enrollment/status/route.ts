@@ -15,6 +15,7 @@ import { fetchParentContractForPortal } from "@/lib/parent-contract";
 import { requireParentContext } from "@/lib/parent-portal-auth";
 import { getSchoolDiscountSettings, isComplimentaryForParent } from "@/lib/school-discounts";
 import { getParentLargeFamilyCard } from "@/lib/parent-profile-discount";
+import { sqlScheduleTemplateVisibleForStudent } from "@/lib/lessons-per-week";
 
 
 
@@ -118,6 +119,18 @@ export async function GET(request: NextRequest) {
        LEFT JOIN locations gl ON gl.id = g.location_id
 
        LEFT JOIN schedule_templates st ON st.group_id = g.id
+         AND ${sqlScheduleTemplateVisibleForStudent(`COALESCE(
+           (
+             SELECT gs2.lessons_per_week
+             FROM group_students gs2
+             WHERE gs2.child_id = c.id
+               AND gs2.group_id = g.id
+               AND gs2.left_at IS NULL
+             ORDER BY gs2.enrolled_at DESC
+             LIMIT 1
+           ),
+           er.lessons_per_week
+         )`)}
 
        LEFT JOIN locations sl ON sl.id = st.location_id
 
@@ -137,7 +150,7 @@ export async function GET(request: NextRequest) {
        GROUP BY c.id, c.enrollment_request_id, ${accessLevelExpr}, c.first_name, c.last_name,
 
                 g.name, er.proposed_at, er.created_at, c.created_at, g.price_monthly, g.price_yearly,
-                g.price_per_lesson, g.teacher_pickup_consent, er.lesson_unit_price,
+                g.price_per_lesson, g.teacher_pickup_consent, g.lessons_per_week, er.lesson_unit_price,
                 er.monthly_unit_price, er.yearly_unit_price, er.lessons_per_week
 
        ORDER BY er.created_at ASC, c.created_at ASC, c.id ASC`,

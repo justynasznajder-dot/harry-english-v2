@@ -3,6 +3,7 @@ import {
   requireAdminSchoolContext,
   resolveSchoolIdForTenant,
 } from "@/lib/admin-school-context";
+import { activateComplimentaryModeForParent } from "@/lib/complimentary-enrollment";
 import {
   getSchoolInvoiceAutoGeneration,
   getSchoolInvoiceGenerationDay,
@@ -186,21 +187,22 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: "Brak identyfikatora szkoły" }, { status: 400 });
     }
 
+    let identity: { parentId?: string; parentEmail?: string } | null = null;
+
     if (candidateKey.startsWith("user:")) {
-      await addComplimentaryParent(schoolId, {
-        parentId: candidateKey.slice("user:".length),
-      });
+      identity = { parentId: candidateKey.slice("user:".length) };
     } else if (candidateKey.startsWith("enrollment:")) {
-      await addComplimentaryParent(schoolId, {
-        parentEmail: candidateKey.slice("enrollment:".length),
-      });
+      identity = { parentEmail: candidateKey.slice("enrollment:".length) };
     } else if (parentId) {
-      await addComplimentaryParent(schoolId, { parentId });
+      identity = { parentId };
     } else if (parentEmail) {
-      await addComplimentaryParent(schoolId, { parentEmail });
+      identity = { parentEmail };
     } else {
       return NextResponse.json({ message: "Wybierz rodzica" }, { status: 400 });
     }
+
+    await addComplimentaryParent(schoolId, identity);
+    await activateComplimentaryModeForParent(schoolId, identity);
 
     const complimentaryParents = await listComplimentaryParents(schoolId);
     const complimentaryCandidates = await listComplimentaryCandidates(schoolId);

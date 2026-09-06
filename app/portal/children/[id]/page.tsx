@@ -30,6 +30,8 @@ type Membership = {
   group_price_monthly: string | null;
   group_price_yearly: string | null;
   group_price_per_lesson: string | null;
+  lessons_per_week: number | null;
+  group_lessons_per_week: number | null;
 };
 
 type PaymentInfo = {
@@ -233,6 +235,24 @@ export default function AdminChildProfilePage() {
                     )}
                   </dd>
                 </div>
+                {membership && Number(membership.group_lessons_per_week) === 2 ? (
+                  <div>
+                    <dt className="text-zinc-500">Frekwencja w grupie</dt>
+                    <dd className="font-medium text-zinc-900">
+                      <span
+                        className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                          Number(membership.lessons_per_week) === 1
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-zinc-100 text-zinc-700'
+                        }`}
+                      >
+                        {Number(membership.lessons_per_week) === 1
+                          ? '1× w tygodniu'
+                          : '2× w tygodniu'}
+                      </span>
+                    </dd>
+                  </div>
+                ) : null}
                 <div>
                   <dt className="text-zinc-500">System płatności</dt>
                   <dd className="font-medium text-zinc-900">

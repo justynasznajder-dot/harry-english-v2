@@ -15,6 +15,7 @@ import {
 import { renderHtmlToPdf } from "@/lib/contract-pdf";
 import { buildPickupConsentPdfFilename, normalizePickupConsentDocumentHtml } from "@/lib/pickup-consent-notice";
 import { getActiveSchoolYear, queryDb } from "@/lib/db";
+import { filterScheduleForStudentAttendance } from "@/lib/lessons-per-week";
 import { buildSingleChildAttachmentPlaceholders, type ParentContractChildRow } from "@/lib/parent-contract";
 import { storeSignedContractPdfsInR2 } from "@/lib/r2-storage";
 
@@ -190,16 +191,38 @@ export async function generateComplimentaryPickupConsentIfNeeded(params: {
     day_of_week: number;
     start_time: Date | string;
     duration_min: number;
+    once_weekly_day: boolean;
+    group_lessons_per_week: number | null;
+    student_lessons_per_week: number | null;
   }>(
-    `SELECT day_of_week, start_time, duration_min
-     FROM schedule_templates
-     WHERE group_id = $1
-     ORDER BY day_of_week ASC, start_time ASC`,
-    [child.group_id]
+    `SELECT
+       st.day_of_week,
+       st.start_time,
+       st.duration_min,
+       st.once_weekly_day,
+       g.lessons_per_week AS group_lessons_per_week,
+       COALESCE(gs.lessons_per_week, er.lessons_per_week) AS student_lessons_per_week
+     FROM schedule_templates st
+     JOIN groups g ON g.id = st.group_id
+     LEFT JOIN enrollment_requests er ON er.id = $2
+     LEFT JOIN group_students gs
+       ON gs.child_id = $3
+      AND gs.group_id = st.group_id
+      AND gs.left_at IS NULL
+     WHERE st.group_id = $1
+       AND st.active = TRUE
+     ORDER BY st.day_of_week ASC, st.start_time ASC`,
+    [child.group_id, child.request_id, child.child_id]
   );
-  const schedule = buildGroupSchedule(scheduleRes.rows);
+  const filtered = filterScheduleForStudentAttendance(scheduleRes.rows, {
+    groupLessonsPerWeek: scheduleRes.rows[0]?.group_lessons_per_week,
+    studentLessonsPerWeek: scheduleRes.rows[0]?.student_lessons_per_week,
+  });
+  const schedule = buildGroupSchedule(filtered);
   groupSchedule = schedule || "Do ustalenia";
-  if (scheduleRes.rows[0]) {
+  if (filtered[0]) {
+    lessonDuration = formatLessonDuration(filtered[0].duration_min);
+  } else if (scheduleRes.rows[0]) {
     lessonDuration = formatLessonDuration(scheduleRes.rows[0].duration_min);
   }
 
