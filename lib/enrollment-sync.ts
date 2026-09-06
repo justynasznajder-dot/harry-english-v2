@@ -63,7 +63,7 @@ export async function syncChildrenAccessLevelForEnrollment(
 /**
  * Tworzy brakujące rekordy `children` ze zgłoszeń (`enrollment_requests`),
  * które mają już `user_id`, ale nie mają jeszcze dziecka w bazie.
- * Potrzebne m.in. gdy konto rodzica powstało z trybu bez opłat przed propozycją grupy.
+ * Wywoływane świadomie przy włączeniu trybu bez opłat — nie przy listach/panelach.
  */
 export async function ensureChildrenFromEnrollmentRequests(
   schoolId: string,

@@ -9,6 +9,7 @@ import {
 } from '@/lib/enrollment-status';
 import { isParentInComplimentaryList } from '@/lib/complimentary-parent-list';
 import type { ComplimentaryParentRow } from '@/lib/complimentary-parent-list';
+import { downloadStudentPipelineXlsx } from '@/lib/student-pipeline-xlsx';
 
 type PipelineRow = {
   childId: string;
@@ -177,6 +178,7 @@ export default function StudentPipelinePanel({
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   const load = useCallback(async (query: string) => {
     setLoading(true);
@@ -214,17 +216,43 @@ export default function StudentPipelinePanel({
     return { withContracts, withoutContracts };
   }, [pipeline, complimentaryParents]);
 
+  const exportXlsx = useCallback(async () => {
+    if (pipeline.length === 0 || exporting) return;
+    setExporting(true);
+    setError(null);
+    try {
+      await downloadStudentPipelineXlsx({
+        withContracts,
+        withoutContracts,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się wygenerować pliku Excel');
+    } finally {
+      setExporting(false);
+    }
+  }, [pipeline.length, exporting, withContracts, withoutContracts]);
+
   const flowLabel = STUDENT_LIST_PIPELINE_STAGES.join(' → ');
 
   const content = (
     <>
-      <input
-        type="search"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Szukaj ucznia lub rodzica…"
-        className="mb-4 w-full max-w-md rounded-xl border border-zinc-300 px-3 py-2 text-sm"
-      />
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Szukaj ucznia lub rodzica…"
+          className="w-full max-w-md rounded-xl border border-zinc-300 px-3 py-2 text-sm"
+        />
+        <button
+          type="button"
+          disabled={loading || exporting || pipeline.length === 0}
+          onClick={() => void exportXlsx()}
+          className="rounded-xl border border-[#0f6e56] bg-white px-3 py-2 text-sm font-semibold text-[#0f6e56] transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {exporting ? 'Generowanie…' : 'Pobierz Excel'}
+        </button>
+      </div>
 
       {error && (
         <p className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">

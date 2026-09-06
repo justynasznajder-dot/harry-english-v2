@@ -2,7 +2,6 @@ import { generateComplimentaryPickupConsentIfNeeded } from "@/lib/complimentary-
 import { queryDb } from "@/lib/db";
 import {
   enrollChildrenForEnrollmentRequest,
-  ensureChildrenFromEnrollmentRequests,
   syncChildrenAccessLevelForEnrollment,
   syncParentUserAccessLevel,
 } from "@/lib/enrollment-sync";
@@ -202,28 +201,5 @@ export async function activateComplimentaryModeForParent(
 ): Promise<void> {
   await completeOpenComplimentaryEnrollmentsForParent(schoolId, identity);
   await applyComplimentaryBillingExemptionForParent(schoolId, identity);
-
-  // Upewnij się, że dzieci ze zgłoszeń są w `children` (także gdy konto istniało wcześniej).
-  const parentId = String(identity.parentId ?? "").trim();
-  const parentEmail = String(identity.parentEmail ?? "")
-    .trim()
-    .toLowerCase();
-
-  if (parentId) {
-    await ensureChildrenFromEnrollmentRequests(schoolId, parentId);
-    return;
-  }
-
-  if (parentEmail) {
-    const users = await queryDb<{ id: string }>(
-      `SELECT id FROM users
-       WHERE school_id = $1
-         AND role = 'PARENT'
-         AND LOWER(BTRIM(email)) = $2`,
-      [schoolId, parentEmail]
-    );
-    for (const row of users.rows) {
-      await ensureChildrenFromEnrollmentRequests(schoolId, row.id);
-    }
-  }
+  // Karty `children` tworzy `addComplimentaryParent` przy zapisie trybu bez opłat.
 }

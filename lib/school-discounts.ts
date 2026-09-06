@@ -230,8 +230,6 @@ export async function ensureComplimentaryParentUserAccounts(
        WHERE id = $2 AND school_id = $3`,
       [parentUserId, row.id, schoolId]
     );
-
-    await ensureChildrenFromEnrollmentRequests(schoolId, parentUserId);
   }
 
   return { linked, created };
@@ -406,7 +404,7 @@ export async function addComplimentaryParent(
         [parentId, schoolId, userEmail]
       );
     }
-    // Od razu karty dzieci ze zgłoszeń (nie czekaj na propozycję grupy).
+    // Włączenie trybu bez opłat → karty dzieci ze zgłoszeń (bez czekania na grupę).
     await ensureChildrenFromEnrollmentRequests(schoolId, parentId);
     return;
   }

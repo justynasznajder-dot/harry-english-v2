@@ -185,7 +185,11 @@ export async function fetchDashboardScheduleSlots(
      JOIN school_years sy ON sy.id = st.school_year_id AND sy.school_id = $1 AND sy.active = TRUE
      LEFT JOIN locations loc ON loc.id = st.location_id
      JOIN users u ON u.id = g.teacher_id
-     CROSS JOIN generate_series($2::date, $3::date, interval '1 day') AS d(day)
+     CROSS JOIN LATERAL generate_series(
+       GREATEST($2::date, sy.date_from),
+       LEAST($3::date, sy.date_to),
+       interval '1 day'
+     ) AS d(day)
      WHERE st.day_of_week = EXTRACT(ISODOW FROM d.day)::int
      ORDER BY scheduled_at ASC, g.name ASC`,
     [schoolId, fromYmd, toYmd]
