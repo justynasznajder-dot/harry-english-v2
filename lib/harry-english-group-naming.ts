@@ -2,11 +2,10 @@ import { queryDb } from "@/lib/db";
 import {
   allocateUniqueGroupName,
   buildGroupNameBase,
-  groupNameMatchesLevel,
   normalizeHarryEnglishLevel,
 } from "@/src/data/harryEnglishLevels";
 
-/** Walidacja poziomu i spięcia z nazwą grupy (Harry English). */
+/** Walidacja poziomu i nazwy grupy (Harry English). Nazwa nie musi zaczynać się od poziomu. */
 export function validateHarryEnglishGroupNaming(input: {
   name?: string | null;
   level?: string | null;
@@ -34,13 +33,6 @@ export function validateHarryEnglishGroupNaming(input: {
     return {
       ok: false,
       message: "Nieprawidłowy poziom. Dozwolone: P3–P6, Sz1–Sz8, Sz8E",
-    };
-  }
-
-  if (!groupNameMatchesLevel(name, level)) {
-    return {
-      ok: false,
-      message: `Nazwa grupy musi zaczynać się od poziomu ${level}`,
     };
   }
 

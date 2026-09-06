@@ -34,7 +34,9 @@ export async function GET(
        FROM groups g
        LEFT JOIN users u ON u.id = g.teacher_id
        LEFT JOIN locations gl ON gl.id = g.location_id
-       WHERE g.id = $1 ${tenant.role === "MANAGER" ? "AND g.school_id = $2" : ""}
+       WHERE g.id = $1
+         AND g.deleted_at IS NULL
+         ${tenant.role === "MANAGER" ? "AND g.school_id = $2" : ""}
        LIMIT 1`,
       tenant.role === "MANAGER" ? [id, ctx.schoolId] : [id]
     );
@@ -246,6 +248,8 @@ export async function PUT(
   try {
     const body = await request.json();
     const {
+      // TODO(tymczasowo): name edytowalne po zapisie — potem usunąć
+      name: bodyName,
       teacherId,
       maxStudents,
       active,
@@ -262,8 +266,9 @@ export async function PUT(
       level: string | null;
       location_id: string | null;
       active: boolean;
+      deleted_at: Date | string | null;
     }>(
-      `SELECT id, school_id, name, level, location_id, active
+      `SELECT id, school_id, name, level, location_id, active, deleted_at
        FROM groups
        WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $2" : ""}
        LIMIT 1`,
@@ -273,22 +278,32 @@ export async function PUT(
     if (!existing) {
       return NextResponse.json({ message: "Nie znaleziono grupy" }, { status: 404 });
     }
+    if (existing.deleted_at) {
+      return NextResponse.json(
+        { message: "Grupa została usunięta z widoku szkoły" },
+        { status: 404 }
+      );
+    }
 
-    // Po pierwszym zapisie nazwa / poziom / lokalizacja są zamrożone.
+    const nextNameRaw =
+      typeof bodyName === "string" ? bodyName.trim() : existing.name;
     const naming = validateHarryEnglishGroupNaming({
-      name: existing.name,
+      name: nextNameRaw,
       level: existing.level ?? "",
       requireLevel: true,
     });
     if (!naming.ok) {
       return NextResponse.json({ message: naming.message }, { status: 400 });
     }
+    const nextName = naming.name;
 
     const nextActive = active == null ? existing.active : Boolean(active);
-    if (!existing.active && nextActive) {
+    const nameChanged =
+      nextName.toLowerCase() !== existing.name.trim().toLowerCase();
+    if (nextActive && (nameChanged || !existing.active)) {
       const conflict = await findActiveGroupNameConflict({
         schoolId: existing.school_id,
-        name: existing.name,
+        name: nextName,
         excludeGroupId: id,
       });
       if (conflict) {
@@ -301,17 +316,19 @@ export async function PUT(
 
     await queryDb(
       `UPDATE groups
-       SET teacher_id = $2,
-           max_students = COALESCE($3, max_students),
-           active = $4,
-           price_monthly = $5,
-           price_yearly = $6,
-           price_per_lesson = $7,
-           teacher_pickup_consent = COALESCE($8, teacher_pickup_consent)
-       WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $9" : ""}`,
+       SET name = $2,
+           teacher_id = $3,
+           max_students = COALESCE($4, max_students),
+           active = $5,
+           price_monthly = $6,
+           price_yearly = $7,
+           price_per_lesson = $8,
+           teacher_pickup_consent = COALESCE($9, teacher_pickup_consent)
+       WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $10" : ""}`,
       tenant.role === "MANAGER"
         ? [
             id,
+            nextName,
             teacherId ?? null,
             maxStudents ?? null,
             nextActive,
@@ -323,6 +340,7 @@ export async function PUT(
           ]
         : [
             id,
+            nextName,
             teacherId ?? null,
             maxStudents ?? null,
             nextActive,
@@ -349,13 +367,28 @@ export async function DELETE(
   const { tenant } = ctx;
   const { id } = await params;
   try {
-    await queryDb(
+    const updated = await queryDb<{ id: string }>(
       tenant.role === "MANAGER"
-        ? `UPDATE groups SET active = FALSE WHERE id = $1 AND school_id = $2`
-        : `UPDATE groups SET active = FALSE WHERE id = $1`,
+        ? `UPDATE groups
+           SET deleted_at = NOW(), active = FALSE
+           WHERE id = $1 AND school_id = $2 AND deleted_at IS NULL
+           RETURNING id`
+        : `UPDATE groups
+           SET deleted_at = NOW(), active = FALSE
+           WHERE id = $1 AND deleted_at IS NULL
+           RETURNING id`,
       tenant.role === "MANAGER" ? [id, ctx.schoolId] : [id]
     );
-    return NextResponse.json({ message: "Grupa została oznaczona jako nieaktywna" });
+    if ((updated.rowCount ?? 0) === 0) {
+      return NextResponse.json(
+        { message: "Nie znaleziono grupy do usunięcia" },
+        { status: 404 }
+      );
+    }
+    return NextResponse.json({
+      message:
+        "Grupa usunięta z widoku szkoły (pozostaje w bazie jako nieaktywna)",
+    });
   } catch (error) {
     console.error("DELETE group error:", error);
     return NextResponse.json({ message: "Błąd usuwania grupy" }, { status: 500 });

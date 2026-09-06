@@ -274,6 +274,8 @@ model groups {
   level                  String?               @db.VarChar(100)
   max_students           Int                   @default(12)
   active                 Boolean               @default(true)
+  /// Usunięcie z widoku szkoły (soft); historia zostaje. NULL = widoczna w panelu managera.
+  deleted_at             DateTime?             @db.Timestamptz(6)
   created_at             DateTime              @default(now()) @db.Timestamp(6)
   location_id            String?
   price_monthly          Decimal?              @db.Decimal(10, 2)
@@ -296,6 +298,7 @@ model groups {
 
   @@index([school_id], map: "idx_groups_school_id")
   @@index([teacher_id], map: "idx_groups_teacher_id")
+  @@index([school_id, deleted_at], map: "idx_groups_school_deleted_at")
 }
 
 model lessons {

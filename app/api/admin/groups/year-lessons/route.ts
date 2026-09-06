@@ -113,7 +113,7 @@ export async function GET(request: NextRequest) {
        LEFT JOIN locations gl ON gl.id = g.location_id
        LEFT JOIN schedule_templates st ON st.group_id = g.id AND st.active = TRUE
        LEFT JOIN locations l ON l.id = st.location_id
-       WHERE 1=1 ${schoolClause}
+       WHERE g.deleted_at IS NULL ${schoolClause}
        GROUP BY g.id, t.id, gl.name
        ORDER BY g.name ASC`,
       groupParams,

@@ -21,7 +21,6 @@ import {
 } from '@/lib/school-timezone';
 import {
   detectLevelFromGroupName,
-  groupNameMatchesLevel,
   isHarryEnglishLevelCode,
   locationMatchesGroupLevel,
 } from '@/src/data/harryEnglishLevels';
@@ -1858,6 +1857,35 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     setGroupsSubTab('list');
   }, []);
 
+  const removeGroupFromSchoolView = useCallback(
+    async (groupId: string, groupName: string) => {
+      const ok = window.confirm(
+        `Usunąć grupę „${groupName}” z widoku szkoły?\n\nZniknie z listy grup (także jako nieaktywna). W bazie pozostanie do historii.`,
+      );
+      if (!ok) return;
+      setGroupSaving(true);
+      try {
+        const res = await fetch(`/api/admin/groups/${groupId}`, { method: 'DELETE' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          pushToast('error', data.message ?? 'Nie udało się usunąć grupy');
+          return;
+        }
+        pushToast(
+          'success',
+          data.message ?? 'Grupa usunięta z widoku szkoły',
+        );
+        resetGroupsToList();
+        await loadData();
+      } catch {
+        pushToast('error', 'Nie udało się usunąć grupy');
+      } finally {
+        setGroupSaving(false);
+      }
+    },
+    [loadData, pushToast, resetGroupsToList],
+  );
+
   const populateGroupFormFromGroup = useCallback(
     (g: GroupDetail['group']) => {
       const name = g.name;
@@ -1971,12 +1999,18 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       pushToast('error', 'Wybierz nauczyciela dla grupy');
       return;
     }
+    if (!groupForm.name.trim()) {
+      pushToast('error', 'Nazwa grupy jest wymagana');
+      return;
+    }
     setGroupSaving(true);
     try {
       const res = await fetch(`/api/admin/groups/${groupForm.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          // TODO(tymczasowo): name edytowalne po zapisie — potem usunąć z body
+          name: groupForm.name.trim(),
           teacherId: groupForm.teacherId,
           maxStudents: groupForm.maxStudents,
           active: groupForm.active,
@@ -4766,6 +4800,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             level={groupForm.level}
             locked
             onLevelChange={() => {}}
+            onNameChange={(name) => {
+              setGroupForm((p) => ({ ...p, name }));
+            }}
             locationField={
               <div className="space-y-1">
                 <label className="block text-sm font-medium text-zinc-700">Lokalizacja</label>
@@ -4832,12 +4869,28 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               />
               Aktywna grupa
             </label>
+            <p className="text-xs text-zinc-500">
+                  Błędnie utworzoną grupę usuń przyciskiem „Usuń z widoku szkoły” — zniknie z listy
+                  (aktywne i nieaktywne zostają). W bazie pozostanie do historii.
+            </p>
           </div>
         </div>
         {/* <p className="mt-3 text-xs text-zinc-500">
           Stawki ratalna i jednorazowa dla tej grupy — zapisują się tutaj i trafiają do umowy rodzica.
         </p> */}
-        <div className="mt-4 flex justify-end">
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+          <button
+            type="button"
+            disabled={groupSaving || !groupForm.id}
+            className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-800 hover:bg-red-100 disabled:opacity-60"
+            onClick={() => {
+              if (!groupForm.id) return;
+              void removeGroupFromSchoolView(groupForm.id, groupForm.name.trim() || 'bez nazwy');
+            }}
+            title="Grupa zniknie z panelu, ale zostanie w bazie jako nieaktywna"
+          >
+            Usuń z widoku szkoły
+          </button>
           <button
             type="button"
             disabled={groupSaving}
@@ -5204,24 +5257,73 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   };
 
   const renderGroups = () => {
-    if (groupLoading) {
+    const showGroupEdit =
+      Boolean(selectedGroupId) &&
+      Boolean(groupDetail) &&
+      groupsSubTab !== 'organize' &&
+      groupsSubTab !== 'add' &&
+      groupsSubTab !== 'yearLessons';
+
+    const groupSubTabButtons = (
+      <GroupSubTabButtons
+        active={groupsSubTab}
+        setGroupsSubTab={setGroupsSubTab}
+        onEnterListTab={() => {
+          setSelectedGroupId(null);
+          setGroupDetail(null);
+        }}
+        onOrganizeStateReset={() => {
+          setOrganizeExpandedGroupId(null);
+          setSelectedGroupId(null);
+          setGroupDetail(null);
+        }}
+        onEnterYearLessonsTab={() => {
+          setSelectedGroupId(null);
+          setGroupDetail(null);
+          setYearLessonsExpandedGroupId(null);
+        }}
+        onEnterAddTab={() => {
+          setSelectedGroupId(null);
+          setGroupDetail(null);
+          setGroupForm({
+            id: '',
+            schoolId: sessionSchoolId ?? '',
+            locationId: '',
+            name: '',
+            level: '',
+            teacherId: '',
+            maxStudents: 12,
+            active: true,
+            priceMonthly: '',
+            priceYearly: '',
+            pricePerLesson: '',
+            teacherPickupConsent: false,
+          });
+          void loadLocations();
+        }}
+      />
+    );
+
+    if (groupLoading && !showGroupEdit) {
       return (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          <SkeletonBlock />
-          <SkeletonBlock />
+        <div className="space-y-4">
+          <section className="rounded-2xl border border-emerald-100 bg-white p-4">
+            {groupSubTabButtons}
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <SkeletonBlock />
+              <SkeletonBlock />
+            </div>
+          </section>
         </div>
       );
     }
 
-    if (
-      selectedGroupId &&
-      groupDetail &&
-      groupsSubTab !== 'organize' &&
-      groupsSubTab !== 'add' &&
-      groupsSubTab !== 'yearLessons'
-    ) {
+    if (showGroupEdit && selectedGroupId && groupDetail) {
       return (
         <div className="space-y-4">
+          <section className="rounded-2xl border border-emerald-100 bg-white p-4">
+            {groupSubTabButtons}
+          </section>
           {renderGroupEditForm({ showBackButton: true, groupId: selectedGroupId })}
           {renderGroupManageSections(groupDetail, selectedGroupId)}
         </div>
@@ -5231,43 +5333,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     return (
       <div className="space-y-4">
         <section className="rounded-2xl border border-emerald-100 bg-white p-4">
-          <GroupSubTabButtons
-            active={groupsSubTab}
-            setGroupsSubTab={setGroupsSubTab}
-            onEnterListTab={() => {
-              setSelectedGroupId(null);
-              setGroupDetail(null);
-            }}
-            onOrganizeStateReset={() => {
-              setOrganizeExpandedGroupId(null);
-              setSelectedGroupId(null);
-              setGroupDetail(null);
-            }}
-            onEnterYearLessonsTab={() => {
-              setSelectedGroupId(null);
-              setGroupDetail(null);
-              setYearLessonsExpandedGroupId(null);
-            }}
-            onEnterAddTab={() => {
-              setSelectedGroupId(null);
-              setGroupDetail(null);
-              setGroupForm({
-                id: '',
-                schoolId: sessionSchoolId ?? '',
-                locationId: '',
-                name: '',
-                level: '',
-                teacherId: '',
-                maxStudents: 12,
-                active: true,
-                priceMonthly: '',
-                priceYearly: '',
-                pricePerLesson: '',
-                teacherPickupConsent: false,
-              });
-              void loadLocations();
-            }}
-          />
+          {groupSubTabButtons}
           {groupsSubTab === 'organize' && (
             <div className="mb-4 grid gap-3 sm:grid-cols-3">
               <div className="space-y-1">
@@ -5485,16 +5551,30 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         </span>
                       </td>
                       <td className="px-4 py-3">
-                        <button
-                          type="button"
-                          className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void loadGroupDetail(g.id);
-                          }}
-                        >
-                          Edytuj
-                        </button>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void loadGroupDetail(g.id);
+                            }}
+                          >
+                            Edytuj
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-800 hover:bg-red-100"
+                            disabled={groupSaving}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void removeGroupFromSchoolView(g.id, g.name);
+                            }}
+                            title="Grupa zniknie z panelu, ale zostanie w bazie jako nieaktywna"
+                          >
+                            Usuń
+                          </button>
+                        </div>
                       </td>
                     </tr>
                     );
@@ -5516,7 +5596,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   applyGroupLevelChange(level);
                 }}
                 onNameChange={(name) => {
-                  if (groupForm.id) return;
                   setGroupForm((p) => ({ ...p, name }));
                 }}
                 locationField={
@@ -5615,13 +5694,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     }
                     if (!groupForm.name.trim()) {
                       pushToast('error', 'Uzupełnij nazwę grupy (albo poziom i lokalizację — nazwa uzupełni się sama)');
-                      return;
-                    }
-                    if (!groupNameMatchesLevel(groupForm.name.trim(), groupForm.level.trim())) {
-                      pushToast(
-                        'error',
-                        `Nazwa grupy musi zaczynać się od poziomu ${groupForm.level.trim()}`,
-                      );
                       return;
                     }
                     if (!groupForm.teacherId) {

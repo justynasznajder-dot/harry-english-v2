@@ -115,7 +115,7 @@ export async function GET(request: NextRequest) {
        LEFT JOIN schedule_templates st ON st.group_id = g.id AND st.active = TRUE
        LEFT JOIN locations l ON l.id = st.location_id
        LEFT JOIN group_students gs ON gs.group_id = g.id
-       WHERE 1=1 ${schoolClause}
+       WHERE g.deleted_at IS NULL ${schoolClause}
        GROUP BY g.id, t.id, gl.name
        ORDER BY g.created_at DESC`,
       listParams

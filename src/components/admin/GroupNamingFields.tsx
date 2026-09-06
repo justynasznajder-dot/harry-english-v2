@@ -12,10 +12,13 @@ import {
 type GroupNamingFieldsProps = {
   name: string;
   level: string;
-  /** Po pierwszym zapisie — poziom, lokalizacja i nazwa zablokowane. */
+  /** Po pierwszym zapisie — poziom i lokalizacja zablokowane. */
   locked: boolean;
   onLevelChange: (level: string) => void;
-  /** Edycja nazwy tylko przed pierwszym zapisem (`!locked`). */
+  /**
+   * Edycja nazwy. Tymczasowo dozwolona także po zapisie (gdy podane).
+   * Potem z powrotem: tylko gdy `!locked`.
+   */
   onNameChange?: (name: string) => void;
   /** Select lokalizacji (kolejność: poziom → lokalizacja → nazwa). */
   locationField: ReactNode;
@@ -25,8 +28,8 @@ type GroupNamingFieldsProps = {
 };
 
 /**
- * Poziom + lokalizacja (slot) + nazwa auto (edytowalna do pierwszego zapisu).
- * Nazwę buduje rodzic z poziomu i lokalizacji; manager może ją poprawić przed Zapisz.
+ * Poziom + lokalizacja (slot) + nazwa auto.
+ * Poziom/lokalizacja blokowane po pierwszym zapisie; nazwa tymczasowo edytowalna także potem.
  */
 export default function GroupNamingFields({
   name,
@@ -40,7 +43,8 @@ export default function GroupNamingFields({
   nameInputClassName = 'w-full rounded-xl border border-emerald-200 px-3 py-2 bg-white disabled:bg-zinc-50 disabled:text-zinc-600',
 }: GroupNamingFieldsProps) {
   const legacyLevel = level && !isHarryEnglishLevelCode(level) ? level : null;
-  const nameEditable = !locked && typeof onNameChange === 'function';
+  // TODO(tymczasowo): nazwa edytowalna także po zapisie — potem: `!locked && typeof onNameChange === 'function'`
+  const nameEditable = typeof onNameChange === 'function';
 
   return (
     <div className={className}>
@@ -56,7 +60,7 @@ export default function GroupNamingFields({
           {' '}
           lub <span className="font-medium">Sz1{GROUP_NAME_SEP}Bemowo</span>.
           {' '}
-          Możesz ją poprawić przed pierwszym zapisem.
+          Możesz ją dowolnie zmienić (dodać tekst na początku lub na końcu).
         </p>
         <ul className="mt-1.5 list-disc space-y-0.5 pl-4">
           <li>
@@ -78,8 +82,8 @@ export default function GroupNamingFields({
             <span className="font-medium">(2)</span>, <span className="font-medium">(3)</span>…
           </li>
           <li>
-            Po pierwszym zapisie poziom, lokalizacja i nazwa są zablokowane — błąd = dezaktywacja
-            grupy i otwarcie nowej
+            Po pierwszym zapisie poziom i lokalizacja są tylko do odczytu — błąd = dezaktywacja
+            grupy i otwarcie nowej. Nazwa jest tymczasowo edytowalna także po zapisie.
           </li>
         </ul>
       </div>
@@ -125,11 +129,9 @@ export default function GroupNamingFields({
           }
           placeholder={`np. Sz1${GROUP_NAME_SEP}Bemowo`}
           title={
-            locked
-              ? 'Nazwa zablokowana po pierwszym zapisie — błąd = dezaktywacja i nowa grupa'
-              : nameEditable
-                ? 'Nazwa uzupełnia się automatycznie — możesz ją zmienić do pierwszego zapisu'
-                : 'Nazwa generowana automatycznie z poziomu i lokalizacji'
+            nameEditable
+              ? 'Możesz zmienić nazwę (także po zapisie — tymczasowo)'
+              : 'Nazwa generowana automatycznie z poziomu i lokalizacji'
           }
         />
       </div>
