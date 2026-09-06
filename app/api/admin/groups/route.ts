@@ -7,7 +7,7 @@ import {
   resolveInsertSchoolId,
 } from "@/lib/admin-school-context";
 import { sqlExistsUnfilledFutureScheduleSlot } from "@/lib/lesson-generation";
-import { normalizeLessonsPerWeek } from "@/lib/lessons-per-week";
+import { defaultLessonsPerWeekForLevel, normalizeLessonsPerWeek } from "@/lib/lessons-per-week";
 import { sqlSchoolTimestampAsTimestamptz } from "@/lib/school-timezone";
 import {
   findActiveGroupNameConflict,
@@ -252,7 +252,9 @@ export async function POST(request: NextRequest) {
       groupName = uniqueName.name;
     }
 
-    const groupLessonsPerWeek = normalizeLessonsPerWeek(lessonsPerWeek) ?? 1;
+    const groupLessonsPerWeek =
+      normalizeLessonsPerWeek(lessonsPerWeek) ??
+      defaultLessonsPerWeekForLevel(namingProbe.level);
 
     const inserted = await queryDb<{ id: string }>(
       `INSERT INTO groups (

@@ -9,6 +9,32 @@ export function normalizeLessonsPerWeek(raw: unknown): LessonsPerWeek | null {
   return null;
 }
 
+/**
+ * Domyślna frekwencja grupy wg poziomu:
+ * przedszkole (P*) i szkoła Sz1–Sz3 → 1×; od Sz4 (w tym Sz8E) → 2×.
+ */
+export function defaultLessonsPerWeekForLevel(
+  level: string | null | undefined
+): LessonsPerWeek {
+  const code = String(level ?? "")
+    .trim()
+    .toUpperCase();
+  if (!code) return 1;
+  if (code.startsWith("P")) return 1;
+  if (code === "SZ1" || code === "SZ2" || code === "SZ3") return 1;
+  if (
+    code === "SZ4" ||
+    code === "SZ5" ||
+    code === "SZ6" ||
+    code === "SZ7" ||
+    code === "SZ8" ||
+    code === "SZ8E"
+  ) {
+    return 2;
+  }
+  return 1;
+}
+
 export function lessonsPerWeekLabel(value: LessonsPerWeek): string {
   return value === 1 ? "1× w tygodniu" : "2× w tygodniu";
 }

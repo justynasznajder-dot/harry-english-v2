@@ -19,7 +19,7 @@ import {
   periodMonthKey,
   todayYmdSchool,
 } from '@/lib/school-timezone';
-import { defaultTargetLessonsPerYear } from '@/lib/lessons-per-week';
+import { defaultLessonsPerWeekForLevel, defaultTargetLessonsPerYear } from '@/lib/lessons-per-week';
 import {
   detectLevelFromGroupName,
   isHarryEnglishLevelCode,
@@ -2101,6 +2101,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
 
   const applyGroupLevelChange = useCallback(
     (level: string) => {
+      const lpw = defaultLessonsPerWeekForLevel(level);
+      setGenerateLessonsCount(String(defaultTargetLessonsPerYear(lpw)));
       setGroupForm((p) => {
         if (p.id) return p;
         const allowed = schoolLocations.filter(
@@ -2113,6 +2115,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           level,
           locationId,
           name: computeAutoGroupName(level, locationId),
+          lessonsPerWeek: lpw,
         };
       });
     },
