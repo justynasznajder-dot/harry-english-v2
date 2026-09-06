@@ -1,26 +1,34 @@
+'use client';
+
+import { Suspense } from 'react';
+import { useParams } from 'next/navigation';
 import Link from 'next/link';
+import PortalAppShell from '@/src/components/PortalAppShell';
 import AdminPortal from '@/src/components/AdminPortal';
 
-interface GroupPageProps {
-  params: Promise<{ id: string }>;
-}
-
-export default async function GroupPage({ params }: GroupPageProps) {
-  const { id } = await params;
+export default function GroupPage() {
+  const params = useParams();
+  const id = typeof params?.id === 'string' ? params.id : Array.isArray(params?.id) ? params.id[0] : '';
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#0f3c33] to-[#175244] p-4">
-      <div className="mx-auto max-w-6xl space-y-4">
-        <div className="rounded-2xl border border-emerald-100 bg-white p-4">
-          <Link
-            href="/portal"
-            className="inline-flex rounded-full border border-zinc-200 bg-zinc-50 px-4 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-100"
-          >
-            ← Powrót do panelu
-          </Link>
-        </div>
-        <AdminPortal initialGroupId={id} />
+    <PortalAppShell>
+      <div className="mb-4">
+        <Link
+          href="/portal?tab=organization"
+          className="text-sm font-semibold text-[#fdfaf3]/90 underline-offset-4 hover:text-[#ffc94a] hover:underline"
+        >
+          ← Powrót do panelu
+        </Link>
       </div>
-    </div>
+      <Suspense
+        fallback={
+          <div className="rounded-3xl bg-[#f8f6f3] p-8 text-center shadow-xl">
+            <p className="text-gray-600">Ładowanie grupy…</p>
+          </div>
+        }
+      >
+        <AdminPortal initialGroupId={id} />
+      </Suspense>
+    </PortalAppShell>
   );
 }

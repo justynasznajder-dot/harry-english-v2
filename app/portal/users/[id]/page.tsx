@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
+import PortalAppShell from '@/src/components/PortalAppShell';
 
 type AdminUserDetail = {
   id: string;
@@ -158,11 +159,11 @@ export default function AdminUserProfilePage() {
   const roleLabel = user ? ROLE_LABELS[user.role] ?? user.role : '';
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#0f3c33] to-[#175244] p-4 sm:p-6">
+    <PortalAppShell showManagerNav maxWidthClassName="max-w-6xl">
       <div className="mx-auto max-w-3xl">
         <div className="mb-4 flex flex-wrap items-center gap-3">
           <Link
-            href="/portal"
+            href="/portal?tab=organization"
             className="text-sm font-semibold text-[#fdfaf3]/90 underline-offset-4 hover:text-[#ffc94a] hover:underline"
           >
             ← Powrót do panelu
@@ -280,6 +281,6 @@ export default function AdminUserProfilePage() {
           </form>
         ) : null}
       </div>
-    </div>
+    </PortalAppShell>
   );
 }

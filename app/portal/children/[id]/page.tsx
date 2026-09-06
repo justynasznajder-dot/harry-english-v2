@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { paymentTypeShortLabel } from '@/lib/payment-labels';
+import PortalAppShell from '@/src/components/PortalAppShell';
 
 type ChildDetail = {
   id: string;
@@ -137,11 +138,15 @@ export default function AdminChildProfilePage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#0f3c33] to-[#175244] p-4 sm:p-6">
+    <PortalAppShell
+      showManagerNav
+      managerActiveTab="families"
+      maxWidthClassName="max-w-6xl"
+    >
       <div className="mx-auto max-w-3xl">
-        <div className="mb-4 flex flex-wrap items-center gap-3">
+        <div className="mb-4">
           <Link
-            href="/portal"
+            href="/portal?tab=families"
             className="text-sm font-semibold text-[#fdfaf3]/90 underline-offset-4 hover:text-[#ffc94a] hover:underline"
           >
             ← Powrót do panelu
@@ -175,6 +180,30 @@ export default function AdminChildProfilePage() {
             ) : null}
 
             <section className="rounded-2xl border border-emerald-100 bg-white p-5 shadow-sm sm:p-6">
+              <h2 className="text-lg font-semibold text-[#1e3a4c]">Rodzic</h2>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0 text-sm">
+                  <Link
+                    href={`/portal/parents/${child.parent_id}`}
+                    className="text-base font-medium text-[#0f6e56] underline-offset-2 hover:underline"
+                  >
+                    {child.parent_first_name} {child.parent_last_name}
+                  </Link>
+                  {child.parent_client_number ? (
+                    <span className="ml-1 text-zinc-500">({child.parent_client_number})</span>
+                  ) : null}
+                  <div className="mt-0.5 text-zinc-600">{child.parent_email}</div>
+                </div>
+                <Link
+                  href={`/portal/parents/${child.parent_id}`}
+                  className="shrink-0 rounded-lg bg-zinc-100 px-3 py-1 text-xs font-semibold text-zinc-800 hover:bg-emerald-50 hover:text-[#0f6e56]"
+                >
+                  Profil rodzica
+                </Link>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-emerald-100 bg-white p-5 shadow-sm sm:p-6">
               <h2 className="text-lg font-semibold text-[#1e3a4c]">Dane dziecka</h2>
               <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
                 <div>
@@ -197,21 +226,6 @@ export default function AdminChildProfilePage() {
                     {child.confirmed ? 'potwierdzony' : 'niepotwierdzony'}
                     {' · '}
                     {child.active ? 'aktywny' : 'nieaktywny'}
-                  </dd>
-                </div>
-                <div className="sm:col-span-2">
-                  <dt className="text-zinc-500">Rodzic</dt>
-                  <dd className="text-zinc-900">
-                    <Link
-                      href={`/portal/parents/${child.parent_id}`}
-                      className="font-medium text-[#0f6e56] underline-offset-2 hover:underline"
-                    >
-                      {child.parent_first_name} {child.parent_last_name}
-                    </Link>
-                    {child.parent_client_number ? (
-                      <span className="text-zinc-500"> ({child.parent_client_number})</span>
-                    ) : null}
-                    <div className="text-zinc-600">{child.parent_email}</div>
                   </dd>
                 </div>
               </dl>
@@ -321,6 +335,6 @@ export default function AdminChildProfilePage() {
           </div>
         ) : null}
       </div>
-    </div>
+    </PortalAppShell>
   );
 }

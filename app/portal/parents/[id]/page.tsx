@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useRouter, useParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
+import PortalAppShell from '@/src/components/PortalAppShell';
 
 type AdminUserDetail = {
   id: string;
@@ -13,6 +14,7 @@ type AdminUserDetail = {
   confirmed: boolean;
   active: boolean;
   phone: string | null;
+  hasSignedContract?: boolean;
 };
 
 type ParentProfileDto = {
@@ -20,7 +22,21 @@ type ParentProfileDto = {
   address: string | null;
   city: string | null;
   zipCode: string | null;
+  companyName?: string | null;
+  nip?: string | null;
+  billingType?: 'private' | 'company';
 } | null;
+
+type ParentChildRow = {
+  child_id: string;
+  first_name: string;
+  last_name: string;
+  birth_date: string;
+  active: boolean;
+  confirmed: boolean;
+  client_number: string | null;
+  group_name: string | null;
+};
 
 export default function AdminParentEditPage() {
   const router = useRouter();
@@ -42,15 +58,21 @@ export default function AdminParentEditPage() {
   const [address, setAddress] = useState('');
   const [city, setCity] = useState('');
   const [zipCode, setZipCode] = useState('');
+  const [billingType, setBillingType] = useState<'private' | 'company'>('private');
+  const [companyName, setCompanyName] = useState('');
+  const [nip, setNip] = useState('');
+  const [children, setChildren] = useState<ParentChildRow[]>([]);
+  const [hasInvoiceProfile, setHasInvoiceProfile] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
     setError(null);
     setLoading(true);
     try {
-      const [uRes, pRes] = await Promise.all([
+      const [uRes, pRes, cRes] = await Promise.all([
         fetch(`/api/admin/users/${id}`, { cache: 'no-store' }),
         fetch(`/api/admin/users/${id}/profile`, { cache: 'no-store' }),
+        fetch(`/api/admin/children?parentId=${encodeURIComponent(id)}`, { cache: 'no-store' }),
       ]);
       const uJson = await uRes.json();
       if (!uRes.ok) {
@@ -73,14 +95,39 @@ export default function AdminParentEditPage() {
         setAddress(p?.address ?? '');
         setCity(p?.city ?? '');
         setZipCode(p?.zipCode ?? '');
+        setBillingType(p?.billingType === 'company' ? 'company' : 'private');
+        setCompanyName(p?.companyName ?? '');
+        setNip(p?.nip ?? '');
+        setHasInvoiceProfile(
+          Boolean(
+            p &&
+              (p.address?.trim() ||
+                p.city?.trim() ||
+                p.zipCode?.trim() ||
+                p.companyName?.trim() ||
+                p.nip?.trim()),
+          ),
+        );
       } else {
         setAddress('');
         setCity('');
         setZipCode('');
+        setBillingType('private');
+        setCompanyName('');
+        setNip('');
+        setHasInvoiceProfile(false);
+      }
+
+      if (cRes.ok) {
+        const cJson = await cRes.json();
+        setChildren((cJson.children as ParentChildRow[]) ?? []);
+      } else {
+        setChildren([]);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Błąd ładowania');
       setUser(null);
+      setChildren([]);
     } finally {
       setLoading(false);
     }
@@ -122,13 +169,24 @@ export default function AdminParentEditPage() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          billingType,
           address: address.trim() || null,
           city: city.trim() || null,
           zipCode: zipCode.trim() || null,
+          companyName: billingType === 'company' ? companyName.trim() || null : null,
+          nip: billingType === 'company' ? nip.trim() || null : null,
         }),
       });
       const pData = await pRes.json();
       if (!pRes.ok) throw new Error(pData.message ?? 'Błąd zapisu profilu rodzica');
+      setHasInvoiceProfile(
+        Boolean(
+          address.trim() ||
+            city.trim() ||
+            zipCode.trim() ||
+            (billingType === 'company' && (companyName.trim() || nip.trim())),
+        ),
+      );
 
       setUser((prev) =>
         prev
@@ -183,11 +241,15 @@ export default function AdminParentEditPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#0f3c33] to-[#175244] p-4 sm:p-6">
+    <PortalAppShell
+      showManagerNav
+      managerActiveTab="families"
+      maxWidthClassName="max-w-6xl"
+    >
       <div className="mx-auto max-w-3xl">
         <div className="mb-4 flex flex-wrap items-center gap-3">
           <Link
-            href="/portal"
+            href="/portal?tab=families"
             className="text-sm font-semibold text-[#fdfaf3]/90 underline-offset-4 hover:text-[#ffc94a] hover:underline"
           >
             ← Powrót do panelu
@@ -210,6 +272,7 @@ export default function AdminParentEditPage() {
             {error}
           </div>
         ) : user ? (
+          <>
           <form onSubmit={handleSave} className="space-y-6">
             {error ? (
               <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
@@ -262,11 +325,17 @@ export default function AdminParentEditPage() {
                   <input
                     type="checkbox"
                     checked={confirmed}
+                    disabled={Boolean(user.hasSignedContract)}
                     onChange={(e) => setConfirmed(e.target.checked)}
-                    className="h-4 w-4 rounded border-emerald-300 text-[#0f6e56] focus:ring-[#0f6e56]"
+                    className="h-4 w-4 rounded border-emerald-300 text-[#0f6e56] focus:ring-[#0f6e56] disabled:opacity-60"
                   />
                   Konto potwierdzone
                 </label>
+                {user.hasSignedContract ? (
+                  <p className="text-xs text-zinc-500 sm:col-span-2">
+                    Automatycznie po podpisanej umowie — nie można odznaczyć.
+                  </p>
+                ) : null}
               </div>
               <p className="mt-3 text-xs text-zinc-500">
                 Status:{' '}
@@ -277,8 +346,60 @@ export default function AdminParentEditPage() {
             </section>
 
             <section className="rounded-2xl border border-emerald-100 bg-white p-5 shadow-sm sm:p-6">
-              <h2 className="text-lg font-semibold text-[#1e3a4c]">Profil rodzica — adres</h2>
-              <div className="mt-4 grid gap-4">
+              <h2 className="text-lg font-semibold text-[#1e3a4c]">Dane do faktury</h2>
+              <p className="mt-1 text-sm text-zinc-600">
+                Te same pola, które rodzic wypełnia w „Profil i dane do faktury”. Po zapisie u rodzica
+                pojawiają się tutaj automatycznie.
+              </p>
+              {!hasInvoiceProfile ? (
+                <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  Rodzic nie uzupełnił jeszcze danych do faktury.
+                </p>
+              ) : null}
+              <div className="mt-4 space-y-4">
+                <div className="flex flex-wrap gap-4 text-sm text-zinc-700">
+                  <label className="inline-flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="billingType"
+                      checked={billingType === 'private'}
+                      onChange={() => setBillingType('private')}
+                      className="h-4 w-4 border-emerald-300 text-[#0f6e56] focus:ring-[#0f6e56]"
+                    />
+                    Osoba prywatna
+                  </label>
+                  <label className="inline-flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="billingType"
+                      checked={billingType === 'company'}
+                      onChange={() => setBillingType('company')}
+                      className="h-4 w-4 border-emerald-300 text-[#0f6e56] focus:ring-[#0f6e56]"
+                    />
+                    Firma
+                  </label>
+                </div>
+                {billingType === 'company' ? (
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="flex flex-col gap-1 text-sm text-zinc-700 sm:col-span-2">
+                      Nazwa firmy
+                      <input
+                        className="rounded-xl border border-emerald-200 px-3 py-2 text-zinc-900"
+                        value={companyName}
+                        onChange={(e) => setCompanyName(e.target.value)}
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm text-zinc-700">
+                      NIP
+                      <input
+                        className="rounded-xl border border-emerald-200 px-3 py-2 text-zinc-900"
+                        value={nip}
+                        onChange={(e) => setNip(e.target.value)}
+                        inputMode="numeric"
+                      />
+                    </label>
+                  </div>
+                ) : null}
                 <label className="flex flex-col gap-1 text-sm text-zinc-700">
                   Ulica i numer
                   <input
@@ -334,8 +455,52 @@ export default function AdminParentEditPage() {
               </div>
             ) : null}
           </form>
+
+            <section className="mt-6 rounded-2xl border border-emerald-100 bg-white p-5 shadow-sm sm:p-6">
+              <h2 className="text-lg font-semibold text-[#1e3a4c]">
+                Dzieci{' '}
+                <span className="font-normal text-zinc-500">({children.length})</span>
+              </h2>
+              {children.length === 0 ? (
+                <p className="mt-3 text-sm text-zinc-500">Brak dzieci powiązanych z tym kontem.</p>
+              ) : (
+                <ul className="mt-4 divide-y divide-emerald-50">
+                  {children.map((ch) => (
+                    <li
+                      key={ch.child_id}
+                      className="flex flex-wrap items-center justify-between gap-2 py-3 first:pt-0 last:pb-0"
+                    >
+                      <div className="min-w-0">
+                        <Link
+                          href={`/portal/children/${ch.child_id}`}
+                          className="font-medium text-[#0f6e56] underline-offset-2 hover:underline"
+                        >
+                          {ch.first_name} {ch.last_name}
+                        </Link>
+                        <p className="mt-0.5 text-xs text-zinc-500">
+                          {ch.client_number ? `ID ${ch.client_number} · ` : null}
+                          {ch.birth_date}
+                          {ch.group_name ? ` · ${ch.group_name}` : null}
+                          {' · '}
+                          {ch.confirmed ? 'potwierdzony' : 'niepotwierdzony'}
+                          {' · '}
+                          {ch.active ? 'aktywny' : 'nieaktywny'}
+                        </p>
+                      </div>
+                      <Link
+                        href={`/portal/children/${ch.child_id}`}
+                        className="shrink-0 rounded-lg bg-zinc-100 px-3 py-1 text-xs font-semibold text-zinc-800 hover:bg-emerald-50 hover:text-[#0f6e56]"
+                      >
+                        Profil
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          </>
         ) : null}
       </div>
-    </div>
+    </PortalAppShell>
   );
 }

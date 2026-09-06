@@ -45,6 +45,7 @@ export async function GET(request: NextRequest) {
       lessons_per_week: number;
       has_schedule: boolean;
       future_lessons_count: number;
+      generated_lessons_count: number;
       missing_generated_lessons: boolean;
       schedule_needs_confirmation: boolean;
     }>(
@@ -83,6 +84,16 @@ export async function GET(request: NextRequest) {
              AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} > NOW()
              AND l.status = 'SCHEDULED'
          ), 0) AS future_lessons_count,
+         COALESCE((
+           SELECT COUNT(*)::int
+           FROM lessons l
+           WHERE l.group_id = g.id
+             AND l.school_year_id = (
+               SELECT sy.id FROM school_years sy
+               WHERE sy.school_id = g.school_id AND sy.active = TRUE
+               LIMIT 1
+             )
+         ), 0) AS generated_lessons_count,
          (
            EXISTS (
              SELECT 1 FROM school_years sy

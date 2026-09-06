@@ -479,7 +479,7 @@ export default function EnrollmentAdminPanel({
                 : 'border-emerald-200 bg-white text-zinc-700'
             }`}
           >
-            Lista uczniów
+            Lista uczniów ({enrollmentStatusCounts[''] ?? 0})
           </button>
         </div>
 

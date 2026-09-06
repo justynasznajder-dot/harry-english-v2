@@ -55,6 +55,10 @@ export async function GET(
             address: profile.address,
             city: profile.city,
             zipCode: profile.zip_code,
+            companyName: profile.company_name,
+            nip: profile.nip,
+            billingType:
+              profile.company_name || profile.nip ? "company" : "private",
             createdAt: profile.created_at,
             updatedAt: profile.updated_at,
           }
@@ -118,17 +122,59 @@ export async function PUT(
     else if (body.zip_code !== undefined) zipFromBody = body.zip_code;
     const zip_code = zipFromBody !== undefined ? normalizeZip(zipFromBody) : undefined;
 
-    if (address === undefined && city === undefined && zip_code === undefined) {
+    const companyName =
+      body.companyName !== undefined || body.company_name !== undefined
+        ? (() => {
+            const raw = body.companyName ?? body.company_name;
+            if (raw == null || String(raw).trim() === "") return null;
+            return String(raw).trim();
+          })()
+        : undefined;
+    const nip =
+      body.nip !== undefined
+        ? body.nip == null || String(body.nip).trim() === ""
+          ? null
+          : String(body.nip).trim()
+        : undefined;
+    const billingTypeRaw = String(body.billingType ?? body.billing_type ?? "").trim();
+    const billingType =
+      billingTypeRaw === "company" || billingTypeRaw === "private"
+        ? billingTypeRaw
+        : undefined;
+
+    if (
+      address === undefined &&
+      city === undefined &&
+      zip_code === undefined &&
+      companyName === undefined &&
+      nip === undefined &&
+      billingType === undefined
+    ) {
       return NextResponse.json({ message: "Brak pól do aktualizacji" }, { status: 400 });
     }
 
     const existing = await getParentProfileByUserId(targetUserId);
+    const resolvedBilling =
+      billingType ??
+      (existing?.company_name || existing?.nip ? "company" : "private");
     const profile = await upsertParentProfileForUser({
       userId: targetUserId,
       schoolId: target.school_id,
       address: address !== undefined ? address : existing?.address ?? null,
       city: city !== undefined ? city : existing?.city ?? null,
       zip_code: zip_code !== undefined ? zip_code : existing?.zip_code ?? null,
+      company_name:
+        resolvedBilling === "company"
+          ? companyName !== undefined
+            ? companyName
+            : existing?.company_name ?? null
+          : null,
+      nip:
+        resolvedBilling === "company"
+          ? nip !== undefined
+            ? nip
+            : existing?.nip ?? null
+          : null,
     });
 
     if (!profile) {
@@ -143,6 +189,10 @@ export async function PUT(
         address: profile.address,
         city: profile.city,
         zipCode: profile.zip_code,
+        companyName: profile.company_name,
+        nip: profile.nip,
+        billingType:
+          profile.company_name || profile.nip ? "company" : "private",
         createdAt: profile.created_at,
         updatedAt: profile.updated_at,
       },

@@ -7,11 +7,13 @@ import {
   restoreUser,
   isAdmin,
   parseUserRole,
+  queryDb,
 } from "@/lib/db";
 import {
   managerSchoolScopeError,
   requireAdminSchoolContext,
 } from "@/lib/admin-school-context";
+import { syncParentUserAccessLevel } from "@/lib/enrollment-sync";
 
 function managerForbiddenSchoolFields(actor: User, body: Record<string, unknown>): NextResponse | null {
   if (actor.role !== "MANAGER") return null;
@@ -49,6 +51,38 @@ export async function GET(
 
     if (!target) {
       return NextResponse.json({ message: "Użytkownik nie został znaleziony" }, { status: 404 });
+    }
+
+    if (target.role === "PARENT") {
+      await syncParentUserAccessLevel(target.id);
+      const refreshed = await getUserById(targetUserId);
+      const signed = await queryDb<{ ok: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM contracts
+           WHERE parent_id = $1
+             AND UPPER(BTRIM(COALESCE(status::text, ''))) = 'SIGNED'
+         ) AS ok`,
+        [targetUserId]
+      );
+      const u = refreshed ?? target;
+      return NextResponse.json({
+        user: {
+          id: u.id,
+          first_name: u.first_name,
+          last_name: u.last_name,
+          email: u.email,
+          role: u.role,
+          confirmed: u.confirmed,
+          active: u.active,
+          access_level: u.access_level,
+          phone: u.phone,
+          school_id: u.school_id,
+          resignation_date: u.resignation_date,
+          created_at: u.created_at,
+          last_login: u.last_login,
+          hasSignedContract: Boolean(signed.rows[0]?.ok),
+        },
+      });
     }
 
     return NextResponse.json({
@@ -175,6 +209,20 @@ export async function PUT(
     const targetForUpdate = await getUserById(targetUserId);
     const updateScopeErr = managerSchoolScopeError(actor, targetForUpdate);
     if (updateScopeErr) return updateScopeErr;
+
+    if (targetForUpdate?.role === "PARENT") {
+      const signed = await queryDb<{ ok: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM contracts
+           WHERE parent_id = $1
+             AND UPPER(BTRIM(COALESCE(status::text, ''))) = 'SIGNED'
+         ) AS ok`,
+        [targetUserId]
+      );
+      if (signed.rows[0]?.ok) {
+        updateData.confirmed = true;
+      }
+    }
 
     const updated = await updateUser(targetUserId, updateData);
 

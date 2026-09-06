@@ -1,6 +1,6 @@
 import { queryDb } from "@/lib/db";
-import { sqlExistsUnfilledFutureScheduleSlot } from "@/lib/lesson-generation";
 import { formatRenewalStatusLabel } from "@/lib/renewal-status";
+import { BASE_TARGET_LESSONS_PER_YEAR } from "@/lib/lessons-per-week";
 import {
   SCHOOL_TIMEZONE,
   periodMonthStartYmd,
@@ -741,8 +741,8 @@ export type DashboardWarning = {
 };
 
 /**
- * Ostrzeżenia operacyjne na pulpit (brak roku / niepotwierdzony harmonogram / brak zajęć / przepełnienie).
- * Logika zgodna z flagami `schedule_needs_confirmation` / `missing_generated_lessons` na liście grup.
+ * Ostrzeżenia operacyjne na pulpit (brak roku / niepotwierdzony harmonogram /
+ * za mało zajęć względem celu 33×frekwencja / przepełnienie).
  * `schoolId = null` → wszystkie szkoły (ADMIN).
  */
 export async function fetchDashboardWarnings(
@@ -751,6 +751,18 @@ export async function fetchDashboardWarnings(
   const schoolFilter = schoolId ? "AND g.school_id = $1" : "";
   const schoolFilterBare = schoolId ? "AND s.id = $1" : "";
   const params: string[] = schoolId ? [schoolId] : [];
+  const targetLessonsSql = `(${BASE_TARGET_LESSONS_PER_YEAR} * CASE WHEN COALESCE(g.lessons_per_week, 1) = 2 THEN 2 ELSE 1 END)`;
+  const generatedLessonsSql = `(
+         SELECT COUNT(*)::int
+         FROM lessons l
+         WHERE l.group_id = g.id
+           AND l.school_year_id = (
+             SELECT sy.id FROM school_years sy
+             WHERE sy.school_id = g.school_id AND sy.active = TRUE
+             LIMIT 1
+           )
+           AND l.status IN ('SCHEDULED', 'COMPLETED')
+       )`;
 
   const warnings: DashboardWarning[] = [];
 
@@ -815,8 +827,17 @@ export async function fetchDashboardWarnings(
     });
   }
 
-  const missingLessons = await queryDb<{ id: string; name: string }>(
-    `SELECT g.id, g.name
+  const missingLessons = await queryDb<{
+    id: string;
+    name: string;
+    generated_count: number;
+    target_count: number;
+  }>(
+    `SELECT
+       g.id,
+       g.name,
+       ${generatedLessonsSql} AS generated_count,
+       ${targetLessonsSql} AS target_count
      FROM groups g
      WHERE g.active = TRUE
        ${schoolFilter}
@@ -844,7 +865,7 @@ export async function fetchDashboardWarnings(
              LIMIT 1
            )
        )
-       AND ${sqlExistsUnfilledFutureScheduleSlot("g.id", "g.school_id")}
+       AND ${generatedLessonsSql} < ${targetLessonsSql}
      ORDER BY g.name ASC`,
     params
   );
@@ -854,10 +875,12 @@ export async function fetchDashboardWarnings(
       type: "missing_lessons",
       message:
         missingLessons.rows.length === 1
-          ? "Brak wygenerowanych zajęć dla grupy:"
-          : "Brak wygenerowanych zajęć dla grup:",
+          ? "Za mało wygenerowanych zajęć dla grupy (wygenerowane/wymagane):"
+          : "Za mało wygenerowanych zajęć dla grup (wygenerowane/wymagane):",
       groupIds: missingLessons.rows.map((r) => r.id),
-      groupNames: missingLessons.rows.map((r) => r.name),
+      groupNames: missingLessons.rows.map(
+        (r) => `${r.name} (${r.generated_count}/${r.target_count})`
+      ),
     });
   }
 

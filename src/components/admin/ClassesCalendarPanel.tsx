@@ -10,7 +10,7 @@ const TZ = 'Europe/Warsaw';
 
 const ClassesCalendarInner = dynamic(() => import('./ClassesCalendarInner'), {
   ssr: false,
-  loading: () => <div className="min-h-[520px] w-full animate-pulse rounded-xl bg-emerald-50/80" />,
+  loading: () => <div className="h-[680px] w-full animate-pulse rounded-xl bg-emerald-50/80" />,
 });
 
 export type CalendarLessonRow = {
@@ -55,10 +55,18 @@ function lessonColors(status: string): { backgroundColor: string; borderColor: s
   }
 }
 
-function lessonTitle(row: CalendarLessonRow): string {
-  const t = row.teacher_name ? ` — ${row.teacher_name}` : '';
-  const loc = row.location_name?.trim() ? row.location_name : '—';
-  return `${row.group_name}${t} · ${loc}`;
+function lessonDisplayTitle(row: CalendarLessonRow): string {
+  return row.group_name?.trim() || 'Zajęcia';
+}
+
+function lessonTooltip(row: CalendarLessonRow): string {
+  const parts = [row.group_name?.trim() || 'Zajęcia'];
+  const loc = row.location_name?.trim();
+  if (loc) parts.push(loc);
+  const teacher = row.teacher_name?.trim();
+  if (teacher) parts.push(teacher);
+  if (row.status && row.status !== 'SCHEDULED') parts.push(row.status);
+  return parts.join(' · ');
 }
 
 function buildEventInputs(lessons: CalendarLessonRow[], holidays: CalendarHolidayRow[]): EventInput[] {
@@ -78,7 +86,7 @@ function buildEventInputs(lessons: CalendarLessonRow[], holidays: CalendarHolida
     const c = lessonColors(l.status);
     return {
       id: l.id,
-      title: lessonTitle(l),
+      title: lessonDisplayTitle(l),
       start: new Date(startMs).toISOString(),
       end: new Date(endMs).toISOString(),
       backgroundColor: c.backgroundColor,
@@ -86,7 +94,8 @@ function buildEventInputs(lessons: CalendarLessonRow[], holidays: CalendarHolida
       textColor: '#ffffff',
       extendedProps: {
         status: l.status,
-        groupName: l.group_name,
+        groupName: lessonDisplayTitle(l),
+        tooltip: lessonTooltip(l),
       },
     };
   });
@@ -239,7 +248,9 @@ export default function ClassesCalendarPanel({
       setCancelLessonParentMessage('');
       setCancelLessonModal({
         id,
-        title: arg.event.title,
+        title:
+          (arg.event.extendedProps?.tooltip as string | undefined)?.trim() ||
+          arg.event.title,
         whenLabel,
         status,
       });

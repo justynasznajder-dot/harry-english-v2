@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { normalizePolishPhone } from '@/lib/phone';
 import ClassesCalendarPanel from '@/src/components/admin/ClassesCalendarPanel';
 import RenewalsPanel from '@/src/components/admin/RenewalsPanel';
@@ -33,13 +34,15 @@ import GroupNamingFields, {
 type TabKey =
   | 'dashboard'
   | 'organization'
+  | 'families'
   | 'classes'
   | 'enrollments'
   | 'announcements'
   | 'billing'
   | 'settlements';
 type MobileTab = 'organization' | 'users' | 'more';
-type UsersSubTab = 'parents' | 'children' | 'teachers' | 'managers' | 'accountants' | 'add';
+type FamiliesSubTab = 'parents' | 'children';
+type UsersSubTab = 'teachers' | 'managers' | 'accountants' | 'add';
 type OrganizationSubTab =
   | 'schoolYear'
   | 'teachers'
@@ -53,7 +56,8 @@ type BillingSubTab = 'summary' | 'invoices' | 'settings';
 type BillingSummaryKind = 'monthly' | 'per_lesson';
 type TeacherOrgSubTab = 'list' | 'add';
 type LocationOrgSubTab = 'list' | 'add' | 'edit' | 'specials';
-type GroupsSubTab = 'list' | 'add' | 'organize' | 'yearLessons';
+type GroupsSubTab = 'list' | 'add' | 'organize';
+type ClassesSubTab = 'calendar' | 'lessonsList';
 
 /** Zgodnie z kolumną `users.role` (TEXT): ADMIN, MANAGER, TEACHER, PARENT, CHILD, ACCOUNTANT */
 type AdminPortalUserRole = 'ADMIN' | 'MANAGER' | 'TEACHER' | 'PARENT' | 'CHILD' | 'ACCOUNTANT';
@@ -113,6 +117,7 @@ interface GroupRow {
   lessons_per_week?: number | null;
   has_schedule?: boolean;
   future_lessons_count?: number;
+  generated_lessons_count?: number;
   missing_generated_lessons?: boolean;
   schedule_needs_confirmation?: boolean;
 }
@@ -142,6 +147,16 @@ function priceFieldFromDb(value: unknown): string {
   const n = Number(String(value).replace(',', '.'));
   if (!Number.isFinite(n)) return '';
   return String(n);
+}
+
+/** Etykieta harmonogramu grupy — „BRAK” gdy brak poprawnego dnia/godziny. */
+function groupScheduleLabel(schedule: string | null | undefined): string {
+  const text = (schedule ?? '').trim();
+  if (!text || text === '-') return 'BRAK';
+  if (text.split(/,\s*/).every((line) => /^Dzień(\s|\d|$)/i.test(line.trim()))) {
+    return 'BRAK';
+  }
+  return text;
 }
 
 /** @deprecated Cennik grupy wyłączony — zostawione na przyszłą automatyzację. */
@@ -426,6 +441,7 @@ interface SchoolLocationRow {
 const topTabs: Array<{ key: TabKey; label: string }> = [
   { key: 'dashboard', label: 'Pulpit' },
   { key: 'organization', label: 'Organizacja szkoły' },
+  { key: 'families', label: 'Rodzice/dzieci' },
   { key: 'classes', label: 'Zajęcia' },
   { key: 'enrollments', label: 'Zapisy / rezygnacje' },
   { key: 'announcements', label: 'Wiadomości' },
@@ -476,9 +492,12 @@ const locationOrgSubTabs: Array<{ key: LocationOrgSubTab; label: string }> = [
   { key: 'add', label: 'Dodaj lokalizację' },
   { key: 'specials', label: 'Pozycje specjalne' },
 ];
-const usersSubTabs: Array<{ key: UsersSubTab; label: string }> = [
+const familiesSubTabs: Array<{ key: FamiliesSubTab; label: string }> = [
   { key: 'parents', label: 'Lista rodziców' },
   { key: 'children', label: 'Lista dzieci' },
+];
+
+const usersSubTabs: Array<{ key: UsersSubTab; label: string }> = [
   { key: 'teachers', label: 'Lista nauczycieli' },
   { key: 'managers', label: 'Lista managerów' },
   { key: 'accountants', label: 'Lista księgowych' },
@@ -488,7 +507,11 @@ const groupsSubTabs: Array<{ key: GroupsSubTab; label: string }> = [
   { key: 'list', label: 'Lista grup' },
   { key: 'add', label: 'Dodaj nową grupę' },
   { key: 'organize', label: 'Organizacja grup' },
-  { key: 'yearLessons', label: 'Zajęcia w roku szkolnym' },
+];
+
+const classesSubTabs: Array<{ key: ClassesSubTab; label: string }> = [
+  { key: 'calendar', label: 'Kalendarz' },
+  { key: 'lessonsList', label: 'Lista zajęć' },
 ];
 
 /** Wartości filtrów listy „Organizacja grup” (select); pusty string = wszystkie. */
@@ -505,7 +528,6 @@ function GroupSubTabButtons(props: {
   onEnterAddTab: () => void;
   onOrganizeStateReset: () => void;
   onEnterListTab?: () => void;
-  onEnterYearLessonsTab?: () => void;
 }) {
   const {
     active,
@@ -513,7 +535,6 @@ function GroupSubTabButtons(props: {
     onEnterAddTab,
     onOrganizeStateReset,
     onEnterListTab,
-    onEnterYearLessonsTab,
   } = props;
   return (
     <div className="mb-4 flex flex-wrap gap-2">
@@ -536,9 +557,6 @@ function GroupSubTabButtons(props: {
             }
             if (tab.key === 'add') {
               onEnterAddTab();
-            }
-            if (tab.key === 'yearLessons') {
-              onEnterYearLessonsTab?.();
             }
           }}
           className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
@@ -569,7 +587,21 @@ function EmptyDataPanel({ title }: { title: string }) {
 }
 
 export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
-  const [activeTab, setActiveTab] = useState<TabKey>('dashboard');
+  const searchParams = useSearchParams();
+  const tabFromUrl = searchParams.get('tab');
+  const initialTabFromUrl: TabKey | null =
+    tabFromUrl === 'dashboard' ||
+    tabFromUrl === 'organization' ||
+    tabFromUrl === 'families' ||
+    tabFromUrl === 'classes' ||
+    tabFromUrl === 'enrollments' ||
+    tabFromUrl === 'announcements' ||
+    tabFromUrl === 'billing' ||
+    tabFromUrl === 'settlements'
+      ? (tabFromUrl as TabKey)
+      : null;
+
+  const [activeTab, setActiveTab] = useState<TabKey>(initialTabFromUrl ?? 'dashboard');
   const [mobileTab, setMobileTab] = useState<MobileTab>('organization');
   const [messagesListResetToken, setMessagesListResetToken] = useState(0);
   const { unreadCount: messagesUnreadCount, refresh: refreshMessagesUnreadCount } =
@@ -588,6 +620,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [teacherOrgSubTab, setTeacherOrgSubTab] = useState<TeacherOrgSubTab>('list');
   const [locationOrgSubTab, setLocationOrgSubTab] = useState<LocationOrgSubTab>('list');
   const [groupsSubTab, setGroupsSubTab] = useState<GroupsSubTab>('list');
+  const [classesSubTab, setClassesSubTab] = useState<ClassesSubTab>('calendar');
   const [schoolLocations, setSchoolLocations] = useState<SchoolLocationRow[]>([]);
   const [locationsLoading, setLocationsLoading] = useState(false);
   const [newLocationForm, setNewLocationForm] = useState({
@@ -624,7 +657,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [search, setSearch] = useState('');
   const [showInactive, setShowInactive] = useState(false);
-  const [usersSubTab, setUsersSubTab] = useState<UsersSubTab>('parents');
+  const [familiesSubTab, setFamiliesSubTab] = useState<FamiliesSubTab>('parents');
+  const [usersSubTab, setUsersSubTab] = useState<UsersSubTab>('teachers');
   const [newUser, setNewUser] = useState({
     firstName: '',
     lastName: '',
@@ -1493,7 +1527,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   }, [activeTab, settlementYearId, settlementMonth, loadSettlementData]);
 
   useEffect(() => {
-    if (activeTab !== 'organization' || organizationSubTab !== 'groups' || groupsSubTab !== 'yearLessons') {
+    if (activeTab === 'classes' && classesSubTab === 'lessonsList') {
+      void loadSchoolYearData();
+    }
+  }, [activeTab, classesSubTab, loadSchoolYearData]);
+
+  useEffect(() => {
+    if (activeTab !== 'classes' || classesSubTab !== 'lessonsList') {
       return;
     }
     const selectable = schoolYears
@@ -1508,7 +1548,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         selectable.find((y) => y.isActive ?? y.active) ?? selectable[0];
       setYearLessonsYearId(preferred.id);
     }
-  }, [activeTab, organizationSubTab, groupsSubTab, schoolYears, yearLessonsYearId]);
+  }, [activeTab, classesSubTab, schoolYears, yearLessonsYearId]);
 
   const loadYearLessons = useCallback(async (schoolYearId: string) => {
     if (!schoolYearId) {
@@ -1540,16 +1580,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   }, [pushToast]);
 
   useEffect(() => {
-    if (
-      activeTab !== 'organization' ||
-      organizationSubTab !== 'groups' ||
-      groupsSubTab !== 'yearLessons' ||
-      !yearLessonsYearId
-    ) {
+    if (activeTab !== 'classes' || classesSubTab !== 'lessonsList' || !yearLessonsYearId) {
       return;
     }
     void loadYearLessons(yearLessonsYearId);
-  }, [activeTab, organizationSubTab, groupsSubTab, yearLessonsYearId, loadYearLessons]);
+  }, [activeTab, classesSubTab, yearLessonsYearId, loadYearLessons]);
 
   useEffect(() => {
     if (activeTab === 'organization' && organizationSubTab === 'discounts') {
@@ -1803,8 +1838,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   useEffect(() => {
     if (mobileTab === 'organization') setActiveTab('organization');
     if (mobileTab === 'users') {
-      setActiveTab('organization');
-      setOrganizationSubTab('users');
+      setActiveTab('families');
+      setFamiliesSubTab('children');
     }
   }, [mobileTab]);
 
@@ -1892,10 +1927,18 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     }
   }, [filteredComplimentaryCandidates, selectedComplimentaryCandidateKey]);
 
+  const groupsForOrganizeCascadedFilters = useMemo(() => {
+    if (!organizeFilterLocation) return groups;
+    if (organizeFilterLocation === ORGANIZE_FILTER_NO_LOCATION) {
+      return groups.filter((g) => !g.location_name?.trim());
+    }
+    return groups.filter((g) => (g.location_name ?? '') === organizeFilterLocation);
+  }, [groups, organizeFilterLocation]);
+
   const organizeFilterNameOptions = useMemo(() => {
-    const set = new Set(groups.map((g) => g.name).filter(Boolean));
+    const set = new Set(groupsForOrganizeCascadedFilters.map((g) => g.name).filter(Boolean));
     return [...set].sort((a, b) => a.localeCompare(b, 'pl'));
-  }, [groups]);
+  }, [groupsForOrganizeCascadedFilters]);
 
   const organizeFilterLocationOptions = useMemo(() => {
     const set = new Set(
@@ -1906,18 +1949,20 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
 
   const organizeFilterTeacherOptions = useMemo(() => {
     const set = new Set(
-      groups.map((g) => (g.teacher_name && g.teacher_name.trim() ? g.teacher_name : null)).filter(Boolean) as string[],
+      groupsForOrganizeCascadedFilters
+        .map((g) => (g.teacher_name && g.teacher_name.trim() ? g.teacher_name : null))
+        .filter(Boolean) as string[],
     );
     return [...set].sort((a, b) => a.localeCompare(b, 'pl'));
-  }, [groups]);
+  }, [groupsForOrganizeCascadedFilters]);
 
   const organizeHasGroupsWithoutLocation = useMemo(
     () => groups.some((g) => !g.location_name?.trim()),
     [groups],
   );
   const organizeHasGroupsWithoutTeacher = useMemo(
-    () => groups.some((g) => !g.teacher_name?.trim()),
-    [groups],
+    () => groupsForOrganizeCascadedFilters.some((g) => !g.teacher_name?.trim()),
+    [groupsForOrganizeCascadedFilters],
   );
 
   const organizeFilteredGroups = useMemo(() => {
@@ -2205,6 +2250,22 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     setInitialGroupLoaded(true);
   }, [initialGroupId, initialGroupLoaded, loadGroupDetail]);
 
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (
+      tab === 'dashboard' ||
+      tab === 'organization' ||
+      tab === 'families' ||
+      tab === 'classes' ||
+      tab === 'enrollments' ||
+      tab === 'announcements' ||
+      tab === 'billing' ||
+      tab === 'settlements'
+    ) {
+      setActiveTab(tab);
+    }
+  }, [searchParams]);
+
   /** Cel generowania = 33 × częstotliwość z pola „Zajęcia w tygodniu”. */
   useEffect(() => {
     setGenerateLessonsCount(String(defaultTargetLessonsPerYear(groupForm.lessonsPerWeek)));
@@ -2358,7 +2419,15 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       } else {
         pushToast('success', 'Dodano użytkownika');
         setOrganizationSubTab('users');
-        setUsersSubTab('parents');
+        setUsersSubTab(
+          newUser.role === 'TEACHER'
+            ? 'teachers'
+            : newUser.role === 'MANAGER'
+              ? 'managers'
+              : newUser.role === 'ACCOUNTANT'
+                ? 'accountants'
+                : 'teachers',
+        );
       }
 
       setNewUser({ firstName: '', lastName: '', email: '', password: '', phone: '', role: '' });
@@ -2408,17 +2477,206 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     [users]
   );
 
+  const renderFamilies = () => {
+    const parentUsers = filteredUsers.filter((user) => user.role === 'PARENT');
+
+    return (
+      <div>
+        <section className="rounded-2xl border border-emerald-100 bg-white p-4 shadow-sm sm:p-6">
+          <header className="border-b border-emerald-50 pb-4">
+            <h2 className="text-xl font-bold text-[#0f6e56] sm:text-2xl">Rodzice / dzieci</h2>
+            <p className="mt-1 text-sm text-zinc-600">
+              Lista rodziców i dzieci przypisanych do szkoły.
+            </p>
+          </header>
+
+          <div className="mt-4 space-y-4">
+            <div className="flex flex-wrap gap-2">
+              {familiesSubTabs.map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setFamiliesSubTab(tab.key)}
+                  className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                    familiesSubTab === tab.key
+                      ? 'border-[#0f6e56] bg-[#0f6e56] text-white shadow-sm'
+                      : 'border-emerald-100 bg-white text-zinc-700 hover:border-[#0f6e56]/40 hover:text-[#0f6e56]'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Szukaj po imieniu, nazwisku, emailu"
+                className="rounded-xl border border-emerald-200 px-3 py-2"
+              />
+              <label className="flex items-center gap-2 rounded-xl border border-emerald-200 px-3 py-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={showInactive}
+                  onChange={(e) => setShowInactive(e.target.checked)}
+                />
+                Pokaż nieaktywnych
+              </label>
+            </div>
+          </div>
+        </section>
+
+        {familiesSubTab === 'parents' && (
+          <section className="mt-4 overflow-hidden rounded-2xl border border-emerald-100 bg-white">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[760px] text-sm">
+                <thead className="bg-emerald-50 text-zinc-700">
+                  <tr>
+                    <th className="px-4 py-3 text-left">ID</th>
+                    <th className="px-4 py-3 text-left">Użytkownik</th>
+                    <th className="px-4 py-3 text-left">Email</th>
+                    <th className="px-4 py-3 text-left">Dzieci</th>
+                    <th className="px-4 py-3 text-left">Status</th>
+                    <th className="px-4 py-3 text-left">Akcje</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {parentUsers.map((user) => (
+                    <tr key={user.id} className="border-t border-emerald-50">
+                      <td className="px-4 py-3 font-mono text-xs text-zinc-600">
+                        {user.client_number ?? '—'}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span>
+                          {user.first_name} {user.last_name}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">{user.email}</td>
+                      <td className="px-4 py-3 tabular-nums">{user.children_count ?? 0}</td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                            user.active
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-zinc-100 text-zinc-700'
+                          }`}
+                        >
+                          {user.active ? 'aktywny' : 'nieaktywny'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-wrap gap-2">
+                          <Link
+                            href={`/portal/parents/${user.id}`}
+                            className="inline-flex rounded-lg bg-zinc-200 px-3 py-1 text-center text-zinc-900 hover:bg-zinc-300"
+                          >
+                            Profil
+                          </Link>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => toggleUserActive(user)}
+                            className={`rounded-lg px-3 py-1 text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                              user.active
+                                ? 'admin-user-toggle-danger'
+                                : 'admin-user-toggle-success'
+                            }`}
+                          >
+                            {user.active ? 'Dezaktywuj' : 'Aktywuj'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {familiesSubTab === 'children' && (
+          <section className="mt-4 overflow-hidden rounded-2xl border border-emerald-100 bg-white">
+            <div className="flex items-center justify-between border-b border-emerald-50 px-4 py-3">
+              <h3 className="font-semibold">Dzieci</h3>
+              <button
+                onClick={() => setChildModalOpen(true)}
+                className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white"
+              >
+                + Dodaj zgłoszenie dziecka
+              </button>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[900px] text-sm">
+                <thead className="bg-emerald-50 text-zinc-700">
+                  <tr>
+                    <th className="px-4 py-3 text-left">ID</th>
+                    <th className="px-4 py-3 text-left">Imię</th>
+                    <th className="px-4 py-3 text-left">Nazwisko</th>
+                    <th className="px-4 py-3 text-left">Data urodzenia</th>
+                    <th className="px-4 py-3 text-left">Rodzic</th>
+                    <th className="px-4 py-3 text-left">Status</th>
+                    <th className="px-4 py-3 text-left">Grupa</th>
+                    <th className="px-4 py-3 text-left">Akcje</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {children.map((child) => (
+                    <tr key={child.child_id} className="border-t border-emerald-50">
+                      <td className="px-4 py-3 font-mono text-xs text-zinc-600">
+                        {child.client_number ?? '—'}
+                      </td>
+                      <td className="px-4 py-3">{child.first_name}</td>
+                      <td className="px-4 py-3">{child.last_name}</td>
+                      <td className="px-4 py-3">{child.birth_date}</td>
+                      <td className="px-4 py-3">
+                        {child.parent_first_name} {child.parent_last_name}
+                        {child.parent_client_number ? (
+                          <span className="ml-1 font-mono text-xs text-zinc-500">
+                            ({child.parent_client_number})
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                            child.confirmed
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-yellow-100 text-yellow-800'
+                          }`}
+                        >
+                          {child.confirmed ? 'potwierdzony' : 'niepotwierdzony'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">{child.group_name ?? '-'}</td>
+                      <td className="px-4 py-3">
+                        <Link
+                          href={`/portal/children/${child.child_id}`}
+                          className="inline-flex rounded-lg bg-zinc-200 px-3 py-1 text-center text-zinc-900 hover:bg-zinc-300"
+                        >
+                          Profil
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+      </div>
+    );
+  };
+
   const renderUsers = () => {
     const roleScopedUsers =
-      usersSubTab === 'parents'
-        ? filteredUsers.filter((user) => user.role === 'PARENT')
-        : usersSubTab === 'teachers'
-          ? filteredUsers.filter((user) => user.role === 'TEACHER')
-          : usersSubTab === 'managers'
-            ? filteredUsers.filter((user) => user.role === 'MANAGER')
-            : usersSubTab === 'accountants'
-              ? filteredUsers.filter((user) => user.role === 'ACCOUNTANT')
-              : filteredUsers;
+      usersSubTab === 'teachers'
+        ? filteredUsers.filter((user) => user.role === 'TEACHER')
+        : usersSubTab === 'managers'
+          ? filteredUsers.filter((user) => user.role === 'MANAGER')
+          : usersSubTab === 'accountants'
+            ? filteredUsers.filter((user) => user.role === 'ACCOUNTANT')
+            : filteredUsers;
 
     return (
     <div className="space-y-4">
@@ -2581,8 +2839,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         )}
       </section>
 
-      {(usersSubTab === 'parents' ||
-        usersSubTab === 'teachers' ||
+      {(usersSubTab === 'teachers' ||
         usersSubTab === 'managers' ||
         usersSubTab === 'accountants') && (
       <section className="overflow-hidden rounded-2xl border border-emerald-100 bg-white">
@@ -2593,17 +2850,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 <th className="px-4 py-3 text-left">ID</th>
                 <th className="px-4 py-3 text-left">Użytkownik</th>
                 <th className="px-4 py-3 text-left">Email</th>
-                {usersSubTab === 'parents' ? (
-                  <th className="px-4 py-3 text-left">Dzieci</th>
-                ) : null}
                 <th className="px-4 py-3 text-left">Status</th>
                 <th className="px-4 py-3 text-left">Akcje</th>
               </tr>
             </thead>
             <tbody>
               {roleScopedUsers.map((user) => {
-                const profileHref =
-                  user.role === 'PARENT' ? `/portal/parents/${user.id}` : `/portal/users/${user.id}`;
+                const profileHref = `/portal/users/${user.id}`;
 
                 return (
                   <tr key={user.id} className="border-t border-emerald-50">
@@ -2616,9 +2869,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       </span>
                     </td>
                     <td className="px-4 py-3">{user.email}</td>
-                    {usersSubTab === 'parents' ? (
-                      <td className="px-4 py-3 tabular-nums">{user.children_count ?? 0}</td>
-                    ) : null}
                     <td className="px-4 py-3">
                       <span
                         className={`rounded-full px-2 py-1 text-xs font-semibold ${
@@ -2651,70 +2901,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   </tr>
                 );
               })}
-            </tbody>
-          </table>
-        </div>
-      </section>
-      )}
-
-      {usersSubTab === 'children' && (
-      <section className="overflow-hidden rounded-2xl border border-emerald-100 bg-white">
-        <div className="flex items-center justify-between border-b border-emerald-50 px-4 py-3">
-          <h3 className="font-semibold">Dzieci</h3>
-          <button
-            onClick={() => setChildModalOpen(true)}
-            className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white"
-          >
-            + Dodaj zgłoszenie dziecka
-          </button>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] text-sm">
-            <thead className="bg-emerald-50 text-zinc-700">
-              <tr>
-                <th className="px-4 py-3 text-left">ID</th>
-                <th className="px-4 py-3 text-left">Imię</th>
-                <th className="px-4 py-3 text-left">Nazwisko</th>
-                <th className="px-4 py-3 text-left">Data urodzenia</th>
-                <th className="px-4 py-3 text-left">Rodzic</th>
-                <th className="px-4 py-3 text-left">Status</th>
-                <th className="px-4 py-3 text-left">Grupa</th>
-                <th className="px-4 py-3 text-left">Akcje</th>
-              </tr>
-            </thead>
-            <tbody>
-              {children.map((child) => (
-                  <tr key={child.child_id} className="border-t border-emerald-50">
-                    <td className="px-4 py-3 font-mono text-xs text-zinc-600">
-                      {child.client_number ?? '—'}
-                    </td>
-                    <td className="px-4 py-3">{child.first_name}</td>
-                    <td className="px-4 py-3">{child.last_name}</td>
-                    <td className="px-4 py-3">{child.birth_date}</td>
-                    <td className="px-4 py-3">
-                      {child.parent_first_name} {child.parent_last_name}
-                      {child.parent_client_number ? (
-                        <span className="ml-1 font-mono text-xs text-zinc-500">
-                          ({child.parent_client_number})
-                        </span>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`rounded-full px-2 py-1 text-xs font-semibold ${child.confirmed ? 'bg-emerald-100 text-emerald-700' : 'bg-yellow-100 text-yellow-800'}`}>
-                        {child.confirmed ? 'potwierdzony' : 'niepotwierdzony'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">{child.group_name ?? '-'}</td>
-                    <td className="px-4 py-3">
-                      <Link
-                        href={`/portal/children/${child.child_id}`}
-                        className="inline-flex rounded-lg bg-zinc-200 px-3 py-1 text-center text-zinc-900 hover:bg-zinc-300"
-                      >
-                        Profil
-                      </Link>
-                    </td>
-                  </tr>
-              ))}
             </tbody>
           </table>
         </div>
@@ -4126,7 +4312,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     <h4 className="font-semibold text-[#0f6e56]">Tryb bez opłat</h4>
                     <p className="mt-1 text-sm text-zinc-600">
                       Rodzice z tej listy kończą zapis po akceptacji grupy — bez umowy, faktur i
-                      płatności. Możesz dodać konto rodzica lub zgłoszenie z rejestracji (e-mail).
+                      płatności. Tryb włączasz na profilu rodzica.
                     </p>
                     <div className="mt-4 space-y-1">
                       <label
@@ -5710,8 +5896,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       Boolean(selectedGroupId) &&
       Boolean(groupDetail) &&
       groupsSubTab !== 'organize' &&
-      groupsSubTab !== 'add' &&
-      groupsSubTab !== 'yearLessons';
+      groupsSubTab !== 'add';
 
     const groupSubTabButtons = (
       <GroupSubTabButtons
@@ -5725,11 +5910,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           setOrganizeExpandedGroupId(null);
           setSelectedGroupId(null);
           setGroupDetail(null);
-        }}
-        onEnterYearLessonsTab={() => {
-          setSelectedGroupId(null);
-          setGroupDetail(null);
-          setYearLessonsExpandedGroupId(null);
         }}
         onEnterAddTab={() => {
           setSelectedGroupId(null);
@@ -5788,24 +5968,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           {groupsSubTab === 'organize' && (
             <div className="mb-4 grid gap-3 sm:grid-cols-3">
               <div className="space-y-1">
-                <label htmlFor="organize-filter-name" className="block text-xs font-medium text-zinc-600">
-                  Nazwa grupy
-                </label>
-                <select
-                  id="organize-filter-name"
-                  className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
-                  value={organizeFilterName}
-                  onChange={(e) => setOrganizeFilterName(e.target.value)}
-                >
-                  <option value="">Wszystkie</option>
-                  {organizeFilterNameOptions.map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-1">
                 <label htmlFor="organize-filter-location" className="block text-xs font-medium text-zinc-600">
                   Lokalizacja
                 </label>
@@ -5813,7 +5975,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   id="organize-filter-location"
                   className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
                   value={organizeFilterLocation}
-                  onChange={(e) => setOrganizeFilterLocation(e.target.value)}
+                  onChange={(e) => {
+                    setOrganizeFilterLocation(e.target.value);
+                    setOrganizeFilterTeacher('');
+                    setOrganizeFilterName('');
+                  }}
                 >
                   <option value="">Wszystkie</option>
                   {organizeHasGroupsWithoutLocation && (
@@ -5843,6 +6009,24 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   {organizeFilterTeacherOptions.map((t) => (
                     <option key={t} value={t}>
                       {t}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label htmlFor="organize-filter-name" className="block text-xs font-medium text-zinc-600">
+                  Nazwa grupy
+                </label>
+                <select
+                  id="organize-filter-name"
+                  className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
+                  value={organizeFilterName}
+                  onChange={(e) => setOrganizeFilterName(e.target.value)}
+                >
+                  <option value="">Wszystkie</option>
+                  {organizeFilterNameOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
                     </option>
                   ))}
                 </select>
@@ -6022,7 +6206,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     >
                       <td className="px-4 py-3">
                         <div className="font-medium text-zinc-900">{g.name}</div>
-                        {g.active && g.schedule_needs_confirmation ? (
+                        {g.active && !g.has_schedule ? (
+                          <p className="mt-1 text-xs font-semibold text-red-600">
+                            Brak harmonogramu
+                          </p>
+                        ) : g.active && g.schedule_needs_confirmation ? (
                           <p className="mt-1 text-xs font-semibold text-red-600">
                             Niepotwierdzony harmonogram
                           </p>
@@ -6030,21 +6218,42 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                           <p className="mt-1 text-xs font-semibold text-red-600">
                             Brak wygenerowanych zajęć
                           </p>
+                        ) : g.active && (g.generated_lessons_count ?? 0) > 0 ? (
+                          <p className="mt-1 text-xs text-zinc-500">
+                            {g.generated_lessons_count}{' '}
+                            {(g.generated_lessons_count ?? 0) === 1
+                              ? 'wygenerowane zajęcie'
+                              : (g.generated_lessons_count ?? 0) >= 2 &&
+                                  (g.generated_lessons_count ?? 0) <= 4
+                                ? 'wygenerowane zajęcia'
+                                : 'wygenerowanych zajęć'}
+                          </p>
                         ) : null}
                       </td>
                       <td className="px-4 py-3">{g.level ?? '-'}</td>
                       <td className="px-4 py-3">{g.teacher_name ?? '-'}</td>
                       <td className="px-4 py-3">{g.location_name ?? '-'}</td>
                       <td className="px-4 py-3 whitespace-normal text-zinc-700">
-                        {g.schedule && g.schedule !== '-' ? (
-                          <span className="flex flex-col gap-0.5">
-                            {g.schedule.split(/,\s*/).map((line) => (
-                              <span key={line}>{line}</span>
-                            ))}
-                          </span>
-                        ) : (
-                          '-'
-                        )}
+                        {(() => {
+                          const scheduleText = (g.schedule ?? '').trim();
+                          const hasProperSchedule =
+                            g.has_schedule === true &&
+                            Boolean(scheduleText) &&
+                            scheduleText !== '-' &&
+                            !scheduleText
+                              .split(/,\s*/)
+                              .every((line) => /^Dzień(\s|\d|$)/i.test(line.trim()));
+                          if (!hasProperSchedule) {
+                            return <span className="text-zinc-500">brak harmonogramu</span>;
+                          }
+                          return (
+                            <span className="flex flex-col gap-0.5">
+                              {scheduleText.split(/,\s*/).map((line) => (
+                                <span key={line}>{line}</span>
+                              ))}
+                            </span>
+                          );
+                        })()}
                       </td>
                       {/*
                       <td className="px-4 py-3 whitespace-nowrap text-xs text-zinc-700">
@@ -6252,202 +6461,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               groupForm.id || null,
               { quietReload: true, disabled: !groupForm.id },
             )}
-            </div>
-          ) : groupsSubTab === 'yearLessons' ? (
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-end justify-between gap-3">
-                <div>
-                  <p className="text-sm text-zinc-600">
-                    Podsumowanie liczby zajęć w roku szkolnym. Rozwiń grupę, aby zobaczyć wszystkie
-                    terminy.
-                  </p>
-                </div>
-                <div>
-                  <label
-                    htmlFor="year-lessons-year"
-                    className="mb-1 block text-xs font-medium text-zinc-600"
-                  >
-                    Rok szkolny
-                  </label>
-                  <select
-                    id="year-lessons-year"
-                    className="min-w-[220px] rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
-                    value={yearLessonsYearId}
-                    onChange={(e) => {
-                      setYearLessonsYearId(e.target.value);
-                      setYearLessonsExpandedGroupId(null);
-                    }}
-                    disabled={schoolYearLoading || schoolYears.length === 0}
-                  >
-                    {schoolYears.length === 0 ? (
-                      <option value="">Brak lat szkolnych</option>
-                    ) : (
-                      schoolYears.map((y) => (
-                        <option key={y.id} value={y.id}>
-                          {y.name}
-                          {y.isActive ?? y.active ? ' (bieżący)' : ''}
-                        </option>
-                      ))
-                    )}
-                  </select>
-                </div>
-              </div>
-
-              {yearLessonsLoading || schoolYearLoading ? (
-                <div className="space-y-2">
-                  <SkeletonBlock />
-                  <SkeletonBlock />
-                </div>
-              ) : !yearLessonsYearId || !yearLessonsSchoolYear ? (
-                <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-6 text-center text-sm text-amber-900">
-                  Brak wybranego roku szkolnego — ustaw lub aktywuj rok w zakładce „Rok szkolny”.
-                </p>
-              ) : yearLessonsGroups.length === 0 ? (
-                <p className="rounded-xl border border-emerald-100 bg-white px-4 py-8 text-center text-sm text-zinc-600">
-                  Brak grup w szkole.
-                </p>
-              ) : (
-                <>
-                  <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 px-4 py-3 text-sm text-zinc-700">
-                    <span className="font-semibold text-[#0f6e56]">
-                      {yearLessonsSchoolYear.name ?? 'Rok szkolny'}
-                    </span>
-                    {' · '}
-                    łącznie{' '}
-                    <span className="font-semibold text-zinc-900">
-                      {yearLessonsGroups.reduce((sum, g) => sum + g.lessons_count, 0)}
-                    </span>{' '}
-                    zajęć w{' '}
-                    <span className="font-semibold text-zinc-900">{yearLessonsGroups.length}</span>{' '}
-                    grupach
-                  </div>
-                  <div className="space-y-2">
-                    {yearLessonsGroups.map((g) => {
-                      const expanded = yearLessonsExpandedGroupId === g.id;
-                      return (
-                        <div
-                          key={g.id}
-                          className="overflow-hidden rounded-2xl border border-emerald-100 bg-white shadow-sm"
-                        >
-                          <button
-                            type="button"
-                            className="flex w-full items-start gap-3 px-4 py-4 text-left transition hover:bg-emerald-50/50"
-                            onClick={() =>
-                              setYearLessonsExpandedGroupId(expanded ? null : g.id)
-                            }
-                          >
-                            <span
-                              className={`mt-0.5 shrink-0 text-emerald-700 transition ${expanded ? 'rotate-90' : ''}`}
-                              aria-hidden
-                            >
-                              ▶
-                            </span>
-                            <div className="min-w-0 flex-1 space-y-2">
-                              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                                <p className="text-base font-semibold text-zinc-900">{g.name}</p>
-                                <p className="shrink-0 text-sm font-bold text-[#0f6e56]">
-                                  {g.lessons_count}{' '}
-                                  {g.lessons_count === 1
-                                    ? 'zajęcie'
-                                    : g.lessons_count >= 2 && g.lessons_count <= 4
-                                      ? 'zajęcia'
-                                      : 'zajęć'}
-                                </p>
-                              </div>
-                              <div className="flex flex-wrap gap-2 text-xs">
-                                {g.schedule && g.schedule !== '-' ? (
-                                  <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-emerald-800">
-                                    Harmonogram: {g.schedule}
-                                  </span>
-                                ) : null}
-                                <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-emerald-800">
-                                  Nauczyciel: {g.teacher_name ?? '-'}
-                                </span>
-                                <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-emerald-800">
-                                  Lokalizacja: {g.location_name ?? '-'}
-                                </span>
-                                {g.scheduled_count > 0 ? (
-                                  <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 font-semibold text-emerald-800">
-                                    {g.scheduled_count} zaplanowanych
-                                  </span>
-                                ) : null}
-                                {g.completed_count > 0 ? (
-                                  <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 font-semibold text-zinc-700">
-                                    {g.completed_count} zakończonych
-                                  </span>
-                                ) : null}
-                                {g.cancelled_count > 0 ? (
-                                  <span className="rounded-full bg-rose-100 px-2.5 py-0.5 font-semibold text-rose-800">
-                                    {g.cancelled_count} anulowanych
-                                  </span>
-                                ) : null}
-                                <span
-                                  className={`rounded-full px-2.5 py-0.5 font-semibold ${g.active ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-700'}`}
-                                >
-                                  {g.active ? 'aktywna' : 'nieaktywna'}
-                                </span>
-                              </div>
-                            </div>
-                          </button>
-                          {expanded && (
-                            <div className="border-t border-emerald-100 bg-emerald-50/40 px-4 py-4">
-                              {g.lessons.length === 0 ? (
-                                <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-600">
-                                  Brak zajęć w planie na ten rok szkolny.
-                                </p>
-                              ) : (
-                                <ul className="max-h-96 space-y-1.5 overflow-y-auto text-sm">
-                                  {g.lessons.map((lesson) => {
-                                    const isCompleted = lesson.status === 'COMPLETED';
-                                    const isCancelled = lesson.status === 'CANCELLED';
-                                    const statusLabel = isCompleted
-                                      ? 'zakończone'
-                                      : isCancelled
-                                        ? 'anulowane'
-                                        : 'zaplanowane';
-                                    const statusClass = isCompleted
-                                      ? 'bg-zinc-200 text-zinc-700'
-                                      : isCancelled
-                                        ? 'bg-rose-100 text-rose-800'
-                                        : 'bg-emerald-100 text-emerald-800';
-                                    const rowClass = isCompleted
-                                      ? 'border-zinc-200 bg-zinc-50'
-                                      : isCancelled
-                                        ? 'border-rose-100 bg-rose-50/50'
-                                        : 'border-emerald-100 bg-emerald-50/40';
-                                    return (
-                                      <li
-                                        key={lesson.id}
-                                        className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 ${rowClass}`}
-                                      >
-                                        <span
-                                          className={`font-medium ${isCompleted || isCancelled ? 'text-zinc-600' : 'text-zinc-900'}`}
-                                        >
-                                          {formatSchoolDateTime(lesson.scheduled_at)}
-                                          {lesson.duration_min ? (
-                                            <span className="ml-2 font-normal text-zinc-500">
-                                              · {lesson.duration_min} min
-                                            </span>
-                                          ) : null}
-                                        </span>
-                                        <span
-                                          className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusClass}`}
-                                        >
-                                          {statusLabel}
-                                        </span>
-                                      </li>
-                                    );
-                                  })}
-                                </ul>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
             </div>
           ) : (
             <div className="space-y-2">
@@ -7584,6 +7597,255 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     </div>
   );
 
+
+  const renderYearLessonsList = () => (
+<div className="space-y-4">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <p className="text-sm text-zinc-600">
+                    Podsumowanie liczby zajęć w roku szkolnym. Rozwiń grupę, aby zobaczyć wszystkie
+                    terminy.
+                  </p>
+                </div>
+                <div>
+                  <label
+                    htmlFor="year-lessons-year"
+                    className="mb-1 block text-xs font-medium text-zinc-600"
+                  >
+                    Rok szkolny
+                  </label>
+                  <select
+                    id="year-lessons-year"
+                    className="min-w-[220px] rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
+                    value={yearLessonsYearId}
+                    onChange={(e) => {
+                      setYearLessonsYearId(e.target.value);
+                      setYearLessonsExpandedGroupId(null);
+                    }}
+                    disabled={schoolYearLoading || schoolYears.length === 0}
+                  >
+                    {schoolYears.length === 0 ? (
+                      <option value="">Brak lat szkolnych</option>
+                    ) : (
+                      schoolYears.map((y) => (
+                        <option key={y.id} value={y.id}>
+                          {y.name}
+                          {y.isActive ?? y.active ? ' (bieżący)' : ''}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+              </div>
+
+              {yearLessonsLoading || schoolYearLoading ? (
+                <div className="space-y-2">
+                  <SkeletonBlock />
+                  <SkeletonBlock />
+                </div>
+              ) : !yearLessonsYearId || !yearLessonsSchoolYear ? (
+                <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-6 text-center text-sm text-amber-900">
+                  Brak wybranego roku szkolnego — ustaw lub aktywuj rok w zakładce „Rok szkolny”.
+                </p>
+              ) : yearLessonsGroups.length === 0 ? (
+                <p className="rounded-xl border border-emerald-100 bg-white px-4 py-8 text-center text-sm text-zinc-600">
+                  Brak grup w szkole.
+                </p>
+              ) : (
+                <>
+                  <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 px-4 py-3 text-sm text-zinc-700">
+                    <span className="font-semibold text-[#0f6e56]">
+                      {yearLessonsSchoolYear.name ?? 'Rok szkolny'}
+                    </span>
+                    {' · '}
+                    łącznie{' '}
+                    <span className="font-semibold text-zinc-900">
+                      {yearLessonsGroups.reduce((sum, g) => sum + g.lessons_count, 0)}
+                    </span>{' '}
+                    zajęć w{' '}
+                    <span className="font-semibold text-zinc-900">{yearLessonsGroups.length}</span>{' '}
+                    grupach
+                  </div>
+                  <div className="space-y-2">
+                    {yearLessonsGroups.map((g) => {
+                      const expanded = yearLessonsExpandedGroupId === g.id;
+                      return (
+                        <div
+                          key={g.id}
+                          className="overflow-hidden rounded-2xl border border-emerald-100 bg-white shadow-sm"
+                        >
+                          <button
+                            type="button"
+                            className="flex w-full items-start gap-3 px-4 py-4 text-left transition hover:bg-emerald-50/50"
+                            onClick={() =>
+                              setYearLessonsExpandedGroupId(expanded ? null : g.id)
+                            }
+                          >
+                            <span
+                              className={`mt-0.5 shrink-0 text-emerald-700 transition ${expanded ? 'rotate-90' : ''}`}
+                              aria-hidden
+                            >
+                              ▶
+                            </span>
+                            <div className="min-w-0 flex-1 space-y-2">
+                              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                                <p className="text-base font-semibold text-zinc-900">{g.name}</p>
+                                <p className="shrink-0 text-sm font-bold text-[#0f6e56]">
+                                  {g.lessons_count}{' '}
+                                  {g.lessons_count === 1
+                                    ? 'zajęcie'
+                                    : g.lessons_count >= 2 && g.lessons_count <= 4
+                                      ? 'zajęcia'
+                                      : 'zajęć'}
+                                </p>
+                              </div>
+                              <div className="flex flex-wrap gap-2 text-xs">
+                                <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-emerald-800">
+                                  Harmonogram: {groupScheduleLabel(g.schedule)}
+                                </span>
+                                <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-emerald-800">
+                                  Nauczyciel: {g.teacher_name ?? '-'}
+                                </span>
+                                <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-emerald-800">
+                                  Lokalizacja: {g.location_name ?? '-'}
+                                </span>
+                                {g.scheduled_count > 0 ? (
+                                  <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 font-semibold text-emerald-800">
+                                    {g.scheduled_count} zaplanowanych
+                                  </span>
+                                ) : null}
+                                {g.completed_count > 0 ? (
+                                  <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 font-semibold text-zinc-700">
+                                    {g.completed_count} zakończonych
+                                  </span>
+                                ) : null}
+                                {g.cancelled_count > 0 ? (
+                                  <span className="rounded-full bg-rose-100 px-2.5 py-0.5 font-semibold text-rose-800">
+                                    {g.cancelled_count} anulowanych
+                                  </span>
+                                ) : null}
+                                <span
+                                  className={`rounded-full px-2.5 py-0.5 font-semibold ${g.active ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-700'}`}
+                                >
+                                  {g.active ? 'aktywna' : 'nieaktywna'}
+                                </span>
+                              </div>
+                            </div>
+                          </button>
+                          {expanded && (
+                            <div className="border-t border-emerald-100 bg-emerald-50/40 px-4 py-4">
+                              {g.lessons.length === 0 ? (
+                                <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-600">
+                                  Brak zajęć w planie na ten rok szkolny.
+                                </p>
+                              ) : (
+                                <ul className="max-h-96 space-y-1.5 overflow-y-auto text-sm">
+                                  {g.lessons.map((lesson) => {
+                                    const isCompleted = lesson.status === 'COMPLETED';
+                                    const isCancelled = lesson.status === 'CANCELLED';
+                                    const statusLabel = isCompleted
+                                      ? 'zakończone'
+                                      : isCancelled
+                                        ? 'anulowane'
+                                        : 'zaplanowane';
+                                    const statusClass = isCompleted
+                                      ? 'bg-zinc-200 text-zinc-700'
+                                      : isCancelled
+                                        ? 'bg-rose-100 text-rose-800'
+                                        : 'bg-emerald-100 text-emerald-800';
+                                    const rowClass = isCompleted
+                                      ? 'border-zinc-200 bg-zinc-50'
+                                      : isCancelled
+                                        ? 'border-rose-100 bg-rose-50/50'
+                                        : 'border-emerald-100 bg-emerald-50/40';
+                                    return (
+                                      <li
+                                        key={lesson.id}
+                                        className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 ${rowClass}`}
+                                      >
+                                        <span
+                                          className={`font-medium ${isCompleted || isCancelled ? 'text-zinc-600' : 'text-zinc-900'}`}
+                                        >
+                                          {formatSchoolDateTime(lesson.scheduled_at)}
+                                          {lesson.duration_min ? (
+                                            <span className="ml-2 font-normal text-zinc-500">
+                                              · {lesson.duration_min} min
+                                            </span>
+                                          ) : null}
+                                        </span>
+                                        <span
+                                          className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusClass}`}
+                                        >
+                                          {statusLabel}
+                                        </span>
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+  );
+
+  const renderClasses = () => {
+    const tabBtn = (active: boolean) =>
+      active
+        ? 'border-[#0f6e56] bg-[#0f6e56] text-white shadow-sm'
+        : 'border-emerald-100 bg-white text-zinc-700 hover:border-[#0f6e56]/40 hover:text-[#0f6e56]';
+
+    return (
+      <div className="space-y-4">
+        <section className="rounded-2xl border border-emerald-100 bg-white p-4 shadow-sm sm:p-6">
+          <header className="border-b border-emerald-50 pb-4">
+            <h2 className="text-xl font-bold text-[#0f6e56] sm:text-2xl">Zajęcia</h2>
+            <p className="mt-1 text-sm text-zinc-600">
+              Kalendarz zajęć oraz lista zajęć w roku szkolnym.
+            </p>
+          </header>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {classesSubTabs.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => {
+                  setClassesSubTab(tab.key);
+                  if (tab.key === 'lessonsList') {
+                    setYearLessonsExpandedGroupId(null);
+                  }
+                }}
+                className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${tabBtn(classesSubTab === tab.key)}`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {classesSubTab === 'calendar' ? (
+          <ClassesCalendarPanel
+            isActive
+            refreshSignal={classesCalRefreshSignal}
+            teachers={calendarTeachers}
+            locations={schoolLocations}
+            groups={groups.map((g) => ({ id: g.id, name: g.name }))}
+            pushToast={pushToast}
+          />
+        ) : (
+          <section className="rounded-2xl border border-emerald-100 bg-white p-4 shadow-sm sm:p-6">
+            {renderYearLessonsList()}
+          </section>
+        )}
+      </div>
+    );
+  };
+
   const renderContent = () => {
     if (loading && activeTab !== 'dashboard') {
       return (
@@ -7609,17 +7871,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       );
     }
     if (activeTab === 'organization') return renderOrganization();
+    if (activeTab === 'families') return renderFamilies();
     if (activeTab === 'classes') {
-      return (
-        <ClassesCalendarPanel
-          isActive
-          refreshSignal={classesCalRefreshSignal}
-          teachers={calendarTeachers}
-          locations={schoolLocations}
-          groups={groups.map((g) => ({ id: g.id, name: g.name }))}
-          pushToast={pushToast}
-        />
-      );
+      return renderClasses();
     }
     if (activeTab === 'billing') return renderBilling();
     if (activeTab === 'settlements') return renderSettlements();

@@ -148,6 +148,19 @@ async function main() {
         [r.id, r.lesson, r.monthly, r.yearly]
       );
       updated += q.rowCount ?? 0;
+      if ((q.rowCount ?? 0) > 0) {
+        await client.query(
+          `UPDATE children
+           SET lesson_unit_price = $2,
+               monthly_unit_price = $3,
+               yearly_unit_price = $4
+           WHERE enrollment_request_id = $1
+             AND lesson_unit_price IS NULL
+             AND monthly_unit_price IS NULL
+             AND yearly_unit_price IS NULL`,
+          [r.id, r.lesson, r.monthly, r.yearly]
+        );
+      }
     }
   });
   console.log(JSON.stringify({ skippedExisting }, null, 2));

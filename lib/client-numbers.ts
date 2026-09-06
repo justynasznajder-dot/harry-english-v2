@@ -129,16 +129,52 @@ export async function allocateParentClientNumber(
   client: Queryable,
   schoolId: string
 ): Promise<string> {
-  const res = await client.query<{ last_number: number }>(
+  // Blokada per szkoła — unikamy wyścigów przy równoległej rejestracji.
+  await client.query(
     `INSERT INTO client_number_counters (school_id, last_number, updated_at)
-     VALUES ($1, 1, NOW())
+     VALUES ($1, 0, NOW())
      ON CONFLICT (school_id)
-     DO UPDATE SET last_number = client_number_counters.last_number + 1, updated_at = NOW()
-     RETURNING last_number`,
+     DO UPDATE SET updated_at = NOW()`,
     [schoolId]
   );
-  const n = res.rows[0]?.last_number;
+  await client.query(
+    `SELECT school_id FROM client_number_counters WHERE school_id = $1 FOR UPDATE`,
+    [schoolId]
+  );
+
+  // Najniższy wolny numer (luka po hard-delete, albo max+1).
+  const free = await client.query<{ next_n: number }>(
+    `WITH used AS (
+       SELECT (client_number)::int AS n
+       FROM users
+       WHERE school_id = $1
+         AND role = 'PARENT'
+         AND client_number ~ '^[0-9]{5}$'
+     ),
+     candidates AS (
+       SELECT generate_series(
+         1,
+         GREATEST(COALESCE((SELECT MAX(n) FROM used), 0) + 1, 1)
+       ) AS n
+     )
+     SELECT c.n AS next_n
+     FROM candidates c
+     LEFT JOIN used u ON u.n = c.n
+     WHERE u.n IS NULL
+     ORDER BY c.n ASC
+     LIMIT 1`,
+    [schoolId]
+  );
+  const n = free.rows[0]?.next_n;
   if (n == null) throw new Error("Nie udało się przydzielić numeru klienta");
+
+  await client.query(
+    `UPDATE client_number_counters
+     SET last_number = GREATEST(last_number, $2), updated_at = NOW()
+     WHERE school_id = $1`,
+    [schoolId, n]
+  );
+
   return formatParentClientNumber(n);
 }
 

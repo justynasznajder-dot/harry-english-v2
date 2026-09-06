@@ -18,7 +18,9 @@ export type GroupStudentPriceOverrides = {
   lessonsPerWeek?: number | null;
 };
 
-/** Ustawia `users.access_level` rodzica: ACTIVE gdy ma aktywne dziecko SIGNED/COMPLETED, inaczej PENDING. */
+/** Ustawia `users.access_level` rodzica: ACTIVE gdy ma aktywne dziecko SIGNED/COMPLETED, inaczej PENDING.
+ *  Dodatkowo: `confirmed = TRUE`, gdy rodzic ma co najmniej jedną umowę SIGNED (nie cofa flagi).
+ */
 export async function syncParentUserAccessLevel(parentId: string): Promise<void> {
   await queryDb(
     `UPDATE users
@@ -30,6 +32,14 @@ export async function syncParentUserAccessLevel(parentId: string): Promise<void>
            AND UPPER(BTRIM(COALESCE(access_level::text, ''))) IN ('SIGNED', 'COMPLETED')
        ) THEN 'ACTIVE'
        ELSE 'PENDING'
+     END,
+     confirmed = CASE
+       WHEN EXISTS (
+         SELECT 1 FROM contracts
+         WHERE parent_id = $1
+           AND UPPER(BTRIM(COALESCE(status::text, ''))) = 'SIGNED'
+       ) THEN TRUE
+       ELSE confirmed
      END
      WHERE id = $1
        AND role = 'PARENT'`,
@@ -67,6 +77,9 @@ export async function ensureChildrenFromEnrollmentRequests(
     child_last_name: string;
     child_birth_date: string;
     status: string;
+    lesson_unit_price: string | null;
+    monthly_unit_price: string | null;
+    yearly_unit_price: string | null;
   }>(
     `SELECT
        er.id AS er_id,
@@ -74,7 +87,10 @@ export async function ensureChildrenFromEnrollmentRequests(
        er.child_first_name,
        er.child_last_name,
        er.child_birth_date::date::text AS child_birth_date,
-       UPPER(BTRIM(COALESCE(er.status::text, 'NEW'))) AS status
+       UPPER(BTRIM(COALESCE(er.status::text, 'NEW'))) AS status,
+       er.lesson_unit_price::text AS lesson_unit_price,
+       er.monthly_unit_price::text AS monthly_unit_price,
+       er.yearly_unit_price::text AS yearly_unit_price
      FROM enrollment_requests er
      WHERE er.school_id = $1
        AND er.user_id IS NOT NULL
@@ -115,8 +131,9 @@ export async function ensureChildrenFromEnrollmentRequests(
       await client.query(
         `INSERT INTO children (
            id, school_id, parent_id, client_number, first_name, last_name, birth_date,
-           active, confirmed, enrollment_request_id, access_level
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7::date, TRUE, FALSE, $8, $9)`,
+           active, confirmed, enrollment_request_id, access_level,
+           lesson_unit_price, monthly_unit_price, yearly_unit_price
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7::date, TRUE, FALSE, $8, $9, $10, $11, $12)`,
         [
           childId,
           schoolId,
@@ -127,6 +144,9 @@ export async function ensureChildrenFromEnrollmentRequests(
           birth,
           row.er_id,
           accessLevel,
+          parsePriceDecimal(row.lesson_unit_price),
+          parsePriceDecimal(row.monthly_unit_price),
+          parsePriceDecimal(row.yearly_unit_price),
         ]
       );
     });
@@ -134,6 +154,36 @@ export async function ensureChildrenFromEnrollmentRequests(
   }
 
   return created;
+}
+
+/**
+ * Kopiuje stawki ze zgłoszenia na powiązane profile dzieci, gdy profil nie ma jeszcze żadnej stawki.
+ * Nie nadpisuje ręcznie ustawionych stawek na `children`.
+ */
+export async function syncEnrollmentPricesOntoChildren(options?: {
+  enrollmentRequestId?: string;
+}): Promise<number> {
+  const requestId = String(options?.enrollmentRequestId ?? "").trim();
+  const res = await queryDb<{ id: string }>(
+    `UPDATE children c
+     SET lesson_unit_price = er.lesson_unit_price,
+         monthly_unit_price = er.monthly_unit_price,
+         yearly_unit_price = er.yearly_unit_price
+     FROM enrollment_requests er
+     WHERE c.enrollment_request_id = er.id
+       AND ($1 = '' OR er.id = $1)
+       AND c.lesson_unit_price IS NULL
+       AND c.monthly_unit_price IS NULL
+       AND c.yearly_unit_price IS NULL
+       AND (
+         er.lesson_unit_price IS NOT NULL
+         OR er.monthly_unit_price IS NOT NULL
+         OR er.yearly_unit_price IS NOT NULL
+       )
+     RETURNING c.id`,
+    [requestId]
+  );
+  return res.rowCount ?? res.rows.length;
 }
 
 async function resolveMembershipPrices(

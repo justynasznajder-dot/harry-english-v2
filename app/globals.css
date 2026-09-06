@@ -78,7 +78,7 @@ input[type="reset"]:disabled {
   background-color: #047857;
 }
 
-/* FullCalendar (admin) — weekendy i tło dni wolnych */
+/* FullCalendar (admin) — weekendy, wydarzenia, toolbar */
 .classes-fc .fc-day-sat,
 .classes-fc .fc-day-sun {
   background-color: rgba(244, 244, 245, 0.85);
@@ -91,4 +91,72 @@ input[type="reset"]:disabled {
 .classes-fc .fc-daygrid-day.fc-day-sat .fc-daygrid-day-number,
 .classes-fc .fc-daygrid-day.fc-day-sun .fc-daygrid-day-number {
   color: #71717a;
+}
+
+.classes-fc .fc-toolbar-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #0f6e56;
+}
+.classes-fc .fc-button-primary {
+  background-color: #0f6e56;
+  border-color: #0f6e56;
+}
+.classes-fc .fc-button-primary:not(:disabled):hover,
+.classes-fc .fc-button-primary:not(:disabled).fc-button-active {
+  background-color: #0c5a46;
+  border-color: #0c5a46;
+}
+.classes-fc .fc-button-primary:disabled {
+  background-color: #0f6e56;
+  border-color: #0f6e56;
+  opacity: 0.55;
+}
+.classes-fc .fc-today-button {
+  text-transform: none;
+}
+.classes-fc .fc-col-header-cell-cushion {
+  font-weight: 600;
+  color: #3f3f46;
+  padding: 6px 4px;
+}
+.classes-fc .fc-timegrid-slot-label-cushion {
+  color: #71717a;
+  font-size: 0.75rem;
+}
+.classes-fc .fc-timegrid-now-indicator-line {
+  border-color: #0f6e56;
+}
+.classes-fc .fc-timegrid-now-indicator-arrow {
+  border-top-color: #0f6e56;
+  border-bottom-color: #0f6e56;
+}
+
+.classes-fc .classes-fc-lesson {
+  border-radius: 6px;
+  border-width: 0 0 0 3px;
+  box-shadow: 0 1px 2px rgba(15, 110, 86, 0.12);
+}
+.classes-fc .classes-fc-event-body {
+  padding: 1px 3px;
+  overflow: hidden;
+  height: 100%;
+}
+.classes-fc .fc-event-time {
+  font-size: 0.65rem;
+  font-weight: 600;
+  line-height: 1.15;
+  opacity: 0.95;
+}
+.classes-fc .fc-event-title,
+.classes-fc .classes-fc-event-body .fc-event-title {
+  white-space: normal;
+  overflow: hidden;
+  word-break: break-word;
+  line-height: 1.2;
+  font-size: 0.72rem;
+  font-weight: 600;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
