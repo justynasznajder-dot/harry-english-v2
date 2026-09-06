@@ -9,31 +9,12 @@ import {
   resolveInsertSchoolId,
 } from "@/lib/admin-school-context";
 import { ensurePolishPublicHolidaysForSchoolYear } from "@/lib/ensure-polish-public-holidays";
+import { topUpLessonsAfterHolidayDeletion } from "@/lib/lesson-generation";
 import { notifyParents, type ParentNotifyRow } from "@/lib/parent-notifications";
 import { requireMessageActor } from "@/lib/messages";
+import { deleteScheduledLessonsInHolidayRange } from "@/lib/school-holiday-lessons";
 
 const HOLIDAY_TYPES = ["HOLIDAY", "PUBLIC", "SCHOOL", "CANCELLED"] as const;
-
-async function cancelScheduledLessonsInHolidayRange(
-  schoolId: string,
-  dateFrom: string,
-  dateTo: string,
-): Promise<number> {
-  const cancelled = await queryDb<{ id: string }>(
-    `UPDATE lessons l
-     SET status = 'CANCELLED',
-         cancellation_reason = COALESCE(NULLIF(TRIM(l.cancellation_reason), ''), 'Dzień wolny')
-     FROM groups g
-     WHERE l.group_id = g.id
-       AND g.school_id = $1
-       AND l.status = 'SCHEDULED'
-       AND l.scheduled_at::date >= $2::date
-       AND l.scheduled_at::date <= $3::date
-     RETURNING l.id`,
-    [schoolId, dateFrom, dateTo],
-  );
-  return cancelled.rowCount ?? 0;
-}
 
 function formatDatePl(ymd: string): string {
   const [y, m, d] = ymd.split("-");
@@ -106,10 +87,13 @@ export async function GET(request: NextRequest) {
 
     if (schoolYearId && ctx.schoolId) {
       try {
-        await ensurePolishPublicHolidaysForSchoolYear({
+        const seed = await ensurePolishPublicHolidaysForSchoolYear({
           schoolId: ctx.schoolId,
           schoolYearId,
         });
+        if (seed && seed.deletedByGroup.length > 0) {
+          await topUpLessonsAfterHolidayDeletion(ctx.schoolId, seed.deletedByGroup);
+        }
       } catch (seedErr) {
         console.error("ensurePolishPublicHolidays on school-holidays GET:", seedErr);
       }
@@ -267,7 +251,8 @@ export async function POST(request: NextRequest) {
       [id, insertSchoolId, yearId, name.trim(), df, dt, type]
     );
     const row = ins.rows[0] as Record<string, unknown>;
-    const lessonsCancelled = await cancelScheduledLessonsInHolidayRange(insertSchoolId, df, dt);
+    const deletion = await deleteScheduledLessonsInHolidayRange(insertSchoolId, df, dt);
+    const topUp = await topUpLessonsAfterHolidayDeletion(insertSchoolId, deletion.byGroup);
 
     let parentsNotified = 0;
     let emailsSent = 0;
@@ -281,7 +266,7 @@ export async function POST(request: NextRequest) {
       const subject = `Dzień wolny — ${holidayName}`;
       const content =
         `Informujemy o dniu wolnym: ${holidayName} (${dateRangeLabel}).\n\n` +
-        `Zaplanowane zajęcia w tym terminie zostały odwołane.\n\n` +
+        `Zaplanowane zajęcia w tym terminie zostały odwołane — kalendarz grup został uzupełniony o kolejne terminy.\n\n` +
         (customMessage ||
           "Prosimy o uwzględnienie tej informacji w planie dnia dziecka.");
 
@@ -297,8 +282,15 @@ export async function POST(request: NextRequest) {
     }
 
     let message = "Dodano dzień wolny.";
-    if (lessonsCancelled > 0) {
-      message += ` Anulowano ${lessonsCancelled} zaplanowanych zajęć w tym okresie.`;
+    if (deletion.deleted > 0) {
+      message += ` Usunięto ${deletion.deleted} zaplanowanych zajęć w tym okresie.`;
+    }
+    if (topUp.created > 0) {
+      message += ` Uzupełniono ${topUp.created} brakując${
+        topUp.created === 1 ? "e zajęcie" : topUp.created < 5 ? "e zajęcia" : "ych zajęć"
+      } (${topUp.groupsProcessed} grup).`;
+    } else if (deletion.deleted > 0 && topUp.groupsProcessed === 0) {
+      message += " Nie uzupełniono kalendarza (brak potwierdzonego harmonogramu lub nauczyciela).";
     }
     if (parentsNotified > 0) {
       message += ` Wysłano powiadomienia do ${parentsNotified} rodziców`;
@@ -313,7 +305,10 @@ export async function POST(request: NextRequest) {
         date_from: String(row.date_from).slice(0, 10),
         date_to: String(row.date_to).slice(0, 10),
       },
-      lessonsCancelled,
+      lessonsCancelled: deletion.deleted,
+      lessonsDeleted: deletion.deleted,
+      lessonsRegenerated: topUp.created,
+      groupsToppedUp: topUp.groupsProcessed,
       parentsNotified,
       emailsSent,
       emailsFailed,

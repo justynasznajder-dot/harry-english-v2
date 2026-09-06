@@ -805,6 +805,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [organizeLoadingGroupId, setOrganizeLoadingGroupId] = useState<string | null>(null);
   const [organizeFilterName, setOrganizeFilterName] = useState('');
   const [organizeFilterLocation, setOrganizeFilterLocation] = useState('');
+  const [listFilterActive, setListFilterActive] = useState<'all' | 'active' | 'inactive'>('active');
   const [yearLessonsYearId, setYearLessonsYearId] = useState('');
   const [yearLessonsLoading, setYearLessonsLoading] = useState(false);
   const [yearLessonsGroups, setYearLessonsGroups] = useState<GroupYearLessonsRow[]>([]);
@@ -1941,6 +1942,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const listFilteredGroups = useMemo(() => {
     return groups
       .filter((g) => {
+        if (listFilterActive === 'active' && !g.active) return false;
+        if (listFilterActive === 'inactive' && g.active) return false;
         if (!organizeFilterLocation) return true;
         if (organizeFilterLocation === ORGANIZE_FILTER_NO_LOCATION) {
           return !g.location_name?.trim();
@@ -1948,7 +1951,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         return (g.location_name ?? '') === organizeFilterLocation;
       })
       .sort(compareGroupsYoungestToOldest);
-  }, [groups, organizeFilterLocation]);
+  }, [groups, organizeFilterLocation, listFilterActive]);
 
   useEffect(() => {
     if (organizeFilterName && !organizeFilterNameOptions.includes(organizeFilterName)) {
@@ -5848,26 +5851,45 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           )}
           {groupsSubTab === 'list' ? (
             <div className="space-y-3">
-              <div className="max-w-sm space-y-1">
-                <label htmlFor="list-filter-location" className="block text-xs font-medium text-zinc-600">
-                  Lokalizacja
-                </label>
-                <select
-                  id="list-filter-location"
-                  className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
-                  value={organizeFilterLocation}
-                  onChange={(e) => setOrganizeFilterLocation(e.target.value)}
-                >
-                  <option value="">Wszystkie</option>
-                  {organizeHasGroupsWithoutLocation && (
-                    <option value={ORGANIZE_FILTER_NO_LOCATION}>Brak lokalizacji</option>
-                  )}
-                  {organizeFilterLocationOptions.map((loc) => (
-                    <option key={loc} value={loc}>
-                      {loc}
-                    </option>
-                  ))}
-                </select>
+              <div className="grid gap-3 sm:grid-cols-2 max-w-2xl">
+                <div className="space-y-1">
+                  <label htmlFor="list-filter-location" className="block text-xs font-medium text-zinc-600">
+                    Lokalizacja
+                  </label>
+                  <select
+                    id="list-filter-location"
+                    className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
+                    value={organizeFilterLocation}
+                    onChange={(e) => setOrganizeFilterLocation(e.target.value)}
+                  >
+                    <option value="">Wszystkie</option>
+                    {organizeHasGroupsWithoutLocation && (
+                      <option value={ORGANIZE_FILTER_NO_LOCATION}>Brak lokalizacji</option>
+                    )}
+                    {organizeFilterLocationOptions.map((loc) => (
+                      <option key={loc} value={loc}>
+                        {loc}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="list-filter-active" className="block text-xs font-medium text-zinc-600">
+                    Status grupy
+                  </label>
+                  <select
+                    id="list-filter-active"
+                    className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
+                    value={listFilterActive}
+                    onChange={(e) =>
+                      setListFilterActive(e.target.value as 'all' | 'active' | 'inactive')
+                    }
+                  >
+                    <option value="all">Wszystkie</option>
+                    <option value="active">Aktywne</option>
+                    <option value="inactive">Nieaktywne</option>
+                  </select>
+                </div>
               </div>
               {(() => {
                 const hasActiveYear = Boolean(activeSchoolYear);
@@ -5969,7 +5991,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 );
               })()}
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1100px] text-sm">
+              <table className="w-full min-w-[960px] text-sm">
                 <thead className="bg-emerald-50 text-zinc-700">
                   <tr>
                     <th className="px-4 py-3 text-left">Nazwa</th>
@@ -5979,15 +6001,14 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     <th className="px-4 py-3 text-left">Termin zajęć</th>
                     {/* <th className="px-4 py-3 text-left">Ceny</th> — cennik grupy wyłączony */}
                     <th className="px-4 py-3 text-left">Uczniowie</th>
-                    <th className="px-4 py-3 text-left">Status</th>
                     <th className="px-4 py-3 text-left">Akcje</th>
                   </tr>
                 </thead>
                 <tbody>
                   {listFilteredGroups.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-4 py-8 text-center text-zinc-600">
-                        Brak grup dla wybranej lokalizacji.
+                      <td colSpan={7} className="px-4 py-8 text-center text-zinc-600">
+                        Brak grup dla wybranych filtrów.
                       </td>
                     </tr>
                   ) : (
@@ -6031,11 +6052,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       </td>
                       */}
                       <td className="px-4 py-3">{g.students_count}/{g.max_students}</td>
-                      <td className="px-4 py-3">
-                        <span className={`rounded-full px-2 py-1 text-xs font-semibold ${g.active ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-700'}`}>
-                          {g.active ? 'aktywna' : 'nieaktywna'}
-                        </span>
-                      </td>
                       <td className="px-4 py-3">
                         <button
                           type="button"
@@ -8036,7 +8052,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
             <h3 className="text-lg font-semibold">Dzień wolny</h3>
             <p className="mt-1 text-sm text-zinc-500">
-              Zaplanowane zajęcia w tym okresie zostaną odwołane. Domyślnie rodzice nie dostaną
+              Zaplanowane zajęcia w tym okresie zostaną usunięte, a brakująca liczba zajęć w
+              grupach zostanie automatycznie uzupełniona kolejnymi terminami. Domyślnie rodzice
+              nie dostaną
               powiadomienia — możesz je wysłać poniżej.
             </p>
             <div className="mt-4 space-y-3">
@@ -8102,7 +8120,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 <span>
                   <span className="font-semibold text-zinc-700">Wyślij wiadomość do rodziców</span>
                   <span className="mt-0.5 block text-xs text-zinc-500">
-                    Powiadomienie w panelu oraz e-mail do rodziców dzieci z odwołanymi zajęciami.
+                    Powiadomienie w panelu oraz e-mail do rodziców dzieci z zajęciami w dniu wolnym.
                   </span>
                 </span>
               </label>
@@ -8150,10 +8168,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       {holidayCancelConfirm && (
         <div className="fixed inset-0 z-[60] grid place-items-center bg-black/50 p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
-            <h3 className="text-lg font-semibold text-zinc-900">Anulować zaplanowane zajęcia?</h3>
+            <h3 className="text-lg font-semibold text-zinc-900">Usunąć zaplanowane zajęcia?</h3>
             <p className="mt-2 text-sm text-zinc-600">
-              W wybranym okresie są zaplanowane zajęcia. Potwierdź, czy mają zostać anulowane
-              razem z dodaniem dnia wolnego.
+              W wybranym okresie są zaplanowane zajęcia. Potwierdź, czy mają zostać usunięte
+              razem z dodaniem dnia wolnego — system uzupełni potem brakujące terminy w grupach.
             </p>
             <ul className="mt-4 max-h-64 space-y-2 overflow-y-auto rounded-xl border border-emerald-100 bg-emerald-50/40 p-3 text-sm text-zinc-800">
               {holidayCancelConfirm.map((l) => (
@@ -8189,7 +8207,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   });
                 }}
               >
-                Tak, anuluj zajęcia
+                Tak, usuń zajęcia
               </button>
             </div>
           </div>
@@ -8202,7 +8220,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             <h3 className="text-lg font-semibold text-zinc-900">Wysłać wiadomość do rodziców?</h3>
             <p className="mt-2 text-sm text-zinc-600">
               Checkbox powiadomienia nie był zaznaczony. Możesz teraz wysłać wiadomość w panelu
-              oraz e-mail do rodziców dzieci z odwołanymi zajęciami.
+              oraz e-mail do rodziców dzieci z zajęciami w dniu wolnym.
             </p>
             <label className="mt-4 block text-sm">
               <span className="mb-1 block font-semibold text-zinc-700">Treść wiadomości</span>
@@ -8347,7 +8365,27 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               </div>
               <div className="space-y-1">
                 <label className="block text-sm font-medium text-zinc-700">Czas trwania (minuty)</label>
-                <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" type="number" min="15" value={scheduleForm.durationMin} onChange={(e) => setScheduleForm((p) => ({ ...p, durationMin: Number(e.target.value || 60) }))} />
+                <input
+                  className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                  type="number"
+                  min={1}
+                  step={1}
+                  inputMode="numeric"
+                  value={
+                    scheduleForm.durationMin > 0 ? scheduleForm.durationMin : ''
+                  }
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === '') {
+                      setScheduleForm((p) => ({ ...p, durationMin: 0 }));
+                      return;
+                    }
+                    const n = Number(raw);
+                    if (Number.isFinite(n)) {
+                      setScheduleForm((p) => ({ ...p, durationMin: n }));
+                    }
+                  }}
+                />
               </div>
               {Number(groupDetail.group.lessons_per_week) === 2 ? (
                 <label className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
@@ -8381,6 +8419,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     if (!selectedGroupId) return;
                     if (!scheduleForm.locationId) {
                       pushToast('error', 'Wybierz lokalizację');
+                      return;
+                    }
+                    if (
+                      !Number.isFinite(scheduleForm.durationMin) ||
+                      scheduleForm.durationMin < 1
+                    ) {
+                      pushToast('error', 'Podaj czas trwania w minutach (liczba większa od 0)');
                       return;
                     }
                     const existing = groupDetail?.scheduleTemplates ?? [];

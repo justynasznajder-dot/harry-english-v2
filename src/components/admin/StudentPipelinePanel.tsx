@@ -225,6 +225,11 @@ export default function StudentPipelinePanel({
         <p className="py-8 text-center text-sm text-zinc-500">Brak uczniów.</p>
       ) : (
         <div className="space-y-6">
+          <p className="text-sm text-zinc-600">
+            Razem <span className="font-semibold text-zinc-800">{pipeline.length}</span>
+            {' · '}z umowami {withContracts.length}
+            {' · '}bez umów {withoutContracts.length}
+          </p>
           <section className="space-y-2">
             <h3 className="text-sm font-semibold text-zinc-800">
               Z umowami{' '}

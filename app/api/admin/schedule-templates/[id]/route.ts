@@ -129,9 +129,9 @@ export async function PATCH(
     if (![1, 2, 3, 4, 5, 6, 7].includes(dayOfWeek)) {
       return NextResponse.json({ message: "Nieprawidłowy dzień tygodnia" }, { status: 400 });
     }
-    if (!Number.isFinite(durationMin) || durationMin < 15) {
+    if (!Number.isFinite(durationMin) || durationMin < 1) {
       return NextResponse.json(
-        { message: "Czas trwania musi wynosić co najmniej 15 minut" },
+        { message: "Podaj czas trwania w minutach (liczba większa od 0)" },
         { status: 400 }
       );
     }

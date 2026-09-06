@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { getActiveSchoolYear, queryDb } from "@/lib/db";
 import { ensurePolishPublicHolidaysForSchoolYear } from "@/lib/ensure-polish-public-holidays";
+import type { HolidayLessonDeletionByGroup } from "@/lib/school-holiday-lessons";
 import { SCHOOL_TIMEZONE, sqlSchoolTimestampAsTimestamptz, sqlSchoolWallTimestamp } from "@/lib/school-timezone";
 
 const TZ = SCHOOL_TIMEZONE;
@@ -179,8 +180,10 @@ export async function generateLessonsForGroup(opts: {
   onlyConfirmedForSchoolYearId?: string;
   /** Utwórz co najwyżej tyle nowych zajęć (kolejność chronologiczna). */
   limit?: number;
+  /** Pomiń seed/czyszczenie świąt PL (np. przy top-up po dniu wolnym). */
+  skipHolidayEnsure?: boolean;
 }): Promise<GenerateLessonsOutcome> {
-  const { schoolId, groupId, teacherId, dateFrom, dateTo, limit } = opts;
+  const { schoolId, groupId, teacherId, dateFrom, dateTo, limit, skipHolidayEnsure } = opts;
   if (limit != null && (!Number.isFinite(limit) || limit < 1)) {
     return { ok: false, reason: "EMPTY_RANGE", message: "Liczba zajęć musi być co najmniej 1" };
   }
@@ -206,11 +209,13 @@ export async function generateLessonsForGroup(opts: {
     return { ok: false, reason: "EMPTY_RANGE", message: "Nieprawidłowy zakres dat" };
   }
 
-  await ensurePolishPublicHolidaysForSchoolYear({
-    schoolId,
-    schoolYearId: yearId,
-    forceCancelScheduled: true,
-  });
+  if (!skipHolidayEnsure) {
+    await ensurePolishPublicHolidaysForSchoolYear({
+      schoolId,
+      schoolYearId: yearId,
+      forceCancelScheduled: true,
+    });
+  }
 
   const todayRes = await queryDb<{ today: string }>(
     `SELECT (NOW() AT TIME ZONE '${TZ}')::date::text AS today`,
@@ -343,8 +348,10 @@ export async function ensureLessonsThroughActiveSchoolYear(opts: {
   teacherId: string | null;
   /** Utwórz co najwyżej tyle nowych zajęć (kolejność chronologiczna). */
   limit?: number;
+  /** Pomiń seed/czyszczenie świąt PL (np. przy top-up po dniu wolnym). */
+  skipHolidayEnsure?: boolean;
 }): Promise<GenerateLessonsOutcome> {
-  const { schoolId, groupId, teacherId, limit } = opts;
+  const { schoolId, groupId, teacherId, limit, skipHolidayEnsure } = opts;
   if (!teacherId) {
     return {
       ok: false,
@@ -410,6 +417,7 @@ export async function ensureLessonsThroughActiveSchoolYear(opts: {
     dateTo,
     onlyConfirmedForSchoolYearId: yearId,
     limit,
+    skipHolidayEnsure,
   });
 }
 
@@ -509,6 +517,63 @@ export async function confirmScheduleAndGenerateLessons(opts: {
           } (łącznie ${existingCount + result.created}/${targetCount} w aktywnym roku).`
         : `Nie dodano nowych zajęć — brak wolnych terminów w zakresie aktywnego roku (obecnie ${existingCount}/${targetCount}).`,
   };
+}
+
+/**
+ * Po usunięciu zajęć na dzień wolny — dokłada tyle samo nowych terminów
+ * (przedłużając kalendarz do końca aktywnego roku), dla grup z potwierdzonym
+ * harmonogramem i nauczycielem.
+ */
+export async function topUpLessonsAfterHolidayDeletion(
+  schoolId: string,
+  byGroup: HolidayLessonDeletionByGroup[],
+): Promise<{ groupsProcessed: number; created: number }> {
+  if (byGroup.length === 0) {
+    return { groupsProcessed: 0, created: 0 };
+  }
+
+  let groupsProcessed = 0;
+  let created = 0;
+
+  for (const { groupId, deletedCount } of byGroup) {
+    if (deletedCount < 1) continue;
+
+    const groupRes = await queryDb<{
+      teacher_id: string | null;
+      has_confirmed: boolean;
+    }>(
+      `SELECT g.teacher_id,
+              EXISTS (
+                SELECT 1
+                FROM schedule_templates st
+                JOIN school_years sy ON sy.id = st.school_year_id
+                  AND sy.school_id = g.school_id
+                  AND sy.active = TRUE
+                WHERE st.group_id = g.id
+                  AND st.active = TRUE
+              ) AS has_confirmed
+       FROM groups g
+       WHERE g.id = $1
+         AND g.school_id = $2
+         AND g.active = TRUE
+       LIMIT 1`,
+      [groupId, schoolId],
+    );
+    const group = groupRes.rows[0];
+    if (!group?.teacher_id || !group.has_confirmed) continue;
+
+    const result = await ensureLessonsThroughActiveSchoolYear({
+      schoolId,
+      groupId,
+      teacherId: group.teacher_id,
+      limit: deletedCount,
+      skipHolidayEnsure: true,
+    });
+    groupsProcessed += 1;
+    if (result.ok) created += result.created;
+  }
+
+  return { groupsProcessed, created };
 }
 
 export type LessonBackfillBatchResult = {

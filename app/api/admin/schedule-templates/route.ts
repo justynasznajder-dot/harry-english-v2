@@ -26,6 +26,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: "Brak wymaganych pól" }, { status: 400 });
     }
 
+    const duration = Number(durationMin);
+    if (!Number.isFinite(duration) || duration < 1) {
+      return NextResponse.json(
+        { message: "Podaj czas trwania w minutach (liczba większa od 0)" },
+        { status: 400 }
+      );
+    }
+
     const group = await assertGroupInSchool(String(groupId), ctx.schoolId);
     if (!group.ok) return tenantNotFoundResponse("Nie znaleziono grupy");
 
@@ -124,7 +132,7 @@ export async function POST(request: NextRequest) {
         locationId,
         dayOfWeek,
         startTime,
-        durationMin,
+        duration,
         activeYear?.id ?? null,
         markOnceWeekly,
       ]

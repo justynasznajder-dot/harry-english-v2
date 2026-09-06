@@ -391,24 +391,33 @@ export type PipelineRow = {
   renewalStatus: string | null;
 };
 
+/**
+ * Lista uczniów w Zgłoszeniach — ten sam zestaw co filtr „Wszystkie”
+ * (otwarte enrollment_requests, bez SIGNED/COMPLETED), nie tylko aktywne `children`.
+ */
 export async function fetchStudentPipeline(
   schoolId: string,
   search?: string
 ): Promise<PipelineRow[]> {
   const searchTrim = search?.trim();
-  const params: unknown[] = [schoolId];
+  const periodMonth = periodMonthStartYmd();
+  const params: unknown[] = [schoolId, periodMonth];
   let searchClause = "";
   if (searchTrim) {
     params.push(`%${searchTrim}%`);
     searchClause = `AND (
-      c.first_name ILIKE $2 OR c.last_name ILIKE $2
-      OR u.first_name ILIKE $2 OR u.last_name ILIKE $2
-      OR u.email ILIKE $2
-      OR CONCAT(c.first_name, ' ', c.last_name) ILIKE $2
+      COALESCE(c.first_name, er.child_first_name, '') ILIKE $3
+      OR COALESCE(c.last_name, er.child_last_name, '') ILIKE $3
+      OR COALESCE(u.first_name, er.parent_first_name, '') ILIKE $3
+      OR COALESCE(u.last_name, er.parent_last_name, '') ILIKE $3
+      OR COALESCE(u.email, er.parent_email, '') ILIKE $3
+      OR CONCAT(
+           COALESCE(c.first_name, er.child_first_name, ''),
+           ' ',
+           COALESCE(c.last_name, er.child_last_name, '')
+         ) ILIKE $3
     )`;
   }
-
-  const periodMonth = periodMonthStartYmd();
 
   const res = await queryDb<{
     child_id: string;
@@ -426,54 +435,93 @@ export async function fetchStudentPipeline(
     renewal_status: string | null;
   }>(
     `SELECT
-       c.id AS child_id,
-       c.first_name AS child_first,
-       c.last_name AS child_last,
-       u.id AS parent_id,
-       u.first_name AS parent_first,
-       u.last_name AS parent_last,
-       u.email AS parent_email,
-       UPPER(BTRIM(COALESCE(c.access_level::text, 'NEW'))) AS access_level,
+       COALESCE(c.id, er.id) AS child_id,
+       COALESCE(c.first_name, er.child_first_name, '') AS child_first,
+       COALESCE(c.last_name, er.child_last_name, '') AS child_last,
+       COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id, '') AS parent_id,
+       COALESCE(
+         NULLIF(BTRIM(u.first_name), ''),
+         NULLIF(BTRIM(er.parent_first_name), ''),
+         ''
+       ) AS parent_first,
+       COALESCE(
+         NULLIF(BTRIM(u.last_name), ''),
+         NULLIF(BTRIM(er.parent_last_name), ''),
+         ''
+       ) AS parent_last,
+       COALESCE(
+         NULLIF(BTRIM(u.email), ''),
+         NULLIF(BTRIM(er.parent_email), ''),
+         ''
+       ) AS parent_email,
+       UPPER(BTRIM(COALESCE(er.status::text, c.access_level::text, 'NEW'))) AS access_level,
        pg.name AS proposal_group,
        ct.status AS contract_status,
        cg.name AS group_name,
        lbp.status AS billing_status,
        rn.status AS renewal_status
-     FROM children c
-     JOIN users u ON u.id = c.parent_id
-     LEFT JOIN enrollment_requests er ON er.id = c.enrollment_request_id
+     FROM enrollment_requests er
+     LEFT JOIN users u
+       ON (
+         u.id = NULLIF(BTRIM(er.user_id), '')
+         OR (
+           u.school_id = er.school_id
+           AND LOWER(u.email::text) = LOWER(er.parent_email::text)
+         )
+       )
+     LEFT JOIN children c
+       ON c.parent_id = COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id)
+      AND c.school_id = er.school_id
+      AND c.first_name = er.child_first_name
+      AND c.last_name = er.child_last_name
      LEFT JOIN groups pg ON pg.id = er.proposed_group_id
      LEFT JOIN LATERAL (
        SELECT ct2.status
        FROM contracts ct2
        JOIN contract_children cc ON cc.contract_id = ct2.id AND cc.child_id = c.id
-       WHERE ct2.parent_id = c.parent_id AND ct2.school_id = c.school_id
+       WHERE c.id IS NOT NULL
+         AND ct2.parent_id = c.parent_id
+         AND ct2.school_id = er.school_id
        ORDER BY ct2.created_at DESC
        LIMIT 1
      ) ct ON TRUE
      LEFT JOIN LATERAL (
        SELECT g.name
        FROM group_students gs
-       JOIN groups g ON g.id = gs.group_id AND g.school_id = c.school_id
+       JOIN groups g ON g.id = gs.group_id AND g.school_id = er.school_id
        JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
-       WHERE gs.child_id = c.id AND gs.left_at IS NULL
+       WHERE c.id IS NOT NULL
+         AND gs.child_id = c.id
+         AND gs.left_at IS NULL
        ORDER BY gs.enrolled_at DESC NULLS LAST
        LIMIT 1
      ) cg ON TRUE
      LEFT JOIN lesson_billing_periods lbp
-       ON lbp.child_id = c.id AND lbp.period_month = $${searchTrim ? 3 : 2}::date
+       ON c.id IS NOT NULL
+      AND lbp.child_id = c.id
+      AND lbp.period_month = $2::date
      LEFT JOIN LATERAL (
        SELECT UPPER(BTRIM(COALESCE(r.status::text, ''))) AS status
        FROM renewals r
-       WHERE r.child_id = c.id AND r.school_id = c.school_id
+       WHERE c.id IS NOT NULL
+         AND r.child_id = c.id
+         AND r.school_id = er.school_id
        ORDER BY r.initiated_at DESC
        LIMIT 1
      ) rn ON TRUE
-     WHERE c.school_id = $1 AND c.active = TRUE
+     WHERE er.school_id = $1
+       AND UPPER(BTRIM(COALESCE(er.status::text, ''))) NOT IN ('COMPLETED', 'SIGNED')
+       AND COALESCE(c.first_name, er.child_first_name, '') <> ''
+       AND COALESCE(c.last_name, er.child_last_name, '') <> ''
+       AND (
+         COALESCE(u.id, NULLIF(BTRIM(er.user_id), '')) IS NOT NULL
+         OR NULLIF(BTRIM(COALESCE(er.parent_email::text, '')), '') IS NOT NULL
+       )
        ${searchClause}
-     ORDER BY c.last_name, c.first_name
-     LIMIT 200`,
-    searchTrim ? [schoolId, `%${searchTrim}%`, periodMonth] : [schoolId, periodMonth]
+     ORDER BY
+       COALESCE(c.last_name, er.child_last_name),
+       COALESCE(c.first_name, er.child_first_name)`,
+    params
   );
 
   return res.rows.map((row) => ({

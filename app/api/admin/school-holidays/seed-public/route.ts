@@ -4,10 +4,12 @@ import {
   resolveInsertSchoolId,
 } from "@/lib/admin-school-context";
 import { ensurePolishPublicHolidaysForSchoolYear } from "@/lib/ensure-polish-public-holidays";
+import { topUpLessonsAfterHolidayDeletion } from "@/lib/lesson-generation";
 
 /**
  * POST — dopina brakujące ustawowe święta PL (type=PUBLIC) do aktywnego
- * (lub wskazanego) roku szkolnego i anuluje zaplanowane zajęcia w tych dniach.
+ * (lub wskazanego) roku szkolnego, usuwa zaplanowane zajęcia w tych dniach
+ * i uzupełnia brakującą liczbę zajęć w grupach.
  */
 export async function POST(request: NextRequest) {
   const ctx = await requireAdminSchoolContext(request);
@@ -49,17 +51,28 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const topUp = await topUpLessonsAfterHolidayDeletion(
+      insertSchoolId,
+      result.deletedByGroup,
+    );
+
     let message =
       result.inserted === 0
         ? "Wszystkie ustawowe święta państwowe są już w kalendarzu."
         : `Dodano ${result.inserted} ustawowych świąt państwowych.`;
-    if (result.lessonsCancelled > 0) {
-      message += ` Anulowano ${result.lessonsCancelled} zaplanowanych zajęć.`;
+    if (result.lessonsDeleted > 0) {
+      message += ` Usunięto ${result.lessonsDeleted} zaplanowanych zajęć.`;
+    }
+    if (topUp.created > 0) {
+      message += ` Uzupełniono ${topUp.created} brakujących zajęć w ${topUp.groupsProcessed} grupach.`;
     }
 
     return NextResponse.json({
       inserted: result.inserted,
-      lessonsCancelled: result.lessonsCancelled,
+      lessonsCancelled: result.lessonsDeleted,
+      lessonsDeleted: result.lessonsDeleted,
+      lessonsRegenerated: topUp.created,
+      groupsToppedUp: topUp.groupsProcessed,
       holidays: result.holidays,
       message,
     });

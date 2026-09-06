@@ -1,39 +1,34 @@
 import { randomUUID } from "crypto";
 import { queryDb } from "@/lib/db";
 import { listPolishPublicHolidays } from "@/lib/polish-public-holidays";
+import {
+  deleteScheduledLessonsInHolidayRange,
+  type HolidayLessonDeletionByGroup,
+} from "@/lib/school-holiday-lessons";
 
 export type EnsurePolishPublicHolidaysResult = {
   inserted: number;
+  /** @deprecated użyj lessonsDeleted */
   lessonsCancelled: number;
+  lessonsDeleted: number;
+  deletedByGroup: HolidayLessonDeletionByGroup[];
   holidays: Array<{ name: string; date: string }>;
 };
 
-async function cancelScheduledLessonsInHolidayRange(
-  schoolId: string,
-  dateFrom: string,
-  dateTo: string,
-): Promise<number> {
-  const cancelled = await queryDb<{ id: string }>(
-    `UPDATE lessons l
-     SET status = 'CANCELLED',
-         cancellation_reason = COALESCE(NULLIF(TRIM(l.cancellation_reason), ''), 'Dzień wolny')
-     FROM groups g
-     WHERE l.group_id = g.id
-       AND g.school_id = $1
-       AND l.status = 'SCHEDULED'
-       AND l.scheduled_at::date >= $2::date
-       AND l.scheduled_at::date <= $3::date
-     RETURNING l.id`,
-    [schoolId, dateFrom, dateTo],
-  );
-  return cancelled.rowCount ?? 0;
+function mergeDeletedByGroup(
+  into: Map<string, number>,
+  rows: HolidayLessonDeletionByGroup[],
+): void {
+  for (const row of rows) {
+    into.set(row.groupId, (into.get(row.groupId) ?? 0) + row.deletedCount);
+  }
 }
 
 /**
  * Idempotentnie dopina ustawowe święta PL do `school_holidays` (type=PUBLIC)
- * w zakresie roku szkolnego i anuluje zaplanowane zajęcia w tych dniach.
+ * w zakresie roku szkolnego i usuwa zaplanowane zajęcia w tych dniach.
  *
- * `forceCancelScheduled` — anuluj też na już istniejących świętach PUBLIC
+ * `forceCancelScheduled` — usuń też na już istniejących świętach PUBLIC
  * (używane przy generowaniu zajęć / ręcznym uzupełnieniu).
  */
 export async function ensurePolishPublicHolidays(opts: {
@@ -46,7 +41,13 @@ export async function ensurePolishPublicHolidays(opts: {
   const { schoolId, schoolYearId, dateFrom, dateTo, forceCancelScheduled } = opts;
   const candidates = listPolishPublicHolidays(dateFrom, dateTo);
   if (candidates.length === 0) {
-    return { inserted: 0, lessonsCancelled: 0, holidays: [] };
+    return {
+      inserted: 0,
+      lessonsCancelled: 0,
+      lessonsDeleted: 0,
+      deletedByGroup: [],
+      holidays: [],
+    };
   }
 
   const existing = await queryDb<{ date_from: string; name: string }>(
@@ -67,7 +68,6 @@ export async function ensurePolishPublicHolidays(opts: {
 
   const toInsert = candidates.filter((h) => !existingDates.has(h.date));
   let inserted = 0;
-  let lessonsCancelled = 0;
   const holidays: Array<{ name: string; date: string }> = [];
 
   for (const h of toInsert) {
@@ -80,19 +80,30 @@ export async function ensurePolishPublicHolidays(opts: {
     holidays.push({ name: h.name, date: h.date });
   }
 
-  const datesToCancel = forceCancelScheduled
+  const datesToClear = forceCancelScheduled
     ? candidates.map((h) => h.date)
     : toInsert.map((h) => h.date);
 
-  for (const date of datesToCancel) {
-    lessonsCancelled += await cancelScheduledLessonsInHolidayRange(
-      schoolId,
-      date,
-      date,
-    );
+  const deletedMap = new Map<string, number>();
+  let lessonsDeleted = 0;
+  for (const date of datesToClear) {
+    const result = await deleteScheduledLessonsInHolidayRange(schoolId, date, date);
+    lessonsDeleted += result.deleted;
+    mergeDeletedByGroup(deletedMap, result.byGroup);
   }
 
-  return { inserted, lessonsCancelled, holidays };
+  const deletedByGroup = [...deletedMap.entries()].map(([groupId, deletedCount]) => ({
+    groupId,
+    deletedCount,
+  }));
+
+  return {
+    inserted,
+    lessonsCancelled: lessonsDeleted,
+    lessonsDeleted,
+    deletedByGroup,
+    holidays,
+  };
 }
 
 /**
