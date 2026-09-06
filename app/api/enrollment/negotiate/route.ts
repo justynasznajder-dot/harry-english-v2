@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getRegistrationSchoolId, queryDb } from "@/lib/db";
-import { getTokenFromRequest } from "@/lib/auth";
+import { queryDb } from "@/lib/db";
 import {
   syncChildrenAccessLevelForEnrollment,
   syncParentUserAccessLevel,
 } from "@/lib/enrollment-sync";
+import { requireParentContext } from "@/lib/parent-portal-auth";
 
 /**
  * Rodzic wybiera „Kontakt ze szkołą” zamiast akceptacji propozycji grupy.
@@ -16,13 +16,10 @@ import {
  * - `children.access_level` → `NEGOTIATING`.
  */
 export async function PUT(request: NextRequest) {
-  const payload = await getTokenFromRequest(request);
-  const parentId = payload?.userId ?? null;
-  if (!parentId) {
-    return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-  }
+  const auth = await requireParentContext(request);
+  if (!auth.ok) return auth.response;
 
-  const SCHOOL_ID = getRegistrationSchoolId();
+  const { parentId, schoolId: SCHOOL_ID } = auth.ctx;
 
   let requestId: string | null = null;
   try {
@@ -80,13 +77,10 @@ export async function PUT(request: NextRequest) {
  * Body: `{ requestId: string }`.
  */
 export async function DELETE(request: NextRequest) {
-  const payload = await getTokenFromRequest(request);
-  const parentId = payload?.userId ?? null;
-  if (!parentId) {
-    return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-  }
+  const auth = await requireParentContext(request);
+  if (!auth.ok) return auth.response;
 
-  const SCHOOL_ID = getRegistrationSchoolId();
+  const { parentId, schoolId: SCHOOL_ID } = auth.ctx;
 
   let requestId: string | null = null;
   try {

@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
          c.first_name AS child_first_name,
          c.last_name AS child_last_name,
          COALESCE(g_pending.name, g_prop.name) AS group_name,
-         COALESCE(MAX(l.name), 'Do ustalenia') AS location_name,
+         COALESCE(MAX(gl_pending.name), MAX(gl_prop.name), MAX(sl.name), 'Do ustalenia') AS location_name,
          COALESCE(
            STRING_AGG(
              DISTINCT CONCAT(${POLISH_DAY_FROM_ST_SQL}, ' ', TO_CHAR(st.start_time, 'HH24:MI')),
@@ -60,8 +60,10 @@ export async function GET(request: NextRequest) {
         AND UPPER(BTRIM(COALESCE(rp_pending.status::text, ''))) = 'PENDING'
        LEFT JOIN groups g_pending ON g_pending.id = rp_pending.group_id
        LEFT JOIN groups g_prop ON g_prop.id = r.proposed_group_id
+       LEFT JOIN locations gl_pending ON gl_pending.id = g_pending.location_id
+       LEFT JOIN locations gl_prop ON gl_prop.id = g_prop.location_id
        LEFT JOIN schedule_templates st ON st.group_id = COALESCE(rp_pending.group_id, r.proposed_group_id)
-       LEFT JOIN locations l ON l.id = st.location_id
+       LEFT JOIN locations sl ON sl.id = st.location_id
        WHERE r.parent_id = $1
          AND r.school_id = $2
          AND UPPER(BTRIM(COALESCE(r.status::text, ''))) NOT IN ('RESIGNED', 'DRAFT')

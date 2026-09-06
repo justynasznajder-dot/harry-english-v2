@@ -251,7 +251,7 @@ export default function PortalPage() {
     <div className="min-h-screen bg-gradient-to-br from-[#0f3c33] to-[#175244] p-4">
       <div className="mx-auto max-w-6xl">
         {isImpersonating && userInfo && (
-          <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-[#1e3a4c] shadow-md sm:flex-row sm:items-center sm:justify-between">
+          <div className="sticky top-4 z-50 mb-4 flex flex-col gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-[#1e3a4c] shadow-md sm:flex-row sm:items-center sm:justify-between">
             <p className="text-sm">
               <span className="font-semibold">Impersonujesz:</span>{' '}
               {[userInfo.firstName, userInfo.lastName].filter(Boolean).join(' ') || userInfo.email}

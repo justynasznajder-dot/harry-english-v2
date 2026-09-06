@@ -27,7 +27,7 @@ export const ENROLLMENT_STATUS_LABELS: Record<EnrollmentStatus, string> = {
   NEGOTIATING: "Rodzic nie zaakceptował terminu zajęć",
   ACCEPTED: ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
     ? "Zaakceptowane — uzupełnij dane do umowy"
-    : "Grupa przypisana — uzupełnij dane do umowy",
+    : "Grupa przypisana — oczekuje na podpisanie umowy przez nauczyciela",
   AWAITING_CONTRACT: "Dane uzupełnione — umowa w trakcie generowania / podpisu",
   CONTRACT_READY: "Umowa gotowa — oczekuje na podpis",
   SIGNED: "Umowa podpisana",

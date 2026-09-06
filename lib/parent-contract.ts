@@ -43,6 +43,7 @@ import { resolveLessonUnitPrice, resolveMonthlyUnitPrice, resolveYearlyUnitPrice
 import {
   lessonsPerWeekLabel,
   normalizeLessonsPerWeek,
+  scaleAmountByLessonsPerWeek,
   type LessonsPerWeek,
 } from "@/lib/lessons-per-week";
 import { normalizePickupConsentDocumentHtml } from "@/lib/pickup-consent-notice";
@@ -375,7 +376,8 @@ export function computeParentContractAmount(
 }
 
 export function buildChildRateSnapshots(
-  included: ParentContractChildRow[]
+  included: ParentContractChildRow[],
+  lessonsPerWeek?: LessonsPerWeek | number | null
 ): Array<{
   child_id: string;
   name: string;
@@ -387,8 +389,14 @@ export function buildChildRateSnapshots(
     child_id: child.child_id,
     name: `${formatPersonName(child.first_name)} ${formatPersonName(child.last_name)}`.trim(),
     lesson_unit_price: resolveChildLessonUnitPriceForContract(child),
-    monthly_unit_price: resolveChildMonthlyUnitPriceForContract(child),
-    yearly_unit_price: resolveChildYearlyUnitPriceForContract(child),
+    monthly_unit_price: scaleAmountByLessonsPerWeek(
+      resolveChildMonthlyUnitPriceForContract(child),
+      lessonsPerWeek
+    ),
+    yearly_unit_price: scaleAmountByLessonsPerWeek(
+      resolveChildYearlyUnitPriceForContract(child),
+      lessonsPerWeek
+    ),
   }));
 }
 
@@ -400,6 +408,7 @@ export function buildParentContractAmountBreakdown(
     discountSettings: SchoolDiscountSettings;
     discountKeys: DiscountKey[];
     frozenAt?: Date | string | null;
+    lessonsPerWeek?: LessonsPerWeek | number | null;
   }
 ): ContractAmountBreakdown {
   return buildContractAmountBreakdown({
@@ -407,7 +416,7 @@ export function buildParentContractAmountBreakdown(
     billingExempt: options.billingExempt,
     discountKeys: options.discountKeys,
     discountSettings: options.discountSettings,
-    children: buildChildRateSnapshots(included),
+    children: buildChildRateSnapshots(included, options.lessonsPerWeek),
     frozenAt: options.frozenAt ?? null,
   });
 }
@@ -647,7 +656,7 @@ export async function generateParentContract(
     }
   );
 
-  const childRates = buildChildRateSnapshots([child]);
+  const childRates = buildChildRateSnapshots([child], lessonsPerWeek);
   const amountBreakdown = buildContractAmountBreakdown({
     paymentType,
     billingExempt,

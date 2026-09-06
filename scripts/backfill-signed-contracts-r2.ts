@@ -12,6 +12,7 @@ type SignedContractRow = {
   signed_at: Date;
   first_name: string;
   last_name: string;
+  school_year_name: string | null;
 };
 
 type ChildAttachmentRow = {
@@ -40,9 +41,11 @@ async function main(): Promise<void> {
          c.content_html,
          c.signed_at,
          u.first_name,
-         u.last_name
+         u.last_name,
+         sy.name AS school_year_name
        FROM contracts c
        JOIN users u ON u.id = c.parent_id
+       LEFT JOIN school_years sy ON sy.id = c.school_year_id
        WHERE c.status = 'SIGNED'
          AND c.signed_at IS NOT NULL
          AND c.content_html IS NOT NULL
@@ -81,8 +84,14 @@ async function main(): Promise<void> {
         })),
       });
 
+      const schoolYearName =
+        row.school_year_name?.trim() ||
+        String(row.signed_at.getFullYear());
+
       const keys = await storeSignedContractPdfsInR2({
         parentUserId: row.parent_id,
+        schoolId: row.school_id,
+        schoolYearName,
         signedAt: row.signed_at,
         pdfFiles,
         source: "script.backfill-contracts",

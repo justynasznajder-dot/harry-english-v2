@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTokenFromRequest } from "@/lib/auth";
 import { completeComplimentaryEnrollment } from "@/lib/complimentary-enrollment";
-import { getRegistrationSchoolId, queryDb } from "@/lib/db";
+import { queryDb } from "@/lib/db";
 import {
   syncChildrenAccessLevelForEnrollment,
   syncParentUserAccessLevel,
 } from "@/lib/enrollment-sync";
+import { requireParentContext } from "@/lib/parent-portal-auth";
 import { isComplimentaryForParent } from "@/lib/school-discounts";
 
 /**
@@ -18,13 +18,10 @@ import { isComplimentaryForParent } from "@/lib/school-discounts";
  * Standardowo: ACCEPTED → uzupełnienie danych do umowy (bez auto-generowania).
  */
 export async function PUT(request: NextRequest) {
-  const payload = await getTokenFromRequest(request);
-  const parentId = payload?.userId ?? null;
-  if (!parentId) {
-    return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-  }
+  const auth = await requireParentContext(request);
+  if (!auth.ok) return auth.response;
 
-  const SCHOOL_ID = getRegistrationSchoolId();
+  const { parentId, schoolId: SCHOOL_ID } = auth.ctx;
 
   let requestedId: string | null = null;
   try {

@@ -65,6 +65,9 @@ export default function GroupNamingFields({
             <span className="font-medium">Sz8E</span>
           </li>
           <li>
+            Lista lokalizacji zależy od poziomu: P* → przedszkola, Sz* → szkoły
+          </li>
+          <li>
             Druga aktywna grupa o tej samej bazie: sufiks{' '}
             <span className="font-medium">(2)</span>, <span className="font-medium">(3)</span>…
           </li>

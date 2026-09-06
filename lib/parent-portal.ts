@@ -155,8 +155,8 @@ export async function fetchParentGroups(
          ),
          'Do ustalenia'
        ) AS schedule,
-       COALESCE(MAX(l.name), 'Do ustalenia') AS location_name,
-       MAX(l.address) AS location_address,
+       COALESCE(MAX(gl.name), MAX(sl.name), 'Do ustalenia') AS location_name,
+       COALESCE(MAX(gl.address), MAX(sl.address)) AS location_address,
        t.first_name AS teacher_first,
        t.last_name AS teacher_last,
        (
@@ -171,8 +171,9 @@ export async function fetchParentGroups(
      JOIN group_students gs ON gs.child_id = c.id AND gs.left_at IS NULL
      JOIN groups g ON g.id = gs.group_id AND g.active = TRUE
      JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
+     LEFT JOIN locations gl ON gl.id = g.location_id
      LEFT JOIN schedule_templates st ON st.group_id = g.id AND st.active = TRUE
-     LEFT JOIN locations l ON l.id = st.location_id
+     LEFT JOIN locations sl ON sl.id = st.location_id
      LEFT JOIN users t ON t.id = g.teacher_id
      WHERE c.parent_id = $1 AND c.school_id = $2 AND c.active = TRUE
      GROUP BY
@@ -235,16 +236,17 @@ export async function fetchParentProposedGroups(
          ),
          'Do ustalenia'
        ) AS schedule,
-       COALESCE(MAX(l.name), 'Do ustalenia') AS location_name,
-       MAX(l.address) AS location_address,
+       COALESCE(MAX(gl.name), MAX(sl.name), 'Do ustalenia') AS location_name,
+       COALESCE(MAX(gl.address), MAX(sl.address)) AS location_address,
        t.first_name AS teacher_first,
        t.last_name AS teacher_last,
        ${accessLevelExpr} AS access_level
      FROM children c
      JOIN enrollment_requests er ON er.id = c.enrollment_request_id
      JOIN groups g ON g.id = er.proposed_group_id
+     LEFT JOIN locations gl ON gl.id = g.location_id
      LEFT JOIN schedule_templates st ON st.group_id = g.id AND st.active = TRUE
-     LEFT JOIN locations l ON l.id = st.location_id
+     LEFT JOIN locations sl ON sl.id = st.location_id
      LEFT JOIN users t ON t.id = g.teacher_id
      WHERE c.parent_id = $1
        AND c.school_id = $2

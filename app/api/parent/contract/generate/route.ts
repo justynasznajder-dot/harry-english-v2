@@ -1,10 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTokenFromRequest } from "@/lib/auth";
-import {
-  getParentProfileByUserId,
-  getRegistrationSchoolId,
-  getUserById,
-} from "@/lib/db";
+import { getParentProfileByUserId, getUserById } from "@/lib/db";
 import {
   isParentContractProfileComplete,
   resolveBillingTypeFromProfile,
@@ -23,28 +18,23 @@ import {
   fetchParentEnrollmentPipelineStatuses,
 } from "@/lib/enrollment-contract-readiness";
 import { normalizePaymentType } from "@/lib/lesson-pricing";
+import { requireParentContext } from "@/lib/parent-portal-auth";
 import { isComplimentaryForParent } from "@/lib/school-discounts";
 import { ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE } from "@/lib/enrollment-status";
 
 export async function POST(request: NextRequest) {
-  const payload = await getTokenFromRequest(request);
-  const parentId = payload?.userId ?? null;
-  if (!parentId) {
-    return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-  }
+  const auth = await requireParentContext(request);
+  if (!auth.ok) return auth.response;
 
-  const SCHOOL_ID = getRegistrationSchoolId();
+  const { parentId, schoolId: SCHOOL_ID } = auth.ctx;
 
   try {
     const user = await getUserById(parentId);
     if (!user || user.role !== "PARENT") {
       return NextResponse.json({ message: "Brak uprawnień" }, { status: 403 });
     }
-    if (!user.school_id) {
-      return NextResponse.json({ message: "Konto nie ma przypisanej szkoły" }, { status: 400 });
-    }
 
-    const complimentary = await isComplimentaryForParent(user.school_id, {
+    const complimentary = await isComplimentaryForParent(SCHOOL_ID, {
       parentId: user.id,
       parentEmail: user.email,
     });
@@ -85,7 +75,7 @@ export async function POST(request: NextRequest) {
     }
 
     const pipelineStatuses = await fetchParentEnrollmentPipelineStatuses(
-      user.school_id,
+      SCHOOL_ID,
       user.id,
       user.email
     );

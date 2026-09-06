@@ -13,6 +13,7 @@ import { paymentTypeShortLabel } from '@/lib/payment-labels';
 import {
   lessonsPerWeekLabel,
   normalizeLessonsPerWeek,
+  scaleAmountByLessonsPerWeek,
   type LessonsPerWeek,
 } from '@/lib/lessons-per-week';
 import { PICKUP_CONSENT_PRINT_INSTRUCTIONS } from '@/lib/pickup-consent-notice';
@@ -1281,8 +1282,10 @@ export default function EnrollmentParentFlow({
                 ) && (
                   <p className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
                     Szkoła przypisała grupę
-                    {proposals.length > 1 ? ' dla dzieci' : ' dla Twojego dziecka'}. Przejdź do
-                    kroku „Umowa”, aby uzupełnić dane — dokument przygotuje szkoła.
+                    {proposals.length > 1 ? ' dla dzieci' : ' dla Twojego dziecka'}.
+                    {ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
+                      ? ' Przejdź do kroku „Umowa”, aby uzupełnić dane — dokument przygotuje szkoła.'
+                      : ' Oczekujemy na przygotowanie i podpisanie umowy przez nauczyciela.'}
                   </p>
                 )}
               {!userInfo.complimentaryAccess &&
@@ -1804,8 +1807,13 @@ export default function EnrollmentParentFlow({
                           isSignedDone ||
                           (profileFieldsLocked && !allowContractRegenerate) ||
                           isReadOnlyPreview;
-                        const amountFor = (type: 'MONTHLY' | 'YEARLY' | 'PER_LESSON') =>
-                          billingExempt ? 0 : resolveProposalPaymentAmount(p, type);
+                        const amountFor = (type: 'MONTHLY' | 'YEARLY' | 'PER_LESSON') => {
+                          if (billingExempt) return 0;
+                          const base = resolveProposalPaymentAmount(p, type);
+                          // Za zajęcie — cena jednostkowa; ratalny/jednorazowy × częstotliwość.
+                          if (type === 'PER_LESSON') return base;
+                          return scaleAmountByLessonsPerWeek(base, childLessonsPerWeek);
+                        };
                         return (
                           <div
                             key={p.request_id}
@@ -1859,7 +1867,9 @@ export default function EnrollmentParentFlow({
                                 {level === 'ACCEPTED' ||
                                 (!ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && level === 'PROPOSED') ? (
                                   <span className="mt-1 inline-flex rounded-full bg-teal-100 px-2 py-0.5 text-xs font-semibold text-teal-900">
-                                    Uzupełnij / potwierdź dane
+                                    {ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
+                                      ? 'Uzupełnij / potwierdź dane'
+                                      : 'Oczekuje na podpisanie umowy przez nauczyciela'}
                                   </span>
                                 ) : null}
                                 {isPending && (

@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { getRegistrationSchoolId, queryDb } from "@/lib/db";
+import { queryDb, getActiveSchoolYear } from "@/lib/db";
 
 import { sendSignedContractConfirmationEmails } from "@/lib/email";
 
-import { getTokenFromRequest } from "@/lib/auth";
+import { requireParentContext } from "@/lib/parent-portal-auth";
 
 import {
 
@@ -47,22 +47,10 @@ function extractIp(request: NextRequest): string {
 
 
 export async function POST(request: NextRequest) {
+  const auth = await requireParentContext(request);
+  if (!auth.ok) return auth.response;
 
-  const payload = await getTokenFromRequest(request);
-
-  const parentId = payload?.userId ?? null;
-
-  if (!parentId) {
-
-    return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-
-  }
-
-
-
-  const SCHOOL_ID = getRegistrationSchoolId();
-
-
+  const { parentId, schoolId: SCHOOL_ID } = auth.ctx;
 
   try {
 
@@ -359,9 +347,26 @@ export async function POST(request: NextRequest) {
       pdfGenerated = true;
 
       try {
+        let schoolYearName: string | null = null;
+        if (contract.school_year_id) {
+          const yearRes = await queryDb<{ name: string }>(
+            `SELECT name FROM school_years WHERE id = $1 AND school_id = $2 LIMIT 1`,
+            [contract.school_year_id, SCHOOL_ID]
+          );
+          schoolYearName = yearRes.rows[0]?.name?.trim() || null;
+        }
+        if (!schoolYearName) {
+          const activeYear = await getActiveSchoolYear(SCHOOL_ID);
+          schoolYearName = activeYear?.name ? String(activeYear.name).trim() : null;
+        }
+        if (!schoolYearName) {
+          throw new Error("Brak nazwy roku szkolnego — nie można zapisać umowy w R2");
+        }
+
         await storeSignedContractPdfsInR2({
           parentUserId: parentId,
           schoolId: SCHOOL_ID,
+          schoolYearName,
           signedAt,
           pdfFiles,
           parentFirstName: parent.first_name,

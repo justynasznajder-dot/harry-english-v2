@@ -257,6 +257,7 @@ export async function generateComplimentaryPickupConsentIfNeeded(params: {
   const uploadedKeys = await storeSignedContractPdfsInR2({
     parentUserId: parentId,
     schoolId,
+    schoolYearName,
     signedAt,
     pdfFiles: [{ filename, content: pdfContent }],
     parentFirstName: user.first_name,

@@ -22,6 +22,7 @@ import {
 import {
   detectLevelFromGroupName,
   isHarryEnglishLevelCode,
+  locationMatchesGroupLevel,
 } from '@/src/data/harryEnglishLevels';
 import GroupNamingFields, {
   previewAutoGroupName,
@@ -1933,6 +1934,34 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         activeGroupNames: activeGroupNamesForPreview,
       }),
     [activeGroupNamesForPreview, resolveGroupLocationName],
+  );
+
+  const locationsForGroupLevel = useCallback(
+    (level: string) =>
+      schoolLocations.filter(
+        (loc) => loc.active && locationMatchesGroupLevel(loc, level),
+      ),
+    [schoolLocations],
+  );
+
+  const applyGroupLevelChange = useCallback(
+    (level: string) => {
+      setGroupForm((p) => {
+        if (p.id) return p;
+        const allowed = schoolLocations.filter(
+          (loc) => loc.active && locationMatchesGroupLevel(loc, level),
+        );
+        const locationStillOk = allowed.some((loc) => loc.id === p.locationId);
+        const locationId = locationStillOk ? p.locationId : '';
+        return {
+          ...p,
+          level,
+          locationId,
+          name: computeAutoGroupName(level, locationId),
+        };
+      });
+    },
+    [computeAutoGroupName, schoolLocations],
   );
 
   const saveGroupForm = useCallback(async () => {
@@ -4839,6 +4868,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       detail?.generatedLessons?.schoolYearCount ?? schoolYearLessons.length;
     const lessonsYearLabel =
       detail?.lessonsSchoolYear?.name ?? detail?.activeSchoolYear?.name ?? null;
+    const hasActiveSchoolYear = Boolean(detail?.activeSchoolYear ?? activeSchoolYear);
+    const scheduleActionsDisabled = disabled || !hasActiveSchoolYear;
     const dayNames: Record<number, string> = {
       1: 'Poniedziałek',
       2: 'Wtorek',
@@ -4862,17 +4893,34 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             </div>
             <button
               type="button"
-              disabled={disabled}
+              disabled={scheduleActionsDisabled}
               className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
               onClick={() => openScheduleModal()}
+              title={
+                !hasActiveSchoolYear
+                  ? 'Harmonogram można ustawić tylko przy aktywnym roku szkolnym'
+                  : undefined
+              }
             >
               + Dodaj termin
             </button>
           </div>
+          {!hasActiveSchoolYear && (
+            <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+              <p className="font-semibold">
+                Brak aktywnego roku szkolnego — ustaw lub aktywuj rok w zakładce „Rok szkolny”.
+              </p>
+              <p className="mt-1 text-red-700/90">
+                Harmonogram można ustawiać tylko dla aktywnego roku szkolnego.
+              </p>
+            </div>
+          )}
           <div className="space-y-2 text-sm">
             {scheduleTemplates.length === 0 ? (
               <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-6 text-center text-zinc-600">
-                Brak zdefiniowanych terminów.
+                {!hasActiveSchoolYear
+                  ? 'Brak aktywnego roku szkolnego — nie można dodać terminów.'
+                  : 'Brak zdefiniowanych terminów.'}
               </p>
             ) : (
               scheduleTemplates.map((st) => (
@@ -4905,7 +4953,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   </div>
                   <button
                     type="button"
-                    className="rounded-lg bg-red-600 px-3 py-1 text-white"
+                    disabled={!hasActiveSchoolYear}
+                    className="rounded-lg bg-red-600 px-3 py-1 text-white disabled:cursor-not-allowed disabled:opacity-50"
                     onClick={async () => {
                       const res = await fetch(`/api/admin/schedule-templates/${st.id}`, { method: 'DELETE' });
                       if (!res.ok) {
@@ -5463,12 +5512,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 level={groupForm.level}
                 locked={Boolean(groupForm.id)}
                 onLevelChange={(level) => {
-                  if (groupForm.id) return;
-                  setGroupForm((p) => ({
-                    ...p,
-                    level,
-                    name: computeAutoGroupName(level, p.locationId),
-                  }));
+                  applyGroupLevelChange(level);
                 }}
                 locationField={
                   <div className="space-y-1">
@@ -5476,11 +5520,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     <select
                       className="w-full rounded-xl border border-emerald-200 px-3 py-2 bg-white disabled:bg-zinc-50 disabled:text-zinc-600"
                       value={groupForm.locationId}
-                      disabled={Boolean(groupForm.id)}
+                      disabled={Boolean(groupForm.id) || !groupForm.level.trim()}
                       title={
                         groupForm.id
                           ? 'Lokalizacja zablokowana po pierwszym zapisie'
-                          : undefined
+                          : !groupForm.level.trim()
+                            ? 'Najpierw wybierz poziom'
+                            : undefined
                       }
                       onChange={(e) => {
                         if (groupForm.id) return;
@@ -5492,8 +5538,12 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         }));
                       }}
                     >
-                      <option value="">Wybierz lokalizację</option>
-                      {schoolLocations.filter((loc) => loc.active).map((loc) => (
+                      <option value="">
+                        {!groupForm.level.trim()
+                          ? 'Najpierw wybierz poziom'
+                          : 'Wybierz lokalizację'}
+                      </option>
+                      {locationsForGroupLevel(groupForm.level).map((loc) => (
                         <option key={loc.id} value={loc.id}>
                           {loc.name}
                         </option>

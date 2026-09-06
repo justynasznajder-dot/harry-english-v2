@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE } from '@/lib/enrollment-status';
 import { paymentTypeShortLabel } from '@/lib/payment-labels';
 import { formatLessonDateTime } from '@/src/components/parent/parent-portal-utils';
 
@@ -48,7 +49,9 @@ function proposedStatusLabel(accessLevel: string): string {
     case 'NEGOTIATING':
       return 'Negocjacja terminu — szkoła przygotuje nową propozycję';
     case 'ACCEPTED':
-      return 'Grupa przypisana — uzupełnij dane do umowy';
+      return ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
+        ? 'Grupa przypisana — uzupełnij dane do umowy'
+        : 'Grupa przypisana — oczekuje na podpisanie umowy przez nauczyciela';
     case 'AWAITING_CONTRACT':
       return 'Oczekuje na wygenerowanie umowy przez szkołę';
     case 'CONTRACT_READY':

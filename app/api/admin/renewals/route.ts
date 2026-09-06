@@ -79,7 +79,7 @@ export async function GET(request: NextRequest) {
          u.last_name AS parent_last_name,
          u.email AS parent_email,
          g.name AS proposed_group_name,
-         COALESCE(MAX(l.name), 'Do ustalenia') AS proposed_location_name,
+         COALESCE(MAX(gl.name), MAX(sl.name), 'Do ustalenia') AS proposed_location_name,
          COALESCE(
            STRING_AGG(
              DISTINCT CONCAT(${POLISH_DAY_FROM_ST_SQL}, ' ', TO_CHAR(st.start_time, 'HH24:MI')),
@@ -119,8 +119,9 @@ export async function GET(request: NextRequest) {
        JOIN children c ON c.id = r.child_id
        JOIN users u ON u.id = r.parent_id
        LEFT JOIN groups g ON g.id = r.proposed_group_id
+       LEFT JOIN locations gl ON gl.id = g.location_id
        LEFT JOIN schedule_templates st ON st.group_id = g.id AND st.active = TRUE
-       LEFT JOIN locations l ON l.id = st.location_id
+       LEFT JOIN locations sl ON sl.id = st.location_id
        WHERE r.school_id = $1
          ${extraWhere}
        GROUP BY
@@ -154,7 +155,7 @@ export async function GET(request: NextRequest) {
     }>(
       `SELECT g.id,
               g.name,
-              COALESCE(MAX(l.name), 'Do ustalenia') AS location_name,
+              COALESCE(MAX(gl.name), MAX(sl.name), 'Do ustalenia') AS location_name,
               COALESCE(
                 STRING_AGG(
                   DISTINCT CONCAT(${POLISH_DAY_FROM_ST_SQL}, ' ', TO_CHAR(st.start_time, 'HH24:MI')),
@@ -163,8 +164,9 @@ export async function GET(request: NextRequest) {
                 'Do ustalenia'
               ) AS schedule
        FROM groups g
+       LEFT JOIN locations gl ON gl.id = g.location_id
        LEFT JOIN schedule_templates st ON st.group_id = g.id AND st.active = TRUE
-       LEFT JOIN locations l ON l.id = st.location_id
+       LEFT JOIN locations sl ON sl.id = st.location_id
        WHERE g.active = TRUE AND g.school_id = $1
        GROUP BY g.id, g.name
        ORDER BY g.name`,

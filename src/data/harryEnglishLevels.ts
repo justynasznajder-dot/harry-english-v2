@@ -60,6 +60,44 @@ export function normalizeHarryEnglishLevel(
   return isHarryEnglishLevelCode(trimmed) ? trimmed : null;
 }
 
+export function getHarryEnglishLevelStage(
+  level: string | null | undefined
+): HarryEnglishLevel['stage'] | null {
+  const code = normalizeHarryEnglishLevel(level);
+  if (!code) return null;
+  return HARRY_ENGLISH_LEVELS.find((l) => l.code === code)?.stage ?? null;
+}
+
+/** Klasyfikacja lokalizacji po facility/nazwie (i fladze special). */
+export function classifyLocationForGroupLevel(loc: {
+  facility?: string | null;
+  name?: string | null;
+  is_special?: boolean | null;
+}): 'preschool' | 'school' | 'special' | 'unknown' {
+  if (loc.is_special) return 'special';
+  const hay = `${loc.facility ?? ''} ${loc.name ?? ''}`.toLowerCase();
+  if (hay.includes('przedszkol')) return 'preschool';
+  if (hay.includes('szkoł') || hay.includes('szkol')) return 'school';
+  return 'unknown';
+}
+
+/** Lokalizacje pasujące do poziomu: P* → przedszkole, Sz* → szkoła (+ special dla egzaminu). */
+export function locationMatchesGroupLevel(
+  loc: {
+    facility?: string | null;
+    name?: string | null;
+    is_special?: boolean | null;
+  },
+  level: string | null | undefined
+): boolean {
+  const stage = getHarryEnglishLevelStage(level);
+  if (!stage) return false;
+  const kind = classifyLocationForGroupLevel(loc);
+  if (stage === 'preschool') return kind === 'preschool';
+  if (stage === 'exam') return kind === 'school' || kind === 'special';
+  return kind === 'school';
+}
+
 /** Czy nazwa grupy zaczyna się od kodu poziomu (np. `Sz1` lub `Sz1 · …`). */
 export function groupNameMatchesLevel(name: string, level: string): boolean {
   const n = name.trim();

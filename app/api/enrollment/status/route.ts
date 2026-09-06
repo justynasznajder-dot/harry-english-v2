@@ -2,37 +2,27 @@ import { NextRequest, NextResponse } from "next/server";
 
 import {
   getActiveSchoolYear,
-  getRegistrationSchoolId,
   POLISH_DAY_FROM_ST_SQL,
   queryDb,
   syncParentIdentityFromEnrollments,
 } from "@/lib/db";
-
-import { getTokenFromRequest } from "@/lib/auth";
 
 import {
   computeEnrollmentContractReadiness,
   fetchParentEnrollmentPipelineStatuses,
 } from "@/lib/enrollment-contract-readiness";
 import { fetchParentContractForPortal } from "@/lib/parent-contract";
+import { requireParentContext } from "@/lib/parent-portal-auth";
 import { getSchoolDiscountSettings, isComplimentaryForParent } from "@/lib/school-discounts";
 import { getParentLargeFamilyCard } from "@/lib/parent-profile-discount";
 
 
 
 export async function GET(request: NextRequest) {
+  const auth = await requireParentContext(request);
+  if (!auth.ok) return auth.response;
 
-  const payload = await getTokenFromRequest(request);
-
-  const parentId = payload?.userId ?? null;
-
-  if (!parentId) return NextResponse.json({ message: "Nieautoryzowany dostęp" }, { status: 401 });
-
-
-
-  const SCHOOL_ID = getRegistrationSchoolId();
-
-
+  const { parentId, schoolId: SCHOOL_ID } = auth.ctx;
 
   try {
     const syncedIdentity = await syncParentIdentityFromEnrollments(parentId);
@@ -91,7 +81,7 @@ export async function GET(request: NextRequest) {
 
          g.name                 AS group_name,
 
-         COALESCE(MAX(l.name), 'Do ustalenia') AS location_name,
+         COALESCE(MAX(gl.name), MAX(sl.name), 'Do ustalenia') AS location_name,
 
          COALESCE(
 
@@ -125,9 +115,11 @@ export async function GET(request: NextRequest) {
 
        LEFT JOIN groups g ON g.id = er.proposed_group_id
 
+       LEFT JOIN locations gl ON gl.id = g.location_id
+
        LEFT JOIN schedule_templates st ON st.group_id = g.id
 
-       LEFT JOIN locations l ON l.id = st.location_id
+       LEFT JOIN locations sl ON sl.id = st.location_id
 
        WHERE c.parent_id = $1
 

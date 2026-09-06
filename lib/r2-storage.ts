@@ -106,7 +106,26 @@ async function sendR2Command<T>(params: {
 export type DocumentKind = "umowy" | "faktury";
 
 /**
- * `{parentUserId}/{year}/umowy` lub `{parentUserId}/{year}/faktury`
+ * Nazwa roku szkolnego jako segment folderu R2.
+ * `2025/2026` → `2025-2026` (slash tworzyłby zbędny poziom katalogów).
+ */
+export function sanitizeSchoolYearFolderName(name: string): string {
+  const trimmed = String(name ?? "").trim();
+  if (!trimmed) throw new Error("Brak nazwy roku szkolnego do ścieżki R2");
+  const sanitized = trimmed
+    .replace(/[\\/]+/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/[^a-zA-Z0-9._\-ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  if (!sanitized || sanitized.includes("..")) {
+    throw new Error(`Nieprawidłowa nazwa roku szkolnego do ścieżki R2: ${name}`);
+  }
+  return sanitized;
+}
+
+/**
+ * Legacy faktury: `{parentUserId}/{year}/faktury`
  * — folder klienta = `users.id` rodzica.
  */
 export function buildClientDocumentR2Prefix(params: {
@@ -122,19 +141,21 @@ export function buildClientDocumentR2Prefix(params: {
   return `${parentUserId}/${params.year}/${params.kind}`;
 }
 
-/** `{parentUserId}/{year}/umowy` */
+/** `{schoolId}/{parentUserId}/{schoolYearName}/umowy` */
 export function buildSignedContractR2Prefix(params: {
+  schoolId: string;
   parentUserId: string;
-  signedAt: Date;
+  schoolYearName: string;
 }): string {
-  return buildClientDocumentR2Prefix({
-    parentUserId: params.parentUserId,
-    year: params.signedAt.getFullYear(),
-    kind: "umowy",
-  });
+  const schoolId = params.schoolId.trim();
+  const parentUserId = params.parentUserId.trim();
+  if (!schoolId) throw new Error("Brak schoolId do ścieżki R2");
+  if (!parentUserId) throw new Error("Brak parentUserId do ścieżki R2");
+  const yearFolder = sanitizeSchoolYearFolderName(params.schoolYearName);
+  return `${schoolId}/${parentUserId}/${yearFolder}/umowy`;
 }
 
-/** `{parentUserId}/{year}/faktury` */
+/** `{parentUserId}/{year}/faktury` — bez zmian (na razie tylko umowy mają schoolId). */
 export function buildInvoiceR2Prefix(params: {
   parentUserId: string;
   issuedAt: Date;
@@ -150,17 +171,29 @@ export function buildInvoiceR2Prefix(params: {
 export function isParentDokumentyKeyAllowed(params: {
   key: string;
   parentUserId: string;
+  schoolId?: string | null;
   kind?: DocumentKind;
 }): boolean {
   const parentUserId = params.parentUserId.trim();
   if (!parentUserId || !params.key.endsWith(".pdf")) return false;
   if (params.key.includes("..")) return false;
 
-  const prefix = `${parentUserId}/`;
-  if (!params.key.startsWith(prefix)) return false;
+  const schoolId = params.schoolId?.trim() || "";
 
-  // {userId}/{year}/umowy|faktury/{file}.pdf
-  const rest = params.key.slice(prefix.length);
+  // Nowe umowy: {schoolId}/{parentId}/{schoolYear}/umowy/{file}.pdf
+  if (schoolId && (!params.kind || params.kind === "umowy")) {
+    const newPrefix = `${schoolId}/${parentUserId}/`;
+    if (params.key.startsWith(newPrefix)) {
+      const rest = params.key.slice(newPrefix.length);
+      const m = rest.match(/^[^/]+\/umowy\/[^/]+\.pdf$/i);
+      if (m) return true;
+    }
+  }
+
+  // Legacy: {parentId}/{yyyy}/umowy|faktury/{file}.pdf
+  const legacyPrefix = `${parentUserId}/`;
+  if (!params.key.startsWith(legacyPrefix)) return false;
+  const rest = params.key.slice(legacyPrefix.length);
   const m = rest.match(/^(\d{4})\/(umowy|faktury)\/[^/]+\.pdf$/i);
   if (!m) return false;
   if (params.kind && m[2].toLowerCase() !== params.kind) return false;
@@ -204,15 +237,20 @@ export async function storeInvoicePdfInR2(params: {
 
 export async function storeSignedContractPdfsInR2(params: {
   parentUserId: string;
-  signedAt: Date;
+  schoolId: string;
+  schoolYearName: string;
   pdfFiles: ContractPdfFile[];
   source?: R2Source;
-  /** Ignorowane — ścieżka R2 jest po parentUserId, nie po szkole / nazwisku. */
-  schoolId?: string | null;
+  /** @deprecated Nie używane w ścieżce R2 — zostawione dla kompatybilności call site'ów. */
+  signedAt?: Date;
   parentFirstName?: string | null;
   parentLastName?: string | null;
 }): Promise<string[]> {
-  const prefix = buildSignedContractR2Prefix(params);
+  const prefix = buildSignedContractR2Prefix({
+    schoolId: params.schoolId,
+    parentUserId: params.parentUserId,
+    schoolYearName: params.schoolYearName,
+  });
   const uploadedKeys: string[] = [];
 
   for (const file of params.pdfFiles) {
@@ -327,21 +365,38 @@ export async function deleteR2Object(
 
 export async function listSignedContractPdfsForParent(params: {
   parentUserId: string;
+  schoolId: string;
   source?: R2Source;
 }): Promise<R2StoredFile[]> {
   const parentUserId = params.parentUserId.trim();
-  if (!parentUserId) return [];
+  const schoolId = params.schoolId.trim();
+  if (!parentUserId || !schoolId) return [];
 
-  const files = await listR2ObjectsUnderPrefix(`${parentUserId}/`, {
-    source: params.source,
-  });
-  return files
-    .filter((file) =>
+  const [newFiles, legacyFiles] = await Promise.all([
+    listR2ObjectsUnderPrefix(`${schoolId}/${parentUserId}/`, {
+      source: params.source,
+    }),
+    // Legacy `{parentId}/{yyyy}/umowy` — aż stare pliki znikną z bucketa.
+    listR2ObjectsUnderPrefix(`${parentUserId}/`, {
+      source: params.source,
+    }),
+  ]);
+
+  const byKey = new Map<string, R2StoredFile>();
+  for (const file of [...newFiles, ...legacyFiles]) {
+    if (
       isParentDokumentyKeyAllowed({
         key: file.key,
         parentUserId,
+        schoolId,
         kind: "umowy",
       })
-    )
-    .sort((a, b) => (b.lastModified ?? "").localeCompare(a.lastModified ?? ""));
+    ) {
+      byKey.set(file.key, file);
+    }
+  }
+
+  return Array.from(byKey.values()).sort((a, b) =>
+    (b.lastModified ?? "").localeCompare(a.lastModified ?? "")
+  );
 }

@@ -4,6 +4,7 @@ import { useCallback, useMemo, useState } from 'react';
 import StudentPipelinePanel from '@/src/components/admin/StudentPipelinePanel';
 import {
   ENROLLMENT_LIST_FILTERS,
+  ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE,
   ENROLLMENT_STATUS_BADGE_BASE,
   ENROLLMENT_STATUS_COLORS,
   ENROLLMENT_STATUS_LABELS,
@@ -675,7 +676,9 @@ export default function EnrollmentAdminPanel({
                                 </p>
                               ) : null}
                               <p className="mt-2 text-xs text-emerald-800">
-                                Rodzic uzupełnia dane do umowy.
+                                {ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
+                                  ? 'Rodzic uzupełnia dane do umowy.'
+                                  : 'Czekamy na podpisanie umowy przez nauczyciela.'}
                               </p>
                             </div>
                           )}
@@ -1096,22 +1099,19 @@ export default function EnrollmentAdminPanel({
                   >
                     {savingBatchProposals ? 'Zapisywanie…' : 'Zapisz'}
                   </button>
+                  {/* TEMP: wyłączone, żeby przypadkiem nie wysłać maili — na razie tylko Zapisz.
+                      Przywróć: usuń `true ||` z disabled oraz stały title poniżej. */}
                   <button
                     type="button"
                     disabled={
+                      true ||
                       !proposalBatchReady ||
                       submittingBatchProposals ||
                       savingBatchProposals ||
                       submittingProposalRequestId != null ||
                       rejectingParentResignationId != null
                     }
-                    title={
-                      proposalBatchReady
-                        ? undefined
-                        : proposalParentIsComplimentary
-                          ? 'Wybierz grupę dla każdego dziecka ze statusem „Nowe”'
-                          : 'Wybierz grupę i podaj wszystkie 3 stawki dla każdego dziecka ze statusem „Nowe”'
-                    }
+                    title="Tymczasowo wyłączone — na razie tylko zapisujemy przydziały (bez wysyłki maila)"
                     className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0c5a47] disabled:cursor-not-allowed disabled:opacity-50"
                     onClick={async () => {
                       if (!confirmGroupChangesIfNeeded()) return;

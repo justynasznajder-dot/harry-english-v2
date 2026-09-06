@@ -11,13 +11,14 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ message: "Brak lub nieprawidłowy klucz pliku" }, { status: 400 });
   }
 
-  const { parentId } = auth.ctx;
+  const { parentId, schoolId } = auth.ctx;
 
   try {
     if (
       !isParentDokumentyKeyAllowed({
         key,
         parentUserId: parentId,
+        schoolId,
       })
     ) {
       return NextResponse.json({ message: "Brak dostępu do pliku" }, { status: 403 });

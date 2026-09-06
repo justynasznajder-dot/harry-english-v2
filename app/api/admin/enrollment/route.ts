@@ -159,7 +159,7 @@ export async function GET(request: NextRequest) {
               g.price_monthly::text AS price_monthly,
               g.price_yearly::text AS price_yearly,
               g.price_per_lesson::text AS price_per_lesson,
-              COALESCE(MAX(l.name), 'Do ustalenia') AS location_name,
+              COALESCE(MAX(gl.name), MAX(sl.name), 'Do ustalenia') AS location_name,
               COALESCE(
                 STRING_AGG(
                   DISTINCT CONCAT(${POLISH_DAY_FROM_ST_SQL}, ' ', TO_CHAR(st.start_time, 'HH24:MI')),
@@ -183,8 +183,9 @@ export async function GET(request: NextRequest) {
                 ARRAY[]::text[]
               ) AS location_ids
        FROM groups g
+       LEFT JOIN locations gl ON gl.id = g.location_id
        LEFT JOIN schedule_templates st ON st.group_id = g.id
-       LEFT JOIN locations l ON l.id = st.location_id
+       LEFT JOIN locations sl ON sl.id = st.location_id
        WHERE g.active = TRUE
          ${groupsSchoolClause}
        GROUP BY g.id, g.name, g.price_monthly, g.price_yearly, g.price_per_lesson, g.location_id
