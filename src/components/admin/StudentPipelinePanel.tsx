@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   resolveStudentListPipelineStage,
@@ -11,6 +12,7 @@ import type { ComplimentaryParentRow } from '@/lib/complimentary-parent-list';
 
 type PipelineRow = {
   childId: string;
+  childProfileId?: string | null;
   childName: string;
   parentId: string;
   parentName: string;
@@ -26,7 +28,7 @@ type PipelineRow = {
 const STAGE_ORDER: Record<StudentListPipelineStage, number> = {
   Zgłoszenie: 0,
   'Przypisany do grupy': 1,
-  'Czeka na umowę': 2,
+  'Umowa wysłana': 2,
   'Umowa podpisana': 3,
 };
 
@@ -87,7 +89,7 @@ function PipelineTable({
             <th className="px-2 py-2 font-semibold">Przypisany do grupy</th>
             {!complimentaryMode && (
               <>
-                <th className="px-2 py-2 font-semibold">Czeka na umowę</th>
+                <th className="px-2 py-2 font-semibold">Umowa wysłana</th>
                 <th className="px-2 py-2 font-semibold">Umowa podpisana</th>
               </>
             )}
@@ -102,18 +104,29 @@ function PipelineTable({
               contractStatus: complimentaryMode ? null : row.contractStatus,
               complimentary: complimentaryMode,
             });
-            const waitingLabel =
+            const sentLabel =
               !complimentaryMode &&
-              (current === 'Czeka na umowę' ||
-                STAGE_ORDER[current] > STAGE_ORDER['Czeka na umowę'])
-                ? row.contractStatus?.trim() || 'Czeka na umowę'
+              (current === 'Umowa wysłana' ||
+                STAGE_ORDER[current] > STAGE_ORDER['Umowa wysłana'])
+                ? row.contractStatus?.trim() || 'Tak'
                 : null;
             const signedLabel =
               !complimentaryMode && current === 'Umowa podpisana' ? 'Tak' : null;
 
             return (
               <tr key={row.childId} className="border-t border-zinc-100">
-                <td className="px-2 py-2 font-medium">{row.childName}</td>
+                <td className="px-2 py-2 font-medium">
+                  {row.childProfileId ? (
+                    <Link
+                      href={`/portal/children/${row.childProfileId}`}
+                      className="text-[#0f6e56] hover:underline"
+                    >
+                      {row.childName}
+                    </Link>
+                  ) : (
+                    row.childName
+                  )}
+                </td>
                 <td className="px-2 py-2">{row.parentName}</td>
                 <td className="px-2 py-2">
                   <PipelineBadge value="Tak" tone={stageTone('Zgłoszenie', current)} />
@@ -132,8 +145,8 @@ function PipelineTable({
                   <>
                     <td className="px-2 py-2">
                       <PipelineBadge
-                        value={waitingLabel}
-                        tone={stageTone('Czeka na umowę', current)}
+                        value={sentLabel}
+                        tone={stageTone('Umowa wysłana', current)}
                       />
                     </td>
                     <td className="px-2 py-2">

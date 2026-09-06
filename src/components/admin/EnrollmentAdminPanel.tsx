@@ -486,7 +486,7 @@ export default function EnrollmentAdminPanel({
         {isPipeline ? (
           <div className="space-y-3">
             <p className="text-sm text-zinc-600">
-              Zgłoszenie → przypisany do grupy → czeka na umowę → umowa podpisana
+              Zgłoszenie → przypisany do grupy → umowa wysłana → umowa podpisana
             </p>
             <StudentPipelinePanel
               embedded

@@ -379,6 +379,8 @@ export async function countPendingEnrollments(schoolId: string | null): Promise<
 
 export type PipelineRow = {
   childId: string;
+  /** Prawdziwy rekord w `children` — null gdy jest tylko zgłoszenie. */
+  childProfileId: string | null;
   childName: string;
   parentId: string;
   parentName: string;
@@ -421,6 +423,7 @@ export async function fetchStudentPipeline(
 
   const res = await queryDb<{
     child_id: string;
+    child_profile_id: string | null;
     child_first: string;
     child_last: string;
     parent_id: string;
@@ -436,6 +439,7 @@ export async function fetchStudentPipeline(
   }>(
     `SELECT
        COALESCE(c.id, er.id) AS child_id,
+       c.id AS child_profile_id,
        COALESCE(c.first_name, er.child_first_name, '') AS child_first,
        COALESCE(c.last_name, er.child_last_name, '') AS child_last,
        COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id, '') AS parent_id,
@@ -526,6 +530,7 @@ export async function fetchStudentPipeline(
 
   return res.rows.map((row) => ({
     childId: row.child_id,
+    childProfileId: row.child_profile_id,
     childName: `${row.child_first} ${row.child_last}`.trim(),
     parentId: row.parent_id,
     parentName: `${row.parent_first} ${row.parent_last}`.trim(),

@@ -85,13 +85,13 @@ export function resolveEnrollmentListBadge(child: {
 }
 
 /**
- * Uproszczony etap listy uczniów (bez akceptacji rodzica / PROPOSED):
- * Zgłoszenie → przypisany do grupy → czeka na umowę → umowa podpisana
+ * Uproszczony etap listy uczniów:
+ * Zgłoszenie → przypisany do grupy (Zapisz) → umowa wysłana (mail z grupą) → umowa podpisana
  */
 export const STUDENT_LIST_PIPELINE_STAGES = [
   "Zgłoszenie",
   "Przypisany do grupy",
-  "Czeka na umowę",
+  "Umowa wysłana",
   "Umowa podpisana",
 ] as const;
 
@@ -117,6 +117,7 @@ export function resolveStudentListPipelineStage(input: {
       hasGroup ||
       level === "ACCEPTED" ||
       level === "PROPOSED" ||
+      level === "NEGOTIATING" ||
       level === "COMPLETED" ||
       level === "SIGNED" ||
       level === "AWAITING_CONTRACT" ||
@@ -134,18 +135,18 @@ export function resolveStudentListPipelineStage(input: {
   ) {
     return "Umowa podpisana";
   }
+  // Mail z grupą wysłany (ACCEPTED/PROPOSED) albo dalszy flow umowy.
   if (
+    level === "ACCEPTED" ||
+    level === "PROPOSED" ||
+    level === "NEGOTIATING" ||
     level === "AWAITING_CONTRACT" ||
     level === "CONTRACT_READY" ||
     (contract.length > 0 && contract !== "SIGNED")
   ) {
-    return "Czeka na umowę";
+    return "Umowa wysłana";
   }
-  if (
-    hasGroup ||
-    level === "ACCEPTED" ||
-    level === "PROPOSED"
-  ) {
+  if (hasGroup) {
     return "Przypisany do grupy";
   }
   return "Zgłoszenie";
