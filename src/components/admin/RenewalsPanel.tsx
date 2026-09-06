@@ -49,7 +49,7 @@ type PlannedYear = { id: string; name: string; date_from: string; date_to: strin
 
 const VIEW_TABS = [
   { value: 'list', label: 'Lista' },
-  { value: 'pipeline', label: 'Pipeline ucznia' },
+  { value: 'pipeline', label: 'Lista uczniów' },
 ] as const;
 
 type ViewMode = (typeof VIEW_TABS)[number]['value'];

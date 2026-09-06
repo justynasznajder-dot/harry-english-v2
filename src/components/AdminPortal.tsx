@@ -5551,30 +5551,16 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         </span>
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void loadGroupDetail(g.id);
-                            }}
-                          >
-                            Edytuj
-                          </button>
-                          <button
-                            type="button"
-                            className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-800 hover:bg-red-100"
-                            disabled={groupSaving}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void removeGroupFromSchoolView(g.id, g.name);
-                            }}
-                            title="Grupa zniknie z panelu, ale zostanie w bazie jako nieaktywna"
-                          >
-                            Usuń
-                          </button>
-                        </div>
+                        <button
+                          type="button"
+                          className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void loadGroupDetail(g.id);
+                          }}
+                        >
+                          Edytuj
+                        </button>
                       </td>
                     </tr>
                     );

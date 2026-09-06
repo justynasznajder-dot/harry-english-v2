@@ -407,14 +407,14 @@ export default function EnrollmentAdminPanel({
                 : 'border-emerald-200 bg-white text-zinc-700'
             }`}
           >
-            Pipeline ucznia
+            Lista uczniów
           </button>
         </div>
 
         {isPipeline ? (
           <div className="space-y-3">
             <p className="text-sm text-zinc-600">
-              Zgłoszenie → propozycja → umowa → grupa → płatności → odnowienie
+              Zgłoszenie → przypisany do grupy → czeka na umowę → umowa podpisana
             </p>
             <StudentPipelinePanel embedded />
           </div>
@@ -672,7 +672,8 @@ export default function EnrollmentAdminPanel({
                               </p>
                             </div>
                           )}
-                          {child.status === 'ACCEPTED' && (
+                          {(child.status === 'ACCEPTED' ||
+                            (child.status === 'NEW' && Boolean(child.proposedGroupId))) && (
                             <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm">
                               <p className="font-semibold text-emerald-900">
                                 Grupa przypisana
@@ -684,9 +685,11 @@ export default function EnrollmentAdminPanel({
                                 </p>
                               ) : null}
                               <p className="mt-2 text-xs text-emerald-800">
-                                {ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
-                                  ? 'Rodzic uzupełnia dane do umowy.'
-                                  : 'Czekamy na podpisanie umowy przez nauczyciela.'}
+                                {child.status === 'NEW'
+                                  ? 'Szkic: grupa zapisana, propozycja jeszcze nie wysłana.'
+                                  : ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
+                                    ? 'Rodzic uzupełnia dane do umowy.'
+                                    : 'Czekamy na podpisanie umowy przez nauczyciela.'}
                               </p>
                             </div>
                           )}

@@ -60,16 +60,63 @@ export function formatEnrollmentStatusLabel(status: string | null | undefined): 
   return status?.trim() || "—";
 }
 
+/**
+ * Uproszczony etap listy uczniów (bez akceptacji rodzica / PROPOSED):
+ * Zgłoszenie → przypisany do grupy → czeka na umowę → umowa podpisana
+ */
+export const STUDENT_LIST_PIPELINE_STAGES = [
+  "Zgłoszenie",
+  "Przypisany do grupy",
+  "Czeka na umowę",
+  "Umowa podpisana",
+] as const;
+
+export type StudentListPipelineStage = (typeof STUDENT_LIST_PIPELINE_STAGES)[number];
+
+export function resolveStudentListPipelineStage(input: {
+  enrollmentStatus?: string | null;
+  hasGroup?: boolean;
+  contractStatus?: string | null;
+}): StudentListPipelineStage {
+  const level = String(input.enrollmentStatus ?? "")
+    .trim()
+    .toUpperCase();
+  const contract = String(input.contractStatus ?? "")
+    .trim()
+    .toUpperCase();
+  const hasGroup = Boolean(input.hasGroup);
+
+  if (
+    level === "SIGNED" ||
+    level === "COMPLETED" ||
+    contract === "SIGNED"
+  ) {
+    return "Umowa podpisana";
+  }
+  if (
+    level === "AWAITING_CONTRACT" ||
+    level === "CONTRACT_READY" ||
+    (contract.length > 0 && contract !== "SIGNED")
+  ) {
+    return "Czeka na umowę";
+  }
+  if (
+    hasGroup ||
+    level === "ACCEPTED" ||
+    level === "PROPOSED"
+  ) {
+    return "Przypisany do grupy";
+  }
+  return "Zgłoszenie";
+}
+
 /** Filtry listy zgłoszeń w panelu admina. SIGNED/COMPLETED nie wchodzą na listę (proces zakończony). */
 export const ENROLLMENT_LIST_FILTERS = [
   { value: "", label: "Wszystkie" },
   { value: "NEW", label: "Nowe" },
-  { value: "PROPOSED", label: "Zaproponowane" },
-  { value: "NEGOTIATING", label: "Negocjacje" },
+  /** Dzieci z przypisaną grupą (szkic NEW + proposed_group / legacy ACCEPTED). */
   { value: "ACCEPTED", label: "Grupa przypisana" },
-  { value: "AWAITING_CONTRACT", label: "Czeka na umowę" },
   { value: "CONTRACT_READY", label: "Umowa do podpisu" },
-  { value: "REJECTED", label: "Odrzucone" },
 ] as const;
 
 /** Statusy ukończone — nie pokazujemy ich w widoku Zgłoszeń. */
@@ -78,18 +125,38 @@ const ENROLLMENT_LIST_HIDDEN_STATUSES: ReadonlySet<EnrollmentStatus> = new Set([
   "COMPLETED",
 ]);
 
-export function filterEnrollmentChildrenByStatus<T extends { status: EnrollmentStatus }>(
-  children: T[],
-  filter: string,
-): T[] {
+function hasProposedGroup(child: { proposedGroupId?: string | null }): boolean {
+  return Boolean(child.proposedGroupId && String(child.proposedGroupId).trim());
+}
+
+/**
+ * Filtr listy zgłoszeń.
+ * „Grupa przypisana” = status ACCEPTED albo szkic NEW z już wybraną grupą (Zapisz bez wysyłki).
+ * „Nowe” = NEW bez przypisanej grupy.
+ */
+export function filterEnrollmentChildrenByStatus<
+  T extends { status: EnrollmentStatus; proposedGroupId?: string | null },
+>(children: T[], filter: string): T[] {
   const visible = children.filter((child) => !ENROLLMENT_LIST_HIDDEN_STATUSES.has(child.status));
   if (!filter) return visible;
+
+  if (filter === "NEW") {
+    return visible.filter((child) => child.status === "NEW" && !hasProposedGroup(child));
+  }
+  if (filter === "ACCEPTED") {
+    return visible.filter(
+      (child) =>
+        child.status === "ACCEPTED" ||
+        (child.status === "NEW" && hasProposedGroup(child)),
+    );
+  }
+
   const status = filter as EnrollmentStatus;
   return visible.filter((child) => child.status === status);
 }
 
 export function enrollmentMatchesStatusFilter(
-  children: Array<{ status: EnrollmentStatus }>,
+  children: Array<{ status: EnrollmentStatus; proposedGroupId?: string | null }>,
   filter: string,
 ): boolean {
   return filterEnrollmentChildrenByStatus(children, filter).length > 0;

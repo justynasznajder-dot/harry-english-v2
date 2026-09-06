@@ -1,7 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { formatEnrollmentStatusLabel } from '@/lib/enrollment-status';
+import {
+  resolveStudentListPipelineStage,
+  STUDENT_LIST_PIPELINE_STAGES,
+  type StudentListPipelineStage,
+} from '@/lib/enrollment-status';
 
 type PipelineRow = {
   childId: string;
@@ -15,15 +19,43 @@ type PipelineRow = {
   renewalStatus: string | null;
 };
 
-function PipelineBadge({ value }: { value: string | null }) {
+const STAGE_ORDER: Record<StudentListPipelineStage, number> = {
+  Zgłoszenie: 0,
+  'Przypisany do grupy': 1,
+  'Czeka na umowę': 2,
+  'Umowa podpisana': 3,
+};
+
+function PipelineBadge({
+  value,
+  tone = 'neutral',
+}: {
+  value: string | null;
+  tone?: 'neutral' | 'done' | 'current';
+}) {
   if (!value) {
     return <span className="text-xs text-zinc-400">—</span>;
   }
+  const cls =
+    tone === 'done'
+      ? 'bg-emerald-100 text-emerald-800'
+      : tone === 'current'
+        ? 'bg-[#0f6e56] text-white'
+        : 'bg-zinc-100 text-zinc-700';
   return (
-    <span className="inline-flex rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700">
+    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}>
       {value}
     </span>
   );
+}
+
+function stageTone(
+  stage: StudentListPipelineStage,
+  current: StudentListPipelineStage,
+): 'neutral' | 'done' | 'current' {
+  if (stage === current) return 'current';
+  if (STAGE_ORDER[stage] < STAGE_ORDER[current]) return 'done';
+  return 'neutral';
 }
 
 export default function StudentPipelinePanel({ embedded = false }: { embedded?: boolean }) {
@@ -39,10 +71,10 @@ export default function StudentPipelinePanel({ embedded = false }: { embedded?: 
       const q = query.trim() ? `?search=${encodeURIComponent(query.trim())}` : '';
       const r = await fetch(`/api/admin/pipeline${q}`, { cache: 'no-store' });
       const data = await r.json();
-      if (!r.ok) throw new Error(data.message ?? 'Błąd pobierania pipeline');
+      if (!r.ok) throw new Error(data.message ?? 'Błąd pobierania listy uczniów');
       setPipeline(data.rows ?? []);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Błąd pobierania pipeline');
+      setError(e instanceof Error ? e.message : 'Błąd pobierania listy uczniów');
       setPipeline([]);
     } finally {
       setLoading(false);
@@ -53,6 +85,8 @@ export default function StudentPipelinePanel({ embedded = false }: { embedded?: 
     const t = setTimeout(() => void load(search), search ? 300 : 0);
     return () => clearTimeout(t);
   }, [load, search]);
+
+  const flowLabel = STUDENT_LIST_PIPELINE_STAGES.join(' → ');
 
   const content = (
     <>
@@ -74,44 +108,67 @@ export default function StudentPipelinePanel({ embedded = false }: { embedded?: 
         <p className="text-sm text-zinc-500">Ładowanie…</p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="min-w-[900px] text-left text-xs sm:text-sm">
+          <table className="min-w-[820px] text-left text-xs sm:text-sm">
             <thead className="bg-zinc-50 text-zinc-700">
               <tr>
                 <th className="px-2 py-2 font-semibold">Uczeń</th>
                 <th className="px-2 py-2 font-semibold">Rodzic</th>
                 <th className="px-2 py-2 font-semibold">Zgłoszenie</th>
-                <th className="px-2 py-2 font-semibold">Propozycja</th>
-                <th className="px-2 py-2 font-semibold">Umowa</th>
-                <th className="px-2 py-2 font-semibold">Grupa</th>
-                <th className="px-2 py-2 font-semibold">Płatności</th>
-                <th className="px-2 py-2 font-semibold">Odnowienie</th>
+                <th className="px-2 py-2 font-semibold">Przypisany do grupy</th>
+                <th className="px-2 py-2 font-semibold">Czeka na umowę</th>
+                <th className="px-2 py-2 font-semibold">Umowa podpisana</th>
               </tr>
             </thead>
             <tbody>
-              {pipeline.map((row) => (
-                <tr key={row.childId} className="border-t border-zinc-100">
-                  <td className="px-2 py-2 font-medium">{row.childName}</td>
-                  <td className="px-2 py-2">{row.parentName}</td>
-                  <td className="px-2 py-2">
-                    <PipelineBadge value={formatEnrollmentStatusLabel(row.enrollmentStatus)} />
-                  </td>
-                  <td className="px-2 py-2">
-                    <PipelineBadge value={row.proposalGroup} />
-                  </td>
-                  <td className="px-2 py-2">
-                    <PipelineBadge value={row.contractStatus} />
-                  </td>
-                  <td className="px-2 py-2">
-                    <PipelineBadge value={row.groupName} />
-                  </td>
-                  <td className="px-2 py-2">
-                    <PipelineBadge value={row.billingStatus} />
-                  </td>
-                  <td className="px-2 py-2">
-                    <PipelineBadge value={row.renewalStatus} />
-                  </td>
-                </tr>
-              ))}
+              {pipeline.map((row) => {
+                const groupLabel = row.groupName || row.proposalGroup;
+                const current = resolveStudentListPipelineStage({
+                  enrollmentStatus: row.enrollmentStatus,
+                  hasGroup: Boolean(groupLabel),
+                  contractStatus: row.contractStatus,
+                });
+                const waitingLabel =
+                  current === 'Czeka na umowę' || STAGE_ORDER[current] > STAGE_ORDER['Czeka na umowę']
+                    ? row.contractStatus?.trim() || 'Czeka na umowę'
+                    : null;
+                const signedLabel =
+                  current === 'Umowa podpisana' ? 'Tak' : null;
+
+                return (
+                  <tr key={row.childId} className="border-t border-zinc-100">
+                    <td className="px-2 py-2 font-medium">{row.childName}</td>
+                    <td className="px-2 py-2">{row.parentName}</td>
+                    <td className="px-2 py-2">
+                      <PipelineBadge
+                        value="Tak"
+                        tone={stageTone('Zgłoszenie', current)}
+                      />
+                    </td>
+                    <td className="px-2 py-2">
+                      <PipelineBadge
+                        value={
+                          STAGE_ORDER[current] >= STAGE_ORDER['Przypisany do grupy']
+                            ? groupLabel || 'Tak'
+                            : null
+                        }
+                        tone={stageTone('Przypisany do grupy', current)}
+                      />
+                    </td>
+                    <td className="px-2 py-2">
+                      <PipelineBadge
+                        value={waitingLabel}
+                        tone={stageTone('Czeka na umowę', current)}
+                      />
+                    </td>
+                    <td className="px-2 py-2">
+                      <PipelineBadge
+                        value={signedLabel}
+                        tone={stageTone('Umowa podpisana', current)}
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           {pipeline.length === 0 && (
@@ -127,11 +184,8 @@ export default function StudentPipelinePanel({ embedded = false }: { embedded?: 
   return (
     <div className="space-y-4">
       <header className="rounded-2xl border border-emerald-100 bg-white p-4 sm:p-5">
-        <h2 className="text-xl font-bold text-[#0f6e56] sm:text-2xl">Pipeline ucznia</h2>
-        <p className="mt-1 text-sm text-zinc-600">
-          Zgłoszenie → propozycja → umowa → grupa → płatności → odnowienie — pełny status w jednym
-          wierszu.
-        </p>
+        <h2 className="text-xl font-bold text-[#0f6e56] sm:text-2xl">Lista uczniów</h2>
+        <p className="mt-1 text-sm text-zinc-600">{flowLabel}</p>
       </header>
       <section className="rounded-2xl border border-emerald-100 bg-white p-4 sm:p-5">
         {content}
