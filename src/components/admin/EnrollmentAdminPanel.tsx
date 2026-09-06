@@ -13,6 +13,7 @@ import {
 } from '@/lib/enrollment-status';
 import { parsePriceDecimal } from '@/lib/lesson-pricing';
 import { isParentInComplimentaryList } from '@/lib/complimentary-parent-list';
+import { compareGroupsYoungestToOldest } from '@/src/data/harryEnglishLevels';
 import type {
   ComplimentaryParentRow,
   EnrollmentGroupRow,
@@ -38,6 +39,25 @@ function groupServesPreferredLocation(
   if (!pref) return true;
   if (!group) return false;
   return (group.location_ids ?? []).includes(pref);
+}
+
+function splitGroupsByPreferredLocation(
+  allGroups: EnrollmentGroupRow[],
+  preferredLocationId: string | null | undefined,
+): { matching: EnrollmentGroupRow[]; other: EnrollmentGroupRow[] } {
+  const pref = preferredLocationId?.trim();
+  if (!pref) {
+    return { matching: [...allGroups].sort(compareGroupsYoungestToOldest), other: [] };
+  }
+  const matching: EnrollmentGroupRow[] = [];
+  const other: EnrollmentGroupRow[] = [];
+  for (const g of allGroups) {
+    if (groupServesPreferredLocation(g, pref)) matching.push(g);
+    else other.push(g);
+  }
+  matching.sort(compareGroupsYoungestToOldest);
+  other.sort(compareGroupsYoungestToOldest);
+  return { matching, other };
 }
 
 /** Wszystkie 3 stawki ręczne muszą być podane (sezon bez cennika grupy / rabatów). */
@@ -119,6 +139,9 @@ export default function EnrollmentAdminPanel({
   const [submittingBatchProposals, setSubmittingBatchProposals] = useState(false);
   const [savingBatchProposals, setSavingBatchProposals] = useState(false);
   const [proposalDrafts, setProposalDrafts] = useState<Record<string, ProposalDraft>>({});
+  const [showOtherLocationGroups, setShowOtherLocationGroups] = useState<
+    Record<string, boolean>
+  >({});
   // const [savingParentDiscountId, setSavingParentDiscountId] = useState<string | null>(null);
   const [savingComplimentaryKey, setSavingComplimentaryKey] = useState<string | null>(null);
   void _discountSettings; // zniżki % wyłączone — prop zostaje dla kompatybilności AdminPortal
@@ -792,35 +815,117 @@ export default function EnrollmentAdminPanel({
                           {proposalAllowed && (
                             <>
                               <div className="space-y-2">
-                                <select
-                                  className="w-full max-w-full rounded-xl border border-emerald-200 px-3 py-2 disabled:cursor-not-allowed disabled:opacity-60"
-                                  disabled={!proposalAllowed}
-                                  value={proposalDrafts[child.requestId]?.groupId ?? ''}
-                                  onChange={(e) =>
-                                    setProposalDrafts((prev) => ({
-                                      ...prev,
-                                      [child.requestId]: {
-                                        ...emptyProposalDraft(),
-                                        ...prev[child.requestId],
-                                        groupId: e.target.value,
-                                      },
-                                    }))
-                                  }
-                                >
-                                  <option value="">
-                                    {proposalParentIsComplimentary
-                                      ? 'Wybierz grupę (opcjonalnie)'
-                                      : 'Wybierz grupę'}
-                                  </option>
-                                  {groups.map((group) => {
-                                    const label = `${group.name} · ${group.location_name} · ${group.schedule}`;
-                                    return (
-                                      <option key={group.id} value={group.id} title={label}>
-                                        {label}
-                                      </option>
-                                    );
-                                  })}
-                                </select>
+                                {(() => {
+                                  const { matching, other } = splitGroupsByPreferredLocation(
+                                    groups,
+                                    child.preferredLocationId,
+                                  );
+                                  const selectedGroupId =
+                                    proposalDrafts[child.requestId]?.groupId ?? '';
+                                  const selectedInOther = other.some(
+                                    (g) => g.id === selectedGroupId,
+                                  );
+                                  const allowOther =
+                                    showOtherLocationGroups[child.requestId] === true ||
+                                    selectedInOther;
+                                  const hasPreferred = Boolean(
+                                    child.preferredLocationId?.trim(),
+                                  );
+
+                                  return (
+                                    <>
+                                      <select
+                                        className="w-full max-w-full rounded-xl border border-emerald-200 px-3 py-2 disabled:cursor-not-allowed disabled:opacity-60"
+                                        disabled={!proposalAllowed}
+                                        value={selectedGroupId}
+                                        onChange={(e) =>
+                                          setProposalDrafts((prev) => ({
+                                            ...prev,
+                                            [child.requestId]: {
+                                              ...emptyProposalDraft(),
+                                              ...prev[child.requestId],
+                                              groupId: e.target.value,
+                                            },
+                                          }))
+                                        }
+                                      >
+                                        <option value="">
+                                          {proposalParentIsComplimentary
+                                            ? 'Wybierz grupę (opcjonalnie)'
+                                            : 'Wybierz grupę'}
+                                        </option>
+                                        {matching.map((group) => {
+                                          const label = `${group.name} · ${group.location_name} · ${group.schedule}`;
+                                          return (
+                                            <option
+                                              key={group.id}
+                                              value={group.id}
+                                              title={label}
+                                            >
+                                              {label}
+                                            </option>
+                                          );
+                                        })}
+                                        {allowOther && other.length > 0 ? (
+                                          <optgroup label="Inne lokalizacje">
+                                            {other.map((group) => {
+                                              const label = `${group.name} · ${group.location_name} · ${group.schedule}`;
+                                              return (
+                                                <option
+                                                  key={group.id}
+                                                  value={group.id}
+                                                  title={label}
+                                                >
+                                                  {label}
+                                                </option>
+                                              );
+                                            })}
+                                          </optgroup>
+                                        ) : null}
+                                      </select>
+                                      {hasPreferred && other.length > 0 ? (
+                                        <label className="flex items-start gap-2 text-xs text-zinc-700">
+                                          <input
+                                            type="checkbox"
+                                            className="mt-0.5 accent-emerald-600"
+                                            checked={allowOther}
+                                            onChange={(e) => {
+                                              const checked = e.target.checked;
+                                              setShowOtherLocationGroups((prev) => ({
+                                                ...prev,
+                                                [child.requestId]: checked,
+                                              }));
+                                              if (!checked && selectedInOther) {
+                                                setProposalDrafts((prev) => ({
+                                                  ...prev,
+                                                  [child.requestId]: {
+                                                    ...emptyProposalDraft(),
+                                                    ...prev[child.requestId],
+                                                    groupId: '',
+                                                  },
+                                                }));
+                                              }
+                                            }}
+                                          />
+                                          <span>
+                                            Wybierz grupę z innej lokalizacji
+                                            {child.preferredLocation
+                                              ? ` (poza: ${child.preferredLocation})`
+                                              : ''}
+                                          </span>
+                                        </label>
+                                      ) : null}
+                                      {hasPreferred && matching.length === 0 ? (
+                                        <p className="rounded-xl border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+                                          Brak grup w lokalizacji{' '}
+                                          {child.preferredLocation ?? 'wybranej przez rodzica'}.
+                                          Zaznacz „Wybierz grupę z innej lokalizacji”, żeby zobaczyć
+                                          pozostałe.
+                                        </p>
+                                      ) : null}
+                                    </>
+                                  );
+                                })()}
                                 {!proposalParentIsComplimentary && (
                                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:items-end">
                                     <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">

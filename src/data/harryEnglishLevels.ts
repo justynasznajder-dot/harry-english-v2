@@ -43,6 +43,35 @@ export const HARRY_ENGLISH_LEVEL_CODES: readonly HarryEnglishLevelCode[] =
 
 const LEVEL_CODE_SET = new Set<string>(HARRY_ENGLISH_LEVEL_CODES);
 
+/** Indeks sortowania: P3 (najmłodsi) → … → Sz8E (najstarsi). Nieznany poziom na końcu. */
+const LEVEL_SORT_INDEX = new Map(
+  HARRY_ENGLISH_LEVEL_CODES.map((code, index) => [code, index] as const)
+);
+
+export function harryEnglishLevelSortIndex(level: string | null | undefined): number {
+  const code = normalizeHarryEnglishLevel(level);
+  if (code != null && LEVEL_SORT_INDEX.has(code)) {
+    return LEVEL_SORT_INDEX.get(code)!;
+  }
+  return 999;
+}
+
+/** Sortowanie grup od najmłodszej (P3) do najstarszej (Sz8E), potem alfabetycznie po nazwie. */
+export function compareGroupsYoungestToOldest(
+  a: { level?: string | null; name?: string | null },
+  b: { level?: string | null; name?: string | null }
+): number {
+  const levelA =
+    normalizeHarryEnglishLevel(a.level) ?? detectLevelFromGroupName(String(a.name ?? ""));
+  const levelB =
+    normalizeHarryEnglishLevel(b.level) ?? detectLevelFromGroupName(String(b.name ?? ""));
+  const diff = harryEnglishLevelSortIndex(levelA) - harryEnglishLevelSortIndex(levelB);
+  if (diff !== 0) return diff;
+  return String(a.name ?? "").localeCompare(String(b.name ?? ""), "pl", {
+    sensitivity: "base",
+  });
+}
+
 export const GROUP_NAME_SEP = ' · ';
 
 /** Sufiks równoległej grupy: ` (2)`, ` (3)`, … — bez `(1)` na pierwszej. */

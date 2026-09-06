@@ -21,6 +21,7 @@ import {
 } from '@/lib/school-timezone';
 import { defaultLessonsPerWeekForLevel, defaultTargetLessonsPerYear } from '@/lib/lessons-per-week';
 import {
+  compareGroupsYoungestToOldest,
   detectLevelFromGroupName,
   isHarryEnglishLevelCode,
   locationMatchesGroupLevel,
@@ -1918,21 +1919,35 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   );
 
   const organizeFilteredGroups = useMemo(() => {
-    return groups.filter((g) => {
-      if (organizeFilterName && g.name !== organizeFilterName) return false;
-      if (organizeFilterLocation) {
-        if (organizeFilterLocation === ORGANIZE_FILTER_NO_LOCATION) {
-          if (g.location_name?.trim()) return false;
-        } else if ((g.location_name ?? '') !== organizeFilterLocation) return false;
-      }
-      if (organizeFilterTeacher) {
-        if (organizeFilterTeacher === ORGANIZE_FILTER_NO_TEACHER) {
-          if (g.teacher_name?.trim()) return false;
-        } else if ((g.teacher_name ?? '') !== organizeFilterTeacher) return false;
-      }
-      return true;
-    });
+    return groups
+      .filter((g) => {
+        if (organizeFilterName && g.name !== organizeFilterName) return false;
+        if (organizeFilterLocation) {
+          if (organizeFilterLocation === ORGANIZE_FILTER_NO_LOCATION) {
+            if (g.location_name?.trim()) return false;
+          } else if ((g.location_name ?? '') !== organizeFilterLocation) return false;
+        }
+        if (organizeFilterTeacher) {
+          if (organizeFilterTeacher === ORGANIZE_FILTER_NO_TEACHER) {
+            if (g.teacher_name?.trim()) return false;
+          } else if ((g.teacher_name ?? '') !== organizeFilterTeacher) return false;
+        }
+        return true;
+      })
+      .sort(compareGroupsYoungestToOldest);
   }, [groups, organizeFilterName, organizeFilterLocation, organizeFilterTeacher]);
+
+  const listFilteredGroups = useMemo(() => {
+    return groups
+      .filter((g) => {
+        if (!organizeFilterLocation) return true;
+        if (organizeFilterLocation === ORGANIZE_FILTER_NO_LOCATION) {
+          return !g.location_name?.trim();
+        }
+        return (g.location_name ?? '') === organizeFilterLocation;
+      })
+      .sort(compareGroupsYoungestToOldest);
+  }, [groups, organizeFilterLocation]);
 
   useEffect(() => {
     if (organizeFilterName && !organizeFilterNameOptions.includes(organizeFilterName)) {
@@ -5794,6 +5809,27 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           )}
           {groupsSubTab === 'list' ? (
             <div className="space-y-3">
+              <div className="max-w-sm space-y-1">
+                <label htmlFor="list-filter-location" className="block text-xs font-medium text-zinc-600">
+                  Lokalizacja
+                </label>
+                <select
+                  id="list-filter-location"
+                  className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
+                  value={organizeFilterLocation}
+                  onChange={(e) => setOrganizeFilterLocation(e.target.value)}
+                >
+                  <option value="">Wszystkie</option>
+                  {organizeHasGroupsWithoutLocation && (
+                    <option value={ORGANIZE_FILTER_NO_LOCATION}>Brak lokalizacji</option>
+                  )}
+                  {organizeFilterLocationOptions.map((loc) => (
+                    <option key={loc} value={loc}>
+                      {loc}
+                    </option>
+                  ))}
+                </select>
+              </div>
               {(() => {
                 const hasActiveYear = Boolean(activeSchoolYear);
                 const unconfirmedGroups = groups.filter(
@@ -5909,7 +5945,14 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   </tr>
                 </thead>
                 <tbody>
-                  {groups.map((g) => {
+                  {listFilteredGroups.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="px-4 py-8 text-center text-zinc-600">
+                        Brak grup dla wybranej lokalizacji.
+                      </td>
+                    </tr>
+                  ) : (
+                    listFilteredGroups.map((g) => {
                     // const priceLines = formatGroupPriceLines(g); — cennik grupy wyłączony
                     return (
                     <tr
@@ -5968,7 +6011,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       </td>
                     </tr>
                     );
-                  })}
+                  })
+                  )}
                 </tbody>
               </table>
             </div>
