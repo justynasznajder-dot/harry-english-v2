@@ -82,16 +82,16 @@ export async function resolveUniqueActiveGroupName(params: {
 export async function findActiveGroupNameConflict(params: {
   schoolId: string;
   name: string;
-  excludeGroupId: string;
+  excludeGroupId?: string | null;
 }): Promise<boolean> {
   const res = await queryDb<{ id: string }>(
     `SELECT id FROM groups
      WHERE school_id = $1
        AND active = TRUE
-       AND id <> $2
+       AND ($2::text IS NULL OR id <> $2::text)
        AND LOWER(BTRIM(name)) = LOWER(BTRIM($3))
      LIMIT 1`,
-    [params.schoolId, params.excludeGroupId, params.name]
+    [params.schoolId, params.excludeGroupId ?? null, params.name]
   );
   return (res.rowCount ?? 0) > 0;
 }

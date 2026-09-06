@@ -103,7 +103,7 @@ export default function EnrollmentAdminPanel({
   onComplimentaryParentsChange,
 }: EnrollmentAdminPanelProps) {
   const [enrollmentStatusFilter, setEnrollmentStatusFilter] = useState('');
-  const [parentLastNameSearch, setParentLastNameSearch] = useState('');
+  const [studentNameSearch, setStudentNameSearch] = useState('');
   const [proposalModalParentId, setProposalModalParentId] = useState<string | null>(null);
   const [submittingProposalRequestId, setSubmittingProposalRequestId] = useState<string | null>(null);
   const [rejectingParentResignationId, setRejectingParentResignationId] = useState<string | null>(
@@ -348,17 +348,25 @@ export default function EnrollmentAdminPanel({
 
   const renderList = () => {
     const isPipeline = enrollmentStatusFilter === 'pipeline';
-    const lastNameQuery = parentLastNameSearch.trim().toLowerCase();
+    const studentQuery = studentNameSearch.trim().toLowerCase();
     const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
     const filteredEnrollmentRows = enrollmentRows
-      .map((parent) => ({
-        ...parent,
-        children: filterEnrollmentChildrenByStatus(parent.children, enrollmentStatusFilter),
-      }))
-      .filter((parent) => parent.children.length > 0)
-      .filter((parent) =>
-        !lastNameQuery || (parent.lastName ?? '').toLowerCase().includes(lastNameQuery),
-      );
+      .map((parent) => {
+        let children = filterEnrollmentChildrenByStatus(parent.children, enrollmentStatusFilter);
+        if (studentQuery) {
+          children = children.filter((child) => {
+            const first = (child.firstName ?? '').toLowerCase();
+            const last = (child.lastName ?? '').toLowerCase();
+            return (
+              first.includes(studentQuery) ||
+              last.includes(studentQuery) ||
+              `${first} ${last}`.includes(studentQuery)
+            );
+          });
+        }
+        return { ...parent, children };
+      })
+      .filter((parent) => parent.children.length > 0);
 
     return (
       <section className="space-y-4 rounded-2xl border border-emerald-100 bg-white p-4">
@@ -368,9 +376,9 @@ export default function EnrollmentAdminPanel({
           <input
             type="search"
             autoComplete="off"
-            value={parentLastNameSearch}
-            onChange={(e) => setParentLastNameSearch(e.target.value)}
-            placeholder="Szukaj po nazwisku rodzica…"
+            value={studentNameSearch}
+            onChange={(e) => setStudentNameSearch(e.target.value)}
+            placeholder="Szukaj po imieniu lub nazwisku ucznia…"
             className="w-full max-w-md rounded-xl border border-emerald-200 px-3 py-2 text-sm"
           />
         )}
@@ -414,7 +422,7 @@ export default function EnrollmentAdminPanel({
           <EmptyDataPanel title="Zgłoszenia" />
         ) : filteredEnrollmentRows.length === 0 ? (
           <p className="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-8 text-center text-sm text-zinc-600">
-            {lastNameQuery ? 'Brak zgłoszeń dla podanego nazwiska' : 'Brak zgłoszeń'}
+            {studentQuery ? 'Brak zgłoszeń dla podanego ucznia' : 'Brak zgłoszeń'}
           </p>
         ) : (
           <div className="space-y-3">

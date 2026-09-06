@@ -9,6 +9,7 @@ import {
 import { sqlExistsUnfilledFutureScheduleSlot } from "@/lib/lesson-generation";
 import { sqlSchoolTimestampAsTimestamptz } from "@/lib/school-timezone";
 import {
+  findActiveGroupNameConflict,
   resolveUniqueActiveGroupName,
   validateHarryEnglishGroupNaming,
 } from "@/lib/harry-english-group-naming";
@@ -134,6 +135,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const {
+      name: bodyName,
       level,
       teacherId,
       maxStudents = 12,
@@ -146,6 +148,7 @@ export async function POST(request: NextRequest) {
       pricePerLesson,
       teacherPickupConsent,
     }: {
+      name?: string | null;
       level?: string;
       teacherId?: string | null;
       maxStudents?: number;
@@ -170,8 +173,10 @@ export async function POST(request: NextRequest) {
     }
 
     const levelNorm = String(level ?? "").trim();
+    const requestedName = String(bodyName ?? "").trim();
     const namingProbe = validateHarryEnglishGroupNaming({
-      name: `${levelNorm} · x`,
+      // Przy braku nazwy z klienta walidujemy sam poziom; nazwę dobierzemy auto.
+      name: requestedName || `${levelNorm} · x`,
       level: levelNorm,
       requireLevel: true,
     });
@@ -209,13 +214,37 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: "Nie znaleziono lokalizacji" }, { status: 404 });
     }
 
-    const uniqueName = await resolveUniqueActiveGroupName({
-      schoolId: insertSchoolId,
-      levelCode: namingProbe.level,
-      locationName: location.name,
-    });
-    if (!uniqueName.ok) {
-      return NextResponse.json({ message: uniqueName.message }, { status: 400 });
+    let groupName: string;
+    if (requestedName) {
+      const naming = validateHarryEnglishGroupNaming({
+        name: requestedName,
+        level: namingProbe.level,
+        requireLevel: true,
+      });
+      if (!naming.ok) {
+        return NextResponse.json({ message: naming.message }, { status: 400 });
+      }
+      const conflict = await findActiveGroupNameConflict({
+        schoolId: insertSchoolId,
+        name: naming.name,
+      });
+      if (conflict) {
+        return NextResponse.json(
+          { message: "Grupa o podanej nazwie już istnieje" },
+          { status: 409 }
+        );
+      }
+      groupName = naming.name;
+    } else {
+      const uniqueName = await resolveUniqueActiveGroupName({
+        schoolId: insertSchoolId,
+        levelCode: namingProbe.level,
+        locationName: location.name,
+      });
+      if (!uniqueName.ok) {
+        return NextResponse.json({ message: uniqueName.message }, { status: 400 });
+      }
+      groupName = uniqueName.name;
     }
 
     const inserted = await queryDb<{ id: string }>(
@@ -230,7 +259,7 @@ export async function POST(request: NextRequest) {
         randomUUID(),
         insertSchoolId,
         teacherId ?? null,
-        uniqueName.name,
+        groupName,
         namingProbe.level,
         maxStudents,
         active,
@@ -244,7 +273,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       id: inserted.rows[0].id,
-      name: uniqueName.name,
+      name: groupName,
       message: "Grupa została utworzona",
     });
   } catch (error) {

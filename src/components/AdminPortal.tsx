@@ -21,6 +21,7 @@ import {
 } from '@/lib/school-timezone';
 import {
   detectLevelFromGroupName,
+  groupNameMatchesLevel,
   isHarryEnglishLevelCode,
   locationMatchesGroupLevel,
 } from '@/src/data/harryEnglishLevels';
@@ -5514,6 +5515,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 onLevelChange={(level) => {
                   applyGroupLevelChange(level);
                 }}
+                onNameChange={(name) => {
+                  if (groupForm.id) return;
+                  setGroupForm((p) => ({ ...p, name }));
+                }}
                 locationField={
                   <div className="space-y-1">
                     <label className="block text-sm font-medium text-zinc-700">Lokalizacja</label>
@@ -5609,7 +5614,14 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       return;
                     }
                     if (!groupForm.name.trim()) {
-                      pushToast('error', 'Uzupełnij poziom i lokalizację — nazwa powstanie automatycznie');
+                      pushToast('error', 'Uzupełnij nazwę grupy (albo poziom i lokalizację — nazwa uzupełni się sama)');
+                      return;
+                    }
+                    if (!groupNameMatchesLevel(groupForm.name.trim(), groupForm.level.trim())) {
+                      pushToast(
+                        'error',
+                        `Nazwa grupy musi zaczynać się od poziomu ${groupForm.level.trim()}`,
+                      );
                       return;
                     }
                     if (!groupForm.teacherId) {
@@ -5626,6 +5638,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
+                          name: groupForm.name.trim(),
                           level: groupForm.level.trim(),
                           teacherId: groupForm.teacherId,
                           maxStudents: groupForm.maxStudents,
