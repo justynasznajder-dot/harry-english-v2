@@ -3,11 +3,13 @@ import { formatRenewalStatusLabel } from "@/lib/renewal-status";
 import { BASE_TARGET_LESSONS_PER_YEAR } from "@/lib/lessons-per-week";
 import {
   SCHOOL_TIMEZONE,
+  addDaysYmd,
   periodMonthStartYmd,
   sqlSchoolTimestampAsTimestamptz,
   toIsoUtc,
   todayYmdSchool,
 } from "@/lib/school-timezone";
+import { mondayOfWeekContaining } from "@/lib/week-ymd";
 
 const TZ = SCHOOL_TIMEZONE;
 
@@ -15,10 +17,9 @@ export function todayYmdWarsaw(): string {
   return todayYmdSchool();
 }
 
+/** Niedziela tygodnia ISO (pon–nd) zawierającego `fromYmd`. */
 function weekEndYmd(fromYmd: string): string {
-  const d = new Date(`${fromYmd}T12:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + 6);
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+  return addDaysYmd(mondayOfWeekContaining(fromYmd), 6);
 }
 
 export type DashboardCounters = {

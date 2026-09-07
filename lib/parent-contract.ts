@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { formatPersonName } from "@/lib/format-person-name";
+import { formatIdCardNumber } from "@/lib/format-id-card-number";
 import {
   applyDiscountsToAmount,
   applyManualDiscountPercent,
@@ -95,6 +96,8 @@ export type ParentContractChildRow = {
   preferred_location_name: string | null;
   teacher_first_name: string | null;
   teacher_last_name: string | null;
+  /** Numer dowodu lektora (`users.id_card_number`). */
+  teacher_id_card_number: string | null;
   teacher_pickup_consent: boolean;
 };
 
@@ -306,6 +309,7 @@ export async function fetchParentEnrollmentChildren(
        loc.name AS preferred_location_name,
        u.first_name AS teacher_first_name,
        u.last_name AS teacher_last_name,
+       NULLIF(BTRIM(u.id_card_number), '') AS teacher_id_card_number,
        COALESCE(g.teacher_pickup_consent, FALSE) AS teacher_pickup_consent
      FROM children c
      JOIN enrollment_requests er ON er.id = c.enrollment_request_id
@@ -592,6 +596,9 @@ export function buildSingleChildAttachmentPlaceholders(
     child_1_birth_date: formatBirthDatePl(child.birth_date),
     teacher_full_name:
       buildTeacherFullName(child.teacher_first_name, child.teacher_last_name) || "Do ustalenia",
+    teacher_id_card_number: formatIdCardNumber(
+      String(child.teacher_id_card_number ?? "")
+    ),
     child_school_name: buildChildSchoolName(
       child.preferred_location_name,
       child.preferred_location
@@ -1073,6 +1080,9 @@ export async function generateParentContract(
     parent_signature_line: "",
     school_signature_line: "",
     teacher_full_name: teacherFullName || "Do ustalenia",
+    teacher_id_card_number: formatIdCardNumber(
+      String(child.teacher_id_card_number ?? "")
+    ),
     child_school_name: childSchoolName,
     ...buildChildPlaceholders([child]),
     children_list: buildChildrenListHtml([child]),

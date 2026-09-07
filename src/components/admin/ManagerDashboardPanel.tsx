@@ -315,7 +315,7 @@ export default function ManagerDashboardPanel({
 
         <Section
           title="Zajęcia w tym tygodniu"
-          description={`${dashboard.lessonsThisWeek.length} lekcji (łącznie z dziś)`}
+          description={`${dashboard.lessonsThisWeek.length} lekcji (od dziś do niedzieli)`}
         >
           {dashboard.lessonsThisWeek.length === 0 ? (
             <p className="text-sm text-zinc-500">Brak zajęć w tym tygodniu.</p>

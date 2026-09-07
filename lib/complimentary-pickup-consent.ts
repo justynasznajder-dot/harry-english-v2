@@ -1,4 +1,5 @@
 import { formatPersonName } from "@/lib/format-person-name";
+import { formatIdCardNumber } from "@/lib/format-id-card-number";
 import {
   applySchoolYearToDocumentHtml,
   buildChildSchoolName,
@@ -85,6 +86,7 @@ async function loadEnrollmentChildForPickupConsent(
        loc.name AS preferred_location_name,
        u.first_name AS teacher_first_name,
        u.last_name AS teacher_last_name,
+       NULLIF(BTRIM(u.id_card_number), '') AS teacher_id_card_number,
        COALESCE(g.teacher_pickup_consent, FALSE) AS teacher_pickup_consent
      FROM children c
      JOIN enrollment_requests er ON er.id = c.enrollment_request_id
@@ -259,6 +261,9 @@ export async function generateComplimentaryPickupConsentIfNeeded(params: {
     parent_signature_line: "",
     school_signature_line: "",
     teacher_full_name: teacherFullName,
+    teacher_id_card_number: formatIdCardNumber(
+      String(child.teacher_id_card_number ?? "")
+    ),
     child_school_name: childSchoolName,
   };
 

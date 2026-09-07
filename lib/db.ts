@@ -10,6 +10,7 @@ import {
   DuplicateEnrollmentError,
 } from "@/lib/enrollment-duplicate";
 import { formatPersonName } from "@/lib/format-person-name";
+import { formatIdCardNumber } from "@/lib/format-id-card-number";
 import { phonesMatch } from "@/lib/phone";
 import {
   allocateChildClientNumber,
@@ -302,7 +303,7 @@ function mapUserRow(row: QueryResultRow): User {
         : null,
     id_card_number:
       row.id_card_number != null && String(row.id_card_number).trim() !== ""
-        ? String(row.id_card_number).trim().slice(0, 32)
+        ? formatIdCardNumber(String(row.id_card_number)) || null
         : null,
     active: row.active === undefined ? true : Boolean(row.active),
     confirmed: Boolean(row.confirmed),

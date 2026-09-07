@@ -41,6 +41,7 @@ export async function fetchParentRenewalContractChildren(
        COALESCE(MAX(l.name), NULL) AS preferred_location_name,
        u.first_name AS teacher_first_name,
        u.last_name AS teacher_last_name,
+       NULLIF(BTRIM(u.id_card_number), '') AS teacher_id_card_number,
        COALESCE(g.teacher_pickup_consent, FALSE) AS teacher_pickup_consent
      FROM renewals r
      JOIN children c ON c.id = r.child_id
@@ -58,7 +59,7 @@ export async function fetchParentRenewalContractChildren(
        c.id, r.id, c.first_name, c.last_name, c.birth_date,
        c.lesson_unit_price, c.monthly_unit_price, c.yearly_unit_price, c.discount_percent,
        g.id, g.name, g.price_monthly, g.price_yearly, g.price_per_lesson,
-       g.teacher_pickup_consent, u.first_name, u.last_name
+       g.teacher_pickup_consent, u.first_name, u.last_name, u.id_card_number
      ORDER BY c.last_name, c.first_name`,
     params
   );
@@ -84,6 +85,7 @@ export async function fetchParentRenewalContractChildren(
     preferred_location_name: row.preferred_location_name,
     teacher_first_name: row.teacher_first_name,
     teacher_last_name: row.teacher_last_name,
+    teacher_id_card_number: row.teacher_id_card_number,
     teacher_pickup_consent: row.teacher_pickup_consent,
   }));
 }

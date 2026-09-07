@@ -8,13 +8,11 @@ const DEV = "efcb641a-e5bd-4e59-aa39-c08fd1b318e9";
 const PROD = "c93d5ac1-fa59-497f-b450-a4e50e1fb50d";
 
 describe("isEnrollmentProposalEmailEnabled", () => {
-  it("enables DEV school only", () => {
+  it("enables DEV and PROD schools", () => {
     expect(isEnrollmentProposalEmailEnabled(DEV)).toBe(true);
     expect(ENROLLMENT_PROPOSAL_EMAIL_ENABLED_SCHOOL_IDS.has(DEV)).toBe(true);
-  });
-
-  it("keeps PROD school disabled", () => {
-    expect(isEnrollmentProposalEmailEnabled(PROD)).toBe(false);
+    expect(isEnrollmentProposalEmailEnabled(PROD)).toBe(true);
+    expect(ENROLLMENT_PROPOSAL_EMAIL_ENABLED_SCHOOL_IDS.has(PROD)).toBe(true);
   });
 
   it("rejects empty or unknown school ids", () => {

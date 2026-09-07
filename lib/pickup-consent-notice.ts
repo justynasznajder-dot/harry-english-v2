@@ -74,7 +74,7 @@ export function normalizePickupConsentDocumentHtml(html: string): string {
       /Imię\s+i\s+nazwisko\s*:/gi,
       "Imię i nazwisko lektora:",
     )
-    // Pusty span po imieniu lektora (dawny placeholder numeru dowodu).
+    // Stary pusty span po imieniu lektora (dawny teacher_id_suffix) — nie ruszaj osobnego pola nr dowodu.
     .replace(
       /(<span class="ph">[^<]*<\/span>)\s*<span class="ph">\s*<\/span>/gi,
       "$1",

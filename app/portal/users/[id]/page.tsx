@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
+import { formatIdCardNumber } from '@/lib/format-id-card-number';
 import PortalAppShell from '@/src/components/PortalAppShell';
 
 type AdminUserDetail = {
@@ -68,7 +69,7 @@ export default function AdminUserProfilePage() {
       setEmail(u.email ?? '');
       setPhone(u.phone ?? '');
       setPesel(u.pesel ?? '');
-      setIdCardNumber(u.id_card_number ?? '');
+      setIdCardNumber(formatIdCardNumber(u.id_card_number ?? ''));
       setConfirmed(Boolean(u.confirmed));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Błąd ładowania');
@@ -106,12 +107,14 @@ export default function AdminUserProfilePage() {
           confirmed,
           phone: phone.trim() || null,
           pesel: pesel.trim() || null,
-          id_card_number: idCardNumber.trim() || null,
+          id_card_number: formatIdCardNumber(idCardNumber) || null,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message ?? 'Błąd zapisu');
 
+      const savedIdCard = formatIdCardNumber(idCardNumber) || null;
+      setIdCardNumber(savedIdCard ?? '');
       setUser((prev) =>
         prev
           ? {
@@ -121,7 +124,7 @@ export default function AdminUserProfilePage() {
               email: email.trim(),
               phone: phone.trim() || null,
               pesel: pesel.trim() || null,
-              id_card_number: idCardNumber.trim() || null,
+              id_card_number: savedIdCard,
               confirmed,
             }
           : prev
@@ -263,15 +266,11 @@ export default function AdminUserProfilePage() {
                   Nr dowodu
                   <input
                     type="text"
-                    maxLength={32}
+                    maxLength={33}
                     className="rounded-xl border border-emerald-200 px-3 py-2 text-zinc-900 uppercase"
                     value={idCardNumber}
-                    onChange={(e) =>
-                      setIdCardNumber(
-                        e.target.value.replace(/[^a-zA-Z0-9]/g, '').slice(0, 32).toUpperCase(),
-                      )
-                    }
-                    placeholder="opcjonalnie"
+                    onChange={(e) => setIdCardNumber(formatIdCardNumber(e.target.value))}
+                    placeholder="ABC 123456"
                   />
                 </label>
                 <div className="text-sm text-zinc-700 sm:col-span-2">

@@ -14,6 +14,7 @@ import {
   requireAdminSchoolContext,
 } from "@/lib/admin-school-context";
 import { syncParentUserAccessLevel } from "@/lib/enrollment-sync";
+import { formatIdCardNumber } from "@/lib/format-id-card-number";
 
 function managerForbiddenSchoolFields(actor: User, body: Record<string, unknown>): NextResponse | null {
   if (actor.role !== "MANAGER") return null;
@@ -220,9 +221,9 @@ export async function PUT(
     }
     if (body.id_card_number !== undefined) {
       const raw =
-        body.id_card_number == null ? "" : String(body.id_card_number).trim();
-      updateData.id_card_number =
-        raw === "" ? null : raw.slice(0, 32).toUpperCase();
+        body.id_card_number == null ? "" : String(body.id_card_number);
+      const formatted = formatIdCardNumber(raw);
+      updateData.id_card_number = formatted === "" ? null : formatted;
     }
 
     if (Object.keys(updateData).length === 0) {
