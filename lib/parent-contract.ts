@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { formatPersonName } from "@/lib/format-person-name";
 import {
-  // applyDiscountsToAmount, // wyłączone — sezon cen ręcznych
+  applyDiscountsToAmount,
   applyManualDiscountPercent,
   DISCOUNT_KEYS,
   getSchoolDiscountSettings,
@@ -42,10 +42,15 @@ import {
 import { ensureChildClientNumber, isAnnexContractNumber } from "@/lib/client-numbers";
 import {
   buildContractAmountBreakdown,
-  // parseContractAmountBreakdown, // wyłączone przy finalize — rabaty z breakdownu nie są odtwarzane
   type ContractAmountBreakdown,
 } from "@/lib/contract-amount-breakdown";
-import { resolveLessonUnitPrice, resolveMonthlyUnitPrice, resolveYearlyUnitPrice, type PaymentType } from "@/lib/lesson-pricing";
+import { resolveContractDiscountSettings } from "@/lib/contract-pricing-preview";
+import {
+  resolveLessonUnitPrice,
+  resolveMonthlyUnitPrice,
+  resolveYearlyUnitPrice,
+  type PaymentType,
+} from "@/lib/lesson-pricing";
 import {
   defaultTargetLessonsPerYear,
   filterScheduleForStudentAttendance,
@@ -55,7 +60,6 @@ import {
   type LessonsPerWeek,
 } from "@/lib/lessons-per-week";
 import { normalizePickupConsentDocumentHtml } from "@/lib/pickup-consent-notice";
-
 function parsePaymentType(raw: string | null | undefined): PaymentType {
   const value = String(raw ?? "").trim().toUpperCase();
   if (value === "YEARLY" || value === "PER_LESSON" || value === "MONTHLY") {
@@ -390,21 +394,33 @@ export function computeParentContractAmount(
   }
 ): number | null {
   if (options.billingExempt) return 0;
-  if (paymentType === "PER_LESSON") return null;
 
-  const total = sumChildrenBaseAmounts(included, paymentType);
+  let total: number | null = null;
+  if (paymentType === "PER_LESSON") {
+    let sum = 0;
+    let hasAny = false;
+    for (const child of included) {
+      const lesson = resolveChildLessonUnitPriceForContract(child);
+      if (lesson == null) continue;
+      sum += lesson;
+      hasAny = true;
+    }
+    total = hasAny ? sum : null;
+  } else {
+    total = sumChildrenBaseAmounts(included, paymentType);
+  }
   if (total == null || total <= 0) return null;
 
-  // Rabaty % wyłączone — kwota = suma stawek ręcznych.
-  void options.discountKeys;
-  void options.discountSettings;
-  return total;
-  // return applyDiscountsToAmount(total, options.discountKeys, options.discountSettings);
+  return applyDiscountsToAmount(total, options.discountKeys, options.discountSettings);
 }
 
 export function buildChildRateSnapshots(
   included: ParentContractChildRow[],
   lessonsPerWeek?: LessonsPerWeek | number | null,
+  /**
+   * Context rabatu — tylko dla trybu complimentary (ceny netto na dziecku).
+   * Na umowie stawki w snapshotcie są bazowe; rabat idzie do contracts.amount.
+   */
   discountContext?: {
     mode: "contract" | "complimentary";
     hasLargeFamilyCard: boolean;
@@ -419,39 +435,39 @@ export function buildChildRateSnapshots(
   yearly_unit_price: number | null;
 }> {
   return included.map((child) => {
-    const effective = discountContext
-      ? resolveEffectiveDiscountPercent({
-          mode: discountContext.mode,
-          managerPercent: child.discount_percent,
-          hasLargeFamilyCard: discountContext.hasLargeFamilyCard,
-          hasSiblingDeclared: discountContext.hasSiblingDeclared,
-          settings: discountContext.settings,
-        })
-      : null;
-    const discountPercent = effective?.percent
-      ? effective.percent
-      : child.discount_percent;
+    const applyDiscount = discountContext?.mode === "complimentary";
+    const effective =
+      applyDiscount && discountContext
+        ? resolveEffectiveDiscountPercent({
+            mode: "complimentary",
+            managerPercent: child.discount_percent,
+            hasLargeFamilyCard: discountContext.hasLargeFamilyCard,
+            hasSiblingDeclared: discountContext.hasSiblingDeclared,
+            settings: discountContext.settings,
+          })
+        : null;
+    const discountPercent = effective?.percent ? effective.percent : null;
+    const lesson = resolveChildLessonUnitPriceForContract(child);
+    const monthly = scaleAmountByLessonsPerWeek(
+      resolveChildMonthlyUnitPriceForContract(child),
+      lessonsPerWeek
+    );
+    const yearly = scaleAmountByLessonsPerWeek(
+      resolveChildYearlyUnitPriceForContract(child),
+      lessonsPerWeek
+    );
     return {
       child_id: child.child_id,
       name: `${formatPersonName(child.first_name)} ${formatPersonName(child.last_name)}`.trim(),
-      lesson_unit_price: applyManualDiscountPercent(
-        resolveChildLessonUnitPriceForContract(child),
-        discountPercent
-      ),
-      monthly_unit_price: applyManualDiscountPercent(
-        scaleAmountByLessonsPerWeek(
-          resolveChildMonthlyUnitPriceForContract(child),
-          lessonsPerWeek
-        ),
-        discountPercent
-      ),
-      yearly_unit_price: applyManualDiscountPercent(
-        scaleAmountByLessonsPerWeek(
-          resolveChildYearlyUnitPriceForContract(child),
-          lessonsPerWeek
-        ),
-        discountPercent
-      ),
+      lesson_unit_price: applyDiscount
+        ? applyManualDiscountPercent(lesson, discountPercent)
+        : lesson,
+      monthly_unit_price: applyDiscount
+        ? applyManualDiscountPercent(monthly, discountPercent)
+        : monthly,
+      yearly_unit_price: applyDiscount
+        ? applyManualDiscountPercent(yearly, discountPercent)
+        : yearly,
     };
   });
 }
@@ -473,13 +489,21 @@ export function buildParentContractAmountBreakdown(
     paymentType,
     billingExempt: options.billingExempt,
     discountKeys: options.discountKeys,
-    discountSettings: options.discountSettings,
-    children: buildChildRateSnapshots(included, options.lessonsPerWeek, {
-      mode: options.billingExempt ? "complimentary" : "contract",
-      hasLargeFamilyCard: Boolean(options.hasLargeFamilyCard),
-      hasSiblingDeclared: Boolean(options.hasSiblingDeclared),
-      settings: options.discountSettings,
-    }),
+    discountSettings: resolveContractDiscountSettings(
+      options.discountSettings
+    ) as SchoolDiscountSettings,
+    children: buildChildRateSnapshots(
+      included,
+      options.lessonsPerWeek,
+      options.billingExempt
+        ? {
+            mode: "complimentary",
+            hasLargeFamilyCard: Boolean(options.hasLargeFamilyCard),
+            hasSiblingDeclared: Boolean(options.hasSiblingDeclared),
+            settings: options.discountSettings,
+          }
+        : undefined
+    ),
     frozenAt: options.frozenAt ?? null,
   });
 }
@@ -718,34 +742,49 @@ export async function generateParentContract(
     parentId,
     parentEmail: user.email,
   });
-  const discountSettings = await getSchoolDiscountSettings(schoolId);
+  const discountSettings = resolveContractDiscountSettings(
+    await getSchoolDiscountSettings(schoolId)
+  ) as SchoolDiscountSettings;
   const hasLargeFamilyCard = await getParentLargeFamilyCard(parentId);
   const hasSiblingDeclared = await parentHasSiblingDeclared(parentId, schoolId);
+  // KDR wyłącza rodzeństwo w kwocie umowy.
+  const effectiveHasSibling = hasLargeFamilyCard ? false : hasSiblingDeclared;
   const effectiveDiscount = resolveEffectiveDiscountPercent({
     mode: billingExempt ? "complimentary" : "contract",
-    managerPercent: child.discount_percent,
+    managerPercent: null,
     hasLargeFamilyCard,
-    hasSiblingDeclared,
+    hasSiblingDeclared: effectiveHasSibling,
     settings: discountSettings,
   });
-  // Flagi na umowie: które zniżki rodzinne weszły w kwotę (nie sumują się nawzajem).
-  const discountLargeFamily =
-    effectiveDiscount.familyOrSiblingKey === DISCOUNT_KEYS.LARGE_FAMILY_CARD;
-  const discountSibling =
-    effectiveDiscount.familyOrSiblingKey === DISCOUNT_KEYS.SIBLING;
+  // Flagi na umowie: które zniżki rodzinne weszły w kwotę.
+  const discountLargeFamily = billingExempt
+    ? hasLargeFamilyCard
+    : effectiveDiscount.familyOrSiblingKey === DISCOUNT_KEYS.LARGE_FAMILY_CARD;
+  const discountSibling = billingExempt
+    ? hasSiblingDeclared && !hasLargeFamilyCard
+    : effectiveDiscount.familyOrSiblingKey === DISCOUNT_KEYS.SIBLING;
 
-  const childRates = buildChildRateSnapshots([child], lessonsPerWeek, {
-    mode: billingExempt ? "complimentary" : "contract",
-    hasLargeFamilyCard,
-    hasSiblingDeclared,
-    settings: discountSettings,
-  });
+  // Na umowie: stawki bazowe w contract_children; rabat tylko w contracts.amount.
+  const childRates = buildChildRateSnapshots(
+    [child],
+    lessonsPerWeek,
+    billingExempt
+      ? {
+          mode: "complimentary",
+          hasLargeFamilyCard,
+          hasSiblingDeclared,
+          settings: discountSettings,
+        }
+      : undefined
+  );
   const amountBreakdown = buildContractAmountBreakdown({
     paymentType,
     billingExempt,
-    discountKeys: effectiveDiscount.familyOrSiblingKey
-      ? [effectiveDiscount.familyOrSiblingKey]
-      : [],
+    discountKeys: billingExempt
+      ? []
+      : effectiveDiscount.familyOrSiblingKey
+        ? [effectiveDiscount.familyOrSiblingKey]
+        : [],
     discountSettings,
     children: childRates,
     frozenAt: null,
@@ -1213,7 +1252,7 @@ export async function generateParentContract(
 
 /**
  * Zamraża kwotę umowy przy podpisie na podstawie snapshotu w contract_children
- * i procentów rabatów z amount_breakdown (bez ponownego odczytu cennika grup).
+ * i flag rabatów na umowie (bez ponownego odczytu cennika grup).
  */
 export async function finalizeContractPricingAtSign(
   contractId: string,
@@ -1267,36 +1306,18 @@ export async function finalizeContractPricingAtSign(
   }));
 
   const paymentType = parsePaymentType(contract.payment_type);
-  // Rabaty % wyłączone — nie odtwarzamy zniżek z breakdownu / flag umowy.
+  const discountSettings = resolveContractDiscountSettings(
+    await getSchoolDiscountSettings(contract.school_id)
+  ) as SchoolDiscountSettings;
+
   const discountKeys: DiscountKey[] = [];
-  const discountSettings = await getSchoolDiscountSettings(contract.school_id);
-  /*
-  const existing = parseContractAmountBreakdown(contract.amount_breakdown);
-
-  let discountKeys: DiscountKey[];
-  let discountSettings: SchoolDiscountSettings;
-
-  if (existing && existing.discounts.length > 0) {
-    discountKeys = existing.discounts.map((d) => d.key);
-    const schoolSettings = await getSchoolDiscountSettings(contract.school_id);
-    discountSettings = {
-      LARGE_FAMILY_CARD: 0,
-      SIBLING: 0,
-      maxPercent: schoolSettings.maxPercent,
-      ...Object.fromEntries(existing.discounts.map((d) => [d.key, d.percent])),
-    };
-  } else {
-    discountKeys = [];
-    if (contract.discount_sibling) discountKeys.push(DISCOUNT_KEYS.SIBLING);
+  if (!contract.billing_exempt) {
     if (contract.discount_large_family) {
       discountKeys.push(DISCOUNT_KEYS.LARGE_FAMILY_CARD);
+    } else if (contract.discount_sibling) {
+      discountKeys.push(DISCOUNT_KEYS.SIBLING);
     }
-    discountSettings = await getSchoolDiscountSettings(contract.school_id);
   }
-  */
-  void contract.discount_sibling;
-  void contract.discount_large_family;
-  void contract.amount_breakdown;
 
   const breakdown = buildContractAmountBreakdown({
     paymentType,

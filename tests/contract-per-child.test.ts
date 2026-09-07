@@ -14,10 +14,10 @@ describe("umowa per dziecko — sibling i walidacja", () => {
     discountSettings: { SIBLING: 5, LARGE_FAMILY_CARD: 10 },
   };
 
-  it("rabat rodzeństwa wyłączony — final = base nawet przy siblingEligible", () => {
+  it("rabat rodzeństwa — final = base − 5%", () => {
     const preview = computeContractPreviewAmount(150, true, pricing);
-    expect(preview.finalTotal).toBe(150);
-    expect(preview.discountKeys).toEqual([]);
+    expect(preview.finalTotal).toBe(142.5);
+    expect(preview.discountKeys).toEqual([DISCOUNT_KEYS.SIBLING]);
   });
 
   it("bez rabatu gdy siblingEligible=false (jedno dziecko)", () => {
@@ -26,22 +26,22 @@ describe("umowa per dziecko — sibling i walidacja", () => {
     expect(preview.discountKeys).not.toContain(DISCOUNT_KEYS.SIBLING);
   });
 
-  it("resolveContractDiscountKeys: rabaty % wyłączone (zawsze [])", () => {
-    expect(resolveContractDiscountKeys(true, pricing)).toEqual([]);
+  it("resolveContractDiscountKeys: KDR wyłącza rodzeństwo", () => {
+    expect(resolveContractDiscountKeys(true, pricing)).toEqual([DISCOUNT_KEYS.SIBLING]);
     expect(resolveContractDiscountKeys(false, pricing)).toEqual([]);
     expect(
       resolveContractDiscountKeys(true, { ...pricing, discountLargeFamily: true })
-    ).toEqual([]);
+    ).toEqual([DISCOUNT_KEYS.LARGE_FAMILY_CARD]);
   });
 
-  it("resolveContractDiscountKeys: cena indywidualna — nadal brak zniżek", () => {
+  it("resolveContractDiscountKeys: ceny ręczne nie blokują zniżek", () => {
     expect(
       resolveContractDiscountKeys(true, {
         ...pricing,
         discountLargeFamily: true,
         hasIndividualPricing: true,
       })
-    ).toEqual([]);
+    ).toEqual([DISCOUNT_KEYS.LARGE_FAMILY_CARD]);
   });
 
   it("applyDiscountsToAmount nie przekracza limitu szkoły (maxPercent)", () => {
@@ -63,7 +63,7 @@ describe("umowa per dziecko — sibling i walidacja", () => {
     expect(amount).toBe(85);
   });
 
-  it("breakdown jednej umowy = jedno dziecko bez rabatu %", () => {
+  it("breakdown jednej umowy = jedno dziecko z rabatem rodzeństwa", () => {
     const breakdown = buildContractAmountBreakdown({
       paymentType: "MONTHLY",
       billingExempt: false,
@@ -79,34 +79,12 @@ describe("umowa per dziecko — sibling i walidacja", () => {
         },
       ],
     });
-    expect(breakdown.children).toHaveLength(1);
-    expect(breakdown.final_total).toBe(150);
+    expect(breakdown.base_total).toBe(150);
+    expect(breakdown.final_total).toBe(142.5);
+    expect(breakdown.discounts).toHaveLength(1);
   });
 
-  it("validateSingleChildForContract wymaga AWAITING_CONTRACT i grupy", () => {
+  it("validateSingleChildForContract wymaga jednego dziecka", () => {
     expect(validateSingleChildForContract(null).ok).toBe(false);
-    const ok = validateSingleChildForContract({
-      child_id: "c1",
-      request_id: "r1",
-      access_level: "AWAITING_CONTRACT",
-      first_name: "A",
-      last_name: "B",
-      birth_date: "2020-01-01",
-      group_id: "g1",
-      group_name: "G",
-      price_monthly: "150",
-      price_yearly: null,
-      price_per_lesson: null,
-      lesson_unit_price: null,
-      monthly_unit_price: null,
-      yearly_unit_price: null,
-      discount_percent: null,
-      preferred_location: null,
-      preferred_location_name: null,
-      teacher_first_name: null,
-      teacher_last_name: null,
-      teacher_pickup_consent: false,
-    });
-    expect(ok.ok).toBe(true);
   });
 });

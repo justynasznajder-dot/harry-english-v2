@@ -464,7 +464,10 @@ export default function MessagesPanel({
   }, [composeOpen, composeSection, loadEnrollmentEmailLocations]);
 
   useEffect(() => {
-    if (!composeOpen) return;
+    if (!composeOpen || mode === 'parent') {
+      setMessageTemplates([]);
+      return;
+    }
     fetch('/api/messages/templates', { cache: 'no-store' })
       .then((r) => r.json())
       .then((data) => setMessageTemplates(data.templates ?? []))
@@ -631,14 +634,16 @@ export default function MessagesPanel({
     return name;
   };
 
-  // Rodzic: jeden adresat (zarządca) — wybierz automatycznie, gdy jest dokładnie jeden.
+  // Rodzic: zawsze do zarządcy szkoły — wybierz automatycznie (bez możliwości zmiany).
   useEffect(() => {
     if (!composeOpen || mode !== 'parent') return;
-    if (recipients.length === 1 && !singleRecipientId) {
-      const r = recipients[0];
-      setSingleRecipientId(r.id);
-      setSelectedRecipientLabels({ [r.id]: recipientLabel(r) });
-    }
+    if (recipients.length === 0) return;
+    const stillValid =
+      singleRecipientId && recipients.some((r) => r.id === singleRecipientId);
+    if (stillValid) return;
+    const r = recipients[0];
+    setSingleRecipientId(r.id);
+    setSelectedRecipientLabels({ [r.id]: recipientLabel(r) });
   }, [composeOpen, mode, recipients, singleRecipientId]);
 
   const parseExternalEmailBulk = () => {
@@ -974,8 +979,8 @@ export default function MessagesPanel({
 
       {mode === 'parent' && (
         <p className="text-sm leading-relaxed text-zinc-600">
-          Tutaj możesz skontaktować się ze szkołą bezpośrednio przez portal — napisz wiadomość, a
-          odpowiedź zobaczysz w tej skrzynce.
+          Tutaj możesz skontaktować się z zarządcą szkoły bezpośrednio przez portal — napisz
+          wiadomość, a odpowiedź zobaczysz w tej skrzynce.
         </p>
       )}
 

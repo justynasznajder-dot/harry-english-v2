@@ -138,6 +138,8 @@ export interface User {
   first_name: string;
   last_name: string;
   phone: string | null;
+  /** PESEL (opcjonalny) — m.in. lektorzy. */
+  pesel: string | null;
   active: boolean;
   confirmed: boolean;
   must_change_password: boolean;
@@ -292,6 +294,10 @@ function mapUserRow(row: QueryResultRow): User {
     first_name: row.first_name as string,
     last_name: row.last_name as string,
     phone: row.phone != null ? (row.phone as string) : null,
+    pesel:
+      row.pesel != null && String(row.pesel).trim() !== ""
+        ? String(row.pesel).trim().slice(0, 11)
+        : null,
     active: row.active === undefined ? true : Boolean(row.active),
     confirmed: Boolean(row.confirmed),
     must_change_password: Boolean(row.must_change_password),
@@ -524,6 +530,7 @@ export async function updateUser(
     role: UserRole;
     confirmed: boolean;
     phone: string | null;
+    pesel: string | null;
   }>
 ): Promise<boolean> {
   const sets: string[] = [];
@@ -553,6 +560,10 @@ export async function updateUser(
   if (data.phone !== undefined) {
     sets.push(`phone = $${i++}`);
     vals.push(data.phone);
+  }
+  if (data.pesel !== undefined) {
+    sets.push(`pesel = $${i++}`);
+    vals.push(data.pesel);
   }
 
   if (sets.length === 0) return false;

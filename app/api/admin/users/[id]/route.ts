@@ -96,6 +96,7 @@ export async function GET(
         active: target.active,
         access_level: target.access_level,
         phone: target.phone,
+        pesel: target.pesel,
         school_id: target.school_id,
         resignation_date: target.resignation_date,
         created_at: target.created_at,
@@ -201,6 +202,21 @@ export async function PUT(
       updateData.phone =
         p == null || String(p).trim() === "" ? null : String(p).trim();
     }
+    if (body.pesel !== undefined) {
+      const raw = body.pesel == null ? "" : String(body.pesel).trim();
+      if (raw === "") {
+        updateData.pesel = null;
+      } else {
+        const digits = raw.replace(/\D/g, "").slice(0, 11);
+        if (digits.length !== 11) {
+          return NextResponse.json(
+            { message: "PESEL musi mieć 11 cyfr" },
+            { status: 400 }
+          );
+        }
+        updateData.pesel = digits;
+      }
+    }
 
     if (Object.keys(updateData).length === 0) {
       return NextResponse.json({ message: "Brak danych do aktualizacji" }, { status: 400 });
@@ -245,6 +261,7 @@ export async function PUT(
       confirmed: user.confirmed,
       active: user.active,
       phone: user.phone,
+      pesel: user.pesel,
       access_level: user.access_level,
       resignation_date: user.resignation_date,
       created_at: user.created_at,

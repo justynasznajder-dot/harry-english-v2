@@ -26,7 +26,6 @@ import {
   findNextQueuedChildWithoutContract,
 } from "@/lib/parent-contract";
 import { storeSignedContractPdfsInR2 } from "@/lib/r2-storage";
-import { createContractYearlyInvoice } from "@/lib/invoicing";
 
 /** PDF (Chromium) + R2 + mail — wymaga więcej czasu niż domyślne 10 s na Vercel. */
 export const maxDuration = 60;
@@ -330,22 +329,8 @@ export async function POST(request: NextRequest) {
 
     await syncParentUserAccessLevel(parentId);
 
-
-
-    // Faktura przy podpisaniu tylko dla płatności jednorazowej (YEARLY).
-    // Ratalne (MONTHLY) — wyłącznie ręcznie w panelu managera (aż do odwołania).
-    if (contract.payment_type === "YEARLY") {
-      try {
-        const yearly = await createContractYearlyInvoice(contract.id);
-        if (!yearly.ok) {
-          console.error("Yearly invoice on sign failed:", yearly.message);
-        }
-      } catch (invoiceErr) {
-        console.error("Yearly invoice on sign error:", invoiceErr);
-      }
-    }
-
-
+    // Faktury przy podpisaniu wyłączone (YEARLY i MONTHLY) — na start generowane ręcznie.
+    // Żeby włączyć auto jednorazowe: createContractYearlyInvoice(contract.id) z lib/invoicing.
 
     let pdfGenerated = false;
     let pdfStored = false;

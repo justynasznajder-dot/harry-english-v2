@@ -14,6 +14,7 @@ import {
 import { fetchParentContractForPortal, fetchSignedContractDownloadsForParent } from "@/lib/parent-contract";
 import { requireParentContext } from "@/lib/parent-portal-auth";
 import { getSchoolDiscountSettings, isComplimentaryForParent } from "@/lib/school-discounts";
+import { resolveContractDiscountSettings } from "@/lib/contract-pricing-preview";
 import { getParentLargeFamilyCard } from "@/lib/parent-profile-discount";
 import { sqlScheduleTemplateVisibleForStudent } from "@/lib/lessons-per-week";
 
@@ -337,7 +338,9 @@ export async function GET(request: NextRequest) {
       complimentaryEnrollment
     );
 
-    const discountSettings = await getSchoolDiscountSettings(SCHOOL_ID);
+    const discountSettings = resolveContractDiscountSettings(
+      await getSchoolDiscountSettings(SCHOOL_ID)
+    );
     const discountLargeFamily = await getParentLargeFamilyCard(parentId);
 
     const multiChildrenRes = await queryDb<{ enrolling_multiple_children: boolean }>(

@@ -718,6 +718,7 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
           <div className="flex min-h-0 flex-col overflow-hidden p-3 md:p-4">
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto md:gap-3">
               {section === 'parents' &&
+                !isParentSimpleCompose &&
                 props.messageTemplates &&
                 props.messageTemplates.length > 0 &&
                 props.onApplyTemplate && (
@@ -744,42 +745,16 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
               {!isEmailSection && (
                 <div className="shrink-0">
                   {isParentSimpleCompose ? (
-                    <>
-                      <label
-                        htmlFor="compose-recipient"
-                        className="mb-1 block text-sm font-medium text-zinc-800"
-                      >
-                        Adresat
-                      </label>
-                      <select
-                        id="compose-recipient"
-                        value={adresatIds[0] ?? ''}
-                        disabled={props.recipientsLoading}
-                        onChange={(e) => {
-                          const id = e.target.value;
-                          if (!id) {
-                            props.onClearSingleRecipient();
-                            return;
-                          }
-                          const r = props.recipients.find((x) => x.id === id);
-                          if (r) props.onSelectSingleRecipient(r);
-                        }}
-                        className={`w-full ${COMPOSE_INPUT}`}
-                      >
-                        <option value="">
-                          {props.recipientsLoading
-                            ? 'Ładowanie…'
-                            : props.recipients.length === 0
-                              ? 'Brak dostępnych odbiorców'
-                              : 'Wybierz odbiorcę…'}
-                        </option>
-                        {props.recipients.map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {props.recipientLabel(r)}
-                          </option>
-                        ))}
-                      </select>
-                    </>
+                    <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5 text-sm text-zinc-800">
+                      <span className="font-medium text-zinc-700">Adresat:</span>{' '}
+                      {props.recipientsLoading
+                        ? 'Ładowanie…'
+                        : adresatIds[0]
+                          ? (props.selectedRecipientLabels[adresatIds[0]] ?? 'Zarządca szkoły')
+                          : props.recipients.length === 0
+                            ? 'Brak zarządcy szkoły'
+                            : 'Zarządca szkoły'}
+                    </div>
                   ) : (
                     <>
                       <label className="mb-1 block text-sm font-medium text-zinc-800">
@@ -956,19 +931,17 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
               </button>
               <button
                 type="button"
-                disabled={props.sendingCompose || templateFieldsIncomplete}
+                disabled={
+                  props.sendingCompose ||
+                  templateFieldsIncomplete ||
+                  (isParentSimpleCompose && adresatIds.length === 0)
+                }
                 onClick={() =>
                   props.onSend(
                     section === 'parents' && selectedTemplateKey
                       ? {
                           templateKey: selectedTemplateKey,
-                          templateFieldValues:
-                            isParentSimpleCompose && selectedTemplateKey === 'resignation'
-                              ? {
-                                  ...templateFieldValues,
-                                  powod: props.composeContent,
-                                }
-                              : templateFieldValues,
+                          templateFieldValues: templateFieldValues,
                         }
                       : undefined
                   )

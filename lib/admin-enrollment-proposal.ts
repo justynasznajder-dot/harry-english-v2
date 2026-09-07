@@ -52,6 +52,7 @@ export type ProposalEmailItem = {
   groupName: string;
   locationName: string;
   schedule: string;
+  teacherName: string;
 };
 
 export type SharedParentState = {
@@ -129,7 +130,7 @@ export async function submitEnrollmentProposal(
     draftOnly?: boolean;
     /** Przy draftOnly — puste stawki jako NULL. */
     allowEmptyPrices?: boolean;
-    /** Tryb bez umowy: stawki wymagane jak u płatnych; grupa może być pusta przy samym zapisie. */
+    /** Tryb bez umowy: jednorazowa + ratalna wymagane; za zajęcia opcjonalne; grupa może być pusta przy samym zapisie. */
     complimentaryPrices?: boolean;
   }
 ): Promise<
@@ -224,6 +225,7 @@ export async function submitEnrollmentProposal(
     name: string;
     location_name: string;
     schedule: string;
+    teacher_name: string;
     price_monthly: string | null;
     price_yearly: string | null;
   }>(
@@ -241,8 +243,13 @@ export async function submitEnrollmentProposal(
                 ''
               ),
               'Do ustalenia'
-            ) AS schedule
+            ) AS schedule,
+            COALESCE(
+              NULLIF(TRIM(MAX(CONCAT(t.first_name, ' ', t.last_name))), ''),
+              'Do ustalenia'
+            ) AS teacher_name
      FROM groups g
+     LEFT JOIN users t ON t.id = g.teacher_id
      LEFT JOIN locations gl ON gl.id = g.location_id
      LEFT JOIN schedule_templates st ON st.group_id = g.id AND st.active = TRUE
        AND ${sqlScheduleTemplateVisibleForStudent("COALESCE($3::int, 2)")}
@@ -386,7 +393,7 @@ export async function submitEnrollmentProposal(
   let parsedYearly: number | null = null;
 
   if (options?.complimentaryPrices || complimentary) {
-    const lesson = parseUnitPrice(lessonUnitPrice, "za pojedyncze zajęcia", true);
+    const lesson = parseUnitPrice(lessonUnitPrice, "za pojedyncze zajęcia", false);
     if (!lesson.ok) return { ok: false, status: 400, message: lesson.message };
     const monthly = parseUnitPrice(monthlyUnitPrice, "ratalna", true);
     if (!monthly.ok) return { ok: false, status: 400, message: monthly.message };
@@ -604,6 +611,7 @@ export async function submitEnrollmentProposal(
       groupName: group.name,
       locationName: group.location_name,
       schedule: group.schedule,
+      teacherName: group.teacher_name,
     },
     complimentaryCompleted,
     childId: resolvedChildId,
@@ -697,11 +705,11 @@ export async function saveEnrollmentRequestPrices(
     if (!monthly.ok) return { ok: false, status: 400, message: monthly.message };
     const yearly = parseOptionalUnitPrice(input.yearlyUnitPrice, "jednorazowa");
     if (!yearly.ok) return { ok: false, status: 400, message: yearly.message };
-    if (lesson.value == null || monthly.value == null || yearly.value == null) {
+    if (monthly.value == null || yearly.value == null) {
       return {
         ok: false,
         status: 400,
-        message: "Podaj wszystkie 3 stawki (jednorazową, ratalną i za zajęcia)",
+        message: "Podaj stawkę jednorazową i ratalną (za zajęcia opcjonalnie)",
       };
     }
     await queryDb(

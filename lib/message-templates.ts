@@ -4,10 +4,7 @@ export type MessageTemplateKey =
   | "lesson_cancel"
   | "payment_reminder"
   | "group_proposal"
-  | "schedule_change"
-  | "resignation"
-  | "payment_question"
-  | "general_contact";
+  | "schedule_change";
 
 export type MessageTemplate = {
   key: MessageTemplateKey;
@@ -85,31 +82,6 @@ W razie pytań prosimy o kontakt.
 Pozdrawiamy,
 Zespół Harry English`,
     audiences: ["MANAGER", "TEACHER"],
-  },
-  {
-    key: "resignation",
-    label: "Rezygnacja z zajęć",
-    subject: "Rezygnacja z zajęć — {{dziecko}}",
-    content: `Zgłaszam rezygnację z zajęć dla {{dziecko}}.
-
-Powód: 
-
-Proszę o kontakt w sprawie formalności.`,
-    audiences: ["PARENT"],
-  },
-  {
-    key: "payment_question",
-    label: "Pytanie o płatność",
-    subject: "Pytanie o płatność",
-    content: "",
-    audiences: ["PARENT"],
-  },
-  {
-    key: "general_contact",
-    label: "Ogólne pytanie",
-    subject: "",
-    content: "",
-    audiences: ["PARENT"],
   },
 ];
 

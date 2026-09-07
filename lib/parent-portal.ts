@@ -1,9 +1,5 @@
 import { extractContractNumber } from "@/lib/contract-html";
 import { POLISH_DAY_FROM_ST_SQL, queryDb } from "@/lib/db";
-import {
-  applyManualDiscountPercent,
-  parseManualDiscountPercent,
-} from "@/lib/discount-math";
 import { ensurePolishPublicHolidaysForSchoolYear } from "@/lib/ensure-polish-public-holidays";
 import { normalizePaymentType, parsePriceDecimal, type PaymentType } from "@/lib/lesson-pricing";
 
@@ -1285,12 +1281,10 @@ export async function fetchComplimentaryParentPaymentOverview(
     const dateFrom = formatYmd(row.school_year_date_from);
     const dateTo = formatYmd(row.school_year_date_to);
     const lessonsPerWeek = normalizeLessonsPerWeek(row.lessons_per_week) ?? 1;
-    const discountPct = parseManualDiscountPercent(row.discount_percent);
-
     const resolveAmount = (base: number | null): number => {
       if (base == null || !Number.isFinite(base) || base < 0) return 0;
-      const afterDiscount = applyManualDiscountPercent(base, discountPct) ?? base;
-      return Math.floor(afterDiscount);
+      // children.* są już netto po freeze — nie stosuj ponownie discount_percent.
+      return Math.floor(base);
     };
 
     const monthlyBase = scaleAmountByLessonsPerWeek(

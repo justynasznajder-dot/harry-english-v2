@@ -1,6 +1,9 @@
 import {
-  // applyDiscountsToAmount, // wyłączone — sezon cen ręcznych
+  applyDiscountsToAmount,
+  DISCOUNT_KEYS,
   DISCOUNT_LABELS,
+  DEFAULT_LARGE_FAMILY_DISCOUNT_PERCENT,
+  DEFAULT_SIBLING_DISCOUNT_PERCENT,
   type DiscountKey,
   type DiscountPercents,
 } from "@/lib/discount-math";
@@ -9,36 +12,43 @@ export type ContractPricingContext = {
   billingExempt: boolean;
   discountLargeFamily: boolean;
   discountSettings: DiscountPercents;
-  /** Gdy true — ceny indywidualne; żadna zniżka procentowa nie działa. */
+  /** Historyczne — ignorowane; stawki ręczne też dostają KDR/rodzeństwo. */
   hasIndividualPricing?: boolean;
 };
 
 /**
- * Reguły zniżek (wyłączone na sezon cen ręcznych 2025/26):
+ * Reguły zniżek na umowie:
  * - tryb bez opłat → brak zniżek
- * - cena indywidualna → brak zniżek
- * - KDR → tylko KDR (wyłącza rodzeństwo), max 10%
- * - inaczej → ewentualnie rodzeństwo
+ * - KDR → tylko KDR (wyłącza rodzeństwo), hard 10% gdy brak ustawienia szkoły
+ * - inaczej → ewentualnie rodzeństwo (hard 5%)
+ * - rabat managera nie wchodzi
  */
 export function resolveContractDiscountKeys(
   siblingEligible: boolean,
   pricing: ContractPricingContext
 ): DiscountKey[] {
-  // Rabaty procentowe wyłączone — ceny ustalane ręcznie per dziecko. Przywrócić poniżej.
-  void siblingEligible;
-  void pricing;
-  return [];
-  /*
   if (pricing.billingExempt) return [];
-  if (pricing.hasIndividualPricing) return [];
   if (pricing.discountLargeFamily) return [DISCOUNT_KEYS.LARGE_FAMILY_CARD];
   if (siblingEligible) return [DISCOUNT_KEYS.SIBLING];
   return [];
-  */
+}
+
+/** Ustawienia z hard defaultami 10% / 5% gdy szkoła ma 0. */
+export function resolveContractDiscountSettings(
+  settings: DiscountPercents | null | undefined
+): DiscountPercents {
+  const kdr = Number(settings?.LARGE_FAMILY_CARD) || 0;
+  const sibling = Number(settings?.SIBLING) || 0;
+  return {
+    LARGE_FAMILY_CARD: kdr > 0 ? kdr : DEFAULT_LARGE_FAMILY_DISCOUNT_PERCENT,
+    SIBLING: sibling > 0 ? sibling : DEFAULT_SIBLING_DISCOUNT_PERCENT,
+    maxPercent: settings?.maxPercent,
+  };
 }
 
 /**
- * @param siblingEligible — true gdy rodzic ma ≥2 dzieci ACCEPTED/SIGNED (nie liczba dzieci na umowie).
+ * @param siblingEligible — true gdy rodzic zaznaczył „więcej niż jedno dziecko”
+ *   albo ma ≥2 dzieci ACCEPTED/SIGNED (zależnie od wywołania).
  * Drugi argument numeryczny jest wspierany wstecznie: `>= 2` ⇒ siblingEligible.
  */
 export function computeContractPreviewAmount(
@@ -65,12 +75,14 @@ export function computeContractPreviewAmount(
       ? siblingEligibleOrCount >= 2
       : siblingEligibleOrCount;
 
-  const discountKeys = resolveContractDiscountKeys(siblingEligible, pricing);
-  // Rabaty % wyłączone — final = base. Przywrócić applyDiscountsToAmount.
-  const finalTotal = baseTotal;
-  // const finalTotal = applyDiscountsToAmount(baseTotal, discountKeys, pricing.discountSettings);
+  const discountSettings = resolveContractDiscountSettings(pricing.discountSettings);
+  const discountKeys = resolveContractDiscountKeys(siblingEligible, {
+    ...pricing,
+    discountSettings,
+  });
+  const finalTotal = applyDiscountsToAmount(baseTotal, discountKeys, discountSettings);
   const discountLabels = discountKeys.map(
-    (key) => `${DISCOUNT_LABELS[key]} (${pricing.discountSettings[key]}%)`
+    (key) => `${DISCOUNT_LABELS[key]} (${discountSettings[key]}%)`
   );
 
   return { finalTotal, discountKeys, discountLabels };

@@ -1,6 +1,6 @@
 import {
-  // applyDiscountsToAmount, // wyłączone — sezon cen ręcznych
-  // DISCOUNT_LABELS,
+  applyDiscountsToAmount,
+  DISCOUNT_LABELS,
   type DiscountKey,
   type SchoolDiscountSettings,
 } from "@/lib/school-discounts";
@@ -12,7 +12,7 @@ export type ContractAmountChildBreakdown = {
   lesson_unit_price: number | null;
   monthly_unit_price: number | null;
   yearly_unit_price: number | null;
-  /** Kwota bazowa dla wybranego payment_type (MONTHLY/YEARLY); null przy PER_LESSON. */
+  /** Kwota bazowa dla wybranego payment_type (MONTHLY/YEARLY/PER_LESSON). */
   base_amount: number | null;
 };
 
@@ -51,6 +51,7 @@ function baseAmountForPaymentType(
 ): number | null {
   if (paymentType === "MONTHLY") return child.monthly_unit_price;
   if (paymentType === "YEARLY") return child.yearly_unit_price;
+  if (paymentType === "PER_LESSON") return child.lesson_unit_price;
   return null;
 }
 
@@ -62,15 +63,11 @@ export function buildContractAmountBreakdown(input: {
   children: ContractChildRateSnapshot[];
   frozenAt?: Date | string | null;
 }): ContractAmountBreakdown {
-  // Rabaty % wyłączone — nie zapisujemy pozycji zniżek. Przywrócić mapowanie discountKeys.
-  void input.discountKeys;
-  void input.discountSettings;
-  const discounts: ContractAmountDiscountBreakdown[] = [];
-  // const discounts: ContractAmountDiscountBreakdown[] = input.discountKeys.map((key) => ({
-  //   key,
-  //   label: DISCOUNT_LABELS[key],
-  //   percent: input.discountSettings[key] ?? 0,
-  // }));
+  const discounts: ContractAmountDiscountBreakdown[] = input.discountKeys.map((key) => ({
+    key,
+    label: DISCOUNT_LABELS[key],
+    percent: input.discountSettings[key] ?? 0,
+  }));
 
   const children: ContractAmountChildBreakdown[] = input.children.map((child) => ({
     child_id: child.child_id,
@@ -87,19 +84,7 @@ export function buildContractAmountBreakdown(input: {
       billing_exempt: true,
       base_total: 0,
       final_total: 0,
-      discounts,
-      children,
-      frozen_at: input.frozenAt ? new Date(input.frozenAt).toISOString() : null,
-    };
-  }
-
-  if (input.paymentType === "PER_LESSON") {
-    return {
-      payment_type: input.paymentType,
-      billing_exempt: false,
-      base_total: null,
-      final_total: null,
-      discounts,
+      discounts: [],
       children,
       frozen_at: input.frozenAt ? new Date(input.frozenAt).toISOString() : null,
     };
@@ -114,12 +99,10 @@ export function buildContractAmountBreakdown(input: {
   }
 
   const base_total = hasAny ? roundMoney(baseTotal) : null;
-  // Rabaty % wyłączone (sezon cen ręcznych) — final = base. Przywrócić applyDiscountsToAmount.
-  const final_total = base_total;
-  // const final_total =
-  //   base_total == null
-  //     ? null
-  //     : applyDiscountsToAmount(base_total, input.discountKeys, input.discountSettings);
+  const final_total =
+    base_total == null
+      ? null
+      : applyDiscountsToAmount(base_total, input.discountKeys, input.discountSettings);
 
   return {
     payment_type: input.paymentType,
@@ -150,7 +133,6 @@ export function recomputeFinalTotalFromBreakdown(
   breakdown: ContractAmountBreakdown
 ): number | null {
   if (breakdown.billing_exempt) return 0;
-  if (breakdown.payment_type === "PER_LESSON") return null;
 
   let baseTotal = 0;
   let hasAny = false;
@@ -158,18 +140,21 @@ export function recomputeFinalTotalFromBreakdown(
     const amount =
       breakdown.payment_type === "YEARLY"
         ? child.yearly_unit_price
-        : child.monthly_unit_price;
+        : breakdown.payment_type === "PER_LESSON"
+          ? child.lesson_unit_price
+          : child.monthly_unit_price;
     if (amount == null) continue;
     baseTotal += amount;
     hasAny = true;
   }
   if (!hasAny) return null;
 
-  // Rabaty % wyłączone — final = suma stawek. Przywrócić applyDiscountsToAmount.
-  return roundMoney(baseTotal);
-  // const settings = {
-  //   ...Object.fromEntries(breakdown.discounts.map((d) => [d.key, d.percent])),
-  // } as SchoolDiscountSettings;
-  // const keys = breakdown.discounts.map((d) => d.key);
-  // return applyDiscountsToAmount(roundMoney(baseTotal), keys, settings);
+  const settings = {
+    LARGE_FAMILY_CARD: 0,
+    SIBLING: 0,
+    maxPercent: 100,
+    ...Object.fromEntries(breakdown.discounts.map((d) => [d.key, d.percent])),
+  } as SchoolDiscountSettings;
+  const keys = breakdown.discounts.map((d) => d.key);
+  return applyDiscountsToAmount(roundMoney(baseTotal), keys, settings);
 }

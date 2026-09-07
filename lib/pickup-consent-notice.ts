@@ -5,6 +5,10 @@ export const PICKUP_CONSENT_DOCUMENT_TITLE =
 
 /** Prefiks nazwy pliku PDF (Załącznik nr 2). */
 export const PICKUP_CONSENT_PDF_TITLE =
+  "Załącznik nr 2 – Upoważnienie lektora do odbioru dziecka" as const;
+
+/** Starszy prefiks PDF — nadal rozpoznawany przy pobieraniu. */
+export const PICKUP_CONSENT_PDF_TITLE_LEGACY =
   "Załącznik nr 2 – Upoważnienie lektora do towarzyszenia dziecku" as const;
 
 export const PICKUP_CONSENT_PRINT_INSTRUCTIONS = {
@@ -18,7 +22,7 @@ export const PICKUP_CONSENT_PRINT_INSTRUCTIONS = {
     "Jeśli nie masz możliwości wydrukowania, nauczyciel na pierwszych zajęciach będzie miał druki do wypełnienia na miejscu.",
 } as const;
 
-/** `Załącznik nr 2 – Upoważnienie lektora do towarzyszenia dziecku _ Imię Nazwisko _ 00031-2-2026.pdf` */
+/** `Załącznik nr 2 – Upoważnienie lektora do odbioru dziecka _ Imię Nazwisko _ 00031-2-2026.pdf` */
 export function buildPickupConsentPdfFilename(
   childFullName: string,
   contractNumber?: string | null
@@ -39,6 +43,7 @@ export function isPickupConsentPdfFilename(filename: string): boolean {
   const base = (filename.split(/[/\\]/).pop() ?? filename).trim().toLowerCase();
   return (
     base.startsWith(PICKUP_CONSENT_PDF_TITLE.toLowerCase()) ||
+    base.startsWith(PICKUP_CONSENT_PDF_TITLE_LEGACY.toLowerCase()) ||
     base.startsWith(`${PICKUP_CONSENT_DOCUMENT_TITLE.toLowerCase()}_`) ||
     /zalacznik-2-odbior/i.test(base)
   );
@@ -48,6 +53,7 @@ export function isPickupConsentPdfFilename(filename: string): boolean {
  * Ujednolica HTML Załącznika 2:
  * - nagłówek: „Załącznik nr 2 do umowy nr {numer}”
  * - usuwa zbędny podtytuł „Zgoda na odebranie…”
+ * - łączy zdanie „Upoważniam…” z kontynuacją pod polami
  * - naprawia skutek starej normalizacji (Zgoda… + numer w span)
  */
 export function normalizePickupConsentDocumentHtml(html: string): string {
@@ -62,12 +68,21 @@ export function normalizePickupConsentDocumentHtml(html: string): string {
     )
     .replace(
       /Imię,\s*nazwisko,\s*numer\s+dowodu\s+osobistego\s*:/gi,
-      "Imię i nazwisko:",
+      "Imię i nazwisko lektora:",
+    )
+    .replace(
+      /Imię\s+i\s+nazwisko\s*:/gi,
+      "Imię i nazwisko lektora:",
     )
     // Pusty span po imieniu lektora (dawny placeholder numeru dowodu).
     .replace(
       /(<span class="ph">[^<]*<\/span>)\s*<span class="ph">\s*<\/span>/gi,
       "$1",
+    )
+    // Stary układ: „Upoważniam…” nad polami + „do odbioru…” pod spodem → jeden akapit pod polami.
+    .replace(
+      /<p(\s[^>]*)?>\s*(Upoważniam\s+lektora[\s\S]*?<strong>Harry English<\/strong>)\s*<\/p>\s*(<div class="party-block">[\s\S]*?<\/div>)\s*<p(\s[^>]*)?>\s*(do odbioru dziecka[\s\S]*?)<\/p>/gi,
+      "$3\n\n<p>\n  $2\n  $5\n</p>",
     )
     .replace(
       /Klient potwierdza zapoznanie się z treścią załącznika i akceptuje jego warunki\./gi,

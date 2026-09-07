@@ -98,7 +98,7 @@ export const DEFAULT_SIBLING_DISCOUNT_PERCENT = 5;
 export type EffectiveDiscountMode = "contract" | "complimentary";
 
 export type EffectiveDiscountInput = {
-  /** Umowa: max z przysługujących. Bez umowy: manager + (KDR XOR rodzeństwo). */
+  /** Umowa: max z przysługujących. Bez umowy: manager + KDR + rodzeństwo (sumują się). */
   mode: EffectiveDiscountMode;
   /** Rabat wpisany przez managera (children.discount_percent). */
   managerPercent?: unknown;
@@ -112,13 +112,19 @@ export type EffectiveDiscountResult = {
   /** Łączny % do odjęcia od kwoty (0–100). */
   percent: number;
   managerPercent: number;
-  /** KDR albo rodzeństwo (nigdy oba naraz) — 0 gdy brak. */
+  /**
+   * Umowa: max(KDR, rodzeństwo).
+   * Bez umowy: KDR + rodzeństwo (sumują się).
+   */
   familyOrSiblingPercent: number;
-  /** Który rabat rodzinny wygrał (KDR ma pierwszeństwo przed rodzeństwem). */
+  /**
+   * Umowa / pojedynczy rabat rodzinny: który wygrał.
+   * Bez umowy przy obu zaznaczonych: null (oba weszły w sumę).
+   */
   familyOrSiblingKey: DiscountKey | null;
   /**
    * contract: który pojedynczy rabat wygrał.
-   * complimentary: „stack” gdy jest manager + rodzinny, inaczej źródło jedynego.
+   * complimentary: „stack” gdy więcej niż jedno źródło, inaczej źródło jedynego.
    */
   source: "none" | "manager" | DiscountKey | "stack";
 };
@@ -153,8 +159,8 @@ function resolveSiblingPercent(
 /**
  * Wylicza efektywny % rabatu.
  *
- * - Rodzic z umową: najwyższy z {manager, KDR?, rodzeństwo?} (rabaty się nie sumują).
- * - Tryb bez umowy: manager + najwyższy z KDR/rodzeństwo.
+ * - Rodzic z umową: KDR (10%) albo rodzeństwo (5%) — nie sumują się; rabat managera pomijany.
+ * - Tryb bez umowy: manager + KDR + rodzeństwo (wszystkie zaznaczone się sumują).
  */
 export function resolveEffectiveDiscountPercent(
   input: EffectiveDiscountInput
@@ -162,22 +168,29 @@ export function resolveEffectiveDiscountPercent(
   const managerPercent = parseManualDiscountPercent(input.managerPercent) ?? 0;
   const kdrPercent = resolveKdrPercent(input.hasLargeFamilyCard, input.settings);
   const siblingPercent = resolveSiblingPercent(input.hasSiblingDeclared, input.settings);
-  // KDR i rodzeństwo nie sumują się — bierzemy wyższy.
-  const familyOrSiblingPercent = Math.max(kdrPercent, siblingPercent);
-  const familyOrSiblingKey: DiscountKey | null =
-    familyOrSiblingPercent <= 0
-      ? null
-      : kdrPercent >= siblingPercent
-        ? DISCOUNT_KEYS.LARGE_FAMILY_CARD
-        : DISCOUNT_KEYS.SIBLING;
 
   if (input.mode === "complimentary") {
+    const familyOrSiblingPercent = clampDiscountPercent0to100(
+      kdrPercent + siblingPercent
+    );
+    const familyOrSiblingKey: DiscountKey | null =
+      kdrPercent > 0 && siblingPercent > 0
+        ? null
+        : kdrPercent > 0
+          ? DISCOUNT_KEYS.LARGE_FAMILY_CARD
+          : siblingPercent > 0
+            ? DISCOUNT_KEYS.SIBLING
+            : null;
     const percent = clampDiscountPercent0to100(
       managerPercent + familyOrSiblingPercent
     );
+    const contributingParts =
+      Number(managerPercent > 0) +
+      Number(kdrPercent > 0) +
+      Number(siblingPercent > 0);
     let source: EffectiveDiscountResult["source"] = "none";
     if (percent <= 0) source = "none";
-    else if (managerPercent > 0 && familyOrSiblingPercent > 0) source = "stack";
+    else if (contributingParts > 1) source = "stack";
     else if (managerPercent > 0) source = "manager";
     else if (familyOrSiblingKey) source = familyOrSiblingKey;
     return {
@@ -189,31 +202,32 @@ export function resolveEffectiveDiscountPercent(
     };
   }
 
-  // Umowa: max z dostępnych (przy remisie: szkoła > KDR > rodzeństwo).
-  const candidates: Array<{ percent: number; source: EffectiveDiscountResult["source"] }> = [
-    { percent: managerPercent, source: "manager" },
-    { percent: kdrPercent, source: DISCOUNT_KEYS.LARGE_FAMILY_CARD },
-    { percent: siblingPercent, source: DISCOUNT_KEYS.SIBLING },
-  ];
-  let best = candidates[0]!;
-  for (const c of candidates) {
-    if (c.percent > best.percent) best = c;
-  }
-  if (best.percent <= 0) {
+  // Umowa: KDR i rodzeństwo nie sumują się — bierzemy wyższy.
+  // Rabat managera na razie nie wchodzi do umowy (tylko KDR / rodzeństwo).
+  void managerPercent;
+  const familyOrSiblingPercent = Math.max(kdrPercent, siblingPercent);
+  const familyOrSiblingKey: DiscountKey | null =
+    familyOrSiblingPercent <= 0
+      ? null
+      : kdrPercent >= siblingPercent
+        ? DISCOUNT_KEYS.LARGE_FAMILY_CARD
+        : DISCOUNT_KEYS.SIBLING;
+
+  if (familyOrSiblingPercent <= 0) {
     return {
       percent: 0,
-      managerPercent,
-      familyOrSiblingPercent,
-      familyOrSiblingKey,
+      managerPercent: 0,
+      familyOrSiblingPercent: 0,
+      familyOrSiblingKey: null,
       source: "none",
     };
   }
   return {
-    percent: clampDiscountPercent0to100(best.percent),
-    managerPercent,
+    percent: clampDiscountPercent0to100(familyOrSiblingPercent),
+    managerPercent: 0,
     familyOrSiblingPercent,
     familyOrSiblingKey,
-    source: best.source,
+    source: familyOrSiblingKey ?? "none",
   };
 }
 
@@ -232,7 +246,7 @@ export function formatEffectiveDiscountInfo(
     return `${result.percent}% rabatu z powodu rodzeństwa`;
   }
   if (result.source === "stack") {
-    return `${result.percent}% rabatu (szkoła + zniżka rodzinna)`;
+    return `${result.percent}% rabatu (zniżki się sumują)`;
   }
   return `${result.percent}% rabatu`;
 }

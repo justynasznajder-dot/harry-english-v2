@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryDb } from "@/lib/db";
+import { reapplyComplimentaryNetRatesForParent } from "@/lib/complimentary-enrollment";
 import { setParentLargeFamilyCard } from "@/lib/parent-profile-discount";
 import { requireParentContext } from "@/lib/parent-portal-auth";
+import { isComplimentaryForParent } from "@/lib/school-discounts";
 
 /**
  * Zapis deklaracji rabatów rodzica (KDR + „więcej niż jedno dziecko”)
@@ -49,16 +51,51 @@ export async function PATCH(request: NextRequest) {
         parentUserId: parentId,
         discountLargeFamily,
       });
+      // KDR wyłącza deklarację rodzeństwa.
+      if (discountLargeFamily === true) {
+        await queryDb(
+          `UPDATE enrollment_requests
+           SET enrolling_multiple_children = FALSE
+           WHERE school_id = $1
+             AND user_id = $2
+             AND UPPER(BTRIM(COALESCE(status::text, ''))) <> 'REJECTED'`,
+          [schoolId, parentId]
+        );
+      }
     }
     if (enrollingMultipleChildren !== undefined) {
-      await queryDb(
-        `UPDATE enrollment_requests
-         SET enrolling_multiple_children = $3
-         WHERE school_id = $1
-           AND user_id = $2
-           AND UPPER(BTRIM(COALESCE(status::text, ''))) <> 'REJECTED'`,
-        [schoolId, parentId, enrollingMultipleChildren]
-      );
+      const kdrActive =
+        discountLargeFamily === true ||
+        (discountLargeFamily !== false &&
+          (
+            await queryDb<{ v: boolean }>(
+              `SELECT COALESCE(discount_large_family, FALSE) AS v
+               FROM parent_profiles WHERE user_id = $1 LIMIT 1`,
+              [parentId]
+            )
+          ).rows[0]?.v === true);
+      if (!kdrActive) {
+        await queryDb(
+          `UPDATE enrollment_requests
+           SET enrolling_multiple_children = $3
+           WHERE school_id = $1
+             AND user_id = $2
+             AND UPPER(BTRIM(COALESCE(status::text, ''))) <> 'REJECTED'`,
+          [schoolId, parentId, enrollingMultipleChildren]
+        );
+      }
+    }
+
+    const parentEmailRes = await queryDb<{ email: string | null }>(
+      `SELECT email FROM users WHERE id = $1 LIMIT 1`,
+      [parentId]
+    );
+    const complimentary = await isComplimentaryForParent(schoolId, {
+      parentId,
+      parentEmail: parentEmailRes.rows[0]?.email ?? null,
+    });
+    if (complimentary) {
+      await reapplyComplimentaryNetRatesForParent(parentId, schoolId);
     }
 
     return NextResponse.json({

@@ -34,7 +34,6 @@ import {
   buildSaleInvoiceNumber,
   ensureChildClientNumber,
 } from "@/lib/client-numbers";
-import { parsePriceDecimal } from "@/lib/lesson-pricing";
 
 export const INVOICE_DESC_MONTHLY_PREFIX = "Rata miesięczna";
 export const INVOICE_DESC_YEARLY_PREFIX = "Płatność jednorazowa";
@@ -916,15 +915,11 @@ async function listMonthlyInvoiceChildren(
     child_id: string;
     first_name: string | null;
     last_name: string | null;
-    monthly_unit_price: string | null;
-    child_monthly_unit_price: string | null;
   }>(
     `SELECT
        cc.child_id,
        ch.first_name,
-       ch.last_name,
-       cc.monthly_unit_price::text AS monthly_unit_price,
-       ch.monthly_unit_price::text AS child_monthly_unit_price
+       ch.last_name
      FROM contract_children cc
      JOIN children ch ON ch.id = cc.child_id
      WHERE cc.contract_id = $1
@@ -944,30 +939,13 @@ async function listMonthlyInvoiceChildren(
     ];
   }
 
-  if (res.rows.length === 1) {
-    const row = res.rows[0]!;
-    const amount =
-      parsePriceDecimal(row.monthly_unit_price) ??
-      parsePriceDecimal(row.child_monthly_unit_price) ??
-      contractAmount;
-    const childName =
-      `${formatPersonName(row.first_name ?? "")} ${formatPersonName(row.last_name ?? "")}`.trim() ||
-      "dziecko";
-    return [{ childId: row.child_id, childName, amount }];
-  }
-
-  const out: Array<{ childId: string; childName: string; amount: number }> = [];
-  for (const row of res.rows) {
-    const amount =
-      parsePriceDecimal(row.monthly_unit_price) ??
-      parsePriceDecimal(row.child_monthly_unit_price);
-    if (amount == null || amount <= 0) continue;
-    const childName =
-      `${formatPersonName(row.first_name ?? "")} ${formatPersonName(row.last_name ?? "")}`.trim() ||
-      "dziecko";
-    out.push({ childId: row.child_id, childName, amount });
-  }
-  return out;
+  // Jedna umowa = jedna finalna kwota z contracts.amount (ta sama co miesiąc).
+  // Przy legacy wielu dzieciach na umowie — cała kwota na pierwszym dziecku (bez dublowania).
+  const primary = res.rows[0]!;
+  const childName =
+    `${formatPersonName(primary.first_name ?? "")} ${formatPersonName(primary.last_name ?? "")}`.trim() ||
+    "dziecko";
+  return [{ childId: primary.child_id, childName, amount: contractAmount }];
 }
 
 async function resolveContractChildLabel(contractId: string): Promise<{

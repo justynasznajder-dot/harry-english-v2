@@ -14,6 +14,7 @@ type AdminUserDetail = {
   confirmed: boolean;
   active: boolean;
   phone: string | null;
+  pesel: string | null;
   client_number?: string | null;
 };
 
@@ -41,6 +42,7 @@ export default function AdminUserProfilePage() {
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  const [pesel, setPesel] = useState('');
   const [confirmed, setConfirmed] = useState(false);
 
   const load = useCallback(async () => {
@@ -63,6 +65,7 @@ export default function AdminUserProfilePage() {
       setLastName(u.last_name ?? '');
       setEmail(u.email ?? '');
       setPhone(u.phone ?? '');
+      setPesel(u.pesel ?? '');
       setConfirmed(Boolean(u.confirmed));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Błąd ładowania');
@@ -99,6 +102,7 @@ export default function AdminUserProfilePage() {
           role: user.role,
           confirmed,
           phone: phone.trim() || null,
+          pesel: pesel.trim() || null,
         }),
       });
       const data = await res.json();
@@ -112,6 +116,7 @@ export default function AdminUserProfilePage() {
               last_name: lastName.trim(),
               email: email.trim(),
               phone: phone.trim() || null,
+              pesel: pesel.trim() || null,
               confirmed,
             }
           : prev
@@ -235,6 +240,18 @@ export default function AdminUserProfilePage() {
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
                     placeholder="+48 …"
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm text-zinc-700 sm:col-span-2">
+                  PESEL
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={11}
+                    className="rounded-xl border border-emerald-200 px-3 py-2 text-zinc-900"
+                    value={pesel}
+                    onChange={(e) => setPesel(e.target.value.replace(/\D/g, '').slice(0, 11))}
+                    placeholder="11 cyfr (opcjonalnie)"
                   />
                 </label>
                 <div className="text-sm text-zinc-700 sm:col-span-2">

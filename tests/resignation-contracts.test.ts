@@ -43,7 +43,7 @@ describe("resignation pricing expectation", () => {
       ],
     });
 
-    expect(withSibling.final_total).toBe(300);
+    expect(withSibling.final_total).toBe(285);
     expect(afterResignation.final_total).toBe(150);
     expect(afterResignation.discounts).toEqual([]);
   });

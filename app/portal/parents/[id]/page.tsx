@@ -25,6 +25,8 @@ type ParentProfileDto = {
   companyName?: string | null;
   nip?: string | null;
   billingType?: 'private' | 'company';
+  discountLargeFamily?: boolean;
+  enrollingMultipleChildren?: boolean;
 } | null;
 
 type ParentChildRow = {
@@ -61,6 +63,8 @@ export default function AdminParentEditPage() {
   const [billingType, setBillingType] = useState<'private' | 'company'>('private');
   const [companyName, setCompanyName] = useState('');
   const [nip, setNip] = useState('');
+  const [discountLargeFamily, setDiscountLargeFamily] = useState(false);
+  const [enrollingMultipleChildren, setEnrollingMultipleChildren] = useState(false);
   const [children, setChildren] = useState<ParentChildRow[]>([]);
   const [hasInvoiceProfile, setHasInvoiceProfile] = useState(false);
 
@@ -98,6 +102,12 @@ export default function AdminParentEditPage() {
         setBillingType(p?.billingType === 'company' ? 'company' : 'private');
         setCompanyName(p?.companyName ?? '');
         setNip(p?.nip ?? '');
+        setDiscountLargeFamily(
+          Boolean(pJson.discountLargeFamily ?? p?.discountLargeFamily),
+        );
+        setEnrollingMultipleChildren(
+          Boolean(pJson.enrollingMultipleChildren ?? p?.enrollingMultipleChildren),
+        );
         setHasInvoiceProfile(
           Boolean(
             p &&
@@ -115,6 +125,8 @@ export default function AdminParentEditPage() {
         setBillingType('private');
         setCompanyName('');
         setNip('');
+        setDiscountLargeFamily(false);
+        setEnrollingMultipleChildren(false);
         setHasInvoiceProfile(false);
       }
 
@@ -426,6 +438,36 @@ export default function AdminParentEditPage() {
                       onChange={(e) => setZipCode(e.target.value)}
                     />
                   </label>
+                </div>
+                <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 px-3 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                    Deklaracje rabatów rodzica
+                  </p>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Zaznaczone przez rodzica przy zapisie / umowie — tylko podgląd.
+                  </p>
+                  <div className="mt-3 flex flex-col gap-2 text-sm text-zinc-700">
+                    <label className="inline-flex items-start gap-2">
+                      <input
+                        type="checkbox"
+                        checked={discountLargeFamily}
+                        disabled
+                        readOnly
+                        className="mt-0.5 h-4 w-4 rounded border-emerald-300 text-[#0f6e56] focus:ring-[#0f6e56] disabled:opacity-90"
+                      />
+                      <span>Karta Dużej Rodziny (KDR)</span>
+                    </label>
+                    <label className="inline-flex items-start gap-2">
+                      <input
+                        type="checkbox"
+                        checked={enrollingMultipleChildren}
+                        disabled
+                        readOnly
+                        className="mt-0.5 h-4 w-4 rounded border-emerald-300 text-[#0f6e56] focus:ring-[#0f6e56] disabled:opacity-90"
+                      />
+                      <span>Rodzeństwo (więcej niż jedno dziecko)</span>
+                    </label>
+                  </div>
                 </div>
               </div>
             </section>

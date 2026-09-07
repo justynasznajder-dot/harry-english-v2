@@ -886,6 +886,7 @@ export async function sendProposalEmail(
     groupName: string;
     locationName: string;
     schedule: string;
+    teacherName?: string;
     childFirstName?: string;
     childLastName?: string;
   },
@@ -893,6 +894,7 @@ export async function sendProposalEmail(
 ) {
   const portalUrl = `${getAppBaseUrl()}/portal/login`;
   const p = getEmailPalette();
+  const teacherName = (proposal.teacherName ?? "").trim() || "Do ustalenia";
   const safeChildName =
     proposal.childFirstName != null && proposal.childLastName != null
       ? `${escapeHtmlForEmail(proposal.childFirstName)} ${escapeHtmlForEmail(proposal.childLastName)}`
@@ -902,14 +904,24 @@ export async function sendProposalEmail(
       ? `${proposal.childFirstName} ${proposal.childLastName}`
       : "Twojego dziecka";
 
+  const pickupConsentHtml = options?.complimentaryCompleted
+    ? ""
+    : `
+      <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;color:${p.text};">
+        Załącznik zawierający zgodę na odbiór dziecka przez lektora należy wydrukować w dwóch egzemplarzach i podpisać własnoręcznie.
+      </p>
+      <ul style="margin:0 0 16px 18px;padding:0;font-size:15px;line-height:1.6;color:${p.text};">
+        <li>Jeden egzemplarz należy przekazać do placówki, z której dziecko będzie odbierane. (świetlica, wychowawca grupy)</li>
+        <li>Drugi egzemplarz należy przekazać lektorowi</li>
+      </ul>
+    `;
+
   const loginHtml = `
       <p style="margin:16px 0 8px 0;font-size:15px;line-height:1.6;color:${p.text};">
         ${
           options?.complimentaryCompleted
             ? "Zaloguj się do portalu danymi, których używasz na co dzień — zapis jest już zakończony."
-            : ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
-              ? "Aby zobaczyć szczegóły propozycji i podjąć decyzję, zaloguj się do portalu danymi, których używasz na co dzień."
-              : "Zaloguj się do portalu danymi, których używasz na co dzień — uzupełnij dane do umowy. Dokument przygotuje szkoła."
+            : "Poniżej znajdziesz dane do logowania w systemie. Zaloguj się danymi, których używasz na co dzień."
         }
       </p>
       <p style="margin:0 0 12px 0;font-size:14px;line-height:1.6;color:${p.text};opacity:0.85;">
@@ -917,21 +929,34 @@ export async function sendProposalEmail(
       </p>
     `;
 
-  const loginText = `
+  const loginText = options?.complimentaryCompleted
+    ? `
 Zaloguj się do portalu danymi, których używasz na co dzień.
+Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logowania.
+`
+    : `
+Poniżej znajdziesz dane do logowania w systemie.
 Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logowania.
 `;
 
   const introHtml = options?.complimentaryCompleted
     ? `Przygotowaliśmy grupę dla ${safeChildName}. Zapis został zakończony (tryb bez umowy) — zaloguj się do portalu, aby zobaczyć szczegóły.`
     : ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
-      ? `Przygotowaliśmy nową propozycję grupy dla ${safeChildName}. Zaakceptuj ją w portalu, a następnie uzupełnij dane do umowy. Umowę przygotuje szkoła.`
-      : `Przygotowaliśmy grupę dla ${safeChildName}. Zaloguj się do portalu i uzupełnij dane do umowy — dokument przygotuje szkoła.`;
+      ? `Przygotowaliśmy nową propozycję grupy dla ${safeChildName}. Zaakceptuj ją w portalu, uzupełnij dane i wygeneruj umowę oraz załączniki.`
+      : `Przygotowaliśmy grupę dla ${safeChildName}. Zaloguj się do portalu, uzupełnij dane i wygeneruj umowę oraz załączniki.`;
   const introText = options?.complimentaryCompleted
     ? `Przygotowaliśmy grupę dla ${childNameText}. Zapis został zakończony (tryb bez umowy) — zaloguj się do portalu, aby zobaczyć szczegóły:`
     : ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
-      ? `Przygotowaliśmy nową propozycję grupy dla ${childNameText}. Zaakceptuj ją w portalu, a następnie uzupełnij dane do umowy. Umowę przygotuje szkoła:`
-      : `Przygotowaliśmy grupę dla ${childNameText}. Zaloguj się do portalu i uzupełnij dane do umowy — dokument przygotuje szkoła:`;
+      ? `Przygotowaliśmy nową propozycję grupy dla ${childNameText}. Zaakceptuj ją w portalu, uzupełnij dane i wygeneruj umowę oraz załączniki.`
+      : `Przygotowaliśmy grupę dla ${childNameText}. Zaloguj się do portalu, uzupełnij dane i wygeneruj umowę oraz załączniki.`;
+
+  const pickupConsentText = options?.complimentaryCompleted
+    ? ""
+    : `
+Załącznik zawierający zgodę na odbiór dziecka przez lektora należy wydrukować w dwóch egzemplarzach i podpisać własnoręcznie.
+- Jeden egzemplarz należy przekazać do placówki, z której dziecko będzie odbierane. (świetlica, wychowawca grupy)
+- Drugi egzemplarz należy przekazać lektorowi
+`;
 
   await sendHarryMail({
     from: {
@@ -944,10 +969,12 @@ Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logow
       title: `Dzień dobry ${escapeHtmlForEmail(parentName)},`,
       intro: introHtml,
       contentHtml: `
+        ${pickupConsentHtml}
         <ul style="margin:0 0 12px 18px;padding:0;font-size:15px;line-height:1.6;color:${p.text};">
           <li><strong>Grupa:</strong> ${escapeHtmlForEmail(proposal.groupName)}</li>
           <li><strong>Lokalizacja:</strong> ${escapeHtmlForEmail(proposal.locationName)}</li>
           <li><strong>Termin:</strong> ${escapeHtmlForEmail(proposal.schedule)}</li>
+          <li><strong>Lektor:</strong> ${escapeHtmlForEmail(teacherName)}</li>
         </ul>
         ${loginHtml}
         ${emailCtaButton(portalUrl, "Przejdź do portalu")}
@@ -959,9 +986,11 @@ Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logow
     text: `Dzień dobry ${parentName},
 
 ${introText}
+${pickupConsentText}
 - Grupa: ${proposal.groupName}
 - Lokalizacja: ${proposal.locationName}
 - Termin: ${proposal.schedule}
+- Lektor: ${teacherName}
 ${loginText}
 Przejdź do portalu: ${portalUrl}
 `,
@@ -975,6 +1004,7 @@ export async function sendCombinedProposalEmail(
     groupName: string;
     locationName: string;
     schedule: string;
+    teacherName?: string;
     childFirstName: string;
     childLastName: string;
   }>,
@@ -991,6 +1021,7 @@ export async function sendCombinedProposalEmail(
   const proposalsHtml = proposals
     .map((proposal) => {
       const safeChildName = `${escapeHtmlForEmail(proposal.childFirstName)} ${escapeHtmlForEmail(proposal.childLastName)}`;
+      const teacherName = (proposal.teacherName ?? "").trim() || "Do ustalenia";
       return `
         <div style="margin:0 0 16px 0;padding:14px 16px;border:2px solid ${p.insetBorder};border-radius:10px;background:${p.insetBg};">
           <p style="margin:0 0 8px 0;font-size:15px;font-weight:700;color:${p.text};">${safeChildName}</p>
@@ -998,6 +1029,7 @@ export async function sendCombinedProposalEmail(
             <li><strong>Grupa:</strong> ${escapeHtmlForEmail(proposal.groupName)}</li>
             <li><strong>Lokalizacja:</strong> ${escapeHtmlForEmail(proposal.locationName)}</li>
             <li><strong>Termin:</strong> ${escapeHtmlForEmail(proposal.schedule)}</li>
+            <li><strong>Lektor:</strong> ${escapeHtmlForEmail(teacherName)}</li>
           </ul>
         </div>
       `;
@@ -1007,10 +1039,12 @@ export async function sendCombinedProposalEmail(
   const proposalsText = proposals
     .map((proposal) => {
       const childName = `${proposal.childFirstName} ${proposal.childLastName}`;
+      const teacherName = (proposal.teacherName ?? "").trim() || "Do ustalenia";
       return `${childName}:
 - Grupa: ${proposal.groupName}
 - Lokalizacja: ${proposal.locationName}
-- Termin: ${proposal.schedule}`;
+- Termin: ${proposal.schedule}
+- Lektor: ${teacherName}`;
     })
     .join("\n\n");
 
@@ -1024,10 +1058,11 @@ export async function sendCombinedProposalEmail(
 
   const credentialsHtml = `
       <p style="margin:16px 0 8px 0;font-size:15px;line-height:1.6;color:${p.text};">
+        Poniżej znajdziesz dane do logowania w systemie.
         ${
           isNewAccount
-            ? "Założyliśmy dla Ciebie konto w portalu. Zaloguj się poniższymi danymi."
-            : "Zaloguj się do portalu poniższymi danymi (konto już masz w systemie)."
+            ? " Założyliśmy dla Ciebie konto w portalu."
+            : " Konto już masz w systemie."
         }
       </p>
       ${emailInsetCellOpen(p)}
@@ -1054,10 +1089,11 @@ export async function sendCombinedProposalEmail(
     `;
 
   const credentialsText = `
+Poniżej znajdziesz dane do logowania w systemie.
 ${
   isNewAccount
-    ? "Założyliśmy dla Ciebie konto w portalu. Zaloguj się poniższymi danymi."
-    : "Zaloguj się do portalu poniższymi danymi (konto już masz w systemie)."
+    ? "Założyliśmy dla Ciebie konto w portalu."
+    : "Konto już masz w systemie."
 }
 - Login (email): ${login.loginEmail}
 - ${isNewAccount ? "Hasło tymczasowe" : "Hasło"}: ${passwordText}
@@ -1076,8 +1112,28 @@ ${
   const introAction = options?.complimentaryCompleted
     ? "Zapis został zakończony (tryb bez umowy) — zaloguj się do portalu, aby zobaczyć szczegóły."
     : ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
-      ? "Zaakceptuj je w portalu, uzupełnij dane do umowy — dokument przygotuje szkoła po zatwierdzeniu grupy."
-      : "Zaloguj się do portalu i uzupełnij dane do umowy — dokument przygotuje szkoła po zatwierdzeniu grupy.";
+      ? "Zaakceptuj je w portalu, uzupełnij dane i wygeneruj umowę oraz załączniki."
+      : "Zaloguj się do portalu, uzupełnij dane i wygeneruj umowę oraz załączniki.";
+
+  const pickupConsentHtml = options?.complimentaryCompleted
+    ? ""
+    : `
+      <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;color:${p.text};">
+        Załącznik zawierający zgodę na odbiór dziecka przez lektora należy wydrukować w dwóch egzemplarzach i podpisać własnoręcznie.
+      </p>
+      <ul style="margin:0 0 16px 18px;padding:0;font-size:15px;line-height:1.6;color:${p.text};">
+        <li>Jeden egzemplarz należy przekazać do placówki, z której dziecko będzie odbierane. (świetlica, wychowawca grupy)</li>
+        <li>Drugi egzemplarz należy przekazać lektorowi</li>
+      </ul>
+    `;
+
+  const pickupConsentText = options?.complimentaryCompleted
+    ? ""
+    : `
+Załącznik zawierający zgodę na odbiór dziecka przez lektora należy wydrukować w dwóch egzemplarzach i podpisać własnoręcznie.
+- Jeden egzemplarz należy przekazać do placówki, z której dziecko będzie odbierane. (świetlica, wychowawca grupy)
+- Drugi egzemplarz należy przekazać lektorowi
+`;
 
   await sendHarryMail({
     from: {
@@ -1093,6 +1149,7 @@ ${
       title: `Dzień dobry ${escapeHtmlForEmail(parentName)},`,
       intro: `${introPlural} ${introAction}`,
       contentHtml: `
+        ${pickupConsentHtml}
         ${proposalsHtml}
         ${credentialsHtml}
         ${emailCtaButton(portalUrl, "Przejdź do portalu")}
@@ -1104,7 +1161,7 @@ ${
     text: `Dzień dobry ${parentName},
 
 ${introPlural} ${introAction}
-
+${pickupConsentText}
 ${proposalsText}
 ${credentialsText}
 Przejdź do portalu: ${portalUrl}

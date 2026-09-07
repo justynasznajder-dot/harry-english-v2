@@ -125,18 +125,16 @@ export function buildPaymentSectionHtml(params: {
   if (t === "PER_LESSON") {
     specificLi =
       "<li>Wysokość miesięcznej opłaty ustalana jest na podstawie liczby zajęć, w których Słuchacz uczestniczył w danym miesiącu.</li>";
-  } else if (t === "MONTHLY") {
-    specificLi =
-      `<li>Każda faktura objęta jest dwutygodniowym terminem płatności. Wpłaty prosimy dokonywać na numer rachunku: 91 1050 1298 1000 0092 5894 4835, w tytule przelewu podając <span class="ph">${contractNumber}</span>.</li>`;
-  } else if (t === "YEARLY") {
-    specificLi =
-      "<li>Klient zobowiązuje się do dokonania płatności w kwocie i terminie wskazanych na fakturze.</li>";
   }
+
+  const paymentTermsLi =
+    `<li>Każda faktura objęta jest dwutygodniowym terminem płatności. Wpłaty prosimy dokonywać na numer rachunku: 91 1050 1298 1000 0092 5894 4835, w tytule przelewu podając <span class="ph">${contractNumber}</span>.</li>`;
 
   return `<ol class="contract-list">
   <li>Klient wybiera następującą formę płatności: <span class="ph">${paymentLabel}</span>, kwota: <span class="ph">${amountLabel}</span>.</li>
   <li>Opłata za uczestnictwo w kursie uiszczana jest w formie elektronicznej, na podstawie faktury wystawionej przez Harry English.</li>
   ${specificLi}
+  ${paymentTermsLi}
   <li>W przypadku opóźnienia w płatności Harry English może naliczyć odsetki ustawowe za opóźnienie.</li>
 </ol>`;
 }

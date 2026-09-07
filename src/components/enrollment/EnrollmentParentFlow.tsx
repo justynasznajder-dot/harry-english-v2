@@ -14,7 +14,7 @@ import {
 } from '@/lib/discount-math';
 import { validateParentContractProfileInput } from '@/lib/parent-contract-profile';
 import { parseContentDispositionFilename } from '@/lib/content-disposition';
-import { paymentTypeShortLabel } from '@/lib/payment-labels';
+import { paymentPlanLabel, paymentTypeShortLabel } from '@/lib/payment-labels';
 import {
   lessonsPerWeekLabel,
   normalizeLessonsPerWeek,
@@ -221,7 +221,7 @@ function ChildSignedPdfButtons({ doc }: { doc: SignedContractDownload }) {
             )
           }
         >
-          {busyKey === 'att1' ? 'PDF…' : 'Pobierz wizerunek'}
+          {busyKey === 'att1' ? 'PDF…' : 'Pobierz zgodę na wykorzystanie wizerunku'}
         </button>
       ) : null}
       {doc.hasAttachment2 ? (
@@ -274,6 +274,36 @@ function resolveProposalPaymentAmount(
     return resolveProposalLessonUnitPrice(p);
   }
   return resolveChildBaseAmount(p, paymentType);
+}
+
+/** Kwoty z propozycji managera (ratalna / jednorazowa) + efektywny % rabatu — bez skalowania frekwencji. */
+function resolveComplimentaryManagerAmounts(
+  p: EnrollmentProposal,
+  effectivePercent: number,
+): Array<{
+  type: 'MONTHLY' | 'YEARLY';
+  label: string;
+  amount: number | null;
+  baseAmount: number | null;
+}> {
+  return (
+    [
+      { type: 'MONTHLY' as const, kind: 'monthly' as const },
+      { type: 'YEARLY' as const, kind: 'yearly' as const },
+    ] as const
+  ).map(({ type, kind }) => {
+    const baseAmount = resolveProposalPaymentAmount(p, type);
+    const amount = applyManualDiscountPercent(
+      baseAmount,
+      effectivePercent > 0 ? effectivePercent : null,
+    );
+    return {
+      type,
+      label: paymentPlanLabel(kind),
+      amount,
+      baseAmount,
+    };
+  });
 }
 
 function validateContractProfile(profile: ParentProfileForm): string | null {
@@ -672,13 +702,10 @@ export default function EnrollmentParentFlow({
         return next;
       });
       setContractPricing(data.contractPricing ?? null);
-      if (data.contractPricing && !data.contractPricing.billingExempt) {
+      if (data.contractPricing) {
         const kdr = Boolean(data.contractPricing.discountLargeFamily);
         setDiscountLargeFamily(kdr);
         setSavedDiscountLargeFamily(kdr);
-      } else if (data.contractPricing?.billingExempt) {
-        setDiscountLargeFamily(false);
-        setSavedDiscountLargeFamily(false);
       }
       if (typeof data.enrollingMultipleChildren === 'boolean') {
         setEnrollingMultipleChildren(data.enrollingMultipleChildren);
@@ -1520,6 +1547,10 @@ export default function EnrollmentParentFlow({
                         <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
                           Rabaty
                         </p>
+                        <p className="text-xs text-zinc-500">
+                          W trybie bez umowy zaznaczone zniżki się sumują. Kwoty poniżej to stawki
+                          wpisane przez szkołę (ratalna i jednorazowa).
+                        </p>
                         <label className="inline-flex items-start gap-2 text-sm text-zinc-700">
                           <input
                             type="checkbox"
@@ -1529,6 +1560,9 @@ export default function EnrollmentParentFlow({
                             onChange={(e) => {
                               const checked = e.target.checked;
                               setDiscountLargeFamily(checked);
+                              if (checked) {
+                                setEnrollingMultipleChildren(false);
+                              }
                               void (async () => {
                                 try {
                                   await fetch('/api/enrollment/discounts', {
@@ -1537,7 +1571,9 @@ export default function EnrollmentParentFlow({
                                     credentials: 'include',
                                     body: JSON.stringify({
                                       discountLargeFamily: checked,
-                                      enrollingMultipleChildren,
+                                      enrollingMultipleChildren: checked
+                                        ? false
+                                        : enrollingMultipleChildren,
                                     }),
                                   });
                                 } catch {
@@ -1548,12 +1584,16 @@ export default function EnrollmentParentFlow({
                           />
                           <span>posiadam kartę dużej rodziny</span>
                         </label>
-                        <label className="inline-flex items-start gap-2 text-sm text-zinc-700">
+                        <label
+                          className={`inline-flex items-start gap-2 text-sm ${
+                            discountLargeFamily ? 'text-zinc-400' : 'text-zinc-700'
+                          }`}
+                        >
                           <input
                             type="checkbox"
                             className="mt-0.5 accent-[#0f6e56]"
-                            disabled={buttonsDisabled}
-                            checked={enrollingMultipleChildren}
+                            disabled={buttonsDisabled || discountLargeFamily}
+                            checked={enrollingMultipleChildren && !discountLargeFamily}
                             onChange={(e) => {
                               const checked = e.target.checked;
                               setEnrollingMultipleChildren(checked);
@@ -1576,6 +1616,50 @@ export default function EnrollmentParentFlow({
                           />
                           <span>zapisuję więcej niż jedno dziecko</span>
                         </label>
+                        {(() => {
+                          const proposalDiscountSettings = {
+                            LARGE_FAMILY_CARD:
+                              contractPricing?.discountSettings?.LARGE_FAMILY_CARD || 10,
+                            SIBLING: contractPricing?.discountSettings?.SIBLING || 5,
+                          };
+                          const effective = resolveEffectiveDiscountPercent({
+                            mode: 'complimentary',
+                            managerPercent: p.discount_percent,
+                            hasLargeFamilyCard: discountLargeFamily,
+                            hasSiblingDeclared:
+                              enrollingMultipleChildren && !discountLargeFamily,
+                            settings: proposalDiscountSettings,
+                          });
+                          const discountInfo = formatEffectiveDiscountInfo(effective);
+                          const rows = resolveComplimentaryManagerAmounts(p, effective.percent);
+                          const hasAnyAmount = rows.some((row) => row.baseAmount != null);
+                          if (!hasAnyAmount) return null;
+                          return (
+                            <ul className="mt-1 space-y-1.5 border-t border-emerald-100 pt-2 text-sm text-zinc-700">
+                              {rows.map((row) => {
+                                const showDiscountNote =
+                                  effective.percent > 0 &&
+                                  row.baseAmount != null &&
+                                  row.amount != null &&
+                                  row.amount !== row.baseAmount;
+                                return (
+                                  <li key={row.type}>
+                                    <span className="font-medium text-zinc-800">{row.label}</span>
+                                    <span className="ml-1.5 font-semibold text-zinc-900">
+                                      {formatPlnAmount(row.amount)}
+                                    </span>
+                                    {showDiscountNote ? (
+                                      <span className="mt-0.5 block text-xs font-normal text-zinc-500">
+                                        Cena wynika z {formatPlnAmount(row.baseAmount)}
+                                        {discountInfo ? ` — ${discountInfo}` : ''}
+                                      </span>
+                                    ) : null}
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          );
+                        })()}
                       </div>
                     )}
 
@@ -2002,8 +2086,8 @@ export default function EnrollmentParentFlow({
                       const billingExempt = Boolean(contractPricing?.billingExempt);
                       const settlementDiscountSettings = {
                         LARGE_FAMILY_CARD:
-                          contractPricing?.discountSettings?.LARGE_FAMILY_CARD ?? 0,
-                        SIBLING: contractPricing?.discountSettings?.SIBLING ?? 0,
+                          contractPricing?.discountSettings?.LARGE_FAMILY_CARD || 10,
+                        SIBLING: contractPricing?.discountSettings?.SIBLING || 5,
                       };
                       const hasPipelineChild = proposals.some((p) => {
                         const level = childAccessLevel(p);
@@ -2022,7 +2106,8 @@ export default function EnrollmentParentFlow({
                           mode: billingExempt ? 'complimentary' : 'contract',
                           managerPercent: null,
                           hasLargeFamilyCard: discountLargeFamily,
-                          hasSiblingDeclared: enrollingMultipleChildren,
+                          hasSiblingDeclared:
+                            enrollingMultipleChildren && !discountLargeFamily,
                           settings: settlementDiscountSettings,
                         }),
                       );
@@ -2034,8 +2119,8 @@ export default function EnrollmentParentFlow({
                                 Zniżki
                               </p>
                               <p className="text-xs text-zinc-500">
-                                Rabaty się nie sumują — naliczamy najwyższy przysługujący. Dotyczy
-                                wszystkich dzieci poniżej.
+                                Rabaty się nie sumują. KDR: 10%, rodzeństwo: 5%. Po zaznaczeniu KDR
+                                opcja rodzeństwa jest niedostępna.
                               </p>
                               <div className="flex flex-col gap-2">
                                 <label className="inline-flex items-start gap-2 text-sm text-zinc-700">
@@ -2047,6 +2132,9 @@ export default function EnrollmentParentFlow({
                                     onChange={(e) => {
                                       const checked = e.target.checked;
                                       setDiscountLargeFamily(checked);
+                                      if (checked) {
+                                        setEnrollingMultipleChildren(false);
+                                      }
                                       setAllowContractRegenerate(true);
                                       setContractPricing((prev) =>
                                         prev ? { ...prev, discountLargeFamily: checked } : prev,
@@ -2055,12 +2143,18 @@ export default function EnrollmentParentFlow({
                                   />
                                   <span>posiadam kartę dużej rodziny</span>
                                 </label>
-                                <label className="inline-flex items-start gap-2 text-sm text-zinc-700">
+                                <label
+                                  className={`inline-flex items-start gap-2 text-sm ${
+                                    discountLargeFamily ? 'text-zinc-400' : 'text-zinc-700'
+                                  }`}
+                                >
                                   <input
                                     type="checkbox"
                                     className="mt-0.5 accent-[#0f6e56]"
-                                    disabled={settlementRadiosLocked}
-                                    checked={enrollingMultipleChildren}
+                                    disabled={settlementRadiosLocked || discountLargeFamily}
+                                    checked={
+                                      enrollingMultipleChildren && !discountLargeFamily
+                                    }
                                     onChange={(e) => {
                                       setEnrollingMultipleChildren(e.target.checked);
                                       setAllowContractRegenerate(true);
@@ -2096,9 +2190,10 @@ export default function EnrollmentParentFlow({
                                 isReadOnlyPreview;
                               const effective = resolveEffectiveDiscountPercent({
                                 mode: billingExempt ? 'complimentary' : 'contract',
-                                managerPercent: p.discount_percent,
+                                managerPercent: billingExempt ? p.discount_percent : null,
                                 hasLargeFamilyCard: discountLargeFamily,
-                                hasSiblingDeclared: enrollingMultipleChildren,
+                                hasSiblingDeclared:
+                                  enrollingMultipleChildren && !discountLargeFamily,
                                 settings: settlementDiscountSettings,
                               });
                               const discountInfo = formatEffectiveDiscountInfo(effective);
@@ -2109,9 +2204,10 @@ export default function EnrollmentParentFlow({
                                   type === 'PER_LESSON'
                                     ? base
                                     : scaleAmountByLessonsPerWeek(base, childLessonsPerWeek);
-                                return applyManualDiscountPercent(
-                                  scaled,
-                                  effective.percent > 0 ? effective.percent : null,
+                                // Umowa: zaokrąglenie do groszy (jak contracts.amount), nie floor.
+                                if (effective.percent <= 0 || scaled == null) return scaled;
+                                return (
+                                  Math.round(scaled * (1 - effective.percent / 100) * 100) / 100
                                 );
                               };
                               const baseAmountFor = (type: 'MONTHLY' | 'YEARLY' | 'PER_LESSON') => {
@@ -2515,24 +2611,183 @@ export default function EnrollmentParentFlow({
                 ? 'Twoje dziecko uczęszcza do grupy:'
                 : 'Twoje dzieci uczęszczają do grup:'}
             </p>
-            {enrolledChildren.map((p) => (
-              <div
-                key={p.request_id}
-                className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4"
-              >
-                <p className="text-base font-semibold text-zinc-900">
-                  {p.child_first_name} {p.child_last_name}
-                </p>
-                <div className="mt-3 grid gap-1.5 text-sm text-zinc-800 sm:grid-cols-[max-content_1fr]">
-                  <span className="font-semibold text-zinc-900">Grupa:</span>
-                  <span>{p.group_name ?? 'Do ustalenia'}</span>
-                  <span className="font-semibold text-zinc-900">Lokalizacja:</span>
-                  <span>{p.location_name}</span>
-                  <span className="font-semibold text-zinc-900">Termin zajęć:</span>
-                  <span>{p.schedule}</span>
+            {userInfo.complimentaryAccess ? (
+              (() => {
+                const summaryDiscountSettings = {
+                  LARGE_FAMILY_CARD:
+                    contractPricing?.discountSettings?.LARGE_FAMILY_CARD || 10,
+                  SIBLING: contractPricing?.discountSettings?.SIBLING || 5,
+                };
+                const sharedDiscountInfo = formatEffectiveDiscountInfo(
+                  resolveEffectiveDiscountPercent({
+                    mode: 'complimentary',
+                    managerPercent: null,
+                    hasLargeFamilyCard: discountLargeFamily,
+                    hasSiblingDeclared:
+                      enrollingMultipleChildren && !discountLargeFamily,
+                    settings: summaryDiscountSettings,
+                  }),
+                );
+                const persistSummaryDiscounts = async (next: {
+                  discountLargeFamily: boolean;
+                  enrollingMultipleChildren: boolean;
+                }) => {
+                  try {
+                    await fetch('/api/enrollment/discounts', {
+                      method: 'PATCH',
+                      headers: { 'Content-Type': 'application/json' },
+                      credentials: 'include',
+                      body: JSON.stringify(next),
+                    });
+                  } catch {
+                    /* ignore — lokalny stan i tak aktualizuje kwoty */
+                  }
+                };
+                return (
+                  <>
+                    <div className="space-y-2 rounded-2xl border border-emerald-200 bg-white px-4 py-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                        Zniżki
+                      </p>
+                      <p className="text-xs text-zinc-500">
+                        Po zaznaczeniu KDR opcja rodzeństwa jest niedostępna.
+                      </p>
+                      <div className="flex flex-col gap-2">
+                        <label className="inline-flex items-start gap-2 text-sm text-zinc-700">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 accent-[#0f6e56]"
+                            disabled={isReadOnlyPreview}
+                            checked={discountLargeFamily}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setDiscountLargeFamily(checked);
+                              if (checked) setEnrollingMultipleChildren(false);
+                              setContractPricing((prev) =>
+                                prev ? { ...prev, discountLargeFamily: checked } : prev,
+                              );
+                              void persistSummaryDiscounts({
+                                discountLargeFamily: checked,
+                                enrollingMultipleChildren: checked
+                                  ? false
+                                  : enrollingMultipleChildren,
+                              });
+                            }}
+                          />
+                          <span>posiadam kartę dużej rodziny</span>
+                        </label>
+                        <label
+                          className={`inline-flex items-start gap-2 text-sm ${
+                            discountLargeFamily ? 'text-zinc-400' : 'text-zinc-700'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 accent-[#0f6e56]"
+                            disabled={isReadOnlyPreview || discountLargeFamily}
+                            checked={enrollingMultipleChildren && !discountLargeFamily}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setEnrollingMultipleChildren(checked);
+                              void persistSummaryDiscounts({
+                                discountLargeFamily,
+                                enrollingMultipleChildren: checked,
+                              });
+                            }}
+                          />
+                          <span>zapisuję więcej niż jedno dziecko</span>
+                        </label>
+                      </div>
+                      {sharedDiscountInfo ? (
+                        <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-900">
+                          {sharedDiscountInfo}
+                        </p>
+                      ) : null}
+                    </div>
+                    {enrolledChildren.map((p) => {
+                      const effective = resolveEffectiveDiscountPercent({
+                        mode: 'complimentary',
+                        managerPercent: p.discount_percent,
+                        hasLargeFamilyCard: discountLargeFamily,
+                        hasSiblingDeclared:
+                          enrollingMultipleChildren && !discountLargeFamily,
+                        settings: summaryDiscountSettings,
+                      });
+                      const discountInfo = formatEffectiveDiscountInfo(effective);
+                      const amountRows = resolveComplimentaryManagerAmounts(
+                        p,
+                        effective.percent,
+                      );
+                      return (
+                        <div
+                          key={p.request_id}
+                          className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4"
+                        >
+                          <p className="text-base font-semibold text-zinc-900">
+                            {p.child_first_name} {p.child_last_name}
+                          </p>
+                          <div className="mt-3 grid gap-1.5 text-sm text-zinc-800 sm:grid-cols-[max-content_1fr]">
+                            <span className="font-semibold text-zinc-900">Grupa:</span>
+                            <span>{p.group_name ?? 'Do ustalenia'}</span>
+                            <span className="font-semibold text-zinc-900">Lokalizacja:</span>
+                            <span>{p.location_name}</span>
+                            <span className="font-semibold text-zinc-900">Termin zajęć:</span>
+                            <span>{p.schedule}</span>
+                          </div>
+                          <div className="mt-4 space-y-2 border-t border-emerald-100 pt-3">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                              Kwoty
+                            </p>
+                            <ul className="space-y-1.5 text-sm text-zinc-700">
+                              {amountRows.map((row) => {
+                                const showDiscountNote =
+                                  effective.percent > 0 &&
+                                  row.baseAmount != null &&
+                                  row.amount != null &&
+                                  row.amount !== row.baseAmount;
+                                return (
+                                  <li key={row.type}>
+                                    <span className="font-medium text-zinc-800">{row.label}</span>
+                                    <span className="ml-1.5 font-semibold text-zinc-900">
+                                      {formatPlnAmount(row.amount)}
+                                    </span>
+                                    {showDiscountNote ? (
+                                      <span className="mt-0.5 block text-xs font-normal text-zinc-500">
+                                        Cena wynika z {formatPlnAmount(row.baseAmount)}
+                                        {discountInfo ? ` — ${discountInfo}` : ''}
+                                      </span>
+                                    ) : null}
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </>
+                );
+              })()
+            ) : (
+              enrolledChildren.map((p) => (
+                <div
+                  key={p.request_id}
+                  className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4"
+                >
+                  <p className="text-base font-semibold text-zinc-900">
+                    {p.child_first_name} {p.child_last_name}
+                  </p>
+                  <div className="mt-3 grid gap-1.5 text-sm text-zinc-800 sm:grid-cols-[max-content_1fr]">
+                    <span className="font-semibold text-zinc-900">Grupa:</span>
+                    <span>{p.group_name ?? 'Do ustalenia'}</span>
+                    <span className="font-semibold text-zinc-900">Lokalizacja:</span>
+                    <span>{p.location_name}</span>
+                    <span className="font-semibold text-zinc-900">Termin zajęć:</span>
+                    <span>{p.schedule}</span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         ) : (
           <EmptyState message="Brak szczegółów grupy. Jeśli informacje się nie pojawią, skontaktuj się ze szkołą." />

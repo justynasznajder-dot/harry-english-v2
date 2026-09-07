@@ -968,6 +968,8 @@ model users {
   first_name                            String                         @db.VarChar(100)
   last_name                             String                         @db.VarChar(100)
   phone                                 String?                        @db.VarChar(50)
+  /// PESEL (opcjonalny) — np. lektorzy; nie wymagany przy rejestracji
+  pesel                                 String?                        @db.VarChar(11)
   active                                Boolean                        @default(true)
   confirmed                             Boolean                        @default(false)
   reset_token                           String?                        @db.VarChar(255)

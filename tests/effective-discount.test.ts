@@ -31,7 +31,7 @@ describe("resolveEffectiveDiscountPercent", () => {
     expect(r.source).toBe("stack");
   });
 
-  it("tryb bez umowy: KDR wygrywa z rodzeństwem (nie sumują się)", () => {
+  it("tryb bez umowy: KDR i rodzeństwo się sumują", () => {
     const r = resolveEffectiveDiscountPercent({
       mode: "complimentary",
       managerPercent: 10,
@@ -39,9 +39,22 @@ describe("resolveEffectiveDiscountPercent", () => {
       hasSiblingDeclared: true,
       settings,
     });
-    expect(r.percent).toBe(20);
-    expect(r.familyOrSiblingKey).toBe(DISCOUNT_KEYS.LARGE_FAMILY_CARD);
-    expect(r.familyOrSiblingPercent).toBe(10);
+    expect(r.percent).toBe(25);
+    expect(r.familyOrSiblingKey).toBeNull();
+    expect(r.familyOrSiblingPercent).toBe(15);
+    expect(r.source).toBe("stack");
+  });
+
+  it("tryb bez umowy: sam KDR + rodzeństwo bez managera się sumują", () => {
+    const r = resolveEffectiveDiscountPercent({
+      mode: "complimentary",
+      managerPercent: null,
+      hasLargeFamilyCard: true,
+      hasSiblingDeclared: true,
+      settings,
+    });
+    expect(r.percent).toBe(15);
+    expect(r.source).toBe("stack");
   });
 
   it("tryb bez umowy: manager 100% bez sufitu", () => {
@@ -55,7 +68,7 @@ describe("resolveEffectiveDiscountPercent", () => {
     expect(r.percent).toBe(100);
   });
 
-  it("umowa: bierze najwyższy z przysługujących (manager > KDR)", () => {
+  it("umowa: ignoruje rabat managera — bierze KDR", () => {
     const r = resolveEffectiveDiscountPercent({
       mode: "contract",
       managerPercent: 14,
@@ -63,11 +76,12 @@ describe("resolveEffectiveDiscountPercent", () => {
       hasSiblingDeclared: true,
       settings,
     });
-    expect(r.percent).toBe(14);
-    expect(r.source).toBe("manager");
+    expect(r.percent).toBe(10);
+    expect(r.source).toBe(DISCOUNT_KEYS.LARGE_FAMILY_CARD);
+    expect(r.managerPercent).toBe(0);
   });
 
-  it("umowa: KDR gdy wyższy od managera", () => {
+  it("umowa: KDR 10%", () => {
     const r = resolveEffectiveDiscountPercent({
       mode: "contract",
       managerPercent: 5,
@@ -79,7 +93,7 @@ describe("resolveEffectiveDiscountPercent", () => {
     expect(r.source).toBe(DISCOUNT_KEYS.LARGE_FAMILY_CARD);
   });
 
-  it("umowa: rodzeństwo gdy wyższe od managera i bez KDR", () => {
+  it("umowa: rodzeństwo 5% bez KDR", () => {
     const r = resolveEffectiveDiscountPercent({
       mode: "contract",
       managerPercent: 3,

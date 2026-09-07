@@ -28,7 +28,9 @@ async function parentHasSiblingDeclaredLocal(
 }
 
 /**
- * Zamraża stawki netto na children (manager + KDR/rodzeństwo) — źródło pod faktury w trybie bez umowy.
+ * Zamraża stawki netto na children (manager + KDR + rodzeństwo) — źródło pod faktury w trybie bez umowy.
+ * Baza zawsze z enrollment_requests / cennika grupy (nie z już zamrożonych children.*),
+ * żeby ponowne wyliczenie po zmianie checkboxów nie robiło podwójnego rabatu.
  */
 async function freezeComplimentaryChildNetRates(params: {
   enrollmentRequestId: string;
@@ -48,37 +50,67 @@ async function freezeComplimentaryChildNetRates(params: {
     lesson_unit_price: string | null;
     monthly_unit_price: string | null;
     yearly_unit_price: string | null;
+    er_lesson_unit_price: string | null;
+    er_monthly_unit_price: string | null;
+    er_yearly_unit_price: string | null;
+    group_price_per_lesson: string | null;
+    group_price_monthly: string | null;
+    group_price_yearly: string | null;
   }>(
-    `SELECT id,
-            discount_percent::text AS discount_percent,
-            lesson_unit_price::text AS lesson_unit_price,
-            monthly_unit_price::text AS monthly_unit_price,
-            yearly_unit_price::text AS yearly_unit_price
-     FROM children
-     WHERE enrollment_request_id = $1
-       AND parent_id = $2
-       AND school_id = $3`,
+    `SELECT c.id,
+            c.discount_percent::text AS discount_percent,
+            c.lesson_unit_price::text AS lesson_unit_price,
+            c.monthly_unit_price::text AS monthly_unit_price,
+            c.yearly_unit_price::text AS yearly_unit_price,
+            er.lesson_unit_price::text AS er_lesson_unit_price,
+            er.monthly_unit_price::text AS er_monthly_unit_price,
+            er.yearly_unit_price::text AS er_yearly_unit_price,
+            g.price_per_lesson::text AS group_price_per_lesson,
+            g.price_monthly::text AS group_price_monthly,
+            g.price_yearly::text AS group_price_yearly
+     FROM children c
+     LEFT JOIN enrollment_requests er ON er.id = c.enrollment_request_id
+     LEFT JOIN groups g ON g.id = er.proposed_group_id
+     WHERE c.enrollment_request_id = $1
+       AND c.parent_id = $2
+       AND c.school_id = $3`,
     [params.enrollmentRequestId, params.parentId, params.schoolId]
   );
 
   for (const child of children.rows) {
+    const managerRaw = child.discount_percent;
     const effective = resolveEffectiveDiscountPercent({
       mode: "complimentary",
-      managerPercent: child.discount_percent,
+      managerPercent: managerRaw,
       hasLargeFamilyCard,
       hasSiblingDeclared,
       settings,
     });
+    const parseMoney = (raw: string | null): number | null => {
+      if (raw == null || String(raw).trim() === "") return null;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : null;
+    };
+    // Baza wyłącznie z ER / cennika grupy — children.* mogą być już netto po wcześniejszym freeze.
+    const grossLesson =
+      parseMoney(child.er_lesson_unit_price) ??
+      parseMoney(child.group_price_per_lesson);
+    const grossMonthly =
+      parseMoney(child.er_monthly_unit_price) ??
+      parseMoney(child.group_price_monthly);
+    const grossYearly =
+      parseMoney(child.er_yearly_unit_price) ??
+      parseMoney(child.group_price_yearly);
     const lesson = applyManualDiscountPercent(
-      child.lesson_unit_price != null ? Number(child.lesson_unit_price) : null,
+      grossLesson,
       effective.percent || null
     );
     const monthly = applyManualDiscountPercent(
-      child.monthly_unit_price != null ? Number(child.monthly_unit_price) : null,
+      grossMonthly,
       effective.percent || null
     );
     const yearly = applyManualDiscountPercent(
-      child.yearly_unit_price != null ? Number(child.yearly_unit_price) : null,
+      grossYearly,
       effective.percent || null
     );
     await queryDb(
@@ -94,10 +126,43 @@ async function freezeComplimentaryChildNetRates(params: {
         monthly,
         yearly,
         // Stawki już netto — nie zostawiamy %, żeby faktura/UI nie odjęły go drugi raz.
-        null,
+        // Zachowaj % managera, gdy był — do ponownego wyliczenia po zmianie KDR/rodzeństwa.
+        managerRaw != null && String(managerRaw).trim() !== ""
+          ? Number(managerRaw)
+          : null,
       ]
     );
   }
+}
+
+/**
+ * Ponownie zamraża stawki netto dla wszystkich zakończonych dzieci rodzica w trybie bez umowy
+ * (np. po zmianie checkboxów KDR / rodzeństwo w Podsumowaniu).
+ */
+export async function reapplyComplimentaryNetRatesForParent(
+  parentId: string,
+  schoolId: string
+): Promise<number> {
+  const rows = await queryDb<{ enrollment_request_id: string }>(
+    `SELECT DISTINCT c.enrollment_request_id
+     FROM children c
+     WHERE c.parent_id = $1
+       AND c.school_id = $2
+       AND c.enrollment_request_id IS NOT NULL
+       AND UPPER(BTRIM(COALESCE(c.access_level::text, ''))) IN ('COMPLETED', 'SIGNED')`,
+    [parentId, schoolId]
+  );
+  let n = 0;
+  for (const row of rows.rows) {
+    if (!row.enrollment_request_id) continue;
+    await freezeComplimentaryChildNetRates({
+      enrollmentRequestId: row.enrollment_request_id,
+      parentId,
+      schoolId,
+    });
+    n += 1;
+  }
+  return n;
 }
 
 /**

@@ -4,7 +4,6 @@ import { useState, useEffect } from "react";
 import ReloadableImage from "../src/components/ReloadableImage";
 import ContactForm from "../src/components/ContactForm";
 import AuthModal from "../src/components/AuthModal";
-import EnrollmentAnnouncementModal from "../src/components/EnrollmentAnnouncementModal";
 
 export default function HomePage() {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -958,13 +957,6 @@ export default function HomePage() {
 
         </div>
       </div>
-
-      <EnrollmentAnnouncementModal
-        onOpenEnrollmentForm={() => {
-          setAuthModalMode("register");
-          setAuthModalOpen(true);
-        }}
-      />
 
       {/* CONTACT FORM MODAL */}
       <ContactForm

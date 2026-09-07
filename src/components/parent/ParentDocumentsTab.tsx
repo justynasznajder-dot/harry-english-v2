@@ -5,6 +5,7 @@ import { paymentTypeShortLabel } from '@/lib/payment-labels';
 import {
   PICKUP_CONSENT_DOCUMENT_TITLE,
   PICKUP_CONSENT_PDF_TITLE,
+  PICKUP_CONSENT_PDF_TITLE_LEGACY,
 } from '@/lib/pickup-consent-notice';
 import { IMAGE_CONSENT_PDF_TITLE } from '@/lib/image-consent-notice';
 
@@ -122,6 +123,7 @@ function isAttachmentPdf(filename: string): boolean {
     base.startsWith('zalacznik-') ||
     base.startsWith(IMAGE_CONSENT_PDF_TITLE.toLowerCase()) ||
     base.startsWith(PICKUP_CONSENT_PDF_TITLE.toLowerCase()) ||
+    base.startsWith(PICKUP_CONSENT_PDF_TITLE_LEGACY.toLowerCase()) ||
     base.includes('wizerunek') ||
     Boolean(childNameFromPickupFilename(filename)) ||
     Boolean(childNameFromImageConsentFilename(filename))
@@ -147,14 +149,16 @@ function childNameFromPickupFilename(filename: string): string | null {
   const base = (filename.split(/[/\\]/).pop() ?? filename).trim();
   const lower = base.toLowerCase();
 
-  if (lower.startsWith(PICKUP_CONSENT_PDF_TITLE.toLowerCase())) {
-    const after = base.slice(PICKUP_CONSENT_PDF_TITLE.length).replace(/\.pdf$/i, '').trim();
-    const parts = after
-      .replace(/^_+\s*/, '')
-      .split(/\s+_\s+/)
-      .map((p) => p.trim())
-      .filter(Boolean);
-    return parts[0] || null;
+  for (const title of [PICKUP_CONSENT_PDF_TITLE, PICKUP_CONSENT_PDF_TITLE_LEGACY]) {
+    if (lower.startsWith(title.toLowerCase())) {
+      const after = base.slice(title.length).replace(/\.pdf$/i, '').trim();
+      const parts = after
+        .replace(/^_+\s*/, '')
+        .split(/\s+_\s+/)
+        .map((p) => p.trim())
+        .filter(Boolean);
+      return parts[0] || null;
+    }
   }
 
   const legacyPrefix = `${PICKUP_CONSENT_DOCUMENT_TITLE}_`;

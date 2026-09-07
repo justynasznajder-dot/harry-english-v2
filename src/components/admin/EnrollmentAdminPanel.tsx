@@ -79,6 +79,15 @@ function draftHasRequiredPrices(draft?: ProposalDraft): boolean {
   );
 }
 
+/** Tryb bez umowy: wymagane jednorazowa + ratalna; za zajęcia opcjonalne. */
+function draftHasComplimentaryRequiredPrices(draft?: ProposalDraft): boolean {
+  if (!draft) return false;
+  return (
+    parsePriceDecimal(draft.yearlyUnitPrice) != null &&
+    parsePriceDecimal(draft.monthlyUnitPrice) != null
+  );
+}
+
 function draftFilledPriceCount(draft?: ProposalDraft): number {
   if (!draft) return 0;
   return [
@@ -94,13 +103,21 @@ function draftHasPartialPrices(draft?: ProposalDraft): boolean {
   return n === 1 || n === 2;
 }
 
+/** Tryb bez umowy: coś wpisane, ale brak jednorazowej lub ratalnej. */
+function draftHasComplimentaryPartialPrices(draft?: ProposalDraft): boolean {
+  if (!draft) return false;
+  const n = draftFilledPriceCount(draft);
+  if (n === 0) return false;
+  return !draftHasComplimentaryRequiredPrices(draft);
+}
+
 function draftIsSaveable(draft?: ProposalDraft): boolean {
   return Boolean((draft?.groupId ?? '').trim()) || draftHasRequiredPrices(draft);
 }
 
-/** W trybie bez umowy: stawki obowiązkowe (jak u płatnych); grupa nadal opcjonalna. */
+/** W trybie bez umowy: jednorazowa + ratalna obowiązkowe; grupa opcjonalna. */
 function draftIsComplimentarySaveable(draft?: ProposalDraft): boolean {
-  return draftHasRequiredPrices(draft);
+  return draftHasComplimentaryRequiredPrices(draft);
 }
 
 /*
@@ -319,17 +336,21 @@ export default function EnrollmentAdminPanel({
     proposalNewChildren.every((c) => {
       const draft = proposalDrafts[c.requestId];
       if (!(draft?.groupId ?? '').trim()) return false;
-      return draftHasRequiredPrices(draft);
+      return proposalParentIsComplimentary
+        ? draftHasComplimentaryRequiredPrices(draft)
+        : draftHasRequiredPrices(draft);
     });
   /**
    * Zapisz: wystarczy pełne dane u jednego dziecka; pozostałe mogą być puste.
    * Częściowe stawki (1–2 z 3) u któregokolwiek dziecka blokują zapis.
-   * Tryb bez umowy: wszystkie 3 stawki obowiązkowe; % zniżki opcjonalny; grupa opcjonalna.
+   * Tryb bez umowy: jednorazowa + ratalna obowiązkowe; za zajęcia i % zniżki opcjonalne; grupa opcjonalna.
    */
   const proposalBatchSaveReady =
     proposalNewChildren.length >= 1 &&
     (proposalParentIsComplimentary
-      ? proposalNewChildren.every((c) => !draftHasPartialPrices(proposalDrafts[c.requestId])) &&
+      ? proposalNewChildren.every(
+          (c) => !draftHasComplimentaryPartialPrices(proposalDrafts[c.requestId]),
+        ) &&
         proposalNewChildren.every((c) => draftIsComplimentarySaveable(proposalDrafts[c.requestId]))
       : proposalNewChildren.every((c) => !draftHasPartialPrices(proposalDrafts[c.requestId])) &&
         proposalNewChildren.some((c) => draftIsSaveable(proposalDrafts[c.requestId])));
@@ -343,10 +364,14 @@ export default function EnrollmentAdminPanel({
           ? 'Zapisz grupę i stawki (bez umowy, bez e-maila)'
           : 'Zapisz stawki (tryb bez umowy) — grupę możesz przypisać później';
       }
-      if (proposalNewChildren.some((c) => draftHasPartialPrices(proposalDrafts[c.requestId]))) {
-        return 'Uzupełnij wszystkie 3 stawki albo wyczyść je — częściowe ceny blokują zapis';
+      if (
+        proposalNewChildren.some((c) =>
+          draftHasComplimentaryPartialPrices(proposalDrafts[c.requestId]),
+        )
+      ) {
+        return 'Uzupełnij stawkę jednorazową i ratalną — za zajęcia jest opcjonalne';
       }
-      return 'Podaj wszystkie 3 stawki dla każdego dziecka (% zniżki opcjonalny)';
+      return 'Podaj stawkę jednorazową i ratalną dla każdego dziecka (za zajęcia opcjonalnie)';
     }
     if (proposalBatchSaveReady) {
       const allHaveGroup = proposalNewChildren
@@ -683,9 +708,9 @@ export default function EnrollmentAdminPanel({
                     </label>
                     <p className="mt-1 text-xs text-zinc-500">
                       Po akceptacji grupy zapis kończy się bez umowy, faktur i płatności. Działa
-                      też przed utworzeniem konta (po e-mailu zgłoszenia). Podaj wszystkie 3
-                      stawki (jednorazową, ratalną i za zajęcia) — będą widoczne w panelu rodzica;
-                      % zniżki jest opcjonalny. Grupę możesz przypisać później.
+                      też przed utworzeniem konta (po e-mailu zgłoszenia). Podaj stawkę
+                      jednorazową i ratalną — będą widoczne w panelu rodzica; za zajęcia i %
+                      zniżki są opcjonalne. Grupę możesz przypisać później.
                     </p>
                     {/*
                      * KDR / zniżki procentowe — wyłączone (sezon cen ręcznych).
@@ -912,11 +937,7 @@ export default function EnrollmentAdminPanel({
                                           }))
                                         }
                                       >
-                                        <option value="">
-                                          {proposalParentIsComplimentary
-                                            ? 'Wybierz grupę (opcjonalnie)'
-                                            : 'Wybierz grupę'}
-                                        </option>
+                                        <option value="">Wybierz grupę</option>
                                         {matching.map((group) => {
                                           const label = `${group.name} · ${group.location_name} · ${group.schedule}`;
                                           return (
@@ -1052,10 +1073,12 @@ export default function EnrollmentAdminPanel({
                                     <input
                                       type="text"
                                       inputMode="decimal"
-                                      required
+                                      required={!proposalParentIsComplimentary}
                                       className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
                                       disabled={!proposalAllowed}
-                                      placeholder="np. 50"
+                                      placeholder={
+                                        proposalParentIsComplimentary ? 'opcjonalnie' : 'np. 50'
+                                      }
                                       value={
                                         proposalDrafts[child.requestId]?.lessonUnitPrice ?? ''
                                       }
@@ -1140,10 +1163,16 @@ export default function EnrollmentAdminPanel({
                                         pushToast('error', 'Wybierz grupę');
                                         return;
                                       }
-                                      if (!draftHasRequiredPrices(draft)) {
+                                      if (
+                                        proposalParentIsComplimentary
+                                          ? !draftHasComplimentaryRequiredPrices(draft)
+                                          : !draftHasRequiredPrices(draft)
+                                      ) {
                                         pushToast(
                                           'error',
-                                          'Podaj wszystkie 3 stawki: jednorazową, ratalną i za pojedyncze zajęcia',
+                                          proposalParentIsComplimentary
+                                            ? 'Podaj stawkę jednorazową i ratalną (za zajęcia opcjonalnie)'
+                                            : 'Podaj wszystkie 3 stawki: jednorazową, ratalną i za pojedyncze zajęcia',
                                         );
                                         return;
                                       }
@@ -1308,7 +1337,7 @@ export default function EnrollmentAdminPanel({
                           pushToast(
                             'error',
                             proposalParentIsComplimentary
-                              ? 'Podaj wszystkie 3 stawki dla każdego dziecka'
+                              ? 'Podaj stawkę jednorazową i ratalną dla każdego dziecka'
                               : 'Brak danych do zapisu',
                           );
                           return;

@@ -2,12 +2,47 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   getParentProfileByUserId,
   getUserById,
+  queryDb,
   upsertParentProfileForUser,
 } from "@/lib/db";
 import {
   managerSchoolScopeError,
   requireAdminSchoolContext,
 } from "@/lib/admin-school-context";
+import { parentHasSiblingDeclared } from "@/lib/parent-contract";
+
+async function loadParentDiscountDeclarations(
+  parentId: string,
+  schoolId: string | null | undefined
+): Promise<{ discountLargeFamily: boolean; enrollingMultipleChildren: boolean }> {
+  const profile = await getParentProfileByUserId(parentId);
+  const fromProfile = profile?.discount_large_family === true;
+
+  let fromEnrollmentSibling = false;
+  if (schoolId) {
+    fromEnrollmentSibling = await parentHasSiblingDeclared(parentId, schoolId);
+  }
+
+  const fromContracts = await queryDb<{
+    discount_large_family: boolean;
+    discount_sibling: boolean;
+  }>(
+    `SELECT
+       COALESCE(BOOL_OR(discount_large_family), FALSE) AS discount_large_family,
+       COALESCE(BOOL_OR(discount_sibling), FALSE) AS discount_sibling
+     FROM contracts
+     WHERE parent_id = $1
+       AND UPPER(BTRIM(COALESCE(status::text, ''))) IN ('SENT', 'SIGNED')`,
+    [parentId]
+  );
+
+  return {
+    discountLargeFamily:
+      fromProfile || fromContracts.rows[0]?.discount_large_family === true,
+    enrollingMultipleChildren:
+      fromEnrollmentSibling || fromContracts.rows[0]?.discount_sibling === true,
+  };
+}
 
 function normalizeZip(raw: unknown): string | null {
   if (raw == null) return null;
@@ -45,6 +80,10 @@ export async function GET(
     }
 
     const profile = await getParentProfileByUserId(targetUserId);
+    const discounts = await loadParentDiscountDeclarations(
+      targetUserId,
+      target.school_id
+    );
 
     return NextResponse.json({
       profile: profile
@@ -59,10 +98,14 @@ export async function GET(
             nip: profile.nip,
             billingType:
               profile.company_name || profile.nip ? "company" : "private",
+            discountLargeFamily: discounts.discountLargeFamily,
+            enrollingMultipleChildren: discounts.enrollingMultipleChildren,
             createdAt: profile.created_at,
             updatedAt: profile.updated_at,
           }
         : null,
+      discountLargeFamily: discounts.discountLargeFamily,
+      enrollingMultipleChildren: discounts.enrollingMultipleChildren,
     });
   } catch (error) {
     console.error("GET /api/admin/users/[id]/profile:", error);
