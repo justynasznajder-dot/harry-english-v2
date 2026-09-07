@@ -223,6 +223,8 @@ model enrollment_requests {
   lessons_per_week   Int?
   /// Staging KDR przed kontem rodzica; po utworzeniu konta kopiowane do parent_profiles
   discount_large_family Boolean          @default(false)
+  /// Deklaracja rodzica: zapisuje więcej niż jedno dziecko (zniżka rodzeństwa)
+  enrolling_multiple_children Boolean    @default(false)
   children           children[]
   contract_children  contract_children[]
   groups             groups?             @relation(fields: [proposed_group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)

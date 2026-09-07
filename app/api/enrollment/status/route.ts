@@ -342,6 +342,18 @@ export async function GET(request: NextRequest) {
       ? false
       : await getParentLargeFamilyCard(parentId);
 
+    const multiChildrenRes = await queryDb<{ enrolling_multiple_children: boolean }>(
+      `SELECT COALESCE(BOOL_OR(enrolling_multiple_children), FALSE) AS enrolling_multiple_children
+       FROM enrollment_requests
+       WHERE school_id = $1
+         AND user_id = $2
+         AND UPPER(BTRIM(COALESCE(status::text, ''))) <> 'REJECTED'`,
+      [SCHOOL_ID, parentId]
+    );
+    const enrollingMultipleChildren =
+      !complimentaryEnrollment &&
+      multiChildrenRes.rows[0]?.enrolling_multiple_children === true;
+
     return NextResponse.json({
 
       proposals,
@@ -355,6 +367,8 @@ export async function GET(request: NextRequest) {
           maxPercent: discountSettings.maxPercent,
         },
       },
+
+      enrollingMultipleChildren,
 
       parentContract: parentContract
 

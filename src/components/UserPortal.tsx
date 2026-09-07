@@ -61,9 +61,7 @@ function BurgerIcon({ open }: { open: boolean }) {
 
 export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalProps) {
   const complimentaryAccess = userInfo.complimentaryAccess === true;
-  const topTabs = complimentaryAccess
-    ? ALL_TOP_TABS.filter((tab) => tab.key !== 'payments')
-    : ALL_TOP_TABS;
+  const topTabs = ALL_TOP_TABS;
 
   const [activeTab, setActiveTab] = useState<PortalTab>('enrollment');
   const [menuOpen, setMenuOpen] = useState(false);
@@ -73,12 +71,6 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
     useUnreadMessagesCount(messagesListResetToken);
 
   const activeTabMeta = topTabs.find((t) => t.key === activeTab) ?? topTabs[0];
-
-  useEffect(() => {
-    if (complimentaryAccess && activeTab === 'payments') {
-      setActiveTab('enrollment');
-    }
-  }, [complimentaryAccess, activeTab]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -152,8 +144,7 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
     if (activeTab === 'group') return <ParentGroupTab />;
     if (activeTab === 'calendar') return <ParentCalendarTab userInfo={userInfo} />;
     if (activeTab === 'payments') {
-      if (complimentaryAccess) return null;
-      return <ParentPaymentsTab complimentaryAccess={false} />;
+      return <ParentPaymentsTab complimentaryAccess={complimentaryAccess} />;
     }
     if (activeTab === 'documents') {
       return <ParentDocumentsTab complimentaryAccess={complimentaryAccess} />;

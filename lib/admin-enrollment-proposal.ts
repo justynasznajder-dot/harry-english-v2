@@ -129,7 +129,7 @@ export async function submitEnrollmentProposal(
     draftOnly?: boolean;
     /** Przy draftOnly — puste stawki jako NULL. */
     allowEmptyPrices?: boolean;
-    /** Tryb bez umowy: wszystkie 3 stawki opcjonalne (można zostawić puste). */
+    /** Tryb bez umowy: stawki wymagane jak u płatnych; grupa może być pusta przy samym zapisie. */
     complimentaryPrices?: boolean;
   }
 ): Promise<
@@ -386,11 +386,11 @@ export async function submitEnrollmentProposal(
   let parsedYearly: number | null = null;
 
   if (options?.complimentaryPrices || complimentary) {
-    const lesson = parseUnitPrice(lessonUnitPrice, "za pojedyncze zajęcia", false);
+    const lesson = parseUnitPrice(lessonUnitPrice, "za pojedyncze zajęcia", true);
     if (!lesson.ok) return { ok: false, status: 400, message: lesson.message };
-    const monthly = parseUnitPrice(monthlyUnitPrice, "ratalna", false);
+    const monthly = parseUnitPrice(monthlyUnitPrice, "ratalna", true);
     if (!monthly.ok) return { ok: false, status: 400, message: monthly.message };
-    const yearly = parseUnitPrice(yearlyUnitPrice, "jednorazowa", false);
+    const yearly = parseUnitPrice(yearlyUnitPrice, "jednorazowa", true);
     if (!yearly.ok) return { ok: false, status: 400, message: yearly.message };
     parsedLesson = lesson.value;
     parsedMonthly = monthly.value;
@@ -697,6 +697,13 @@ export async function saveEnrollmentRequestPrices(
     if (!monthly.ok) return { ok: false, status: 400, message: monthly.message };
     const yearly = parseOptionalUnitPrice(input.yearlyUnitPrice, "jednorazowa");
     if (!yearly.ok) return { ok: false, status: 400, message: yearly.message };
+    if (lesson.value == null || monthly.value == null || yearly.value == null) {
+      return {
+        ok: false,
+        status: 400,
+        message: "Podaj wszystkie 3 stawki (jednorazową, ratalną i za zajęcia)",
+      };
+    }
     await queryDb(
       `UPDATE enrollment_requests
        SET lesson_unit_price = $2,

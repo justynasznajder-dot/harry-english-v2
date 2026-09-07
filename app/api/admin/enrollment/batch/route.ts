@@ -103,7 +103,7 @@ export async function POST(request: NextRequest) {
           },
           {
             ...schoolRestrict,
-            allowEmptyPrices: allowEmptyPrices || complimentaryMode,
+            allowEmptyPrices: allowEmptyPrices && !complimentaryMode,
             complimentaryPrices: complimentaryMode,
           }
         );

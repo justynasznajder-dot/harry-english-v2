@@ -66,6 +66,8 @@ export async function POST(request: NextRequest) {
       payment_type_by_request_id?: unknown;
       includedRequestIds?: unknown;
       included_request_ids?: unknown;
+      enrollingMultipleChildren?: unknown;
+      enrolling_multiple_children?: unknown;
     };
 
     const paymentTypeByRequestIdRaw =
@@ -118,6 +120,24 @@ export async function POST(request: NextRequest) {
        RETURNING id`,
       [SCHOOL_ID, parentId]
     );
+
+    const enrollingMultipleChildrenRaw =
+      body.enrollingMultipleChildren ?? body.enrolling_multiple_children;
+    if (enrollingMultipleChildrenRaw !== undefined) {
+      const enrollingMultipleChildren =
+        enrollingMultipleChildrenRaw === true ||
+        enrollingMultipleChildrenRaw === "true" ||
+        enrollingMultipleChildrenRaw === 1 ||
+        enrollingMultipleChildrenRaw === "1";
+      await queryDb(
+        `UPDATE enrollment_requests
+         SET enrolling_multiple_children = $3
+         WHERE school_id = $1
+           AND user_id = $2
+           AND UPPER(BTRIM(COALESCE(status::text, ''))) <> 'REJECTED'`,
+        [SCHOOL_ID, parentId, enrollingMultipleChildren]
+      );
+    }
 
     for (const row of updated.rows) {
       await syncChildrenAccessLevelForEnrollment(row.id, "AWAITING_CONTRACT");
