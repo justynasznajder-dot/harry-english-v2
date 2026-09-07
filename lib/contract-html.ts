@@ -31,7 +31,12 @@ import {
 
 export { buildAnnexContractNumber, buildBaseContractNumber };
 
+/** Forma płatności w treści umowy (np. „płatność za pojedyncze zajęcia”). */
 export function formatPaymentTypeLabel(paymentType: string | null | undefined): string {
+  const t = String(paymentType ?? "").trim().toUpperCase();
+  if (t === "MONTHLY") return "płatność ratalna";
+  if (t === "YEARLY") return "płatność jednorazowa";
+  if (t === "PER_LESSON") return "płatność za pojedyncze zajęcia";
   return paymentTypePeriodLabel(String(paymentType ?? ""));
 }
 
@@ -84,6 +89,30 @@ export function formatLessonDuration(durationMin: number | null | undefined): st
   return String(Math.round(durationMin));
 }
 
+/** Czas zajęć z jednostką — placeholder w umowie, np. „45 minut”. */
+export function formatLessonDurationLabel(durationMin: number | null | undefined): string {
+  const minutes = formatLessonDuration(durationMin);
+  return minutes ? `${minutes} minut` : "";
+}
+
+/** Odmiana „spotkanie/spotkania/spotkań” dla planowanej liczby zajęć. */
+export function formatPlannedLessonsLabel(count: number | null | undefined): string {
+  if (count == null || !Number.isFinite(count) || count <= 0) return "";
+  const n = Math.round(count);
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  let word = "spotkań";
+  if (mod10 === 1 && mod100 !== 11) word = "spotkanie";
+  else if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) word = "spotkania";
+  return `${n} ${word}`;
+}
+
+export function formatLessonUnitPriceLabel(amount: number | string | null | undefined): string {
+  const formatted = formatContractAmount(amount);
+  if (!formatted) return "";
+  return `${formatted} zł brutto`;
+}
+
 export function formatScheduleTime(value: Date | string | null | undefined): string {
   if (value == null || value === "") return "";
   if (typeof value === "string" && /^\d{1,2}:\d{2}/.test(value.trim())) {
@@ -106,6 +135,33 @@ export function buildGroupSchedule(
     })
     .filter(Boolean);
   return parts.join(", ");
+}
+
+export function buildScheduleDayLabel(
+  rows: Array<{ day_of_week: number }>
+): string {
+  const parts = rows
+    .map((row) => POLISH_DAY_NAMES_1_7[row.day_of_week] ?? `dzień ${row.day_of_week}`)
+    .filter(Boolean);
+  return parts.join(", ");
+}
+
+export function buildScheduleTimeLabel(
+  rows: Array<{ start_time: Date | string }>
+): string {
+  const parts = rows.map((row) => formatScheduleTime(row.start_time)).filter(Boolean);
+  return parts.join(", ");
+}
+
+/** Miejsce zajęć: nazwa lokalizacji + adres (jeśli jest). */
+export function buildSchedulePlaceLabel(
+  name: string | null | undefined,
+  address: string | null | undefined
+): string {
+  const named = stripLocationMarketingSuffix(String(name ?? "").trim());
+  const addr = String(address ?? "").trim();
+  if (named && addr) return `${named}, ${addr}`;
+  return named || addr || "";
 }
 
 export function buildAmountClause(

@@ -20,6 +20,18 @@ function parseOptionalPrice(
   return { ok: true, value };
 }
 
+function parseOptionalDiscountPercent(
+  raw: unknown
+): { ok: true; value: number | null } | { ok: false; message: string } {
+  if (raw == null || raw === "") return { ok: true, value: null };
+  const value = parsePriceDecimal(raw as string | number);
+  if (value == null) return { ok: false, message: "Nieprawidłowy % zniżki" };
+  if (value < 0 || value > 100) {
+    return { ok: false, message: "% zniżki musi być w zakresie 0–100" };
+  }
+  return { ok: true, value };
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -42,6 +54,7 @@ export async function GET(
       lesson_unit_price: string | null;
       monthly_unit_price: string | null;
       yearly_unit_price: string | null;
+      discount_percent: string | null;
       parent_first_name: string;
       parent_last_name: string;
       parent_email: string;
@@ -59,6 +72,7 @@ export async function GET(
          c.lesson_unit_price::text AS lesson_unit_price,
          c.monthly_unit_price::text AS monthly_unit_price,
          c.yearly_unit_price::text AS yearly_unit_price,
+         c.discount_percent::text AS discount_percent,
          u.first_name AS parent_first_name,
          u.last_name AS parent_last_name,
          u.email AS parent_email,
@@ -162,7 +176,8 @@ export async function PUT(
     const hasPriceField =
       body.lessonUnitPrice !== undefined ||
       body.monthlyUnitPrice !== undefined ||
-      body.yearlyUnitPrice !== undefined;
+      body.yearlyUnitPrice !== undefined ||
+      body.discountPercent !== undefined;
 
     if (hasPriceField) {
       const lessonParsed = parseOptionalPrice(body.lessonUnitPrice, "stawka za pojedyncze zajęcia");
@@ -177,15 +192,21 @@ export async function PUT(
       if (!yearlyParsed.ok) {
         return NextResponse.json({ message: yearlyParsed.message }, { status: 400 });
       }
+      const discountParsed = parseOptionalDiscountPercent(body.discountPercent);
+      if (!discountParsed.ok) {
+        return NextResponse.json({ message: discountParsed.message }, { status: 400 });
+      }
 
       const prices: {
         lessonUnitPrice?: number | null;
         monthlyUnitPrice?: number | null;
         yearlyUnitPrice?: number | null;
+        discountPercent?: number | null;
       } = {};
       if (body.lessonUnitPrice !== undefined) prices.lessonUnitPrice = lessonParsed.value;
       if (body.monthlyUnitPrice !== undefined) prices.monthlyUnitPrice = monthlyParsed.value;
       if (body.yearlyUnitPrice !== undefined) prices.yearlyUnitPrice = yearlyParsed.value;
+      if (body.discountPercent !== undefined) prices.discountPercent = discountParsed.value;
 
       const ok = await updateChildPriceOverrides(id, ctx.schoolId, prices);
       if (!ok) return tenantNotFoundResponse("Dziecko nie zostało znalezione");

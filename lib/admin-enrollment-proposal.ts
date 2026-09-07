@@ -61,6 +61,7 @@ export type SharedParentState = {
   parentLastName: string;
   parentCreated: boolean;
   tempPassword: string | null;
+  schoolId: string;
 };
 
 export type ProposalInput = {
@@ -184,6 +185,14 @@ export async function submitEnrollmentProposal(
       ok: false,
       status: 400,
       message: "Wszystkie propozycje w jednej wysyłce muszą dotyczyć tego samego rodzica.",
+    };
+  }
+
+  if (sharedParent && sharedParent.schoolId !== parentSchoolId) {
+    return {
+      ok: false,
+      status: 400,
+      message: "Wszystkie propozycje w jednej wysyłce muszą dotyczyć tej samej szkoły.",
     };
   }
 
@@ -543,6 +552,7 @@ export async function submitEnrollmentProposal(
       parentLastName,
       parentCreated,
       tempPassword,
+      schoolId: parentSchoolId,
     },
     emailItem: {
       childFirstName: enrollment.child_first_name,

@@ -275,6 +275,7 @@ export async function updateChildPriceOverrides(
     lessonUnitPrice?: number | null;
     monthlyUnitPrice?: number | null;
     yearlyUnitPrice?: number | null;
+    discountPercent?: number | null;
   }
 ): Promise<boolean> {
   const sets: string[] = [];
@@ -293,6 +294,10 @@ export async function updateChildPriceOverrides(
     sets.push(`yearly_unit_price = $${idx++}`);
     values.push(prices.yearlyUnitPrice);
   }
+  if (prices.discountPercent !== undefined) {
+    sets.push(`discount_percent = $${idx++}`);
+    values.push(prices.discountPercent);
+  }
   if (sets.length === 0) return false;
 
   const updated = await queryDb<{ id: string }>(
@@ -304,7 +309,8 @@ export async function updateChildPriceOverrides(
   );
   if (!updated.rows[0]) return false;
 
-  // Lustro na aktywnych członkostwach (legacy / przenoszenie roku) — źródłem prawdy jest children.
+  // Lustro stawek PLN na aktywnych członkostwach (legacy / przenoszenie roku) — źródłem prawdy jest children.
+  // discount_percent zostaje tylko na children (profil dziecka).
   const mirrorSets: string[] = [];
   const mirrorValues: unknown[] = [childId, schoolId];
   let mIdx = 3;

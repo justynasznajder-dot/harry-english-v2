@@ -11,9 +11,11 @@ type TemplateKind = "CONTRACT" | "ATTACHMENT_1" | "ATTACHMENT_2";
 
 const TEMPLATE_FILES: Array<{ kind: TemplateKind; file: string; namePrefix: string }> = [
   { kind: "CONTRACT", file: "umowa_harry_english_template.html", namePrefix: "Umowa HarryEnglish" },
-  { kind: "ATTACHMENT_1", file: "zalacznik_1_wizerunek_template.html", namePrefix: "Załącznik 1 — wizerunek" },
   { kind: "ATTACHMENT_2", file: "zalacznik_2_odbior_template.html", namePrefix: "Zgoda na odebranie dziecka przez lektora" },
 ];
+
+/** Osobny załącznik wizerunku wyłączony — zgoda jest w §4 umowy. */
+const DEACTIVATED_TEMPLATE_KINDS: TemplateKind[] = ["ATTACHMENT_1"];
 
 async function main() {
   loadEnvFiles();
@@ -119,6 +121,23 @@ async function main() {
       if (deactivated.rowCount && deactivated.rowCount > 0) {
         console.log(
           `Dezaktywowano ${deactivated.rowCount} duplikat(ów) ${tpl.kind}: ${deactivated.rows.map((r) => r.id).join(", ")}`
+        );
+      }
+    }
+
+    for (const kind of DEACTIVATED_TEMPLATE_KINDS) {
+      const off = await pool.query<{ id: string }>(
+        `UPDATE contract_templates
+         SET active = FALSE, updated_at = NOW()
+         WHERE school_id = $1
+           AND COALESCE(template_kind, 'CONTRACT') = $2
+           AND active = TRUE
+         RETURNING id`,
+        [school.id, kind]
+      );
+      if (off.rowCount && off.rowCount > 0) {
+        console.log(
+          `Wyłączono ${kind}: ${off.rows.map((r) => r.id).join(", ")}`
         );
       }
     }

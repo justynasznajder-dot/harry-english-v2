@@ -52,7 +52,8 @@ export function attendanceStatusClass(status: string | null | undefined): string
 export function paymentStatusLabel(status: string): string {
   const s = status.toUpperCase();
   if (s === 'PAID') return 'Opłacone';
-  if (s === 'PENDING') return 'Do zapłaty';
+  if (s === 'PENDING' || s === 'UNPAID') return 'Do zapłaty';
+  if (s === 'AWAITING_INVOICE') return 'Oczekiwanie na fakturę';
   if (s === 'DRAFT') return 'W przygotowaniu';
   if (s === 'OVERDUE') return 'Po terminie';
   return status;
@@ -61,9 +62,37 @@ export function paymentStatusLabel(status: string): string {
 export function paymentStatusClass(status: string): string {
   const s = status.toUpperCase();
   if (s === 'PAID') return 'text-emerald-700 bg-emerald-50 border-emerald-200';
-  if (s === 'DRAFT') return 'text-zinc-600 bg-zinc-50 border-zinc-200';
-  if (s === 'OVERDUE') return 'text-rose-700 bg-rose-50 border-rose-200';
+  if (s === 'AWAITING_INVOICE' || s === 'DRAFT') return 'text-zinc-600 bg-zinc-50 border-zinc-200';
+  if (s === 'OVERDUE' || s === 'UNPAID') return 'text-rose-700 bg-rose-50 border-rose-200';
   return 'text-amber-800 bg-amber-50 border-amber-200';
+}
+
+/** Zielony / czerwony check albo oczekiwanie — status rozliczenia rodzica. */
+export function paymentDisplayStatusVisual(status: string): {
+  kind: 'paid' | 'unpaid' | 'awaiting';
+  label: string;
+  className: string;
+} {
+  const s = status.toUpperCase();
+  if (s === 'PAID') {
+    return {
+      kind: 'paid',
+      label: 'Opłacone',
+      className: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+    };
+  }
+  if (s === 'AWAITING_INVOICE' || s === 'DRAFT') {
+    return {
+      kind: 'awaiting',
+      label: 'Oczekiwanie na fakturę',
+      className: 'text-zinc-600 bg-zinc-50 border-zinc-200',
+    };
+  }
+  return {
+    kind: 'unpaid',
+    label: 'Do zapłaty',
+    className: 'text-rose-700 bg-rose-50 border-rose-200',
+  };
 }
 
 export function formatAmountPln(amount: string | number): string {

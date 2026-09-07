@@ -1269,6 +1269,14 @@ export async function sendSignedContractConfirmationEmails(params: {
     address: process.env.EMAIL_USER || "kontakt@harry-english.pl",
   };
   const schoolEmail = params.schoolEmail?.trim() || "kontakt@harry-english.pl";
+  const parentEmail = params.parentEmail.trim();
+  // Jeden mail, obaj w To — odbiorcy widzą się nawzajem.
+  const recipients = [parentEmail, schoolEmail].filter((email, index, all) => {
+    if (!email) return false;
+    const lower = email.toLowerCase();
+    return all.findIndex((candidate) => candidate.toLowerCase() === lower) === index;
+  });
+
   const contractLabel = params.contractNumber ? ` nr ${params.contractNumber}` : "";
   const childPart = params.childName?.trim() ? ` Dotyczy: ${params.childName.trim()}.` : "";
   const attachmentList = params.pdfFiles.map((file) => ({
@@ -1282,36 +1290,23 @@ export async function sendSignedContractConfirmationEmails(params: {
     .join("");
 
   const sharedContentHtml = `
-    <p>Umowa${escapeHtmlForEmail(contractLabel)} została podpisana elektronicznie.${escapeHtmlForEmail(childPart)}</p>
+    <p>Umowa${escapeHtmlForEmail(contractLabel)} została podpisana elektronicznie przez: <strong>${escapeHtmlForEmail(params.parentFullName)}</strong>.${escapeHtmlForEmail(childPart)}</p>
     <p>W załączeniu przesyłamy podpisane dokumenty w formacie PDF:</p>
     <ul style="margin:8px 0;padding-left:20px;">${filesListHtml}</ul>
   `;
 
-  const sharedText = `Umowa${contractLabel} została podpisana.${childPart} W załączeniu: ${params.pdfFiles.map((f) => f.filename).join(", ")}.`;
+  const sharedText = `Umowa${contractLabel} została podpisana przez ${params.parentFullName}.${childPart} W załączeniu: ${params.pdfFiles.map((f) => f.filename).join(", ")}.`;
 
   await sendHarryMail({
     from,
-    to: params.parentEmail,
-    subject: "Potwierdzenie podpisania umowy - Harry English",
+    to: recipients,
+    subject: `Potwierdzenie podpisania umowy${contractLabel} - ${params.parentFullName} - Harry English`,
     html: buildEmailShell({
       title: `Dzień dobry ${escapeHtmlForEmail(params.parentFirstName)},`,
       intro: "Dziękujemy za podpisanie umowy.",
       contentHtml: sharedContentHtml,
     }),
     text: `Dzień dobry ${params.parentFirstName}, dziękujemy za podpisanie umowy. ${sharedText}`,
-    attachments: attachmentList,
-  });
-
-  await sendHarryMail({
-    from,
-    to: schoolEmail,
-    subject: `Podpisana umowa${contractLabel} - ${params.parentFullName} - Harry English`,
-    html: buildEmailShell({
-      title: "Podpisana umowa",
-      intro: `Rodzic ${escapeHtmlForEmail(params.parentFullName)} podpisał umowę${escapeHtmlForEmail(contractLabel)}.`,
-      contentHtml: sharedContentHtml,
-    }),
-    text: `Rodzic ${params.parentFullName} podpisał umowę${contractLabel}. ${sharedText}`,
     attachments: attachmentList,
   });
 }

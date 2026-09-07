@@ -21,6 +21,9 @@ import {
   buildParentAddress,
   buildParentPeselOrId,
   buildPerLessonClause,
+  buildScheduleDayLabel,
+  buildSchedulePlaceLabel,
+  buildScheduleTimeLabel,
   buildTeacherFullName,
   buildTeacherIdSuffix,
   extractContractNumber,
@@ -28,7 +31,10 @@ import {
   formatContractDate,
   formatSchoolYearFromDate,
   formatLessonDuration,
+  formatLessonDurationLabel,
+  formatLessonUnitPriceLabel,
   formatPaymentTypeLabel,
+  formatPlannedLessonsLabel,
   generateContractHtml,
   nextBaseContractIndex,
   paymentTypeToClauseKey,
@@ -41,6 +47,7 @@ import {
 } from "@/lib/contract-amount-breakdown";
 import { resolveLessonUnitPrice, resolveMonthlyUnitPrice, resolveYearlyUnitPrice, type PaymentType } from "@/lib/lesson-pricing";
 import {
+  defaultTargetLessonsPerYear,
   filterScheduleForStudentAttendance,
   lessonsPerWeekLabel,
   normalizeLessonsPerWeek,
@@ -709,7 +716,7 @@ export async function generateParentContract(
     throw new Error("Brak aktywnego szablonu umowy — skontaktuj się ze szkołą");
   }
 
-  const attachment1Template = await findContractTemplate(schoolId, schoolYearName, "ATTACHMENT_1");
+  // Zgoda na wizerunek jest w treści umowy (§4) — osobny ATTACHMENT_1 wyłączony.
   const attachment2Template = includeAttachment2
     ? await findContractTemplate(schoolId, schoolYearName, "ATTACHMENT_2")
     : null;
@@ -721,7 +728,12 @@ export async function generateParentContract(
   const school = schoolRes.rows[0];
 
   let lessonDuration = "";
+  let lessonDurationLabel = "";
   let groupSchedule = "Do ustalenia";
+  let scheduleDay = "Do ustalenia";
+  let scheduleTime = "Do ustalenia";
+  let schedulePlace =
+    buildChildSchoolName(child.preferred_location_name, child.preferred_location) || "Do ustalenia";
   if (child.group_id) {
     const scheduleRes = await queryDb<{
       day_of_week: number;
@@ -729,15 +741,20 @@ export async function generateParentContract(
       duration_min: number;
       once_weekly_day: boolean;
       group_lessons_per_week: number | null;
+      location_name: string | null;
+      location_address: string | null;
     }>(
       `SELECT
          st.day_of_week,
          st.start_time,
          st.duration_min,
          st.once_weekly_day,
-         g.lessons_per_week AS group_lessons_per_week
+         g.lessons_per_week AS group_lessons_per_week,
+         loc.name AS location_name,
+         loc.address AS location_address
        FROM schedule_templates st
        JOIN groups g ON g.id = st.group_id
+       LEFT JOIN locations loc ON loc.id = COALESCE(st.location_id, g.location_id)
        WHERE st.group_id = $1
          AND st.active = TRUE
        ORDER BY st.day_of_week ASC, st.start_time ASC`,
@@ -749,14 +766,34 @@ export async function generateParentContract(
     });
     const schedule = buildGroupSchedule(filtered);
     groupSchedule = schedule || "Do ustalenia";
+    scheduleDay = buildScheduleDayLabel(filtered) || "Do ustalenia";
+    scheduleTime = buildScheduleTimeLabel(filtered) || "Do ustalenia";
+    const locationRow = filtered[0] ?? scheduleRes.rows[0];
+    const placeFromGroup = buildSchedulePlaceLabel(
+      locationRow?.location_name,
+      locationRow?.location_address
+    );
+    if (placeFromGroup) schedulePlace = placeFromGroup;
     if (filtered[0]) {
       lessonDuration = formatLessonDuration(filtered[0].duration_min);
+      lessonDurationLabel = formatLessonDurationLabel(filtered[0].duration_min);
     } else if (scheduleRes.rows[0]) {
       lessonDuration = formatLessonDuration(scheduleRes.rows[0].duration_min);
+      lessonDurationLabel = formatLessonDurationLabel(scheduleRes.rows[0].duration_min);
     }
+  }
+  if (!lessonDurationLabel) {
+    lessonDurationLabel = formatLessonDurationLabel(60);
+    lessonDuration = lessonDuration || formatLessonDuration(60);
   }
   const childSchoolName =
     buildChildSchoolName(child.preferred_location_name, child.preferred_location) || "—";
+  const plannedLessonsLabel = formatPlannedLessonsLabel(
+    defaultTargetLessonsPerYear(lessonsPerWeek ?? 1)
+  );
+  const lessonUnitPriceLabel = formatLessonUnitPriceLabel(
+    billingExempt ? 0 : resolveChildLessonUnitPriceForContract(child)
+  );
 
   if (!schoolYearId) {
     throw new Error("Brak aktywnego roku szkolnego — nie można wygenerować umowy");
@@ -900,8 +937,13 @@ export async function generateParentContract(
     parent_address: parentAddress,
     parent_phone: user.phone?.trim() ?? "",
     parent_email: user.email?.trim() ?? "",
-    lesson_duration: lessonDuration || formatLessonDuration(60),
+    lesson_duration: lessonDurationLabel || lessonDuration || formatLessonDurationLabel(60),
     group_schedule: groupSchedule,
+    schedule_day: scheduleDay,
+    schedule_time: scheduleTime,
+    schedule_place: schedulePlace,
+    planned_lessons_label: plannedLessonsLabel,
+    lesson_unit_price_label: lessonUnitPriceLabel,
     lessons_per_week: lessonsPerWeek ? String(lessonsPerWeek) : "",
     lessons_per_week_label: lessonsPerWeek ? lessonsPerWeekLabel(lessonsPerWeek) : "",
     payment_type: formatPaymentTypeLabel(paymentType),
@@ -919,9 +961,7 @@ export async function generateParentContract(
   const contentHtml = generateContractHtml(template.content_html, placeholders);
 
   const childPlaceholders = buildSingleChildAttachmentPlaceholders(placeholders, child);
-  const childAttachment1 = attachment1Template
-    ? generateContractHtml(attachment1Template.content_html, childPlaceholders)
-    : null;
+  const childAttachment1: string | null = null;
 
   let childAttachment2: string | null = null;
   if (includeAttachment2) {

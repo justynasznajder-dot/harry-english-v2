@@ -173,6 +173,8 @@ export interface Child {
   lesson_unit_price: string | null;
   monthly_unit_price: string | null;
   yearly_unit_price: string | null;
+  /** Ręczna zniżka % managera (null = brak) */
+  discount_percent: string | null;
 }
 
 type UserRow = QueryResultRow & {
@@ -268,6 +270,7 @@ type ChildRow = QueryResultRow & {
   lesson_unit_price?: string | number | null;
   monthly_unit_price?: string | number | null;
   yearly_unit_price?: string | number | null;
+  discount_percent?: string | number | null;
 };
 
 function mapUserRow(row: QueryResultRow): User {
@@ -338,6 +341,7 @@ function mapChildRow(row: ChildRow): Child {
     lesson_unit_price: priceFieldToText(row.lesson_unit_price),
     monthly_unit_price: priceFieldToText(row.monthly_unit_price),
     yearly_unit_price: priceFieldToText(row.yearly_unit_price),
+    discount_percent: priceFieldToText(row.discount_percent),
   };
 }
 
@@ -1550,6 +1554,7 @@ export async function updateChild(
     lesson_unit_price: number | null;
     monthly_unit_price: number | null;
     yearly_unit_price: number | null;
+    discount_percent: number | null;
   }>
 ): Promise<boolean> {
   const sets: string[] = [];
@@ -1617,6 +1622,10 @@ export async function updateChild(
   if (data.yearly_unit_price !== undefined) {
     sets.push(`yearly_unit_price = $${i++}`);
     vals.push(data.yearly_unit_price);
+  }
+  if (data.discount_percent !== undefined) {
+    sets.push(`discount_percent = $${i++}`);
+    vals.push(data.discount_percent);
   }
 
   if (sets.length === 0) return false;

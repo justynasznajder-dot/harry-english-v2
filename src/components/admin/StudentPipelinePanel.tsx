@@ -248,7 +248,7 @@ export default function StudentPipelinePanel({
           type="button"
           disabled={loading || exporting || pipeline.length === 0}
           onClick={() => void exportXlsx()}
-          className="rounded-xl border border-[#0f6e56] bg-white px-3 py-2 text-sm font-semibold text-[#0f6e56] transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+          className="ml-auto rounded-xl border border-[#0f6e56] bg-white px-3 py-2 text-sm font-semibold text-[#0f6e56] transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {exporting ? 'Generowanie…' : 'Pobierz Excel'}
         </button>

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sendCombinedProposalEmail } from "@/lib/email";
 import { requireAdminSchoolContext } from "@/lib/admin-school-context";
+import { queryDb } from "@/lib/db";
+import { isEnrollmentProposalEmailEnabled } from "@/lib/enrollment-proposal-email";
 import {
   resolveProposalEmailCredentials,
   saveEnrollmentProposalDraft,
@@ -141,6 +143,29 @@ export async function POST(request: NextRequest) {
         saved: true,
         count: proposals.length,
       });
+    }
+
+    const requestIds = proposals
+      .map((p) => (typeof p.requestId === "string" ? p.requestId.trim() : ""))
+      .filter(Boolean);
+    if (requestIds.length > 0) {
+      const schoolsRes = await queryDb<{ school_id: string }>(
+        `SELECT DISTINCT school_id
+         FROM enrollment_requests
+         WHERE id = ANY($1::text[])`,
+        [requestIds]
+      );
+      if (
+        schoolsRes.rows.some((row) => !isEnrollmentProposalEmailEnabled(row.school_id))
+      ) {
+        return NextResponse.json(
+          {
+            message:
+              "Wysyłka maila z propozycją i danymi logowania jest wyłączona dla tej szkoły. Użyj „Zapisz”.",
+          },
+          { status: 403 }
+        );
+      }
     }
 
     for (const p of proposals) {

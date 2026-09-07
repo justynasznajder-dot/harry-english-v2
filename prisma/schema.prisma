@@ -83,6 +83,8 @@ model children {
   lesson_unit_price     Decimal?             @db.Decimal(10, 2)
   monthly_unit_price    Decimal?             @db.Decimal(10, 2)
   yearly_unit_price     Decimal?             @db.Decimal(10, 2)
+  /// Ręczna zniżka % wpisana przez managera (null = brak)
+  discount_percent      Decimal?             @db.Decimal(5, 2)
   attendance            attendance[]
   child_auth            child_auth?
   child_rewards         child_rewards[]
@@ -823,7 +825,8 @@ model client_number_counters {
   @@id([school_id])
 }
 
-/// Kolejny numer faktury sprzedaży per rodzic + miesiąc (ParentID/m/yyyy/n)
+/// Legacy: kolejny numer faktury per rodzic + miesiąc (stary format ParentID/m/yyyy/n).
+/// Nowe faktury: ChildID/m/yyyy/n — alokacja z istniejących numerów invoices (bez tego licznika).
 model invoice_parent_month_counters {
   school_id   String
   parent_id   String

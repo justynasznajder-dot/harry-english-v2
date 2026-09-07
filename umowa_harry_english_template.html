@@ -141,6 +141,15 @@
     border: none;
     border-top: 1px solid #eee;
   }
+  ul.schedule-details {
+    margin: 6px 0 0;
+    padding-left: 18px;
+    list-style: disc;
+  }
+  ul.schedule-details li {
+    margin-bottom: 4px;
+    text-align: left;
+  }
 </style>
 </head>
 <body>
@@ -148,20 +157,17 @@
 <h1>Umowa o świadczenie usług edukacyjnych</h1>
 <div class="contract-number">Nr umowy: <span class="ph">{{contract_number}}</span></div>
 
-<p>Umowa zawarta dnia <span class="ph">{{contract_date}}</span> roku w <span class="ph">{{contract_city}}</span>.</p>
+<p>Umowa zawarta dnia <span class="ph">{{contract_date}}</span> roku w Paniówkach.</p>
 
 <p><strong>Pomiędzy:</strong></p>
 <p>Firma Handlowo Usługowa Michał Sznajder, 44-177 Paniówki, ul. Powstańców Śląskich 146, NIP: 6412394661
-(zwaną dalej: <strong>Harry English</strong>) reprezentowaną przez: Anna i Michał Sznajder,</p>
+(zwaną dalej: <strong>Harry English</strong>) reprezentowaną przez Annę i Michała Sznajder,</p>
 
 <p style="text-align:center"><strong>a</strong></p>
 
 <div class="party-block">
   <div class="field-label">Imię i nazwisko rodzica/prawnego opiekuna:</div>
   <div class="field-value"><span class="ph">{{parent_full_name}}</span></div>
-
-  <div class="field-label">PESEL i/lub numer dowodu tożsamości:</div>
-  <div class="field-value"><span class="ph">{{parent_pesel_or_id}}</span></div>
 
   <div class="field-label">Adres zamieszkania:</div>
   <div class="field-value"><span class="ph">{{parent_address}}</span></div>
@@ -188,54 +194,63 @@
 
 <div class="section-header">§1 Przedmiot umowy</div>
 <ol class="contract-list">
-  <li>Umowa dotyczy organizacji oraz przeprowadzenia przez Harry English kursu językowego, którego uczestnikiem będzie Słuchacz.</li>
-  <li>Umowa zostaje zawarta na okres roku szkolnego <span class="ph">{{school_year}}</span> z możliwością jej rozwiązania na warunkach opisanych w §3.</li>
-  <li>Kurs odbywa się według ustalonego kalendarza określonego w ofercie; zajęcia nie odbywają się w święta oraz dni ustawowo wolne od pracy. Planowana liczba spotkań w roku szkolnym wynosi 33 spotkania w przypadku jednego spotkania tygodniowo lub 66 spotkań przy dwóch spotkaniach tygodniowo.</li>
-  <li>Zajęcia trwają 40 minut dla dzieci przedszkolnych, 45 minut dla dzieci szkolnych w klasach 1–3 oraz 50 minut dla pozostałych Słuchaczy. Czas trwania zajęć dla Słuchacza objętego niniejszą umową: <span class="ph">{{lesson_duration}}</span> minut.</li>
-  <li>Kurs odbywa się w miesiącach od września do czerwca danego roku szkolnego w wyznaczone dni tygodnia: <span class="ph">{{group_schedule}}</span>.</li>
+  <li>Umowa określa zasady organizacji i prowadzenia przez Harry English kursu językowego, w którym uczestniczy Słuchacz.</li>
+  <li>Umowa zostaje zawarta na okres roku szkolnego <span class="ph">{{school_year}}</span>, z możliwością jej rozwiązania na zasadach określonych w niniejszej umowie.</li>
+  <li>Kurs odbywa się zgodnie z ustalonym kalendarzem. Zajęcia nie odbywają się w święta oraz dni ustawowo wolne od pracy. Planowana liczba zajęć w roku szkolnym wynosi <span class="ph">{{planned_lessons_label}}</span>.</li>
+  <li>Czas trwania pojedynczych zajęć Słuchacza wynosi <span class="ph">{{lesson_duration}}</span>.</li>
+  <li>Zajęcia odbywają się:
+    <ul class="schedule-details">
+      <li>w dniu: <span class="ph">{{schedule_day}}</span></li>
+      <li>o godzinie: <span class="ph">{{schedule_time}}</span></li>
+      <li>w miejscu: <span class="ph">{{schedule_place}}</span></li>
+    </ul>
+  </li>
+  <li>Harry English zastrzega możliwość wprowadzenia uzasadnionych zmian organizacyjnych, w szczególności dotyczących osoby prowadzącej zajęcia lub sali w ramach wskazanego miejsca zajęć. O zmianach dotyczących dnia, godziny lub miejsca zajęć Klient zostanie poinformowany z odpowiednim wyprzedzeniem.</li>
 </ol>
 
 <div class="section-header">§2 Koszt oraz forma płatności</div>
 <ol class="contract-list">
-  <li>Opłata za uczestnictwo w kursie uiszczana będzie w formie elektronicznej, na podstawie wystawionej faktury.</li>
-  <li>Na podstawie oferty szkoły Harry English Klient wybiera płatność w trybie: <span class="ph">{{payment_type}}</span>.</li>
-  <li>W przypadku wyboru płatności w trybie pojedynczych zajęć, wysokość comiesięcznej opłaty zostanie skalkulowana na podstawie obecności dziecka na zajęciach, po zakończeniu danego miesiąca (z uwzględnieniem warunków określonych w pkt. 4 §2). Klient zobowiązuje się do dokonania płatności zgodnie z terminem wskazanym na fakturze.</li>
-  <li>Decydując się na rozliczanie za każde pojedyncze zajęcia, Klient akceptuje obowiązek uiszczenia opłaty za jedne zajęcia nawet w sytuacji, kiedy w danym miesiącu dziecko w żadnych zajęciach nie uczestniczyło. W przypadku uczestnictwa w minimum jednym spotkaniu opłata ta staje się automatycznie opłatą za te zajęcia; każde kolejne zajęcia rozliczane są zgodnie z zasadami opisanymi w pkt. 3 §2.</li>
-  <li>W przypadku płatności w trybie ratalnym Klient zobowiązuje się do dokonania płatności zgodnie z kwotą i terminem wskazanymi na fakturze.</li>
-  <li>W przypadku płatności w trybie jednorazowym Klient zobowiązuje się do dokonania jednorazowej płatności w kwocie i terminie wskazanych na fakturze.</li>
-</ol>
-{{amount_clause}}
-<p class="note">Opłata ratalna i jednorazowa uśrednia koszt przez cały rok kursu (10 miesięcy). Przy wyborze płatności ratalnej lub jednorazowej Klient otrzymuje rabat zgodnie z aktualną informacją na stronie internetowej <a href="https://www.harry-english.pl">www.harry-english.pl</a>.</p>
-<ol class="contract-list" style="counter-reset: item 6">
-  <li>Za brak płatności w terminie naliczane będą odsetki ustawowe.</li>
+  <li>Stawka za pojedyncze zajęcia dla Słuchacza wynosi <span class="ph">{{lesson_unit_price_label}}</span>.</li>
+  <li>Klient wybiera następującą formę płatności: <span class="ph">{{payment_type}}</span>.</li>
+  <li>Opłata za uczestnictwo w kursie uiszczana jest w formie elektronicznej, na podstawie faktury wystawionej przez Harry English, w terminie wskazanym na fakturze.</li>
+  <li>W przypadku płatności za pojedyncze zajęcia wysokość miesięcznej opłaty ustalana jest na podstawie liczby zajęć, w których Słuchacz uczestniczył w danym miesiącu.</li>
+  <li>W przypadku wyboru płatności ratalnej wysokość rat oraz terminy płatności są wskazywane na wystawianych fakturach.</li>
+  <li>W przypadku wyboru płatności jednorazowej Klient zobowiązuje się do dokonania płatności w kwocie i terminie wskazanych na fakturze.</li>
+  <li>W przypadku opóźnienia w płatności Harry English może naliczyć odsetki ustawowe za opóźnienie.</li>
 </ol>
 
 <div class="section-header">§3 Warunki przeprowadzenia kursu</div>
 <ol class="contract-list">
-  <li>Zajęcia będą odbywać się w kilkuosobowych grupach.</li>
-  <li>Strony mają prawo do wypowiedzenia umowy z 30-dniowym okresem wypowiedzenia. W sytuacji wypowiedzenia umowy ewentualna nadwyżka opłat poniesionych przez Klienta zostanie zwrócona w kwocie pomniejszonej proporcjonalnie do czasu, w jakim Słuchacz uczestniczył w kursie (w zaokrągleniu do pełnych miesięcy w przód), w terminie 3 dni roboczych od uprawomocnienia się złożonego wypowiedzenia.</li>
-  <li>Harry English zastrzega sobie prawo do odwołania zajęć lub całkowitego zakończenia kursu w sytuacji, gdy liczba Słuchaczy w grupie spadnie poniżej 4 osób. Informacja o odwołaniu zajęć lub zakończeniu kursu zostanie przekazana Klientowi najpóźniej 3 dni przed planowanym terminem spotkania; całość poniesionych przez Klienta opłat zostanie zwrócona w terminie 3 dni roboczych.</li>
-  <li>Firma Harry English posiada zdefiniowaną politykę ochrony dzieci przed krzywdzeniem zgodnie z wymogami ustawy z dnia 28 lipca 2023 r. o zmianie ustawy – Kodeks rodzinny i opiekuńczy oraz niektórych innych ustaw (Dz. U. z 2023 r., poz. 1606). Polityka dostępna jest na stronie <a href="https://www.harry-english.pl">www.harry-english.pl</a> w zakładce aktualności oraz u właściciela firmy.</li>
-  <li>Rodzic/opiekun prawny ponosi odpowiedzialność za zapewnienie opieki Słuchaczowi przed oraz po zajęciach odbywających się w wyznaczonych godzinach.</li>
-  <li>Jeśli zajęcia Harry English prowadzone są bezpośrednio po zajęciach szkolnych lub przedszkolnych Słuchacza, istnieje możliwość, że na podstawie upoważnienia wystawionego przez rodzica/opiekuna prawnego (Załącznik nr 2) lektor będzie towarzyszył dziecku podczas przejścia ze szkoły/przedszkola na zajęcia Harry English. Podpisane upoważnienie należy przekazać w szkole/przedszkolu oraz lektorowi prowadzącemu grupę podczas pierwszych zajęć.</li>
+  <li>Zajęcia odbywają się w kilkuosobowych grupach.</li>
+  <li>Zajęcia odwołane przez Harry English nie podlegają opłacie. Jeżeli zostały wcześniej opłacone, odpowiednia kwota zostanie zaliczona na poczet kolejnych należności lub zwrócona Klientowi.</li>
+  <li>Każda ze Stron ma prawo wypowiedzieć umowę z zachowaniem 30-dniowego okresu wypowiedzenia. Po zakończeniu umowy Harry English dokona rozliczenia należności, a ewentualna nadpłata zostanie zwrócona Klientowi.</li>
+  <li>Harry English zastrzega sobie prawo do zakończenia prowadzenia danej grupy, jeżeli liczba Słuchaczy spadnie poniżej 4 osób. Klient zostanie o tym poinformowany możliwie niezwłocznie, a opłaty dotyczące niezrealizowanych zajęć zostaną zwrócone lub odpowiednio rozliczone.</li>
+  <li>Rodzic lub opiekun prawny ponosi odpowiedzialność za zapewnienie Słuchaczowi opieki przed rozpoczęciem oraz po zakończeniu zajęć.</li>
+  <li>Jeżeli zajęcia Harry English odbywają się bezpośrednio po zajęciach szkolnych lub przedszkolnych Słuchacza, lektor może towarzyszyć dziecku podczas przejścia ze szkoły lub przedszkola na zajęcia Harry English na podstawie odrębnego upoważnienia udzielonego przez rodzica lub opiekuna prawnego.</li>
 </ol>
 
 <div class="section-header">§4 Ochrona danych osobowych (RODO)</div>
 <ol class="contract-list">
-  <li>Administratorem danych osobowych udostępnionych w ramach niniejszej umowy jest Firma Handlowo Usługowa Michał Sznajder z siedzibą w Paniówkach (44-177), ul. Powstańców Śląskich 146.</li>
-  <li>Klient, w imieniu swoim oraz Słuchacza, którego jest prawnym opiekunem, świadomie i dobrowolnie wyraża zgodę na wykorzystywanie, przechowywanie oraz przetwarzanie danych osobowych zawartych w umowie. Dane te posłużą Administratorowi do informowania Klienta oraz Słuchacza o aspektach organizacyjnych związanych z uczestnictwem w kursach. Klient ma prawo do wycofania zgody w dowolnym momencie poprzez pisemne oświadczenie dostarczone na adres siedziby Administratora. Wycofanie zgody nie wpływa na zgodność z prawem przetwarzania, które miało miejsce przed jej wycofaniem.</li>
-  <li>Zgoda na utrwalanie i wykorzystywanie wizerunku Słuchacza do celów promocyjnych jest dobrowolna i stanowi odrębny dokument – <strong>Załącznik nr 1</strong> do niniejszej umowy. Brak podpisania Załącznika nr 1 nie wpływa na ważność umowy.</li>
+  <li>Administratorem danych osobowych Klienta oraz Słuchacza jest Firma Handlowo Usługowa Michał Sznajder z siedzibą w Paniówkach (44-177), ul. Powstańców Śląskich 146.</li>
+  <li>Dane osobowe Klienta oraz Słuchacza są przetwarzane w zakresie niezbędnym do zawarcia i realizacji niniejszej umowy, organizacji kursu, kontaktu z Klientem, prowadzenia rozliczeń oraz realizacji obowiązków prawnych ciążących na Administratorze.</li>
+  <li>Dane osobowe będą przechowywane przez okres obowiązywania umowy, a po jej zakończeniu przez okres wymagany przepisami prawa lub niezbędny do ustalenia, dochodzenia albo obrony roszczeń.</li>
+  <li>Klientowi przysługują, w przypadkach przewidzianych przepisami prawa, prawa do dostępu do danych, ich sprostowania, usunięcia, ograniczenia przetwarzania oraz wniesienia skargi do Prezesa Urzędu Ochrony Danych Osobowych.</li>
+  <li>Podanie danych osobowych niezbędnych do zawarcia i realizacji umowy jest konieczne do świadczenia usług objętych umową.</li>
+  <li>W trakcie zajęć oraz wydarzeń organizowanych przez Harry English mogą być wykonywane zdjęcia i krótkie nagrania przedstawiające uczestników zajęć. Klient może dobrowolnie wyrazić zgodę na nieodpłatne utrwalanie i publikowanie wizerunku Słuchacza, bez podawania jego imienia i nazwiska, w materiałach informacyjnych i promocyjnych Harry English, w szczególności na profilach Harry English w mediach społecznościowych, w tym na Facebooku i Instagramie.</li>
+  <li>Nowe materiały zawierające wizerunek Słuchacza mogą być publikowane w okresie roku szkolnego <span class="ph">{{school_year}}</span>. Materiały opublikowane w tym okresie mogą pozostać w historii profili Harry English również po zakończeniu roku szkolnego.</li>
+  <li>Klient wyraża zgodę na nieodpłatne utrwalanie i publikowanie wizerunku Słuchacza, bez podawania jego imienia i nazwiska, na zasadach określonych w pkt 6–7. Jeżeli Klient nie wyraża zgody na wykorzystanie wizerunku Słuchacza lub chce ją w późniejszym czasie wycofać, może poinformować o tym Harry English, wysyłając wiadomość na adres <a href="mailto:kontakt@harry-english.pl">kontakt@harry-english.pl</a>. Brak zgody lub jej późniejsze wycofanie nie ma wpływu na możliwość uczestnictwa Słuchacza w kursie.</li>
 </ol>
 
 <div class="section-header">§5 Postanowienia ogólne</div>
 <ol class="contract-list">
-  <li>Umowa została sporządzona i przesłana drogą elektroniczną, co strony uznają za równoważne z formą pisemną.</li>
-  <li>W sprawach nieuregulowanych niniejszą umową zastosowanie mają przepisy Kodeksu cywilnego.</li>
-  <li>Klient wyraża zgodę na otrzymywanie faktur, rachunków oraz informacji organizacyjnych drogą elektroniczną na podany adres e-mail oraz numer telefonu.</li>
+  <li>Klient potwierdza, że zapoznał się z treścią niniejszej umowy i akceptuje jej warunki.</li>
+  <li>Umowa zostaje zawarta w formie elektronicznej. Po jej zawarciu kopia umowy jest automatycznie przesyłana na adres e-mail Klienta wskazany w umowie oraz na adres e-mail Harry English, co umożliwia obu Stronom zapisanie i przechowywanie jej treści.</li>
+  <li>Faktury oraz informacje organizacyjne związane z realizacją kursu będą przesyłane Klientowi drogą elektroniczną na adres e-mail oraz/lub numer telefonu wskazany w umowie.</li>
+  <li>W sprawach nieuregulowanych niniejszą umową zastosowanie mają przepisy prawa polskiego, w szczególności Kodeksu cywilnego.</li>
+  <li>Integralną część umowy stanowi Załącznik nr 1 – Upoważnienie lektora do towarzyszenia dziecku, jeżeli dotyczy.</li>
 </ol>
 
 <div class="signatures">
-  <p class="signature-confirm"><em>Klient potwierdza zapoznanie się z treścią umowy i akceptuje jej warunki.</em></p>
   {{signed_at_line}}
   <div class="signature-row">
     <div class="signature-col">
@@ -251,8 +266,7 @@
 
 <div class="attachments">
   <p><strong>Załączniki do umowy:</strong></p>
-  <p>Załącznik nr 1 – Zgoda na utrwalanie i wykorzystywanie wizerunku</p>
-  <p>Załącznik nr 2 – Upoważnienie lektora do towarzyszenia dziecku (jeśli dotyczy)</p>
+  <p>Załącznik nr 1 – Upoważnienie lektora do towarzyszenia dziecku (jeśli dotyczy)</p>
 </div>
 
 </body>

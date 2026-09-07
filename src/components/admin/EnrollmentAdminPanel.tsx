@@ -11,8 +11,10 @@ import {
   filterEnrollmentChildrenByStatus,
   resolveEnrollmentListBadge,
 } from '@/lib/enrollment-status';
+import { downloadEnrollmentListXlsx } from '@/lib/enrollment-list-xlsx';
 import { parsePriceDecimal } from '@/lib/lesson-pricing';
 import { isParentInComplimentaryList } from '@/lib/complimentary-parent-list';
+import { isEnrollmentProposalEmailEnabled } from '@/lib/enrollment-proposal-email';
 import { compareGroupsYoungestToOldest } from '@/src/data/harryEnglishLevels';
 import type {
   ComplimentaryParentRow,
@@ -150,6 +152,7 @@ export default function EnrollmentAdminPanel({
   >({});
   // const [savingParentDiscountId, setSavingParentDiscountId] = useState<string | null>(null);
   const [savingComplimentaryKey, setSavingComplimentaryKey] = useState<string | null>(null);
+  const [exportingList, setExportingList] = useState(false);
   void _discountSettings; // zniżki % wyłączone — prop zostaje dla kompatybilności AdminPortal
 
   /*
@@ -306,6 +309,7 @@ export default function EnrollmentAdminPanel({
         : false,
     [proposalParent, complimentaryParents],
   );
+  const proposalEmailEnabled = isEnrollmentProposalEmailEnabled(proposalParent?.schoolId);
   const proposalBatchReady =
     proposalNewChildren.length >= 1 &&
     proposalNewChildren.every((c) => {
@@ -455,7 +459,7 @@ export default function EnrollmentAdminPanel({
           />
         )}
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {ENROLLMENT_LIST_FILTERS.map((filter) => (
             <button
               key={filter.value || 'all'}
@@ -481,6 +485,50 @@ export default function EnrollmentAdminPanel({
           >
             Status zapisów ({enrollmentStatusCounts[''] ?? 0})
           </button>
+          {!isPipeline && (
+            <button
+              type="button"
+              disabled={exportingList || filteredEnrollmentRows.length === 0}
+              onClick={() => {
+                void (async () => {
+                  if (exportingList || filteredEnrollmentRows.length === 0) return;
+                  setExportingList(true);
+                  try {
+                    const filterLabel =
+                      ENROLLMENT_LIST_FILTERS.find((f) => f.value === enrollmentStatusFilter)
+                        ?.label ?? 'Zgłoszenia';
+                    const groupNameById = Object.fromEntries(
+                      groups.map((g) => [g.id, g.name]),
+                    );
+                    await downloadEnrollmentListXlsx({
+                      filterLabel,
+                      groupNameById,
+                      rows: filteredEnrollmentRows.map((parent) => ({
+                        firstName: parent.firstName,
+                        lastName: parent.lastName,
+                        email: parent.email,
+                        complimentary: isParentInComplimentaryList(
+                          parent,
+                          complimentaryParents,
+                        ),
+                        children: parent.children,
+                      })),
+                    });
+                  } catch (e) {
+                    pushToast(
+                      'error',
+                      e instanceof Error ? e.message : 'Nie udało się wygenerować pliku Excel',
+                    );
+                  } finally {
+                    setExportingList(false);
+                  }
+                })();
+              }}
+              className="ml-auto rounded-xl border border-[#0f6e56] bg-white px-3 py-2 text-sm font-semibold text-[#0f6e56] transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {exportingList ? 'Generowanie…' : 'Pobierz Excel'}
+            </button>
+          )}
         </div>
 
         {isPipeline ? (
@@ -1349,19 +1397,22 @@ export default function EnrollmentAdminPanel({
                   >
                     {savingBatchProposals ? 'Zapisywanie…' : 'Zapisz'}
                   </button>
-                  {/* TEMP: wyłączone, żeby przypadkiem nie wysłać maili — na razie tylko Zapisz.
-                      Przywróć: usuń `true ||` z disabled oraz stały title poniżej. */}
+                  {/* Wysyłka maila (zajęcia + login/hasło) — tylko szkoły z allowlisty. */}
                   <button
                     type="button"
                     disabled={
-                      true ||
+                      !proposalEmailEnabled ||
                       !proposalBatchReady ||
                       submittingBatchProposals ||
                       savingBatchProposals ||
                       submittingProposalRequestId != null ||
                       rejectingParentResignationId != null
                     }
-                    title="Tymczasowo wyłączone — na razie tylko zapisujemy przydziały (bez wysyłki maila)"
+                    title={
+                      proposalEmailEnabled
+                        ? undefined
+                        : 'Wysyłka maila wyłączona dla tej szkoły — na razie tylko zapis przydziału'
+                    }
                     className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0c5a47] disabled:cursor-not-allowed disabled:opacity-50"
                     onClick={async () => {
                       if (!confirmGroupChangesIfNeeded()) return;

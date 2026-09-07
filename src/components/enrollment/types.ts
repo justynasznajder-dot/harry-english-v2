@@ -26,6 +26,7 @@ export type EnrollmentParentRow = {
   firstName: string;
   lastName: string;
   email: string;
+  schoolId?: string | null;
   accessLevel: EnrollmentStatus;
   discountLargeFamily?: boolean;
   children: EnrollmentChildRow[];

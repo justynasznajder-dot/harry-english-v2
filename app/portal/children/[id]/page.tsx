@@ -18,6 +18,7 @@ type ChildDetail = {
   lesson_unit_price: string | null;
   monthly_unit_price: string | null;
   yearly_unit_price: string | null;
+  discount_percent: string | null;
   parent_first_name: string;
   parent_last_name: string;
   parent_email: string;
@@ -70,6 +71,7 @@ export default function AdminChildProfilePage() {
   const [monthlyPrice, setMonthlyPrice] = useState('');
   const [yearlyPrice, setYearlyPrice] = useState('');
   const [lessonPrice, setLessonPrice] = useState('');
+  const [discountPercent, setDiscountPercent] = useState('');
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -90,6 +92,7 @@ export default function AdminChildProfilePage() {
       setMonthlyPrice(priceFromDb(c.monthly_unit_price));
       setYearlyPrice(priceFromDb(c.yearly_unit_price));
       setLessonPrice(priceFromDb(c.lesson_unit_price));
+      setDiscountPercent(priceFromDb(c.discount_percent));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Błąd ładowania');
       setChild(null);
@@ -124,6 +127,7 @@ export default function AdminChildProfilePage() {
           monthlyUnitPrice: monthlyPrice.trim() || null,
           yearlyUnitPrice: yearlyPrice.trim() || null,
           lessonUnitPrice: lessonPrice.trim() || null,
+          discountPercent: discountPercent.trim() || null,
         }),
       });
       const data = await res.json();
@@ -282,13 +286,14 @@ export default function AdminChildProfilePage() {
               <h2 className="text-lg font-semibold text-[#1e3a4c]">Stawki indywidualne</h2>
               <form onSubmit={handleSaveRates} className="mt-4 space-y-4">
                 <p className="text-sm text-zinc-600">
-                  Nadpisanie należy do profilu dziecka (nie do grupy). Puste pole = stawka domyślna
-                  grupy
+                  Nadpisanie należy do profilu dziecka (nie do grupy). Puste pole stawki = stawka
+                  domyślna grupy
                   {membership
                     ? `: ratalna ${formatGroupDefault(membership.group_price_monthly)}, jednorazowa ${formatGroupDefault(membership.group_price_yearly)}, za zajęcia ${formatGroupDefault(membership.group_price_per_lesson)}.`
-                    : ' (po przypisaniu do grupy).'}
+                    : ' (po przypisaniu do grupy).'}{' '}
+                  Puste % zniżki = brak zniżki.
                 </p>
-                <div className="grid gap-4 sm:grid-cols-3">
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <label className="flex flex-col gap-1 text-sm text-zinc-700">
                     Ratalna (PLN)
                     <input
@@ -320,6 +325,17 @@ export default function AdminChildProfilePage() {
                       value={lessonPrice}
                       onChange={(e) => setLessonPrice(e.target.value)}
                       placeholder="Domyślna"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-sm text-zinc-700">
+                    % zniżki
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      className="rounded-xl border border-emerald-200 px-3 py-2 text-zinc-900"
+                      value={discountPercent}
+                      onChange={(e) => setDiscountPercent(e.target.value)}
+                      placeholder="Brak"
                     />
                   </label>
                 </div>

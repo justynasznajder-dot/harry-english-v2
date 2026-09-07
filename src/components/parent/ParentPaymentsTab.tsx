@@ -1,48 +1,61 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { paymentTypeShortLabel } from '@/lib/payment-labels';
 import {
+  attendanceStatusClass,
+  attendanceStatusLabel,
   formatAmountPln,
+  formatLessonDateTime,
   formatMonthLabel,
-  paymentStatusClass,
-  paymentStatusLabel,
+  paymentDisplayStatusVisual,
 } from '@/src/components/parent/parent-portal-utils';
 
-type PaymentRow = {
-  id: string;
-  childId: string | null;
-  childName: string | null;
-  amount: string;
-  status: string;
-  dueDate: string | null;
-  paidAt: string | null;
-  periodMonth: string | null;
-  description: string | null;
-  paymentType: string | null;
-  source: 'payment' | 'lesson_billing';
-  billingPeriodStatus: string | null;
+type DisplayStatus = 'AWAITING_INVOICE' | 'UNPAID' | 'PAID';
+
+type InvoiceRef = {
+  paymentId: string | null;
   invoiceNumber: string | null;
   hasInvoicePdf: boolean;
+  dueDate: string | null;
+  paidAt: string | null;
 };
 
-const ALL_YEARS = 'all';
+type InstallmentRow = InvoiceRef & {
+  periodMonth: string;
+  amount: string;
+  displayStatus: DisplayStatus;
+};
 
-function yearFromPayment(p: PaymentRow): number | null {
-  if (p.periodMonth) {
-    const y = Number(p.periodMonth.slice(0, 4));
-    if (Number.isFinite(y)) return y;
-  }
-  if (p.dueDate) {
-    const y = Number(p.dueDate.slice(0, 4));
-    if (Number.isFinite(y)) return y;
-  }
-  if (p.paidAt) {
-    const y = new Date(p.paidAt).getFullYear();
-    if (Number.isFinite(y)) return y;
-  }
-  return null;
-}
+type LessonCharge = {
+  lessonId: string;
+  scheduledAt: string;
+  attendanceStatus: string;
+  groupName: string;
+  unitPrice: string;
+  amount: string;
+  periodMonth: string;
+};
+
+type LessonMonthRow = InvoiceRef & {
+  periodMonth: string;
+  lessonsCount: number;
+  amount: string;
+  displayStatus: DisplayStatus;
+  lessons: LessonCharge[];
+};
+
+type ChildOverview = {
+  childId: string;
+  childName: string;
+  contractId: string;
+  paymentType: string;
+  schoolYearName: string | null;
+  installments: InstallmentRow[] | null;
+  yearly: (InstallmentRow & { label: string }) | null;
+  lessonMonths: LessonMonthRow[] | null;
+  lessonUnitPrice: string | null;
+};
 
 async function downloadInvoicePdf(paymentId: string): Promise<void> {
   const res = await fetch(`/api/parent/payments/${paymentId}/invoice`, {
@@ -66,6 +79,31 @@ async function downloadInvoicePdf(paymentId: string): Promise<void> {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+function StatusBadge({ status }: { status: DisplayStatus }) {
+  const visual = paymentDisplayStatusVisual(status);
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-semibold ${visual.className}`}
+      title={visual.label}
+    >
+      {visual.kind === 'paid' ? (
+        <span aria-hidden className="text-base leading-none text-emerald-600">
+          ✓
+        </span>
+      ) : visual.kind === 'unpaid' ? (
+        <span aria-hidden className="text-base leading-none text-rose-600">
+          ✓
+        </span>
+      ) : (
+        <span aria-hidden className="text-sm leading-none text-zinc-400">
+          ◌
+        </span>
+      )}
+      {visual.label}
+    </span>
+  );
 }
 
 function InvoiceDownloadButton({
@@ -102,9 +140,210 @@ function InvoiceDownloadButton({
   );
 }
 
+function InvoiceCell({ row }: { row: InvoiceRef & { displayStatus: DisplayStatus } }) {
+  if (row.displayStatus === 'AWAITING_INVOICE' || !row.paymentId) {
+    return <span className="text-xs text-zinc-400">—</span>;
+  }
+  if (row.hasInvoicePdf) {
+    return <InvoiceDownloadButton paymentId={row.paymentId} invoiceNumber={row.invoiceNumber} />;
+  }
+  if (row.invoiceNumber) {
+    return (
+      <div className="space-y-1">
+        <div className="text-xs text-zinc-600">{row.invoiceNumber}</div>
+        <span className="text-xs text-amber-800">Faktura bez pliku PDF — skontaktuj się ze szkołą.</span>
+      </div>
+    );
+  }
+  return <span className="text-xs text-zinc-400">—</span>;
+}
+
+function InfoBanner({ children }: { children: ReactNode }) {
+  return (
+    <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
+      {children}
+    </div>
+  );
+}
+
+function ChildMonthlySection({ child }: { child: ChildOverview }) {
+  const rows = child.installments ?? [];
+  return (
+    <div className="space-y-3">
+      <InfoBanner>
+        Faktury ratalne wystawiane są w okolicach <strong>10. dnia każdego miesiąca</strong>. Do
+        tego czasu status to „Oczekiwanie na fakturę”.
+      </InfoBanner>
+      {rows.length === 0 ? (
+        <p className="text-sm text-zinc-600">Brak harmonogramu rat dla tego roku szkolnego.</p>
+      ) : (
+        <>
+          <div className="space-y-2 md:hidden">
+            {rows.map((row) => (
+              <article
+                key={row.periodMonth}
+                className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-semibold text-zinc-900">{formatMonthLabel(row.periodMonth)}</p>
+                    {row.dueDate ? (
+                      <p className="mt-0.5 text-xs text-zinc-500">Termin: {row.dueDate}</p>
+                    ) : null}
+                  </div>
+                  <StatusBadge status={row.displayStatus} />
+                </div>
+                <div className="mt-3 flex flex-wrap items-end justify-between gap-3 border-t border-zinc-100 pt-3">
+                  <p className="text-base font-semibold text-zinc-900">{formatAmountPln(row.amount)}</p>
+                  <InvoiceCell row={row} />
+                </div>
+              </article>
+            ))}
+          </div>
+          <div className="hidden overflow-hidden rounded-2xl border border-zinc-200 md:block">
+            <table className="min-w-full text-left text-sm">
+              <thead className="bg-zinc-50 text-zinc-700">
+                <tr>
+                  <th className="px-4 py-3 font-semibold">Miesiąc</th>
+                  <th className="px-4 py-3 font-semibold">Kwota</th>
+                  <th className="px-4 py-3 font-semibold">Status</th>
+                  <th className="px-4 py-3 font-semibold">Faktura</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.periodMonth} className="border-t border-zinc-100">
+                    <td className="px-4 py-3">
+                      <div>{formatMonthLabel(row.periodMonth)}</div>
+                      {row.dueDate ? (
+                        <div className="text-xs text-zinc-500">Termin: {row.dueDate}</div>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-3 font-medium">{formatAmountPln(row.amount)}</td>
+                    <td className="px-4 py-3">
+                      <StatusBadge status={row.displayStatus} />
+                    </td>
+                    <td className="px-4 py-3">
+                      <InvoiceCell row={row} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ChildYearlySection({ child }: { child: ChildOverview }) {
+  const row = child.yearly;
+  if (!row) {
+    return <p className="text-sm text-zinc-600">Brak danych o płatności jednorazowej.</p>;
+  }
+  return (
+    <div className="space-y-3">
+      <InfoBanner>
+        Płatność jednorazowa za rok szkolny. Po wystawieniu faktury status zmieni się na „Do
+        zapłaty”, a po zaksięgowaniu wpłaty — na „Opłacone”.
+      </InfoBanner>
+      <article className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="font-semibold text-zinc-900">{row.label}</p>
+            {row.dueDate ? (
+              <p className="mt-0.5 text-xs text-zinc-500">Termin: {row.dueDate}</p>
+            ) : null}
+          </div>
+          <StatusBadge status={row.displayStatus} />
+        </div>
+        <div className="mt-3 flex flex-wrap items-end justify-between gap-3 border-t border-zinc-100 pt-3">
+          <p className="text-xl font-semibold text-zinc-900">{formatAmountPln(row.amount)}</p>
+          <InvoiceCell row={row} />
+        </div>
+      </article>
+    </div>
+  );
+}
+
+function ChildLessonSection({ child }: { child: ChildOverview }) {
+  const months = child.lessonMonths ?? [];
+  return (
+    <div className="space-y-4">
+      <InfoBanner>
+        Rozliczenie za obecności oznaczone przez nauczyciela (obecny / spóźniony)
+        {child.lessonUnitPrice ? (
+          <>
+            {' '}
+            × stawka <strong>{formatAmountPln(child.lessonUnitPrice)}</strong>
+          </>
+        ) : null}
+        . Faktura za miesiąc wystawiana jest <strong>ostatniego dnia miesiąca</strong>.
+      </InfoBanner>
+      {months.length === 0 ? (
+        <p className="text-sm text-zinc-600">
+          Brak oznaczonych obecności do rozliczenia. Pojawią się tu zajęcia po oznaczeniu przez
+          lektora.
+        </p>
+      ) : (
+        months.map((month) => (
+          <div
+            key={month.periodMonth}
+            className="overflow-hidden rounded-2xl border border-zinc-200 bg-white"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-100 bg-zinc-50 px-4 py-3">
+              <div>
+                <p className="font-semibold text-zinc-900">{formatMonthLabel(month.periodMonth)}</p>
+                <p className="text-xs text-zinc-500">
+                  {month.lessonsCount}{' '}
+                  {month.lessonsCount === 1
+                    ? 'zajęcie'
+                    : month.lessonsCount < 5
+                      ? 'zajęcia'
+                      : 'zajęć'}{' '}
+                  · łącznie {formatAmountPln(month.amount)}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <StatusBadge status={month.displayStatus} />
+                <InvoiceCell row={month} />
+              </div>
+            </div>
+            <ul className="divide-y divide-zinc-100">
+              {month.lessons.map((lesson) => (
+                <li
+                  key={lesson.lessonId}
+                  className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm"
+                >
+                  <div className="min-w-0">
+                    <p className="font-medium text-zinc-900">
+                      {formatLessonDateTime(lesson.scheduledAt)}
+                    </p>
+                    <p className="text-xs text-zinc-500">{lesson.groupName}</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${attendanceStatusClass(lesson.attendanceStatus)}`}
+                    >
+                      {attendanceStatusLabel(lesson.attendanceStatus)}
+                    </span>
+                    <span className="font-semibold text-zinc-900">
+                      {formatAmountPln(lesson.amount)}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
 export default function ParentPaymentsTab({ complimentaryAccess }: { complimentaryAccess?: boolean }) {
-  const [payments, setPayments] = useState<PaymentRow[]>([]);
-  const [selectedYear, setSelectedYear] = useState(ALL_YEARS);
+  const [children, setChildren] = useState<ChildOverview[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -114,32 +353,19 @@ export default function ParentPaymentsTab({ complimentaryAccess }: { complimenta
     try {
       const r = await fetch('/api/parent/payments', { cache: 'no-store', credentials: 'include' });
       const data = (await r.json().catch(() => ({}))) as {
-        payments?: PaymentRow[];
+        overview?: { children?: ChildOverview[] };
         complimentaryAccess?: boolean;
         message?: string;
       };
       if (!r.ok) {
         setError(data.message ?? 'Nie udało się pobrać płatności');
-        setPayments([]);
+        setChildren([]);
         return;
       }
-      const nextPayments = data.payments ?? [];
-      setPayments(nextPayments);
-
-      const years = Array.from(
-        new Set(nextPayments.map((p) => yearFromPayment(p)).filter((y): y is number => y != null))
-      ).sort((a, b) => b - a);
-
-      setSelectedYear((prev) => {
-        if (prev !== ALL_YEARS && years.includes(Number(prev))) return prev;
-        const current = new Date().getFullYear();
-        if (years.includes(current)) return String(current);
-        if (years[0]) return String(years[0]);
-        return String(current);
-      });
+      setChildren(data.overview?.children ?? []);
     } catch {
       setError('Błąd połączenia z serwerem');
-      setPayments([]);
+      setChildren([]);
     } finally {
       setLoading(false);
     }
@@ -148,31 +374,6 @@ export default function ParentPaymentsTab({ complimentaryAccess }: { complimenta
   useEffect(() => {
     void load();
   }, [load]);
-
-  const yearOptions = useMemo(() => {
-    const years = Array.from(
-      new Set(payments.map((p) => yearFromPayment(p)).filter((y): y is number => y != null))
-    ).sort((a, b) => b - a);
-
-    const current = new Date().getFullYear();
-    if (!years.includes(current)) years.unshift(current);
-    years.sort((a, b) => b - a);
-
-    const options: Array<{ id: string; label: string }> = years.map((y) => ({
-      id: String(y),
-      label: String(y),
-    }));
-    if (options.length > 1) {
-      options.unshift({ id: ALL_YEARS, label: 'Wszystkie lata' });
-    }
-    return options;
-  }, [payments]);
-
-  const filteredPayments = useMemo(() => {
-    if (selectedYear === ALL_YEARS) return payments;
-    const year = Number(selectedYear);
-    return payments.filter((p) => yearFromPayment(p) === year);
-  }, [payments, selectedYear]);
 
   if (complimentaryAccess) {
     return (
@@ -189,49 +390,14 @@ export default function ParentPaymentsTab({ complimentaryAccess }: { complimenta
     );
   }
 
-  const renderInvoiceCell = (p: PaymentRow) => {
-    if (p.source === 'payment' && (p.hasInvoicePdf || p.invoiceNumber)) {
-      if (p.hasInvoicePdf) {
-        return <InvoiceDownloadButton paymentId={p.id} invoiceNumber={p.invoiceNumber} />;
-      }
-      return (
-        <div className="space-y-1">
-          {p.invoiceNumber ? <div className="text-xs text-zinc-600">{p.invoiceNumber}</div> : null}
-          <span className="text-xs text-amber-800">Faktura bez pliku PDF — skontaktuj się ze szkołą.</span>
-        </div>
-      );
-    }
-    return <span className="text-xs text-zinc-400">—</span>;
-  };
-
   return (
-    <section className="space-y-4 rounded-3xl border border-emerald-100 bg-white p-5 md:p-6">
-      <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-zinc-900 md:text-2xl">Płatności</h2>
-          <p className="mt-1 text-sm text-zinc-600">
-            Status rozliczeń zgodnie z umową. Faktury PDF możesz pobrać poniżej.
-          </p>
-        </div>
-        {!loading && !error ? (
-          <div className="w-full sm:w-auto">
-            <label htmlFor="payments-year" className="mb-1 block text-sm font-medium text-zinc-800">
-              Rok
-            </label>
-            <select
-              id="payments-year"
-              value={selectedYear}
-              onChange={(e) => setSelectedYear(e.target.value)}
-              className="w-full min-w-[160px] appearance-auto rounded-xl border border-emerald-200 bg-white px-3 py-2.5 text-sm font-semibold text-zinc-900 outline-none ring-[#0f6e56]/30 transition focus:border-[#0f6e56] focus:ring-2 sm:w-auto"
-            >
-              {yearOptions.map((y) => (
-                <option key={y.id} value={y.id} className="text-zinc-900">
-                  {y.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        ) : null}
+    <section className="space-y-6 rounded-3xl border border-emerald-100 bg-white p-5 md:p-6">
+      <header>
+        <h2 className="text-xl font-bold text-zinc-900 md:text-2xl">Płatności</h2>
+        <p className="mt-1 text-sm text-zinc-600">
+          Harmonogram i status rozliczeń dla wszystkich dzieci. Zielony ✓ = opłacone, czerwony ✓ =
+          faktura do zapłaty, ◌ = oczekiwanie na fakturę.
+        </p>
       </header>
 
       {loading ? (
@@ -240,97 +406,29 @@ export default function ParentPaymentsTab({ complimentaryAccess }: { complimenta
         <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
           {error}
         </div>
-      ) : filteredPayments.length === 0 ? (
+      ) : children.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-8 text-center text-sm text-zinc-600">
-          {payments.length > 0
-            ? 'Brak płatności dla wybranego roku.'
-            : 'Brak danych o płatnościach.'}
+          Brak podpisanych umów z płatnościami. Harmonogram pojawi się po podpisaniu umowy.
         </div>
       ) : (
-        <>
-          {/* Mobile: karty z widocznym pobieraniem faktury */}
-          <div className="space-y-3 md:hidden">
-            {filteredPayments.map((p) => (
-              <article
-                key={`${p.source}-${p.id}`}
-                className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="font-semibold text-zinc-900">
-                      {p.periodMonth ? formatMonthLabel(p.periodMonth) : p.description ?? 'Płatność'}
-                    </p>
-                    {p.childName ? <p className="mt-0.5 text-sm text-zinc-600">{p.childName}</p> : null}
-                    {p.dueDate ? (
-                      <p className="mt-0.5 text-xs text-zinc-500">Termin: {p.dueDate}</p>
-                    ) : null}
-                    {p.description && p.periodMonth ? (
-                      <p className="mt-0.5 text-xs text-zinc-500">{p.description}</p>
-                    ) : null}
-                  </div>
-                  <span
-                    className={`inline-flex shrink-0 rounded-full border px-2.5 py-0.5 text-xs font-semibold ${paymentStatusClass(p.status)}`}
-                  >
-                    {paymentStatusLabel(p.status)}
-                  </span>
+        <div className="space-y-8">
+          {children.map((child) => (
+            <article key={`${child.childId}-${child.contractId}`} className="space-y-4">
+              <div className="flex flex-wrap items-end justify-between gap-2 border-b border-emerald-100 pb-3">
+                <div>
+                  <h3 className="text-lg font-bold text-zinc-900">{child.childName}</h3>
+                  <p className="text-sm text-zinc-600">
+                    {paymentTypeShortLabel(child.paymentType)}
+                    {child.schoolYearName ? ` · ${child.schoolYearName}` : null}
+                  </p>
                 </div>
-                <div className="mt-3 flex flex-wrap items-end justify-between gap-3 border-t border-zinc-100 pt-3">
-                  <div>
-                    <p className="text-base font-semibold text-zinc-900">{formatAmountPln(p.amount)}</p>
-                    <p className="text-xs text-zinc-500">
-                      {p.paymentType ? paymentTypeShortLabel(p.paymentType) : '—'}
-                    </p>
-                  </div>
-                  <div>{renderInvoiceCell(p)}</div>
-                </div>
-              </article>
-            ))}
-          </div>
-
-          {/* Desktop: tabela */}
-          <div className="hidden overflow-hidden rounded-2xl border border-zinc-200 md:block">
-            <table className="min-w-full text-left text-sm">
-              <thead className="bg-zinc-50 text-zinc-700">
-                <tr>
-                  <th className="px-4 py-3 font-semibold">Okres</th>
-                  <th className="px-4 py-3 font-semibold">Dziecko</th>
-                  <th className="px-4 py-3 font-semibold">Kwota</th>
-                  <th className="px-4 py-3 font-semibold">Rozliczenie</th>
-                  <th className="px-4 py-3 font-semibold">Status</th>
-                  <th className="px-4 py-3 font-semibold">Faktura</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredPayments.map((p) => (
-                  <tr key={`${p.source}-${p.id}`} className="border-t border-zinc-100">
-                    <td className="px-4 py-3">
-                      <div>{p.periodMonth ? formatMonthLabel(p.periodMonth) : '—'}</div>
-                      {p.dueDate ? (
-                        <div className="text-xs text-zinc-500">Termin: {p.dueDate}</div>
-                      ) : null}
-                      {p.description ? (
-                        <div className="text-xs text-zinc-500">{p.description}</div>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-3">{p.childName ?? '—'}</td>
-                    <td className="px-4 py-3 font-medium">{formatAmountPln(p.amount)}</td>
-                    <td className="px-4 py-3">
-                      {p.paymentType ? paymentTypeShortLabel(p.paymentType) : '—'}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-semibold ${paymentStatusClass(p.status)}`}
-                      >
-                        {paymentStatusLabel(p.status)}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">{renderInvoiceCell(p)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
+              </div>
+              {child.paymentType === 'MONTHLY' ? <ChildMonthlySection child={child} /> : null}
+              {child.paymentType === 'YEARLY' ? <ChildYearlySection child={child} /> : null}
+              {child.paymentType === 'PER_LESSON' ? <ChildLessonSection child={child} /> : null}
+            </article>
+          ))}
+        </div>
       )}
     </section>
   );

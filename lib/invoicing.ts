@@ -32,15 +32,16 @@ import {
 import {
   buildCorrectiveInvoiceNumber,
   buildSaleInvoiceNumber,
-  ensureParentClientNumber,
+  ensureChildClientNumber,
 } from "@/lib/client-numbers";
+import { parsePriceDecimal } from "@/lib/lesson-pricing";
 
 export const INVOICE_DESC_MONTHLY_PREFIX = "Rata miesięczna";
 export const INVOICE_DESC_YEARLY_PREFIX = "Płatność jednorazowa";
 export const INVOICE_DESC_LESSON_PREFIX = "Rozliczenie za pojedyncze zajęcia";
 
 export type InvoiceCreateResult =
-  | { ok: true; paymentId: string; created: boolean }
+  | { ok: true; paymentId: string; created: boolean; createdCount?: number }
   | { ok: false; message: string; status: number };
 
 type ContractInvoiceRow = {
@@ -404,36 +405,48 @@ async function allocateSaleInvoiceNumber(
   client: PoolClient,
   schoolId: string,
   parentId: string,
+  childId: string,
   issueDate: Date
 ): Promise<string> {
-  const parentClientNumber = await ensureParentClientNumber(
+  const childClientNumber = await ensureChildClientNumber(
     client,
-    parentId,
-    schoolId
+    childId,
+    schoolId,
+    parentId
   );
   const yearMonth = periodMonthKey(issueDate);
   const [yearStr, monthStr] = yearMonth.split("-");
   const year = Number(yearStr);
   const month = Number(monthStr);
+  const prefix = `${childClientNumber}/${month}/${year}/`;
 
-  const res = await client.query<{ last_number: number }>(
-    `INSERT INTO invoice_parent_month_counters (
-       school_id, parent_id, year_month, last_number, updated_at
-     ) VALUES ($1, $2, $3, 1, NOW())
-     ON CONFLICT (school_id, parent_id, year_month)
-     DO UPDATE SET
-       last_number = invoice_parent_month_counters.last_number + 1,
-       updated_at = NOW()
-     RETURNING last_number`,
-    [schoolId, parentId, yearMonth]
+  // Blokada dziecka — unikamy kolizji numerów przy równoległym wystawianiu.
+  await client.query(`SELECT id FROM children WHERE id = $1 FOR UPDATE`, [childId]);
+
+  const res = await client.query<{ invoice_number: string }>(
+    `SELECT invoice_number
+     FROM invoices
+     WHERE school_id = $1
+       AND child_id = $2
+       AND invoice_number LIKE $3
+       AND COALESCE(document_type, 'SALE') = 'SALE'`,
+    [schoolId, childId, `${prefix}%`]
   );
-  const n = res.rows[0]?.last_number;
-  if (!n) throw new Error("Nie udało się przydzielić numeru faktury");
+
+  let maxSeq = 0;
+  for (const row of res.rows) {
+    const rest = String(row.invoice_number ?? "").slice(prefix.length);
+    const m = /^(\d+)/.exec(rest);
+    if (!m) continue;
+    const n = Number(m[1]);
+    if (Number.isInteger(n) && n > maxSeq) maxSeq = n;
+  }
+
   return buildSaleInvoiceNumber({
-    parentClientNumber,
+    childClientNumber,
     month,
     year,
-    sequence: n,
+    sequence: maxSeq + 1,
   });
 }
 
@@ -472,7 +485,7 @@ async function insertPaymentWithInvoice(params: {
   schoolId: string;
   parentId: string;
   contractId: string | null;
-  childId: string | null;
+  childId: string;
   amount: number;
   description: string;
   periodMonth: string | null;
@@ -481,6 +494,11 @@ async function insertPaymentWithInvoice(params: {
   /** Gdy podane — wiele pozycji; inaczej jedna z domyślną nazwą szkoły. */
   items?: InvoiceLineInput[];
 }): Promise<{ paymentId: string; invoiceId: string; invoiceNumber: string }> {
+  const childId = String(params.childId ?? "").trim();
+  if (!childId) {
+    throw new Error("Brak child_id — faktura musi być powiązana z dzieckiem");
+  }
+
   const school = await fetchSchoolInvoiceSettings(params.schoolId);
   const sellerName = requireTrimmed(school.invoice_seller_name, "invoice_seller_name");
   const sellerAddress = requireTrimmed(school.invoice_seller_address, "invoice_seller_address");
@@ -500,7 +518,7 @@ async function insertPaymentWithInvoice(params: {
           {
             name: defaultItemName,
             amount: params.amount,
-            childId: params.childId,
+            childId,
             contractId: params.contractId,
           },
         ];
@@ -560,6 +578,7 @@ async function insertPaymentWithInvoice(params: {
         client,
         params.schoolId,
         params.parentId,
+        childId,
         issueDate
       );
       const paymentId = randomUUID();
@@ -581,7 +600,7 @@ async function insertPaymentWithInvoice(params: {
         [
           paymentId,
           params.schoolId,
-          params.childId,
+          childId,
           params.parentId,
           params.contractId,
           totalAmount,
@@ -617,7 +636,7 @@ async function insertPaymentWithInvoice(params: {
           params.schoolId,
           paymentId,
           params.parentId,
-          params.childId,
+          childId,
           params.contractId,
           params.schoolYearId,
           invoiceNumber,
@@ -783,6 +802,9 @@ export async function createContractYearlyInvoice(contractId: string): Promise<I
 
     try {
       const childId = await resolveContractChildId(contract.id);
+      if (!childId) {
+        return { ok: false, message: "Brak dziecka na umowie", status: 409 };
+      }
       const { paymentId } = await insertPaymentWithInvoice({
         schoolId: contract.school_id,
         parentId: contract.parent_id,
@@ -845,6 +867,109 @@ async function contractHasMonthlyInvoiceForPeriod(
   return res.rows[0]?.exists === true;
 }
 
+async function childHasMonthlyInvoiceForPeriod(
+  contractId: string,
+  childId: string,
+  periodMonthStr: string
+): Promise<boolean> {
+  const hasItems = await invoicesSupportInvoiceItems();
+  if (hasItems) {
+    const res = await queryDb<{ exists: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM payments p
+         WHERE p.contract_id = $1
+           AND p.child_id = $2
+           AND p.period_month = $3::date
+           AND p.description LIKE $4
+         UNION ALL
+         SELECT 1
+         FROM invoice_items ii
+         JOIN invoices i ON i.id = ii.invoice_id
+         JOIN payments p ON p.id = i.payment_id
+         WHERE ii.contract_id = $1
+           AND ii.child_id = $2
+           AND p.period_month = $3::date
+           AND p.description LIKE $4
+       ) AS exists`,
+      [contractId, childId, periodMonthStr, `${INVOICE_DESC_MONTHLY_PREFIX}%`]
+    );
+    return res.rows[0]?.exists === true;
+  }
+  const res = await queryDb<{ exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM payments p
+       WHERE p.contract_id = $1
+         AND p.child_id = $2
+         AND p.period_month = $3::date
+         AND p.description LIKE $4
+     ) AS exists`,
+    [contractId, childId, periodMonthStr, `${INVOICE_DESC_MONTHLY_PREFIX}%`]
+  );
+  return res.rows[0]?.exists === true;
+}
+
+async function listMonthlyInvoiceChildren(
+  contractId: string,
+  contractAmount: number
+): Promise<Array<{ childId: string; childName: string; amount: number }>> {
+  const res = await queryDb<{
+    child_id: string;
+    first_name: string | null;
+    last_name: string | null;
+    monthly_unit_price: string | null;
+    child_monthly_unit_price: string | null;
+  }>(
+    `SELECT
+       cc.child_id,
+       ch.first_name,
+       ch.last_name,
+       cc.monthly_unit_price::text AS monthly_unit_price,
+       ch.monthly_unit_price::text AS child_monthly_unit_price
+     FROM contract_children cc
+     JOIN children ch ON ch.id = cc.child_id
+     WHERE cc.contract_id = $1
+     ORDER BY cc.sort_order ASC, ch.last_name ASC, ch.first_name ASC`,
+    [contractId]
+  );
+
+  if (res.rows.length === 0) {
+    const fallback = await resolveContractChildLabel(contractId);
+    if (!fallback.childId) return [];
+    return [
+      {
+        childId: fallback.childId,
+        childName: fallback.childName,
+        amount: contractAmount,
+      },
+    ];
+  }
+
+  if (res.rows.length === 1) {
+    const row = res.rows[0]!;
+    const amount =
+      parsePriceDecimal(row.monthly_unit_price) ??
+      parsePriceDecimal(row.child_monthly_unit_price) ??
+      contractAmount;
+    const childName =
+      `${formatPersonName(row.first_name ?? "")} ${formatPersonName(row.last_name ?? "")}`.trim() ||
+      "dziecko";
+    return [{ childId: row.child_id, childName, amount }];
+  }
+
+  const out: Array<{ childId: string; childName: string; amount: number }> = [];
+  for (const row of res.rows) {
+    const amount =
+      parsePriceDecimal(row.monthly_unit_price) ??
+      parsePriceDecimal(row.child_monthly_unit_price);
+    if (amount == null || amount <= 0) continue;
+    const childName =
+      `${formatPersonName(row.first_name ?? "")} ${formatPersonName(row.last_name ?? "")}`.trim() ||
+      "dziecko";
+    out.push({ childId: row.child_id, childName, amount });
+  }
+  return out;
+}
+
 async function resolveContractChildLabel(contractId: string): Promise<{
   childId: string | null;
   childName: string;
@@ -878,7 +1003,7 @@ async function resolveContractChildLabel(contractId: string): Promise<{
   };
 }
 
-/** Zbiorcza faktura miesięczna: umowy MONTHLY rodzica w okresie → 1 faktura + N pozycji.
+/** Faktury ratalne MONTHLY: osobna faktura na każde dziecko.
  *  Domyślnie pomija umowy wstrzymane na ten miesiąc.
  *  `onlyContractIds` — wystaw tylko wskazane umowy (np. ręcznie przez księgową mimo holdu).
  */
@@ -923,10 +1048,10 @@ export async function createParentMonthlyInvoice(
       );
 
       const pending: Array<{
-        id: string;
+        contractId: string;
         school_year_id: string | null;
         amount: number;
-        childId: string | null;
+        childId: string;
         childName: string;
       }> = [];
 
@@ -939,19 +1064,23 @@ export async function createParentMonthlyInvoice(
           const signedMonth = firstDayOfMonth(new Date(row.signed_at));
           if (periodStart < signedMonth) continue;
         }
-        if (await contractHasMonthlyInvoiceForPeriod(row.id, periodMonthStr)) {
-          continue;
+        const contractAmount = Number(row.amount);
+        if (!Number.isFinite(contractAmount) || contractAmount <= 0) continue;
+
+        const children = await listMonthlyInvoiceChildren(row.id, contractAmount);
+        for (const child of children) {
+          if (!child.childId || child.amount <= 0) continue;
+          if (await childHasMonthlyInvoiceForPeriod(row.id, child.childId, periodMonthStr)) {
+            continue;
+          }
+          pending.push({
+            contractId: row.id,
+            school_year_id: row.school_year_id,
+            amount: child.amount,
+            childId: child.childId,
+            childName: child.childName,
+          });
         }
-        const amount = Number(row.amount);
-        if (!Number.isFinite(amount) || amount <= 0) continue;
-        const child = await resolveContractChildLabel(row.id);
-        pending.push({
-          id: row.id,
-          school_year_id: row.school_year_id,
-          amount,
-          childId: child.childId,
-          childName: child.childName,
-        });
       }
 
       if (pending.length === 0) {
@@ -982,7 +1111,12 @@ export async function createParentMonthlyInvoice(
             ]
           );
           if (anyOfRequested.rows[0]) {
-            return { ok: true, paymentId: anyOfRequested.rows[0].id, created: false };
+            return {
+              ok: true,
+              paymentId: anyOfRequested.rows[0].id,
+              created: false,
+              createdCount: 0,
+            };
           }
           return { ok: false, message: "Brak umów do zafakturowania", status: 409 };
         }
@@ -998,7 +1132,12 @@ export async function createParentMonthlyInvoice(
           [parentId, schoolId, periodMonthStr, `${INVOICE_DESC_MONTHLY_PREFIX}%`]
         );
         if (anyExisting.rows[0]) {
-          return { ok: true, paymentId: anyExisting.rows[0].id, created: false };
+          return {
+            ok: true,
+            paymentId: anyExisting.rows[0].id,
+            created: false,
+            createdCount: 0,
+          };
         }
         return { ok: false, message: "Brak umów do zafakturowania", status: 409 };
       }
@@ -1006,43 +1145,44 @@ export async function createParentMonthlyInvoice(
       const school = await fetchSchoolInvoiceSettings(schoolId);
       const defaultItemName =
         String(school.invoice_default_item_name ?? "").trim() || "Kurs języka angielskiego";
-
-      const items: InvoiceLineInput[] = pending.map((c) => ({
-        name: `${defaultItemName} — ${c.childName} — ${periodLabel}`,
-        amount: c.amount,
-        childId: c.childId,
-        contractId: c.id,
-      }));
-
       const dueDate = lastDayOfMonthDateString(periodStart);
-      const first = pending[0]!;
-      const childCount = pending.length;
-      const description =
-        childCount === 1
-          ? `${INVOICE_DESC_MONTHLY_PREFIX} — ${periodLabel}`
-          : `${INVOICE_DESC_MONTHLY_PREFIX} — ${periodLabel} (${childCount} dzieci)`;
 
+      const paymentIds: string[] = [];
       try {
-        const { paymentId } = await insertPaymentWithInvoice({
-          schoolId,
-          parentId,
-          contractId: first.id,
-          childId: first.childId,
-          amount: items.reduce((s, i) => s + i.amount, 0),
-          description,
-          periodMonth: periodMonthStr,
-          dueDate,
-          schoolYearId: first.school_year_id,
-          items,
-        });
-
-        try {
-          await notifyParentAboutInvoice(paymentId);
-        } catch (err) {
-          console.error("Monthly invoice email error:", err);
+        for (const item of pending) {
+          const { paymentId } = await insertPaymentWithInvoice({
+            schoolId,
+            parentId,
+            contractId: item.contractId,
+            childId: item.childId,
+            amount: item.amount,
+            description: `${INVOICE_DESC_MONTHLY_PREFIX} — ${periodLabel}`,
+            periodMonth: periodMonthStr,
+            dueDate,
+            schoolYearId: item.school_year_id,
+            items: [
+              {
+                name: `${defaultItemName} — ${item.childName} — ${periodLabel}`,
+                amount: item.amount,
+                childId: item.childId,
+                contractId: item.contractId,
+              },
+            ],
+          });
+          paymentIds.push(paymentId);
+          try {
+            await notifyParentAboutInvoice(paymentId);
+          } catch (err) {
+            console.error("Monthly invoice email error:", err);
+          }
         }
 
-        return { ok: true, paymentId, created: true };
+        return {
+          ok: true,
+          paymentId: paymentIds[0]!,
+          created: true,
+          createdCount: paymentIds.length,
+        };
       } catch (err) {
         return mapInvoiceError(err);
       }
@@ -1116,7 +1256,9 @@ export async function createContractMonthlyInvoice(
     };
   }
 
-  return createParentMonthlyInvoice(contract.parent_id, contract.school_id, periodStart);
+  return createParentMonthlyInvoice(contract.parent_id, contract.school_id, periodStart, {
+    onlyContractIds: [contractId],
+  });
 }
 
 export async function createLessonBillingInvoice(
@@ -1556,7 +1698,7 @@ export async function generateMonthlyInvoicesForSchool(
       errors.push({ contractId: row.parent_id, message: result.message });
       continue;
     }
-    if (result.created) generated += 1;
+    if (result.created) generated += result.createdCount ?? 1;
     else skipped += 1;
   }
 

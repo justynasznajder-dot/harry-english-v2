@@ -54,16 +54,16 @@ export function buildAnnexContractNumber(
   return `${baseContractNumber}/A${annexIndex}`;
 }
 
-/** Faktura sprzedaży: ParentID/miesiąc/rok/n (miesiąc bez zera wiodącego). */
+/** Faktura sprzedaży: ChildID/miesiąc/rok/n (miesiąc bez zera wiodącego). */
 export function buildSaleInvoiceNumber(params: {
-  parentClientNumber: string;
+  childClientNumber: string;
   month: number;
   year: number;
   sequence: number;
 }): string {
-  const { parentClientNumber, month, year, sequence } = params;
-  if (!/^\d{5}$/.test(parentClientNumber)) {
-    throw new Error(`Nieprawidłowy numer rodzica: ${parentClientNumber}`);
+  const { childClientNumber, month, year, sequence } = params;
+  if (!/^\d{5}\/\d+$/.test(childClientNumber)) {
+    throw new Error(`Nieprawidłowy ID dziecka: ${childClientNumber}`);
   }
   if (!Number.isInteger(month) || month < 1 || month > 12) {
     throw new Error(`Nieprawidłowy miesiąc: ${month}`);
@@ -74,7 +74,7 @@ export function buildSaleInvoiceNumber(params: {
   if (!Number.isInteger(sequence) || sequence < 1) {
     throw new Error(`Nieprawidłowy numer kolejny faktury: ${sequence}`);
   }
-  return `${parentClientNumber}/${month}/${year}/${sequence}`;
+  return `${childClientNumber}/${month}/${year}/${sequence}`;
 }
 
 /** Korekta: {originalInvoiceNumber}/K{n} */

@@ -40,6 +40,7 @@ export async function GET(request: NextRequest) {
       first_name: string;
       last_name: string;
       email: string;
+      school_id: string;
       access_level: EnrollmentStatus;
       discount_large_family: boolean;
       children_json: string;
@@ -64,6 +65,7 @@ export async function GET(request: NextRequest) {
            MAX(NULLIF(BTRIM(er.parent_email), '')),
            ''
          ) AS email,
+         MAX(er.school_id) AS school_id,
          CASE
            WHEN BOOL_OR(UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'NEW') THEN 'NEW'
            WHEN BOOL_OR(UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'NEGOTIATING') THEN 'NEGOTIATING'
@@ -200,6 +202,7 @@ export async function GET(request: NextRequest) {
         firstName: row.first_name,
         lastName: row.last_name,
         email: row.email,
+        schoolId: row.school_id,
         accessLevel: row.access_level,
         discountLargeFamily: row.discount_large_family === true,
         children: JSON.parse(row.children_json),
