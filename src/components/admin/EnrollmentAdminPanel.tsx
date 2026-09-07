@@ -134,6 +134,15 @@ function EmptyDataPanel({ title }: { title: string }) {
   );
 }
 
+function formatEnrollmentPrice(value: string | number | null | undefined): string {
+  const n = parsePriceDecimal(value);
+  if (n == null) return '—';
+  return `${n.toLocaleString('pl-PL', {
+    minimumFractionDigits: Number.isInteger(n) ? 0 : 2,
+    maximumFractionDigits: 2,
+  })} PLN`;
+}
+
 export type EnrollmentAdminPanelProps = {
   pushToast: (kind: 'success' | 'error', message: string) => void;
   parents: EnrollmentParentRow[];
@@ -444,8 +453,90 @@ export default function EnrollmentAdminPanel({
     return counts;
   }, [parents, complimentaryParents]);
 
+  const childrenByProposedGroup = useMemo(() => {
+    type Row = {
+      child: EnrollmentParentRow['children'][number];
+      parent: EnrollmentParentRow;
+    };
+    const byGroupId = new Map<string, Row[]>();
+    const unassigned: Row[] = [];
+
+    for (const parent of parents) {
+      for (const child of parent.children) {
+        const groupId = (child.proposedGroupId ?? '').trim();
+        const row = { child, parent };
+        if (!groupId) {
+          unassigned.push(row);
+          continue;
+        }
+        const list = byGroupId.get(groupId) ?? [];
+        list.push(row);
+        byGroupId.set(groupId, list);
+      }
+    }
+
+    const sortedGroups = [...groups].sort(compareGroupsYoungestToOldest);
+    const sections: {
+      key: string;
+      title: string;
+      subtitle?: string;
+      rows: Row[];
+    }[] = [];
+
+    for (const group of sortedGroups) {
+      const rows = byGroupId.get(group.id);
+      if (!rows?.length) continue;
+      rows.sort((a, b) => {
+        const last = (a.child.lastName ?? '').localeCompare(b.child.lastName ?? '', 'pl');
+        if (last !== 0) return last;
+        return (a.child.firstName ?? '').localeCompare(b.child.firstName ?? '', 'pl');
+      });
+      sections.push({
+        key: group.id,
+        title: group.name,
+        subtitle: [group.location_name, group.schedule].filter(Boolean).join(' · ') || undefined,
+        rows,
+      });
+      byGroupId.delete(group.id);
+    }
+
+    // Grupy usunięte / nieobecne na liście, ale nadal przypisane w enrollment_requests
+    for (const [groupId, rows] of byGroupId) {
+      rows.sort((a, b) => {
+        const last = (a.child.lastName ?? '').localeCompare(b.child.lastName ?? '', 'pl');
+        if (last !== 0) return last;
+        return (a.child.firstName ?? '').localeCompare(b.child.firstName ?? '', 'pl');
+      });
+      sections.push({
+        key: groupId,
+        title: `Nieznana grupa (${groupId.slice(0, 8)}…)`,
+        rows,
+      });
+    }
+
+    if (unassigned.length > 0) {
+      unassigned.sort((a, b) => {
+        const last = (a.child.lastName ?? '').localeCompare(b.child.lastName ?? '', 'pl');
+        if (last !== 0) return last;
+        return (a.child.firstName ?? '').localeCompare(b.child.firstName ?? '', 'pl');
+      });
+      sections.push({
+        key: '__unassigned__',
+        title: 'Bez przypisanej grupy',
+        rows: unassigned,
+      });
+    }
+
+    const assignedCount = sections
+      .filter((s) => s.key !== '__unassigned__')
+      .reduce((sum, s) => sum + s.rows.length, 0);
+
+    return { sections, assignedCount, totalCount: assignedCount + unassigned.length };
+  }, [parents, groups]);
+
   const renderList = () => {
     const isPipeline = enrollmentStatusFilter === 'pipeline';
+    const isByGroupPrices = enrollmentStatusFilter === 'by-group-prices';
     const studentQuery = studentNameSearch.trim().toLowerCase();
     const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
     const filteredEnrollmentRows = enrollmentRows
@@ -470,6 +561,26 @@ export default function EnrollmentAdminPanel({
         return { ...parent, children };
       })
       .filter((parent) => parent.children.length > 0);
+
+    const filteredByGroupSections = isByGroupPrices
+      ? childrenByProposedGroup.sections
+          .map((section) => {
+            if (!studentQuery) return section;
+            const rows = section.rows.filter(({ child, parent }) => {
+              const first = (child.firstName ?? '').toLowerCase();
+              const last = (child.lastName ?? '').toLowerCase();
+              const parentName = `${parent.firstName ?? ''} ${parent.lastName ?? ''}`.toLowerCase();
+              return (
+                first.includes(studentQuery) ||
+                last.includes(studentQuery) ||
+                `${first} ${last}`.includes(studentQuery) ||
+                parentName.includes(studentQuery)
+              );
+            });
+            return { ...section, rows };
+          })
+          .filter((section) => section.rows.length > 0)
+      : [];
 
     return (
       <section className="space-y-4 rounded-2xl border border-emerald-100 bg-white p-4">
@@ -512,7 +623,18 @@ export default function EnrollmentAdminPanel({
           >
             Status zapisów ({enrollmentStatusCounts[''] ?? 0})
           </button>
-          {!isPipeline && (
+          <button
+            type="button"
+            onClick={() => setEnrollmentStatusFilter('by-group-prices')}
+            className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+              isByGroupPrices
+                ? 'border-[#0f6e56] bg-[#0f6e56] text-white'
+                : 'border-emerald-200 bg-white text-zinc-700'
+            }`}
+          >
+            Grupy i ceny ({childrenByProposedGroup.assignedCount})
+          </button>
+          {!isPipeline && !isByGroupPrices && (
             <button
               type="button"
               disabled={exportingList || filteredEnrollmentRows.length === 0}
@@ -567,6 +689,74 @@ export default function EnrollmentAdminPanel({
               embedded
               complimentaryParents={complimentaryParents}
             />
+          </div>
+        ) : isByGroupPrices ? (
+          <div className="space-y-3">
+            <p className="text-sm text-zinc-600">
+              Dzieci pogrupowane po proponowanej grupie — ceny z zgłoszenia (
+              <span className="font-medium text-zinc-800">jednorazowa / ratalna / za zajęcia</span>
+              ).
+            </p>
+            {filteredByGroupSections.length === 0 ? (
+              <p className="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-8 text-center text-sm text-zinc-600">
+                {studentQuery ? 'Brak dzieci dla podanego wyszukiwania' : 'Brak dzieci'}
+              </p>
+            ) : (
+              <div className="grid gap-3 lg:grid-cols-2">
+                {filteredByGroupSections.map((section) => (
+                  <div
+                    key={section.key}
+                    className="rounded-xl border border-emerald-100 bg-emerald-50/30 p-4"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <h3 className="font-semibold text-zinc-900">{section.title}</h3>
+                        {section.subtitle ? (
+                          <p className="mt-0.5 text-xs text-zinc-500">{section.subtitle}</p>
+                        ) : null}
+                      </div>
+                      <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-zinc-600 ring-1 ring-emerald-100">
+                        {section.rows.length}
+                      </span>
+                    </div>
+                    <ul className="mt-3 divide-y divide-emerald-100/80">
+                      {section.rows.map(({ child, parent }) => (
+                        <li key={child.requestId} className="py-2.5 first:pt-0 last:pb-0">
+                          <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
+                            <p className="text-sm font-medium text-zinc-900">
+                              {child.firstName} {child.lastName}
+                            </p>
+                            <p className="text-xs text-zinc-500">
+                              {parent.firstName} {parent.lastName}
+                            </p>
+                          </div>
+                          <dl className="mt-1.5 grid grid-cols-3 gap-1 text-xs">
+                            <div>
+                              <dt className="text-zinc-500">Jednorazowa</dt>
+                              <dd className="font-semibold tabular-nums text-zinc-800">
+                                {formatEnrollmentPrice(child.yearlyUnitPrice)}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt className="text-zinc-500">Ratalna</dt>
+                              <dd className="font-semibold tabular-nums text-zinc-800">
+                                {formatEnrollmentPrice(child.monthlyUnitPrice)}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt className="text-zinc-500">Za zajęcia</dt>
+                              <dd className="font-semibold tabular-nums text-zinc-800">
+                                {formatEnrollmentPrice(child.lessonUnitPrice)}
+                              </dd>
+                            </div>
+                          </dl>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         ) : enrollmentRows.length === 0 ? (
           <EmptyDataPanel title="Zgłoszenia" />

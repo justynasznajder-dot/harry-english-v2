@@ -359,7 +359,7 @@ export async function sendPasswordResetEmail(
     to,
     subject: '🔐 Reset hasła - Harry English',
     html: buildEmailShell({
-      title: `Dzień dobry ${escapeHtmlForEmail(parentFirstName)}!`,
+      title: `Dzień dobry!`,
       intro: "Otrzymaliśmy prośbę o zresetowanie hasła do Twojego konta w Harry English.",
       contentHtml: `
         <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;color:${p.text};">Aby ustawić nowe hasło, kliknij poniższy przycisk:</p>
@@ -381,7 +381,7 @@ export async function sendPasswordResetEmail(
     text: `
 Reset hasła - Harry English
 
-Dzień dobry ${parentFirstName}!
+Dzień dobry!
 
 Otrzymaliśmy prośbę o zresetowanie hasła do Twojego konta w Harry English.
 
@@ -807,7 +807,7 @@ export async function sendMessageNotificationEmail(params: {
   const replyToAddress = params.replyTo?.trim();
   const shellTitle = isDirectEmail
     ? escapeHtmlForEmail(params.subject)
-    : `Dzień dobry ${escapeHtmlForEmail(params.recipientName)},`;
+    : `Dzień dobry,`;
   const shellIntro = isDirectEmail
     ? undefined
     : `Otrzymałeś/aś nową wiadomość od ${escapeHtmlForEmail(params.senderName)} (${roleLabel}).`;
@@ -848,7 +848,7 @@ Facebook: ${FACEBOOK_URL}
 Instagram: ${INSTAGRAM_URL}
 
 Harry English`
-      : `Dzień dobry ${params.recipientName},
+      : `Dzień dobry,
 
 Otrzymałeś/aś nową wiadomość od ${params.senderName} (${roleLabel}).
 
@@ -1065,20 +1065,20 @@ export async function sendCombinedProposalEmail(
             : " Konto już masz w systemie."
         }
       </p>
-      ${emailInsetCellOpen(p)}
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;">
-        <tr>
-          <td style="padding:4px 12px 4px 0;font-size:15px;color:${p.insetText};"><strong>Login (email):</strong></td>
-          <td style="padding:4px 0;font-size:15px;color:${p.insetText};font-family:Consolas,Menlo,monospace;">
-            ${buildEmailMailtoLink(login.loginEmail, p.insetText)}
-          </td>
-        </tr>
-        <tr>
-          <td style="padding:4px 12px 4px 0;font-size:15px;color:${p.insetText};"><strong>${isNewAccount ? "Hasło tymczasowe:" : "Hasło:"}</strong></td>
-          <td style="padding:4px 0;font-size:16px;color:${p.insetText};font-family:Consolas,Menlo,monospace;letter-spacing:1px;">${passwordHtml}</td>
-        </tr>
-      </table>
-      ${emailInsetCellClose()}
+      <div style="margin:0 0 16px 0;padding:14px 16px;border:2px solid ${p.insetBorder};border-radius:10px;background:${p.insetBg};">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;">
+          <tr>
+            <td style="padding:4px 12px 4px 0;font-size:15px;color:${p.text};"><strong>Login (email):</strong></td>
+            <td style="padding:4px 0;font-size:15px;color:${p.text};font-family:Consolas,Menlo,monospace;">
+              ${buildEmailMailtoLink(login.loginEmail, p.text)}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:4px 12px 4px 0;font-size:15px;color:${p.text};"><strong>${isNewAccount ? "Hasło tymczasowe:" : "Hasło:"}</strong></td>
+            <td style="padding:4px 0;font-size:16px;color:${p.text};font-family:Consolas,Menlo,monospace;letter-spacing:1px;">${passwordHtml}</td>
+          </tr>
+        </table>
+      </div>
       <p style="margin:12px 0;font-size:14px;line-height:1.6;color:${p.text};opacity:0.85;">
         ${
           isNewAccount
@@ -1271,14 +1271,14 @@ export async function sendContractEmail(
     to,
     subject: "Umowa gotowa do podpisu - Harry English",
     html: buildEmailShell({
-      title: `Dzień dobry ${escapeHtmlForEmail(parentName)},`,
+      title: `Dzień dobry,`,
       intro: "Twoja umowa została przygotowana. Zapoznaj się z nią i podpisz ją w portalu.",
       contentHtml: `
         <hr style="border:none;border-top:1px solid ${p.insetBorder};margin:0 0 12px 0;" />
         ${contractHtml}
       `,
     }),
-    text: `Dzień dobry ${parentName}, Twoja umowa została przygotowana. Zaloguj się do portalu i podpisz ją elektronicznie.`,
+    text: `Dzień dobry, Twoja umowa została przygotowana. Zaloguj się do portalu i podpisz ją elektronicznie.`,
   });
 }
 
@@ -1359,11 +1359,11 @@ export async function sendSignedContractConfirmationEmails(params: {
     to: recipients,
     subject: `Potwierdzenie podpisania umowy${contractLabel} - ${params.parentFullName} - Harry English`,
     html: buildEmailShell({
-      title: `Dzień dobry ${escapeHtmlForEmail(params.parentFirstName)},`,
+      title: `Dzień dobry,`,
       intro: "Dziękujemy za podpisanie umowy.",
       contentHtml: sharedContentHtml,
     }),
-    text: `Dzień dobry ${params.parentFirstName}, dziękujemy za podpisanie umowy. ${sharedText}`,
+    text: `Dzień dobry, dziękujemy za podpisanie umowy. ${sharedText}`,
     attachments: attachmentList,
   });
 }
@@ -1404,10 +1404,10 @@ export async function sendInvoiceNotificationEmail(params: {
     to: params.parentEmail,
     subject: "Nowa faktura w panelu rodzica — Harry English",
     html: buildEmailShell({
-      title: `Dzień dobry ${escapeHtmlForEmail(params.parentFirstName)},`,
+      title: `Dzień dobry,`,
       intro: "Faktura jest gotowa do pobrania w panelu rodzica.",
       contentHtml,
     }),
-    text: `Dzień dobry ${params.parentFirstName}, ${textBody}`,
+    text: `Dzień dobry, ${textBody}`,
   });
 }
