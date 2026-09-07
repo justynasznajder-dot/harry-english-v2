@@ -70,7 +70,7 @@ function PipelineTable({
   complimentaryMode = false,
 }: {
   rows: PipelineRow[];
-  /** Tryb bez umowy — bez kolumn umowy; flow kończy się na grupie. */
+  /** Tryb bez umowy — bez kolumn umowy; flow kończy się po mailu z grupą. */
   complimentaryMode?: boolean;
 }) {
   if (rows.length === 0) {
@@ -284,7 +284,7 @@ export default function StudentPipelinePanel({
               <span className="font-normal text-zinc-500">({withoutContracts.length})</span>
             </h3>
             <p className="text-xs text-zinc-500">
-              Tryb bez umowy — zgłoszenie → przypisany do grupy (bez umowy).
+              Tryb bez umowy — zgłoszenie → mail z grupą i loginem → zakończony.
             </p>
             <PipelineTable rows={withoutContracts} complimentaryMode />
           </section>

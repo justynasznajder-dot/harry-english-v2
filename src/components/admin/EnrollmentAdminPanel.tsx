@@ -33,6 +33,16 @@ type ProposalDraft = {
 /** Domyślny % zniżki w trybie bez umowy (manager może zmienić). */
 const COMPLIMENTARY_DEFAULT_DISCOUNT_PERCENT = '14';
 
+/** Wyświetlanie w polu: „14.00” → „14” (bez zbędnych zer po przecinku). */
+function formatDiscountPercentForInput(raw: unknown): string {
+  if (raw == null) return '';
+  const trimmed = String(raw).trim();
+  if (trimmed === '') return '';
+  const n = Number(trimmed.replace(',', '.'));
+  if (!Number.isFinite(n)) return trimmed;
+  return String(n);
+}
+
 function emptyProposalDraft(groupId = ''): ProposalDraft {
   return {
     groupId,
@@ -271,7 +281,7 @@ export default function EnrollmentAdminPanel({
             onComplimentaryParentsChange?.(data.complimentaryParents);
           }
           pushToast('success', 'Włączono tryb bez umowy');
-          // Odśwież listę — przy mailu już wysłanym zgłoszenia z grupą mogły się domknąć.
+          // Odśwież listę — zapis kończy się dopiero po „Wyślij maila”.
           await onRefresh();
         } else {
           const existing = complimentaryParents.find((row) => {
@@ -874,7 +884,9 @@ export default function EnrollmentAdminPanel({
                           draft.yearlyUnitPrice = String(child.yearlyUnitPrice);
                         }
                         if (child.discountPercent != null && child.discountPercent !== '') {
-                          draft.discountPercent = String(child.discountPercent);
+                          draft.discountPercent = formatDiscountPercentForInput(
+                            child.discountPercent,
+                          );
                         } else if (parentIsComplimentary) {
                           draft.discountPercent = COMPLIMENTARY_DEFAULT_DISCOUNT_PERCENT;
                         }
@@ -978,10 +990,10 @@ export default function EnrollmentAdminPanel({
                       Tryb bez umowy
                     </label>
                     <p className="mt-1 text-xs text-zinc-500">
-                      Po akceptacji grupy zapis kończy się bez umowy, faktur i płatności. Działa
-                      też przed utworzeniem konta (po e-mailu zgłoszenia). Podaj stawkę
-                      jednorazową i ratalną — będą widoczne w panelu rodzica; za zajęcia i %
-                      zniżki są opcjonalne. Grupę możesz przypisać później.
+                      Bez umowy, faktur i płatności. Zapis kończy się dopiero po „Wyślij maila”
+                      (login + grupa + termin). „Zapisz” tylko utrwala stawki/grupę. Podaj
+                      jednorazową i ratalną — widoczne w panelu rodzica; za zajęcia i % zniżki
+                      opcjonalne. Grupę możesz przypisać później.
                     </p>
                     {/*
                      * KDR / zniżki procentowe — wyłączone (sezon cen ręcznych).
@@ -1369,10 +1381,10 @@ export default function EnrollmentAdminPanel({
                                     <span className="leading-snug">% zniżki</span>
                                     <input
                                       type="text"
-                                      inputMode="decimal"
+                                      inputMode="numeric"
                                       className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
                                       disabled={!proposalAllowed}
-                                      placeholder="opcjonalnie"
+                                      placeholder="0–100"
                                       value={
                                         proposalDrafts[child.requestId]?.discountPercent ?? ''
                                       }
@@ -1386,6 +1398,25 @@ export default function EnrollmentAdminPanel({
                                           },
                                         }))
                                       }
+                                      onBlur={(e) => {
+                                        const formatted = formatDiscountPercentForInput(
+                                          e.target.value,
+                                        );
+                                        if (
+                                          formatted ===
+                                          (proposalDrafts[child.requestId]?.discountPercent ?? '')
+                                        ) {
+                                          return;
+                                        }
+                                        setProposalDrafts((prev) => ({
+                                          ...prev,
+                                          [child.requestId]: {
+                                            ...emptyProposalDraft(),
+                                            ...prev[child.requestId],
+                                            discountPercent: formatted,
+                                          },
+                                        }));
+                                      }}
                                     />
                                   </label>
                                 </div>

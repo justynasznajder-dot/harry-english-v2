@@ -202,6 +202,7 @@ export default function SuperAdminPortal() {
               </h2>
               <p className="mt-1 text-sm text-zinc-600">
                 Otwórz panel wybranego użytkownika bez hasła (pełna impersonacja).
+                Rodzice: tylko ci, którzy dostali dane do logowania.
               </p>
             </div>
             <div className="flex flex-col gap-2 sm:flex-row">

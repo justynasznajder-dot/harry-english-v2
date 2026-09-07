@@ -4466,7 +4466,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   <div className="rounded-xl border border-emerald-100 bg-white p-4">
                     <h4 className="font-semibold text-[#0f6e56]">Tryb bez umowy</h4>
                     <p className="mt-1 text-sm text-zinc-600">
-                      Rodzice z tej listy kończą zapis po akceptacji grupy — bez umowy, faktur i
+                      Rodzice z tej listy kończą zapis po wysłaniu maila z loginem i grupą — bez umowy, faktur i
                       płatności. Tryb włączasz na profilu rodzica.
                     </p>
                     <div className="mt-4 space-y-1">
@@ -4519,8 +4519,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                               <p className="text-sm text-zinc-600">{parent.email}</p>
                               <p className="mt-0.5 text-xs text-zinc-500">
                                 {parent.source === 'ENROLLMENT'
-                                  ? 'Źródło: zgłoszenie · bez umowy po akceptacji grupy'
-                                  : 'Źródło: konto rodzica · bez umowy po akceptacji grupy'}
+                                  ? 'Źródło: zgłoszenie · bez umowy po wysłaniu maila'
+                                  : 'Źródło: konto rodzica · bez umowy po wysłaniu maila'}
                               </p>
                             </div>
                             <button

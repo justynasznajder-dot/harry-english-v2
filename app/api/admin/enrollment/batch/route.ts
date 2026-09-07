@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { sendCombinedProposalEmail } from "@/lib/email";
 import { requireAdminSchoolContext } from "@/lib/admin-school-context";
 import { queryDb } from "@/lib/db";
+import { completeComplimentaryEnrollment } from "@/lib/complimentary-enrollment";
 import { isEnrollmentProposalEmailEnabled } from "@/lib/enrollment-proposal-email";
 import {
   resolveProposalEmailCredentials,
@@ -158,7 +159,11 @@ export async function POST(request: NextRequest) {
 
     let sharedParent: SharedParentState | null = null;
     const emailItems: ProposalEmailItem[] = [];
-    let complimentaryCompleted = false;
+    const complimentaryToComplete: Array<{
+      requestId: string;
+      parentUserId: string;
+      schoolId: string;
+    }> = [];
 
     // PROPOSED: retry po częściowym sukcesie (np. PDF zgody na odbiór padł przed COMPLETED).
     const allowedStatuses = complimentaryMode ? (["NEW", "PROPOSED"] as const) : (["NEW"] as const);
@@ -186,7 +191,13 @@ export async function POST(request: NextRequest) {
 
       sharedParent = result.sharedParent;
       emailItems.push(result.emailItem);
-      if (result.complimentaryCompleted) complimentaryCompleted = true;
+      if (result.complimentaryCompleted) {
+        complimentaryToComplete.push({
+          requestId: p.requestId!,
+          parentUserId: result.sharedParent.parentUserId,
+          schoolId: result.sharedParent.schoolId,
+        });
+      }
     }
 
     if (!sharedParent) {
@@ -210,6 +221,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const complimentaryCompleted = complimentaryToComplete.length > 0;
+
     await sendCombinedProposalEmail(
       sharedParent.parentEmail,
       `${sharedParent.parentFirstName} ${sharedParent.parentLastName}`.trim(),
@@ -217,6 +230,25 @@ export async function POST(request: NextRequest) {
       login,
       { complimentaryCompleted }
     );
+
+    for (const item of complimentaryToComplete) {
+      try {
+        await completeComplimentaryEnrollment(
+          item.requestId,
+          item.parentUserId,
+          item.schoolId
+        );
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : "nieznany błąd";
+        console.error("completeComplimentaryEnrollment after email failed:", err);
+        return NextResponse.json(
+          {
+            message: `Mail wysłany, ale zapis nie dokończył się (${detail}). Otwórz zgłoszenie i kliknij ponownie „Wyślij maila”.`,
+          },
+          { status: 500 }
+        );
+      }
+    }
 
     return NextResponse.json({
       message: sharedParent.parentCreated

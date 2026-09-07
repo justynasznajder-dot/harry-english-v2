@@ -246,7 +246,7 @@ export function formatEffectiveDiscountInfo(
     return `${result.percent}% rabatu z powodu rodzeństwa`;
   }
   if (result.source === "stack") {
-    return `${result.percent}% rabatu (zniżki się sumują)`;
+    return `${result.percent}% rabatu`;
   }
   return `${result.percent}% rabatu`;
 }

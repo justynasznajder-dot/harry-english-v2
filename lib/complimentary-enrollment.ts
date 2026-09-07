@@ -270,10 +270,8 @@ async function resolveComplimentaryParentIds(
 
 /**
  * Po dodaniu rodzica do trybu bez opłat: domknij otwarte zgłoszenia z już przypisaną grupą
- * (bez etapu umowy).
- * - Status po mailu (≠ NEW) → domknij od razu.
- * - Szkic NEW z grupą + stawkami (jednorazowa + ratalna) → też domknij (→ potwierdzony).
- * - Szkic NEW z samą grupą bez stawek → zostaw (manager dopisze stawki i kliknie Zapisz).
+ * (bez etapu umowy), ale tylko gdy status ≠ NEW — czyli po wcześniejszej wysyłce maila /
+ * akceptacji. Szkice NEW (nawet z grupą + stawkami) zostają — manager klika „Wyślij maila”.
  * Zgłoszenia bez grupy zostają — admin przypisze ją później.
  */
 export async function completeOpenComplimentaryEnrollmentsForParent(
@@ -297,14 +295,7 @@ export async function completeOpenComplimentaryEnrollmentsForParent(
      WHERE er.school_id = $1
        AND er.proposed_group_id IS NOT NULL
        AND UPPER(BTRIM(COALESCE(er.status::text, ''))) NOT IN (
-         'COMPLETED', 'REJECTED', 'SIGNED'
-       )
-       AND (
-         UPPER(BTRIM(COALESCE(er.status::text, ''))) <> 'NEW'
-         OR (
-           er.yearly_unit_price IS NOT NULL
-           AND er.monthly_unit_price IS NOT NULL
-         )
+         'COMPLETED', 'REJECTED', 'SIGNED', 'NEW'
        )
        AND (
          ($2 <> '' AND c.parent_id = $2)
@@ -389,12 +380,13 @@ export async function applyComplimentaryBillingExemptionForParent(
   };
 }
 
-/** Domknięcie otwartych zapisów + zwolnienie z billing po dodaniu do trybu bez opłat. */
+/** Domknięcie otwartych zapisów + zwolnienie z billing po dodaniu do trybu bez opłat.
+ *  Nie domykamy zgłoszeń automatycznie — COMPLETED dopiero po „Wyślij maila”.
+ */
 export async function activateComplimentaryModeForParent(
   schoolId: string,
   identity: { parentId?: string | null; parentEmail?: string | null }
 ): Promise<void> {
-  await completeOpenComplimentaryEnrollmentsForParent(schoolId, identity);
   await applyComplimentaryBillingExemptionForParent(schoolId, identity);
   // Karty `children` tworzy `addComplimentaryParent` przy zapisie trybu bez opłat.
 }

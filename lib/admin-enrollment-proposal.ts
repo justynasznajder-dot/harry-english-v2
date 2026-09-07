@@ -21,7 +21,6 @@ import {
   ensureChildClientNumber,
 } from "@/lib/client-numbers";
 import { promotePendingLargeFamilyCardToParent } from "@/lib/parent-profile-discount";
-import { completeComplimentaryEnrollment } from "@/lib/complimentary-enrollment";
 import { ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE } from "@/lib/enrollment-status";
 import { isComplimentaryForParent } from "@/lib/school-discounts";
 import {
@@ -138,7 +137,7 @@ export async function submitEnrollmentProposal(
       ok: true;
       sharedParent: SharedParentState;
       emailItem: ProposalEmailItem;
-      /** Tryb bez umowy — zapis domknięty przy propozycji (gdy akceptacja wyłączona). */
+      /** Tryb bez umowy — caller ma domknąć COMPLETED po udanej wysyłce maila. */
       complimentaryCompleted: boolean;
       childId: string;
       groupChanged: boolean;
@@ -575,28 +574,15 @@ export async function submitEnrollmentProposal(
     persistToChild: true,
   });
 
-  // Domknięcie bez umowy: wysyłka maila ALBO Zapisz szkicu z już wybraną grupą
-  // (np. najpierw grupa, potem włączenie trybu bez umowy i stawki — mail jeszcze nie poszedł).
-  const complimentaryCompleted =
+  // Tryb bez umowy: przy wysyłce maila ustawiamy PROPOSED; COMPLETED dopiero po udanej wysyłce (caller).
+  // „Zapisz” (draftOnly) nigdy nie domyka — zostaje NEW z grupą/stawkami.
+  const complimentaryReadyToComplete =
     complimentary &&
     Boolean(groupId.trim()) &&
-    (draftOnly || !ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE);
+    !draftOnly &&
+    !ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE;
 
-  if (complimentaryCompleted) {
-    try {
-      await completeComplimentaryEnrollment(requestId, parentUserId, parentSchoolId);
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : "nieznany błąd";
-      console.error("completeComplimentaryEnrollment failed:", err);
-      return {
-        ok: false,
-        status: 500,
-        message: draftOnly
-          ? `Zapis w trybie bez umowy nie dokończył się (${detail}). Spróbuj ponownie „Zapisz”.`
-          : `Zapis w trybie bez opłat nie dokończył się (${detail}). Spróbuj ponownie „Wyślij maila”.`,
-      };
-    }
-  } else if (!draftOnly) {
+  if (!draftOnly) {
     await syncParentUserAccessLevel(parentUserId);
   }
 
@@ -619,7 +605,7 @@ export async function submitEnrollmentProposal(
       schedule: group.schedule,
       teacherName: group.teacher_name,
     },
-    complimentaryCompleted,
+    complimentaryCompleted: complimentaryReadyToComplete,
     childId: resolvedChildId,
     groupChanged,
   };
@@ -628,6 +614,7 @@ export async function submitEnrollmentProposal(
 /**
  * Zapis grupy i stawek + utworzenie konta/dziecka + członkostwo w grupie (confirmed=false),
  * bez zmiany statusu zgłoszenia i bez maila.
+ * Twarda gwarancja: nigdy nie zostawia COMPLETED (nawet przy starym kodzie / race).
  */
 export async function saveEnrollmentProposalDraft(
   input: ProposalInput,
@@ -648,6 +635,28 @@ export async function saveEnrollmentProposalDraft(
     complimentaryPrices: options?.complimentaryPrices,
   });
   if (!result.ok) return result;
+
+  // „Zapisz” = tylko szkic. COMPLETED wyłącznie po „Wyślij maila”.
+  await queryDb(
+    `UPDATE enrollment_requests
+     SET status = 'NEW'::enrollment_status,
+         accepted_at = NULL
+     WHERE id = $1
+       AND UPPER(BTRIM(COALESCE(status::text, ''))) <> 'NEW'`,
+    [input.requestId]
+  );
+  await queryDb(
+    `UPDATE children
+     SET access_level = 'NEW',
+         confirmed = FALSE
+     WHERE enrollment_request_id = $1
+       AND (
+         UPPER(BTRIM(COALESCE(access_level::text, ''))) <> 'NEW'
+         OR COALESCE(confirmed, FALSE) = TRUE
+       )`,
+    [input.requestId]
+  );
+
   return {
     ok: true,
     childId: result.childId,

@@ -12,6 +12,7 @@ import {
 } from "@/lib/school-discounts";
 import { getParentLargeFamilyCard } from "@/lib/parent-profile-discount";
 import { formatPersonName } from "@/lib/format-person-name";
+import { freezeSignedContractNetRatesOnChildren } from "@/lib/parent-contract";
 
 export type ResignationContractAdjustment = {
   cancelledContractIds: string[];
@@ -236,6 +237,7 @@ export async function recalculateSiblingPricingForParent(params: {
         at,
       ]
     );
+    await freezeSignedContractNetRatesOnChildren(contract.id);
     updated.push(contract.id);
   }
 

@@ -1352,6 +1352,107 @@ export async function finalizeContractPricingAtSign(
   return { amount, breakdown };
 }
 
+/**
+ * Zapisuje stawki netto (po rabacie KDR/rodzeństwa z umowy) na `children.*_unit_price`.
+ * Wywoływać po enrollChildInGroup przy podpisie — enroll nadpisuje children stawkami brutto z contract_children.
+ * Nie rusza discount_percent (zostaje % managera).
+ *
+ * Kolumna odpowiadająca payment_type = contracts.amount (1 dziecko na umowę).
+ * Pozostałe dwie stawki: ten sam % rabatu na bazie z contract_children.
+ */
+export async function freezeSignedContractNetRatesOnChildren(
+  contractId: string
+): Promise<number> {
+  const contractRes = await queryDb<{
+    school_id: string;
+    payment_type: string | null;
+    amount: string | null;
+    billing_exempt: boolean;
+    discount_sibling: boolean;
+    discount_large_family: boolean;
+  }>(
+    `SELECT school_id, payment_type, amount::text AS amount, billing_exempt,
+            discount_sibling, discount_large_family
+     FROM contracts
+     WHERE id = $1
+     LIMIT 1`,
+    [contractId]
+  );
+  const contract = contractRes.rows[0];
+  if (!contract) {
+    throw new Error("Nie znaleziono umowy do zamrożenia stawek netto na dziecku");
+  }
+
+  const childrenRes = await queryDb<{
+    child_id: string;
+    lesson_unit_price: string | null;
+    monthly_unit_price: string | null;
+    yearly_unit_price: string | null;
+  }>(
+    `SELECT cc.child_id,
+            cc.lesson_unit_price::text AS lesson_unit_price,
+            cc.monthly_unit_price::text AS monthly_unit_price,
+            cc.yearly_unit_price::text AS yearly_unit_price
+     FROM contract_children cc
+     WHERE cc.contract_id = $1
+     ORDER BY cc.sort_order ASC`,
+    [contractId]
+  );
+
+  const discountSettings = resolveContractDiscountSettings(
+    await getSchoolDiscountSettings(contract.school_id)
+  ) as SchoolDiscountSettings;
+
+  const discountKeys: DiscountKey[] = [];
+  if (!contract.billing_exempt) {
+    if (contract.discount_large_family) {
+      discountKeys.push(DISCOUNT_KEYS.LARGE_FAMILY_CARD);
+    } else if (contract.discount_sibling) {
+      discountKeys.push(DISCOUNT_KEYS.SIBLING);
+    }
+  }
+
+  const paymentType = parsePaymentType(contract.payment_type);
+  const contractAmount = contract.billing_exempt
+    ? 0
+    : parseNullableMoney(contract.amount);
+  const singleChild = childrenRes.rows.length === 1;
+
+  const toNet = (raw: string | null): number | null => {
+    if (contract.billing_exempt) return 0;
+    const base = parseNullableMoney(raw);
+    if (base == null) return null;
+    if (discountKeys.length === 0) return base;
+    return applyDiscountsToAmount(base, discountKeys, discountSettings);
+  };
+
+  let updated = 0;
+  for (const row of childrenRes.rows) {
+    let lesson = toNet(row.lesson_unit_price);
+    let monthly = toNet(row.monthly_unit_price);
+    let yearly = toNet(row.yearly_unit_price);
+
+    // Gwarancja: przy umowie 1:1 stawka typu płatności = contracts.amount (źródło faktur).
+    if (singleChild && contractAmount != null) {
+      if (paymentType === "MONTHLY") monthly = contractAmount;
+      else if (paymentType === "YEARLY") yearly = contractAmount;
+      else if (paymentType === "PER_LESSON") lesson = contractAmount;
+    }
+
+    await queryDb(
+      `UPDATE children
+       SET lesson_unit_price = $2,
+           monthly_unit_price = $3,
+           yearly_unit_price = $4
+       WHERE id = $1`,
+      [row.child_id, lesson, monthly, yearly]
+    );
+    updated += 1;
+  }
+
+  return updated;
+}
+
 export type ParentContractChildAttachment = {
   child_id: string;
   request_id: string;

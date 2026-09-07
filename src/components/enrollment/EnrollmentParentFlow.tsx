@@ -276,7 +276,17 @@ function resolveProposalPaymentAmount(
   return resolveChildBaseAmount(p, paymentType);
 }
 
-/** Kwoty z propozycji managera (ratalna / jednorazowa) + efektywny % rabatu — bez skalowania frekwencji. */
+/** Kwoty z propozycji managera (ratalna / jednorazowa) + efektywny % rabatu; 2× w tygodniu = ×2. */
+function resolveProposalLessonsPerWeek(p: EnrollmentProposal): LessonsPerWeek {
+  const fromField = normalizeLessonsPerWeek(p.lessons_per_week);
+  if (fromField) return fromField;
+  const slots = String(p.schedule ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0 && s.toLowerCase() !== 'do ustalenia');
+  return slots.length >= 2 ? 2 : 1;
+}
+
 function resolveComplimentaryManagerAmounts(
   p: EnrollmentProposal,
   effectivePercent: number,
@@ -286,13 +296,15 @@ function resolveComplimentaryManagerAmounts(
   amount: number | null;
   baseAmount: number | null;
 }> {
+  const lessonsPerWeek = resolveProposalLessonsPerWeek(p);
   return (
     [
       { type: 'MONTHLY' as const, kind: 'monthly' as const },
       { type: 'YEARLY' as const, kind: 'yearly' as const },
     ] as const
   ).map(({ type, kind }) => {
-    const baseAmount = resolveProposalPaymentAmount(p, type);
+    const unitAmount = resolveProposalPaymentAmount(p, type);
+    const baseAmount = scaleAmountByLessonsPerWeek(unitAmount, lessonsPerWeek);
     const amount = applyManualDiscountPercent(
       baseAmount,
       effectivePercent > 0 ? effectivePercent : null,
@@ -696,12 +708,7 @@ export default function EnrollmentParentFlow({
         const next = { ...prev };
         for (const p of incoming) {
           if (!isProposalInContractPricing(p)) continue;
-          const fromServer = normalizeLessonsPerWeek(p.lessons_per_week);
-          if (fromServer) {
-            next[p.request_id] = fromServer;
-          } else if (!next[p.request_id]) {
-            next[p.request_id] = 1;
-          }
+          next[p.request_id] = resolveProposalLessonsPerWeek(p);
         }
         return next;
       });
@@ -1557,15 +1564,18 @@ export default function EnrollmentParentFlow({
                           Rabaty
                         </p>
                         <p className="text-xs text-zinc-500">
-                          W trybie bez umowy zaznaczone zniżki się sumują. Kwoty poniżej to stawki
-                          wpisane przez szkołę (ratalna i jednorazowa).
+                          Kwoty poniżej to stawki wpisane przez szkołę (ratalna i jednorazowa).
                         </p>
-                        <label className="inline-flex items-start gap-2 text-sm text-zinc-700">
+                        <label
+                          className={`inline-flex items-start gap-2 text-sm ${
+                            enrollingMultipleChildren ? 'text-zinc-400' : 'text-zinc-700'
+                          }`}
+                        >
                           <input
                             type="checkbox"
                             className="mt-0.5 accent-[#0f6e56]"
-                            disabled={buttonsDisabled}
-                            checked={discountLargeFamily}
+                            disabled={buttonsDisabled || enrollingMultipleChildren}
+                            checked={discountLargeFamily && !enrollingMultipleChildren}
                             onChange={(e) => {
                               const checked = e.target.checked;
                               setDiscountLargeFamily(checked);
@@ -1606,6 +1616,9 @@ export default function EnrollmentParentFlow({
                             onChange={(e) => {
                               const checked = e.target.checked;
                               setEnrollingMultipleChildren(checked);
+                              if (checked) {
+                                setDiscountLargeFamily(false);
+                              }
                               void (async () => {
                                 try {
                                   await fetch('/api/enrollment/discounts', {
@@ -1614,7 +1627,7 @@ export default function EnrollmentParentFlow({
                                     credentials: 'include',
                                     body: JSON.stringify({
                                       enrollingMultipleChildren: checked,
-                                      discountLargeFamily,
+                                      discountLargeFamily: checked ? false : discountLargeFamily,
                                     }),
                                   });
                                 } catch {
@@ -1639,33 +1652,19 @@ export default function EnrollmentParentFlow({
                               enrollingMultipleChildren && !discountLargeFamily,
                             settings: proposalDiscountSettings,
                           });
-                          const discountInfo = formatEffectiveDiscountInfo(effective);
                           const rows = resolveComplimentaryManagerAmounts(p, effective.percent);
                           const hasAnyAmount = rows.some((row) => row.baseAmount != null);
                           if (!hasAnyAmount) return null;
                           return (
                             <ul className="mt-1 space-y-1.5 border-t border-emerald-100 pt-2 text-sm text-zinc-700">
-                              {rows.map((row) => {
-                                const showDiscountNote =
-                                  effective.percent > 0 &&
-                                  row.baseAmount != null &&
-                                  row.amount != null &&
-                                  row.amount !== row.baseAmount;
-                                return (
-                                  <li key={row.type}>
-                                    <span className="font-medium text-zinc-800">{row.label}</span>
-                                    <span className="ml-1.5 font-semibold text-zinc-900">
-                                      {formatPlnAmount(row.amount)}
-                                    </span>
-                                    {showDiscountNote ? (
-                                      <span className="mt-0.5 block text-xs font-normal text-zinc-500">
-                                        Cena wynika z {formatPlnAmount(row.baseAmount)}
-                                        {discountInfo ? ` — ${discountInfo}` : ''}
-                                      </span>
-                                    ) : null}
-                                  </li>
-                                );
-                              })}
+                              {rows.map((row) => (
+                                <li key={row.type}>
+                                  <span className="font-medium text-zinc-800">{row.label}</span>
+                                  <span className="ml-1.5 font-semibold text-zinc-900">
+                                    {formatPlnAmount(row.amount)}
+                                  </span>
+                                </li>
+                              ))}
                             </ul>
                           );
                         })()}
@@ -2128,16 +2127,19 @@ export default function EnrollmentParentFlow({
                                 Zniżki
                               </p>
                               <p className="text-xs text-zinc-500">
-                                Rabaty się nie sumują. KDR: 10%, rodzeństwo: 5%. Po zaznaczeniu KDR
-                                opcja rodzeństwa jest niedostępna.
+                                Rabaty się nie sumują. KDR: 10%, rodzeństwo: 5%.
                               </p>
                               <div className="flex flex-col gap-2">
-                                <label className="inline-flex items-start gap-2 text-sm text-zinc-700">
+                                <label
+                                  className={`inline-flex items-start gap-2 text-sm ${
+                                    enrollingMultipleChildren ? 'text-zinc-400' : 'text-zinc-700'
+                                  }`}
+                                >
                                   <input
                                     type="checkbox"
                                     className="mt-0.5 accent-[#0f6e56]"
-                                    disabled={settlementRadiosLocked}
-                                    checked={discountLargeFamily}
+                                    disabled={settlementRadiosLocked || enrollingMultipleChildren}
+                                    checked={discountLargeFamily && !enrollingMultipleChildren}
                                     onChange={(e) => {
                                       const checked = e.target.checked;
                                       setDiscountLargeFamily(checked);
@@ -2165,7 +2167,14 @@ export default function EnrollmentParentFlow({
                                       enrollingMultipleChildren && !discountLargeFamily
                                     }
                                     onChange={(e) => {
-                                      setEnrollingMultipleChildren(e.target.checked);
+                                      const checked = e.target.checked;
+                                      setEnrollingMultipleChildren(checked);
+                                      if (checked) {
+                                        setDiscountLargeFamily(false);
+                                        setContractPricing((prev) =>
+                                          prev ? { ...prev, discountLargeFamily: false } : prev,
+                                        );
+                                      }
                                       setAllowContractRegenerate(true);
                                     }}
                                   />
@@ -2192,7 +2201,9 @@ export default function EnrollmentParentFlow({
                                 (ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && level === 'PROPOSED');
                               const isSignedDone = level === 'SIGNED' || level === 'COMPLETED';
                               const childPaymentType = paymentTypeByRequestId[p.request_id] ?? 'MONTHLY';
-                              const childLessonsPerWeek = lessonsPerWeekByRequestId[p.request_id] ?? 1;
+                              const childLessonsPerWeek =
+                                lessonsPerWeekByRequestId[p.request_id] ??
+                                resolveProposalLessonsPerWeek(p);
                               const paymentRadiosLocked =
                                 isSignedDone ||
                                 (profileFieldsLocked && !allowContractRegenerate) ||
@@ -2624,15 +2635,6 @@ export default function EnrollmentParentFlow({
                 };
                 const effectiveSibling =
                   enrollingMultipleChildren && !discountLargeFamily;
-                const sharedDiscountInfo = formatEffectiveDiscountInfo(
-                  resolveEffectiveDiscountPercent({
-                    mode: 'complimentary',
-                    managerPercent: null,
-                    hasLargeFamilyCard: discountLargeFamily,
-                    hasSiblingDeclared: effectiveSibling,
-                    settings: summaryDiscountSettings,
-                  }),
-                );
                 const summaryDiscountsDirty =
                   discountLargeFamily !== savedDiscountLargeFamily ||
                   effectiveSibling !== savedEnrollingMultipleChildren;
@@ -2686,20 +2688,19 @@ export default function EnrollmentParentFlow({
                       <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
                         Zniżki
                       </p>
-                      <p className="text-xs text-zinc-500">
-                        Po zaznaczeniu KDR opcja rodzeństwa jest niedostępna.
-                      </p>
                       <div className="flex flex-col gap-2">
                         <label
                           className={`inline-flex items-start gap-2 text-sm ${
-                            discountsDisabled ? 'text-zinc-500' : 'text-zinc-700'
+                            discountsDisabled || enrollingMultipleChildren
+                              ? 'text-zinc-400'
+                              : 'text-zinc-700'
                           }`}
                         >
                           <input
                             type="checkbox"
                             className="mt-0.5 accent-[#0f6e56]"
-                            disabled={discountsDisabled}
-                            checked={discountLargeFamily}
+                            disabled={discountsDisabled || enrollingMultipleChildren}
+                            checked={discountLargeFamily && !enrollingMultipleChildren}
                             onChange={(e) => {
                               const checked = e.target.checked;
                               setDiscountLargeFamily(checked);
@@ -2721,17 +2722,14 @@ export default function EnrollmentParentFlow({
                             disabled={discountsDisabled || discountLargeFamily}
                             checked={effectiveSibling}
                             onChange={(e) => {
-                              setEnrollingMultipleChildren(e.target.checked);
+                              const checked = e.target.checked;
+                              setEnrollingMultipleChildren(checked);
+                              if (checked) setDiscountLargeFamily(false);
                             }}
                           />
                           <span>zapisuję więcej niż jedno dziecko</span>
                         </label>
                       </div>
-                      {sharedDiscountInfo ? (
-                        <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-900">
-                          {sharedDiscountInfo}
-                        </p>
-                      ) : null}
                       {!isReadOnlyPreview && !summaryDiscountsLocked ? (
                         <button
                           type="button"
@@ -2762,7 +2760,6 @@ export default function EnrollmentParentFlow({
                           enrollingMultipleChildren && !discountLargeFamily,
                         settings: summaryDiscountSettings,
                       });
-                      const discountInfo = formatEffectiveDiscountInfo(effective);
                       const amountRows = resolveComplimentaryManagerAmounts(
                         p,
                         effective.percent,
@@ -2788,27 +2785,14 @@ export default function EnrollmentParentFlow({
                               Kwoty
                             </p>
                             <ul className="space-y-1.5 text-sm text-zinc-700">
-                              {amountRows.map((row) => {
-                                const showDiscountNote =
-                                  effective.percent > 0 &&
-                                  row.baseAmount != null &&
-                                  row.amount != null &&
-                                  row.amount !== row.baseAmount;
-                                return (
-                                  <li key={row.type}>
-                                    <span className="font-medium text-zinc-800">{row.label}</span>
-                                    <span className="ml-1.5 font-semibold text-zinc-900">
-                                      {formatPlnAmount(row.amount)}
-                                    </span>
-                                    {showDiscountNote ? (
-                                      <span className="mt-0.5 block text-xs font-normal text-zinc-500">
-                                        Cena wynika z {formatPlnAmount(row.baseAmount)}
-                                        {discountInfo ? ` — ${discountInfo}` : ''}
-                                      </span>
-                                    ) : null}
-                                  </li>
-                                );
-                              })}
+                              {amountRows.map((row) => (
+                                <li key={row.type}>
+                                  <span className="font-medium text-zinc-800">{row.label}</span>
+                                  <span className="ml-1.5 font-semibold text-zinc-900">
+                                    {formatPlnAmount(row.amount)}
+                                  </span>
+                                </li>
+                              ))}
                             </ul>
                           </div>
                         </div>

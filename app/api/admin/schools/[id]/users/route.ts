@@ -1,9 +1,47 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAllUsers, queryDb } from "@/lib/db";
-import { ensureComplimentaryParentUserAccounts } from "@/lib/school-discounts";
 import { requireSuperAdmin } from "@/lib/superadmin-auth";
 
 type RouteContext = { params: Promise<{ id: string }> };
+
+/**
+ * Rodzic na liście impersonacji tylko gdy dostał dane do logowania:
+ * - wysłany mail z propozycją (enrollment ≠ NEW), albo
+ * - konto założone ręcznie w panelu (confirmed), albo
+ * - już się logował.
+ * Lektorzy / zarządcy / itd. — bez tego filtra.
+ */
+async function parentIdsWithPortalCredentials(
+  schoolId: string,
+  parentIds: string[]
+): Promise<Set<string>> {
+  if (parentIds.length === 0) return new Set();
+
+  const res = await queryDb<{ parent_id: string }>(
+    `SELECT DISTINCT u.id AS parent_id
+     FROM users u
+     WHERE u.school_id = $1
+       AND u.id = ANY($2::text[])
+       AND u.role = 'PARENT'
+       AND (
+         u.confirmed = TRUE
+         OR u.last_login IS NOT NULL
+         OR EXISTS (
+           SELECT 1
+           FROM enrollment_requests er
+           WHERE er.school_id = u.school_id
+             AND (
+               er.user_id = u.id
+               OR LOWER(BTRIM(er.parent_email::text)) = LOWER(u.email)
+             )
+             AND UPPER(BTRIM(COALESCE(er.status::text, ''))) <> 'NEW'
+         )
+       )`,
+    [schoolId, parentIds]
+  );
+
+  return new Set(res.rows.map((r) => r.parent_id));
+}
 
 export async function GET(request: NextRequest, context: RouteContext) {
   try {
@@ -23,15 +61,22 @@ export async function GET(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ message: "Szkoła nie istnieje" }, { status: 404 });
     }
 
-    // Complimentary tylko po e-mailu → utwórz/podlinkuj konto, żeby było na liście do impersonacji.
-    await ensureComplimentaryParentUserAccounts(schoolId);
-
     const users = await getAllUsers(schoolId);
     const withoutAdmins = users.filter((u) => u.role !== "ADMIN");
 
-    const parentIds = withoutAdmins
+    const allParentIds = withoutAdmins
       .filter((u) => u.role === "PARENT")
       .map((u) => u.id);
+    const parentsWithCredentials = await parentIdsWithPortalCredentials(
+      schoolId,
+      allParentIds
+    );
+
+    const visible = withoutAdmins.filter(
+      (u) => u.role !== "PARENT" || parentsWithCredentials.has(u.id)
+    );
+
+    const parentIds = visible.filter((u) => u.role === "PARENT").map((u) => u.id);
     const childrenCountByParent = new Map<string, number>();
     if (parentIds.length > 0) {
       const counts = await queryDb<{ parent_id: string; cnt: number }>(
@@ -53,7 +98,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
         id: school.rows[0].id,
         name: school.rows[0].name,
       },
-      users: withoutAdmins.map((u) => ({
+      users: visible.map((u) => ({
         id: u.id,
         first_name: u.first_name,
         last_name: u.last_name,

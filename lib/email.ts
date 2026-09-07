@@ -170,6 +170,9 @@ function getAppBaseUrl(): string {
   return raw.replace(/\/$/, "");
 }
 
+/** Publiczny adres strony (CTA w mailach z propozycją grupy). */
+const PUBLIC_SITE_URL = "https://www.harry-english.pl/";
+
 function getPublicEmailAssetBaseUrl(): string {
   const appUrl = getAppBaseUrl();
   if (/localhost|127\.0\.0\.1|0\.0\.0\.0/i.test(appUrl)) {
@@ -892,7 +895,7 @@ export async function sendProposalEmail(
   },
   options?: { complimentaryCompleted?: boolean },
 ) {
-  const portalUrl = `${getAppBaseUrl()}/portal/login`;
+  const portalUrl = PUBLIC_SITE_URL;
   const p = getEmailPalette();
   const teacherName = (proposal.teacherName ?? "").trim() || "Do ustalenia";
   const safeChildName =
@@ -908,7 +911,7 @@ export async function sendProposalEmail(
     ? ""
     : `
       <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;color:${p.text};">
-        Załącznik zawierający zgodę na odbiór dziecka przez lektora należy wydrukować w dwóch egzemplarzach i podpisać własnoręcznie.
+        Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować w dwóch egzemplarzach i podpisać własnoręcznie.
       </p>
       <ul style="margin:0 0 16px 18px;padding:0;font-size:15px;line-height:1.6;color:${p.text};">
         <li>Jeden egzemplarz należy przekazać do placówki, z której dziecko będzie odbierane. (świetlica, wychowawca grupy)</li>
@@ -953,7 +956,7 @@ Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logow
   const pickupConsentText = options?.complimentaryCompleted
     ? ""
     : `
-Załącznik zawierający zgodę na odbiór dziecka przez lektora należy wydrukować w dwóch egzemplarzach i podpisać własnoręcznie.
+Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować w dwóch egzemplarzach i podpisać własnoręcznie.
 - Jeden egzemplarz należy przekazać do placówki, z której dziecko będzie odbierane. (świetlica, wychowawca grupy)
 - Drugi egzemplarz należy przekazać lektorowi
 `;
@@ -1015,7 +1018,7 @@ export async function sendCombinedProposalEmail(
   },
   options?: { complimentaryCompleted?: boolean },
 ) {
-  const portalUrl = `${getAppBaseUrl()}/portal/login`;
+  const portalUrl = PUBLIC_SITE_URL;
   const p = getEmailPalette();
 
   const proposalsHtml = proposals
@@ -1082,7 +1085,7 @@ export async function sendCombinedProposalEmail(
       <p style="margin:12px 0;font-size:14px;line-height:1.6;color:${p.text};opacity:0.85;">
         ${
           isNewAccount
-            ? "Po pierwszym zalogowaniu poprosimy Cię o ustawienie własnego hasła."
+            ? "W czasie pierwszego logowania system poprosi Cię o zmianę hasła."
             : "Nie pamiętasz hasła? Skorzystaj z opcji „Zapomniałem hasła” na stronie logowania."
         }
       </p>
@@ -1099,7 +1102,7 @@ ${
 - ${isNewAccount ? "Hasło tymczasowe" : "Hasło"}: ${passwordText}
 ${
   isNewAccount
-    ? "Po pierwszym zalogowaniu poprosimy Cię o ustawienie własnego hasła."
+    ? "W czasie pierwszego logowania system poprosi Cię o zmianę hasła."
     : "Nie pamiętasz hasła? Skorzystaj z opcji \"Zapomniałem hasła\" na stronie logowania."
 }
 `;
@@ -1119,7 +1122,7 @@ ${
     ? ""
     : `
       <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;color:${p.text};">
-        Załącznik zawierający zgodę na odbiór dziecka przez lektora należy wydrukować w dwóch egzemplarzach i podpisać własnoręcznie.
+        Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować w dwóch egzemplarzach i podpisać własnoręcznie.
       </p>
       <ul style="margin:0 0 16px 18px;padding:0;font-size:15px;line-height:1.6;color:${p.text};">
         <li>Jeden egzemplarz należy przekazać do placówki, z której dziecko będzie odbierane. (świetlica, wychowawca grupy)</li>
@@ -1130,7 +1133,7 @@ ${
   const pickupConsentText = options?.complimentaryCompleted
     ? ""
     : `
-Załącznik zawierający zgodę na odbiór dziecka przez lektora należy wydrukować w dwóch egzemplarzach i podpisać własnoręcznie.
+Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować w dwóch egzemplarzach i podpisać własnoręcznie.
 - Jeden egzemplarz należy przekazać do placówki, z której dziecko będzie odbierane. (świetlica, wychowawca grupy)
 - Drugi egzemplarz należy przekazać lektorowi
 `;

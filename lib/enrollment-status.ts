@@ -101,7 +101,7 @@ export function resolveStudentListPipelineStage(input: {
   enrollmentStatus?: string | null;
   hasGroup?: boolean;
   contractStatus?: string | null;
-  /** Tryb bez umowy — flow kończy się na przypisaniu do grupy (bez etapów umowy). */
+  /** Tryb bez umowy — flow kończy się po wysłaniu maila z loginem i grupą (bez etapów umowy). */
   complimentary?: boolean;
 }): StudentListPipelineStage {
   const level = String(input.enrollmentStatus ?? "")

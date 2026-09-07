@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { countPendingEnrollments } from "@/lib/admin-dashboard";
 import { POLISH_DAY_FROM_ST_SQL, queryDb } from "@/lib/db";
 import { sendProposalEmail } from "@/lib/email";
+import { completeComplimentaryEnrollment } from "@/lib/complimentary-enrollment";
 import {
   managerSchoolAndClause,
   requireAdminSchoolContext,
@@ -261,6 +262,25 @@ export async function POST(request: NextRequest) {
       emailItem,
       { complimentaryCompleted }
     );
+
+    if (complimentaryCompleted) {
+      try {
+        await completeComplimentaryEnrollment(
+          requestId,
+          sharedParent.parentUserId,
+          sharedParent.schoolId
+        );
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : "nieznany błąd";
+        console.error("completeComplimentaryEnrollment after email failed:", err);
+        return NextResponse.json(
+          {
+            message: `Mail wysłany, ale zapis nie dokończył się (${detail}). Spróbuj ponownie „Wyślij maila”.`,
+          },
+          { status: 500 }
+        );
+      }
+    }
 
     return NextResponse.json({
       message: "Nowa propozycja została wysłana",

@@ -24,6 +24,7 @@ import {
   fetchParentEnrollmentChildren,
   finalizeContractPricingAtSign,
   findNextQueuedChildWithoutContract,
+  freezeSignedContractNetRatesOnChildren,
 } from "@/lib/parent-contract";
 import { storeSignedContractPdfsInR2 } from "@/lib/r2-storage";
 
@@ -325,7 +326,8 @@ export async function POST(request: NextRequest) {
 
     }
 
-
+    // Po enrollChildInGroup (który zapisuje brutto z contract_children) — lustro netto jak contracts.amount.
+    await freezeSignedContractNetRatesOnChildren(contract.id);
 
     await syncParentUserAccessLevel(parentId);
 
