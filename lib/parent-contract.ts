@@ -5,15 +5,14 @@ import {
   applyManualDiscountPercent,
   DISCOUNT_KEYS,
   getSchoolDiscountSettings,
-  hasIndividualPriceOverride,
   isComplimentaryForParent,
+  resolveEffectiveDiscountPercent,
   type DiscountKey,
   type SchoolDiscountSettings,
 } from "@/lib/school-discounts";
-import { resolveContractDiscountKeys } from "@/lib/contract-pricing-preview";
+import { getParentLargeFamilyCard } from "@/lib/parent-profile-discount";
 import { getActiveSchoolYear, queryDb, runPgTransaction } from "@/lib/db";
 import { sumChildrenBaseAmounts } from "@/lib/enrollment-pricing";
-import { getParentLargeFamilyCard } from "@/lib/parent-profile-discount";
 import {
   buildAmountClause,
   buildChildSchoolName,
@@ -27,7 +26,6 @@ import {
   buildSchedulePlaceLabel,
   buildScheduleTimeLabel,
   buildTeacherFullName,
-  buildTeacherIdSuffix,
   extractContractNumber,
   formatBirthDatePl,
   formatContractDate,
@@ -139,6 +137,22 @@ export async function parentHasSiblingDiscount(
   schoolId: string
 ): Promise<boolean> {
   return (await countActiveSiblingChildren(parentId, schoolId)) >= 2;
+}
+
+/** Deklaracja rodzica z checkboxa (enrollment_requests.enrolling_multiple_children). */
+export async function parentHasSiblingDeclared(
+  parentId: string,
+  schoolId: string
+): Promise<boolean> {
+  const res = await queryDb<{ declared: boolean }>(
+    `SELECT COALESCE(BOOL_OR(enrolling_multiple_children), FALSE) AS declared
+     FROM enrollment_requests
+     WHERE school_id = $1
+       AND user_id = $2
+       AND UPPER(BTRIM(COALESCE(status::text, ''))) <> 'REJECTED'`,
+    [schoolId, parentId]
+  );
+  return res.rows[0]?.declared === true;
 }
 
 /** Czy dziecko ma aktywną umowę SENT/SIGNED w bieżącym roku szkolnym. */
@@ -390,7 +404,13 @@ export function computeParentContractAmount(
 
 export function buildChildRateSnapshots(
   included: ParentContractChildRow[],
-  lessonsPerWeek?: LessonsPerWeek | number | null
+  lessonsPerWeek?: LessonsPerWeek | number | null,
+  discountContext?: {
+    mode: "contract" | "complimentary";
+    hasLargeFamilyCard: boolean;
+    hasSiblingDeclared: boolean;
+    settings: Pick<SchoolDiscountSettings, "LARGE_FAMILY_CARD" | "SIBLING">;
+  }
 ): Array<{
   child_id: string;
   name: string;
@@ -399,7 +419,18 @@ export function buildChildRateSnapshots(
   yearly_unit_price: number | null;
 }> {
   return included.map((child) => {
-    const discountPercent = child.discount_percent;
+    const effective = discountContext
+      ? resolveEffectiveDiscountPercent({
+          mode: discountContext.mode,
+          managerPercent: child.discount_percent,
+          hasLargeFamilyCard: discountContext.hasLargeFamilyCard,
+          hasSiblingDeclared: discountContext.hasSiblingDeclared,
+          settings: discountContext.settings,
+        })
+      : null;
+    const discountPercent = effective?.percent
+      ? effective.percent
+      : child.discount_percent;
     return {
       child_id: child.child_id,
       name: `${formatPersonName(child.first_name)} ${formatPersonName(child.last_name)}`.trim(),
@@ -434,6 +465,8 @@ export function buildParentContractAmountBreakdown(
     discountKeys: DiscountKey[];
     frozenAt?: Date | string | null;
     lessonsPerWeek?: LessonsPerWeek | number | null;
+    hasLargeFamilyCard?: boolean;
+    hasSiblingDeclared?: boolean;
   }
 ): ContractAmountBreakdown {
   return buildContractAmountBreakdown({
@@ -441,7 +474,12 @@ export function buildParentContractAmountBreakdown(
     billingExempt: options.billingExempt,
     discountKeys: options.discountKeys,
     discountSettings: options.discountSettings,
-    children: buildChildRateSnapshots(included, options.lessonsPerWeek),
+    children: buildChildRateSnapshots(included, options.lessonsPerWeek, {
+      mode: options.billingExempt ? "complimentary" : "contract",
+      hasLargeFamilyCard: Boolean(options.hasLargeFamilyCard),
+      hasSiblingDeclared: Boolean(options.hasSiblingDeclared),
+      settings: options.discountSettings,
+    }),
     frozenAt: options.frozenAt ?? null,
   });
 }
@@ -682,21 +720,32 @@ export async function generateParentContract(
   });
   const discountSettings = await getSchoolDiscountSettings(schoolId);
   const hasLargeFamilyCard = await getParentLargeFamilyCard(parentId);
-  const discountKeys = resolveContractDiscountKeys(
-    await parentHasSiblingDiscount(parentId, schoolId),
-    {
-      billingExempt,
-      discountLargeFamily: hasLargeFamilyCard,
-      discountSettings,
-      hasIndividualPricing: hasIndividualPriceOverride(child),
-    }
-  );
+  const hasSiblingDeclared = await parentHasSiblingDeclared(parentId, schoolId);
+  const effectiveDiscount = resolveEffectiveDiscountPercent({
+    mode: billingExempt ? "complimentary" : "contract",
+    managerPercent: child.discount_percent,
+    hasLargeFamilyCard,
+    hasSiblingDeclared,
+    settings: discountSettings,
+  });
+  // Flagi na umowie: które zniżki rodzinne weszły w kwotę (nie sumują się nawzajem).
+  const discountLargeFamily =
+    effectiveDiscount.familyOrSiblingKey === DISCOUNT_KEYS.LARGE_FAMILY_CARD;
+  const discountSibling =
+    effectiveDiscount.familyOrSiblingKey === DISCOUNT_KEYS.SIBLING;
 
-  const childRates = buildChildRateSnapshots([child], lessonsPerWeek);
+  const childRates = buildChildRateSnapshots([child], lessonsPerWeek, {
+    mode: billingExempt ? "complimentary" : "contract",
+    hasLargeFamilyCard,
+    hasSiblingDeclared,
+    settings: discountSettings,
+  });
   const amountBreakdown = buildContractAmountBreakdown({
     paymentType,
     billingExempt,
-    discountKeys,
+    discountKeys: effectiveDiscount.familyOrSiblingKey
+      ? [effectiveDiscount.familyOrSiblingKey]
+      : [],
     discountSettings,
     children: childRates,
     frozenAt: null,
@@ -816,10 +865,6 @@ export async function generateParentContract(
   const paymentAmountLabel = formatLessonUnitPriceLabel(
     billingExempt ? 0 : paymentAmountRaw
   );
-  const paymentSection = buildPaymentSectionHtml({
-    paymentType,
-    amountLabel: paymentAmountLabel,
-  });
   const lessonUnitPriceLabel = formatLessonUnitPriceLabel(
     billingExempt ? 0 : childRates[0]?.lesson_unit_price ?? null
   );
@@ -956,6 +1001,12 @@ export async function generateParentContract(
 
   const contractSchoolYear = formatSchoolYearFromDate(contractDate);
 
+  const paymentSection = buildPaymentSectionHtml({
+    paymentType,
+    amountLabel: paymentAmountLabel,
+    contractNumber,
+  });
+
   const placeholders: Record<string, string> = {
     contract_number: contractNumber,
     contract_date: formatContractDate(contractDate),
@@ -983,7 +1034,6 @@ export async function generateParentContract(
     parent_signature_line: "",
     school_signature_line: "",
     teacher_full_name: teacherFullName || "Do ustalenia",
-    teacher_id_suffix: buildTeacherIdSuffix(),
     child_school_name: childSchoolName,
     ...buildChildPlaceholders([child]),
     children_list: buildChildrenListHtml([child]),
@@ -1041,8 +1091,6 @@ export async function generateParentContract(
   const primaryGroupId = child.group_id;
   const enrollmentRequestId =
     child.request_id && child.request_id !== child.child_id ? child.request_id : null;
-  const discountSibling = discountKeys.includes(DISCOUNT_KEYS.SIBLING);
-  const discountLargeFamily = discountKeys.includes(DISCOUNT_KEYS.LARGE_FAMILY_CARD);
   const rates = childRates[0];
 
   let contractId: string;
@@ -1384,7 +1432,9 @@ export async function fetchParentContractForPortal(
       first_name: c.first_name,
       last_name: c.last_name,
       attachment_1_html: showDocs ? c.attachment_1_html : null,
-      attachment_2_html: showDocs ? c.attachment_2_html : null,
+      attachment_2_html: showDocs && c.attachment_2_html
+        ? normalizePickupConsentDocumentHtml(c.attachment_2_html)
+        : null,
     })),
   };
 }
@@ -1513,7 +1563,9 @@ export async function fetchParentContractByIdForPortal(
       first_name: c.first_name,
       last_name: c.last_name,
       attachment_1_html: showDocs ? c.attachment_1_html : null,
-      attachment_2_html: showDocs ? c.attachment_2_html : null,
+      attachment_2_html: showDocs && c.attachment_2_html
+        ? normalizePickupConsentDocumentHtml(c.attachment_2_html)
+        : null,
     })),
   };
 }

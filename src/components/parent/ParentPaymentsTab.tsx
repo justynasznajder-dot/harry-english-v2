@@ -166,14 +166,27 @@ function InfoBanner({ children }: { children: ReactNode }) {
   );
 }
 
-function ChildMonthlySection({ child }: { child: ChildOverview }) {
+function ChildMonthlySection({
+  child,
+  hideInvoiceAndStatus,
+}: {
+  child: ChildOverview;
+  hideInvoiceAndStatus?: boolean;
+}) {
   const rows = child.installments ?? [];
   return (
     <div className="space-y-3">
-      <InfoBanner>
-        Faktury ratalne wystawiane są w okolicach <strong>10. dnia każdego miesiąca</strong>. Do
-        tego czasu status to „Oczekiwanie na fakturę”.
-      </InfoBanner>
+      {hideInvoiceAndStatus ? (
+        <InfoBanner>
+          Tryb bez umowy — poniżej lista kwot miesięcznych. Nie wystawiamy faktur i nie śledzimy
+          statusu płatności.
+        </InfoBanner>
+      ) : (
+        <InfoBanner>
+          Faktury ratalne wystawiane są w okolicach <strong>10. dnia każdego miesiąca</strong>. Do
+          tego czasu status to „Oczekiwanie na fakturę”.
+        </InfoBanner>
+      )}
       {rows.length === 0 ? (
         <p className="text-sm text-zinc-600">Brak harmonogramu rat dla tego roku szkolnego.</p>
       ) : (
@@ -187,15 +200,15 @@ function ChildMonthlySection({ child }: { child: ChildOverview }) {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="font-semibold text-zinc-900">{formatMonthLabel(row.periodMonth)}</p>
-                    {row.dueDate ? (
+                    {!hideInvoiceAndStatus && row.dueDate ? (
                       <p className="mt-0.5 text-xs text-zinc-500">Termin: {row.dueDate}</p>
                     ) : null}
                   </div>
-                  <StatusBadge status={row.displayStatus} />
+                  {!hideInvoiceAndStatus ? <StatusBadge status={row.displayStatus} /> : null}
                 </div>
                 <div className="mt-3 flex flex-wrap items-end justify-between gap-3 border-t border-zinc-100 pt-3">
                   <p className="text-base font-semibold text-zinc-900">{formatAmountPln(row.amount)}</p>
-                  <InvoiceCell row={row} />
+                  {!hideInvoiceAndStatus ? <InvoiceCell row={row} /> : null}
                 </div>
               </article>
             ))}
@@ -206,8 +219,12 @@ function ChildMonthlySection({ child }: { child: ChildOverview }) {
                 <tr>
                   <th className="px-4 py-3 font-semibold">Miesiąc</th>
                   <th className="px-4 py-3 font-semibold">Kwota</th>
-                  <th className="px-4 py-3 font-semibold">Status</th>
-                  <th className="px-4 py-3 font-semibold">Faktura</th>
+                  {!hideInvoiceAndStatus ? (
+                    <>
+                      <th className="px-4 py-3 font-semibold">Status</th>
+                      <th className="px-4 py-3 font-semibold">Faktura</th>
+                    </>
+                  ) : null}
                 </tr>
               </thead>
               <tbody>
@@ -215,17 +232,21 @@ function ChildMonthlySection({ child }: { child: ChildOverview }) {
                   <tr key={row.periodMonth} className="border-t border-zinc-100">
                     <td className="px-4 py-3">
                       <div>{formatMonthLabel(row.periodMonth)}</div>
-                      {row.dueDate ? (
+                      {!hideInvoiceAndStatus && row.dueDate ? (
                         <div className="text-xs text-zinc-500">Termin: {row.dueDate}</div>
                       ) : null}
                     </td>
                     <td className="px-4 py-3 font-medium">{formatAmountPln(row.amount)}</td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={row.displayStatus} />
-                    </td>
-                    <td className="px-4 py-3">
-                      <InvoiceCell row={row} />
-                    </td>
+                    {!hideInvoiceAndStatus ? (
+                      <>
+                        <td className="px-4 py-3">
+                          <StatusBadge status={row.displayStatus} />
+                        </td>
+                        <td className="px-4 py-3">
+                          <InvoiceCell row={row} />
+                        </td>
+                      </>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>
@@ -237,50 +258,82 @@ function ChildMonthlySection({ child }: { child: ChildOverview }) {
   );
 }
 
-function ChildYearlySection({ child }: { child: ChildOverview }) {
+function ChildYearlySection({
+  child,
+  hideInvoiceAndStatus,
+}: {
+  child: ChildOverview;
+  hideInvoiceAndStatus?: boolean;
+}) {
   const row = child.yearly;
   if (!row) {
     return <p className="text-sm text-zinc-600">Brak danych o płatności jednorazowej.</p>;
   }
   return (
     <div className="space-y-3">
-      <InfoBanner>
-        Płatność jednorazowa za rok szkolny. Po wystawieniu faktury status zmieni się na „Do
-        zapłaty”, a po zaksięgowaniu wpłaty — na „Opłacone”.
-      </InfoBanner>
+      {hideInvoiceAndStatus ? (
+        <InfoBanner>
+          Tryb bez umowy — poniżej kwota jednorazowa. Nie wystawiamy faktur i nie śledzimy statusu
+          płatności.
+        </InfoBanner>
+      ) : (
+        <InfoBanner>
+          Płatność jednorazowa za rok szkolny. Po wystawieniu faktury status zmieni się na „Do
+          zapłaty”, a po zaksięgowaniu wpłaty — na „Opłacone”.
+        </InfoBanner>
+      )}
       <article className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="font-semibold text-zinc-900">{row.label}</p>
-            {row.dueDate ? (
+            {!hideInvoiceAndStatus && row.dueDate ? (
               <p className="mt-0.5 text-xs text-zinc-500">Termin: {row.dueDate}</p>
             ) : null}
           </div>
-          <StatusBadge status={row.displayStatus} />
+          {!hideInvoiceAndStatus ? <StatusBadge status={row.displayStatus} /> : null}
         </div>
         <div className="mt-3 flex flex-wrap items-end justify-between gap-3 border-t border-zinc-100 pt-3">
           <p className="text-xl font-semibold text-zinc-900">{formatAmountPln(row.amount)}</p>
-          <InvoiceCell row={row} />
+          {!hideInvoiceAndStatus ? <InvoiceCell row={row} /> : null}
         </div>
       </article>
     </div>
   );
 }
 
-function ChildLessonSection({ child }: { child: ChildOverview }) {
+function ChildLessonSection({
+  child,
+  hideInvoiceAndStatus,
+}: {
+  child: ChildOverview;
+  hideInvoiceAndStatus?: boolean;
+}) {
   const months = child.lessonMonths ?? [];
   return (
     <div className="space-y-4">
-      <InfoBanner>
-        Rozliczenie za obecności oznaczone przez nauczyciela (obecny / spóźniony)
-        {child.lessonUnitPrice ? (
-          <>
-            {' '}
-            × stawka <strong>{formatAmountPln(child.lessonUnitPrice)}</strong>
-          </>
-        ) : null}
-        . Faktura za miesiąc wystawiana jest <strong>ostatniego dnia miesiąca</strong>.
-      </InfoBanner>
+      {hideInvoiceAndStatus ? (
+        <InfoBanner>
+          Tryb bez umowy — rozliczenie według obecności
+          {child.lessonUnitPrice ? (
+            <>
+              {' '}
+              × stawka <strong>{formatAmountPln(child.lessonUnitPrice)}</strong>
+            </>
+          ) : null}
+          . Nie wystawiamy faktur i nie śledzimy statusu płatności.
+        </InfoBanner>
+      ) : (
+        <InfoBanner>
+          Rozliczenie za obecności oznaczone przez nauczyciela (obecny / spóźniony)
+          {child.lessonUnitPrice ? (
+            <>
+              {' '}
+              × stawka <strong>{formatAmountPln(child.lessonUnitPrice)}</strong>
+            </>
+          ) : null}
+          . Faktura za miesiąc wystawiana jest <strong>ostatniego dnia miesiąca</strong>.
+        </InfoBanner>
+      )}
       {months.length === 0 ? (
         <p className="text-sm text-zinc-600">
           Brak oznaczonych obecności do rozliczenia. Pojawią się tu zajęcia po oznaczeniu przez
@@ -305,10 +358,12 @@ function ChildLessonSection({ child }: { child: ChildOverview }) {
                   · łącznie {formatAmountPln(month.amount)}
                 </p>
               </div>
-              <div className="flex flex-wrap items-center gap-3">
-                <StatusBadge status={month.displayStatus} />
-                <InvoiceCell row={month} />
-              </div>
+              {!hideInvoiceAndStatus ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <StatusBadge status={month.displayStatus} />
+                  <InvoiceCell row={month} />
+                </div>
+              ) : null}
             </div>
             <ul className="divide-y divide-zinc-100">
               {month.lessons.map((lesson) => (
@@ -346,6 +401,7 @@ export default function ParentPaymentsTab({ complimentaryAccess }: { complimenta
   const [children, setChildren] = useState<ChildOverview[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [apiComplimentary, setApiComplimentary] = useState(Boolean(complimentaryAccess));
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -362,6 +418,7 @@ export default function ParentPaymentsTab({ complimentaryAccess }: { complimenta
         setChildren([]);
         return;
       }
+      setApiComplimentary(Boolean(data.complimentaryAccess ?? complimentaryAccess));
       setChildren(data.overview?.children ?? []);
     } catch {
       setError('Błąd połączenia z serwerem');
@@ -369,34 +426,22 @@ export default function ParentPaymentsTab({ complimentaryAccess }: { complimenta
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [complimentaryAccess]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  if (complimentaryAccess) {
-    return (
-      <section className="space-y-4 rounded-3xl border border-emerald-100 bg-white p-5 md:p-6">
-        <h2 className="text-xl font-bold text-zinc-900 md:text-2xl">Płatności</h2>
-        <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-6 text-sm text-sky-900">
-          <p className="font-semibold">Tryb bez umowy</p>
-          <p className="mt-2">
-            Twoje konto korzysta z dostępu do systemu bez generowania faktur i bez pobierania
-            płatności.
-          </p>
-        </div>
-      </section>
-    );
-  }
+  const hideInvoiceAndStatus = complimentaryAccess || apiComplimentary;
 
   return (
     <section className="space-y-6 rounded-3xl border border-emerald-100 bg-white p-5 md:p-6">
       <header>
         <h2 className="text-xl font-bold text-zinc-900 md:text-2xl">Płatności</h2>
         <p className="mt-1 text-sm text-zinc-600">
-          Harmonogram i status rozliczeń dla wszystkich dzieci. Zielony ✓ = opłacone, czerwony ✓ =
-          faktura do zapłaty, ◌ = oczekiwanie na fakturę.
+          {hideInvoiceAndStatus
+            ? 'Lista kwot dla dzieci. W trybie bez umowy nie ma faktur ani statusów płatności.'
+            : 'Harmonogram i status rozliczeń dla wszystkich dzieci. Zielony ✓ = opłacone, czerwony ✓ = faktura do zapłaty, ◌ = oczekiwanie na fakturę.'}
         </p>
       </header>
 
@@ -408,7 +453,9 @@ export default function ParentPaymentsTab({ complimentaryAccess }: { complimenta
         </div>
       ) : children.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-8 text-center text-sm text-zinc-600">
-          Brak podpisanych umów z płatnościami. Harmonogram pojawi się po podpisaniu umowy.
+          {hideInvoiceAndStatus
+            ? 'Brak harmonogramu płatności. Pojawi się po przypisaniu dziecka do grupy i ustaleniu stawek.'
+            : 'Brak podpisanych umów z płatnościami. Harmonogram pojawi się po podpisaniu umowy.'}
         </div>
       ) : (
         <div className="space-y-8">
@@ -423,9 +470,15 @@ export default function ParentPaymentsTab({ complimentaryAccess }: { complimenta
                   </p>
                 </div>
               </div>
-              {child.paymentType === 'MONTHLY' ? <ChildMonthlySection child={child} /> : null}
-              {child.paymentType === 'YEARLY' ? <ChildYearlySection child={child} /> : null}
-              {child.paymentType === 'PER_LESSON' ? <ChildLessonSection child={child} /> : null}
+              {child.paymentType === 'MONTHLY' ? (
+                <ChildMonthlySection child={child} hideInvoiceAndStatus={hideInvoiceAndStatus} />
+              ) : null}
+              {child.paymentType === 'YEARLY' ? (
+                <ChildYearlySection child={child} hideInvoiceAndStatus={hideInvoiceAndStatus} />
+              ) : null}
+              {child.paymentType === 'PER_LESSON' ? (
+                <ChildLessonSection child={child} hideInvoiceAndStatus={hideInvoiceAndStatus} />
+              ) : null}
             </article>
           ))}
         </div>

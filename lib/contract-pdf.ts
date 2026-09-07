@@ -3,7 +3,7 @@ import {
   buildImageConsentPdfFilename,
   IMAGE_CONSENT_PDF_TITLE,
 } from "@/lib/image-consent-notice";
-import { buildPickupConsentPdfFilename } from "@/lib/pickup-consent-notice";
+import { buildPickupConsentPdfFilename, normalizePickupConsentDocumentHtml } from "@/lib/pickup-consent-notice";
 
 export type ContractPdfFile = {
   filename: string;
@@ -146,7 +146,10 @@ export async function buildSignedContractPdfFiles(params: {
       if (child.attachment2Html) {
         files.push({
           filename: buildPickupConsentPdfFilename(child.childName || "dziecko", contractNumber),
-          content: await renderHtmlToPdfWithBrowser(browser, child.attachment2Html),
+          content: await renderHtmlToPdfWithBrowser(
+            browser,
+            normalizePickupConsentDocumentHtml(child.attachment2Html)
+          ),
         });
       }
     }

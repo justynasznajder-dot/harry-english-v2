@@ -6,14 +6,16 @@ import {
   buildParentAddress,
   buildParentPeselOrId,
   buildTeacherFullName,
-  buildTeacherIdSuffix,
   formatContractDate,
   formatLessonDuration,
   formatSchoolYearFromDate,
   generateContractHtml,
 } from "@/lib/contract-html";
 import { renderHtmlToPdf } from "@/lib/contract-pdf";
-import { buildPickupConsentPdfFilename, normalizePickupConsentDocumentHtml } from "@/lib/pickup-consent-notice";
+import {
+  buildPickupConsentPdfFilename,
+  stripPickupConsentContractReferenceLine,
+} from "@/lib/pickup-consent-notice";
 import { getActiveSchoolYear, queryDb } from "@/lib/db";
 import { filterScheduleForStudentAttendance } from "@/lib/lessons-per-week";
 import { buildSingleChildAttachmentPlaceholders, type ParentContractChildRow } from "@/lib/parent-contract";
@@ -23,11 +25,6 @@ export {
   buildPickupConsentPdfFilename,
   isPickupConsentPdfFilename as isComplimentaryPickupConsentPdf,
 } from "@/lib/pickup-consent-notice";
-
-/** W trybie bez opłat dokument nie jest załącznikiem do umowy. */
-function stripAttachmentContractReferenceLine(html: string): string {
-  return normalizePickupConsentDocumentHtml(html);
-}
 
 async function findAttachment2Template(
   schoolId: string,
@@ -262,12 +259,11 @@ export async function generateComplimentaryPickupConsentIfNeeded(params: {
     parent_signature_line: "",
     school_signature_line: "",
     teacher_full_name: teacherFullName,
-    teacher_id_suffix: buildTeacherIdSuffix(),
     child_school_name: childSchoolName,
   };
 
   const childPlaceholders = buildSingleChildAttachmentPlaceholders(basePlaceholders, child);
-  const unsignedHtml = stripAttachmentContractReferenceLine(
+  const unsignedHtml = stripPickupConsentContractReferenceLine(
     applySchoolYearToDocumentHtml(
       generateContractHtml(template.content_html, childPlaceholders),
       signedAt,

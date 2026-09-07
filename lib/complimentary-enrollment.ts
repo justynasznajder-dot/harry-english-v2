@@ -1,13 +1,107 @@
 import { generateComplimentaryPickupConsentIfNeeded } from "@/lib/complimentary-pickup-consent";
 import { queryDb } from "@/lib/db";
 import {
+  applyManualDiscountPercent,
+  getSchoolDiscountSettings,
+  resolveEffectiveDiscountPercent,
+} from "@/lib/school-discounts";
+import {
   enrollChildrenForEnrollmentRequest,
   syncChildrenAccessLevelForEnrollment,
   syncParentUserAccessLevel,
 } from "@/lib/enrollment-sync";
+import { getParentLargeFamilyCard } from "@/lib/parent-profile-discount";
+
+async function parentHasSiblingDeclaredLocal(
+  parentId: string,
+  schoolId: string
+): Promise<boolean> {
+  const res = await queryDb<{ declared: boolean }>(
+    `SELECT COALESCE(BOOL_OR(enrolling_multiple_children), FALSE) AS declared
+     FROM enrollment_requests
+     WHERE school_id = $1
+       AND user_id = $2
+       AND UPPER(BTRIM(COALESCE(status::text, ''))) <> 'REJECTED'`,
+    [schoolId, parentId]
+  );
+  return res.rows[0]?.declared === true;
+}
 
 /**
- * Kończy zapis po akceptacji grupy — bez umowy i bez zgody na wizerunek (tryb bez opłat).
+ * Zamraża stawki netto na children (manager + KDR/rodzeństwo) — źródło pod faktury w trybie bez umowy.
+ */
+async function freezeComplimentaryChildNetRates(params: {
+  enrollmentRequestId: string;
+  parentId: string;
+  schoolId: string;
+}): Promise<void> {
+  const settings = await getSchoolDiscountSettings(params.schoolId);
+  const hasLargeFamilyCard = await getParentLargeFamilyCard(params.parentId);
+  const hasSiblingDeclared = await parentHasSiblingDeclaredLocal(
+    params.parentId,
+    params.schoolId
+  );
+
+  const children = await queryDb<{
+    id: string;
+    discount_percent: string | null;
+    lesson_unit_price: string | null;
+    monthly_unit_price: string | null;
+    yearly_unit_price: string | null;
+  }>(
+    `SELECT id,
+            discount_percent::text AS discount_percent,
+            lesson_unit_price::text AS lesson_unit_price,
+            monthly_unit_price::text AS monthly_unit_price,
+            yearly_unit_price::text AS yearly_unit_price
+     FROM children
+     WHERE enrollment_request_id = $1
+       AND parent_id = $2
+       AND school_id = $3`,
+    [params.enrollmentRequestId, params.parentId, params.schoolId]
+  );
+
+  for (const child of children.rows) {
+    const effective = resolveEffectiveDiscountPercent({
+      mode: "complimentary",
+      managerPercent: child.discount_percent,
+      hasLargeFamilyCard,
+      hasSiblingDeclared,
+      settings,
+    });
+    const lesson = applyManualDiscountPercent(
+      child.lesson_unit_price != null ? Number(child.lesson_unit_price) : null,
+      effective.percent || null
+    );
+    const monthly = applyManualDiscountPercent(
+      child.monthly_unit_price != null ? Number(child.monthly_unit_price) : null,
+      effective.percent || null
+    );
+    const yearly = applyManualDiscountPercent(
+      child.yearly_unit_price != null ? Number(child.yearly_unit_price) : null,
+      effective.percent || null
+    );
+    await queryDb(
+      `UPDATE children
+       SET lesson_unit_price = COALESCE($2, lesson_unit_price),
+           monthly_unit_price = COALESCE($3, monthly_unit_price),
+           yearly_unit_price = COALESCE($4, yearly_unit_price),
+           discount_percent = $5
+       WHERE id = $1`,
+      [
+        child.id,
+        lesson,
+        monthly,
+        yearly,
+        // Stawki już netto — nie zostawiamy %, żeby faktura/UI nie odjęły go drugi raz.
+        null,
+      ]
+    );
+  }
+}
+
+/**
+ * Kończy zapis po akceptacji grupy — bez umowy i bez zgody na wizerunek (tryb bez umowy).
  * Jeśli grupa wymaga zgody na odbiór przez lektora — generuje PDF zgody (nie załącznik).
  * Błąd PDF nie blokuje COMPLETED ani maila z logowaniem (dokument można wygenerować później).
  */
@@ -66,6 +160,11 @@ export async function completeComplimentaryEnrollment(
   );
 
   await enrollChildrenForEnrollmentRequest(enrollmentRequestId);
+  await freezeComplimentaryChildNetRates({
+    enrollmentRequestId,
+    parentId,
+    schoolId,
+  });
   await syncParentUserAccessLevel(parentId);
 
   return {

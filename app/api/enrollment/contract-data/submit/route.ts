@@ -30,6 +30,7 @@ import {
   resolveBillingTypeFromProfile,
 } from "@/lib/parent-contract-profile";
 import { requireParentContext } from "@/lib/parent-portal-auth";
+import { setParentLargeFamilyCard } from "@/lib/parent-profile-discount";
 import { isComplimentaryForParent } from "@/lib/school-discounts";
 
 /**
@@ -68,6 +69,8 @@ export async function POST(request: NextRequest) {
       included_request_ids?: unknown;
       enrollingMultipleChildren?: unknown;
       enrolling_multiple_children?: unknown;
+      discountLargeFamily?: unknown;
+      discount_large_family?: unknown;
     };
 
     const paymentTypeByRequestIdRaw =
@@ -137,6 +140,21 @@ export async function POST(request: NextRequest) {
            AND UPPER(BTRIM(COALESCE(status::text, ''))) <> 'REJECTED'`,
         [SCHOOL_ID, parentId, enrollingMultipleChildren]
       );
+    }
+
+    const discountLargeFamilyRaw =
+      body.discountLargeFamily ?? body.discount_large_family;
+    if (discountLargeFamilyRaw !== undefined) {
+      const discountLargeFamily =
+        discountLargeFamilyRaw === true ||
+        discountLargeFamilyRaw === "true" ||
+        discountLargeFamilyRaw === 1 ||
+        discountLargeFamilyRaw === "1";
+      await setParentLargeFamilyCard({
+        schoolId: SCHOOL_ID,
+        parentUserId: parentId,
+        discountLargeFamily,
+      });
     }
 
     for (const row of updated.rows) {

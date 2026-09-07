@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ContractPortal from '@/src/components/ContractPortal';
-import ParentAddChildSection from '@/src/components/parent/ParentAddChildSection';
 import RenewalParentFlowSection from '@/src/components/parent/RenewalParentFlowSection';
 import type { ContractPricingContext } from '@/lib/contract-pricing-preview';
 import { resolveChildBaseAmount } from '@/lib/enrollment-pricing';
@@ -10,7 +9,8 @@ import { ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE } from '@/lib/enrollment-status'
 import { resolveLessonUnitPrice } from '@/lib/lesson-pricing';
 import {
   applyManualDiscountPercent,
-  parseManualDiscountPercent,
+  formatEffectiveDiscountInfo,
+  resolveEffectiveDiscountPercent,
 } from '@/lib/discount-math';
 import { validateParentContractProfileInput } from '@/lib/parent-contract-profile';
 import { parseContentDispositionFilename } from '@/lib/content-disposition';
@@ -909,10 +909,7 @@ export default function EnrollmentParentFlow({
       return;
     }
 
-    const needsProfileSave =
-      isEditingContractProfile ||
-      !profileComplete ||
-      discountLargeFamily !== savedDiscountLargeFamily;
+    const needsProfileSave = isEditingContractProfile || !profileComplete;
     if (needsProfileSave) {
       const saved = await handleSaveContractProfile({ silent: true });
       if (!saved) return;
@@ -945,6 +942,7 @@ export default function EnrollmentParentFlow({
           paymentTypeByRequestId: resolvedPaymentTypes,
           includedRequestIds: priced.map((p) => p.request_id),
           enrollingMultipleChildren,
+          discountLargeFamily,
         }),
       });
       const data = (await r.json().catch(() => ({}))) as {
@@ -971,6 +969,7 @@ export default function EnrollmentParentFlow({
       }
       setAllowContractRegenerate(false);
       setIsEditingContractProfile(false);
+      setSavedDiscountLargeFamily(discountLargeFamily);
       const next = data.nextChildToContract;
       setFlash({
         kind: 'success',
@@ -1042,7 +1041,11 @@ export default function EnrollmentParentFlow({
         const r = await fetch('/api/enrollment/accept', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ requestId }),
+          body: JSON.stringify({
+            requestId,
+            discountLargeFamily,
+            enrollingMultipleChildren,
+          }),
           credentials: 'include',
         });
         const data = (await r.json().catch(() => ({}))) as {
@@ -1082,7 +1085,7 @@ export default function EnrollmentParentFlow({
         setAcceptingId(null);
       }
     },
-    [loadProposals, refreshUserAccessLevel]
+    [discountLargeFamily, enrollingMultipleChildren, loadProposals, refreshUserAccessLevel]
   );
 
   const handleContactSchool = useCallback(
@@ -1508,8 +1511,77 @@ export default function EnrollmentParentFlow({
                       </div>
                     ) : null}
 
+                    {userInfo.complimentaryAccess &&
+                      (level === 'PROPOSED' ||
+                        level === 'NEW' ||
+                        level === 'NEGOTIATING' ||
+                        isActionable) && (
+                      <div className="mt-4 flex flex-col gap-2 rounded-xl border border-emerald-100 bg-emerald-50/50 px-3 py-3">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                          Rabaty
+                        </p>
+                        <label className="inline-flex items-start gap-2 text-sm text-zinc-700">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 accent-[#0f6e56]"
+                            disabled={buttonsDisabled}
+                            checked={discountLargeFamily}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setDiscountLargeFamily(checked);
+                              void (async () => {
+                                try {
+                                  await fetch('/api/enrollment/discounts', {
+                                    method: 'PATCH',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    credentials: 'include',
+                                    body: JSON.stringify({
+                                      discountLargeFamily: checked,
+                                      enrollingMultipleChildren,
+                                    }),
+                                  });
+                                } catch {
+                                  /* ignore — zapis przy akceptacji/umowie */
+                                }
+                              })();
+                            }}
+                          />
+                          <span>posiadam kartę dużej rodziny</span>
+                        </label>
+                        <label className="inline-flex items-start gap-2 text-sm text-zinc-700">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 accent-[#0f6e56]"
+                            disabled={buttonsDisabled}
+                            checked={enrollingMultipleChildren}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setEnrollingMultipleChildren(checked);
+                              void (async () => {
+                                try {
+                                  await fetch('/api/enrollment/discounts', {
+                                    method: 'PATCH',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    credentials: 'include',
+                                    body: JSON.stringify({
+                                      enrollingMultipleChildren: checked,
+                                      discountLargeFamily,
+                                    }),
+                                  });
+                                } catch {
+                                  /* ignore */
+                                }
+                              })();
+                            }}
+                          />
+                          <span>zapisuję więcej niż jedno dziecko</span>
+                        </label>
+                      </div>
+                    )}
+
                     {isActionable && ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && (
-                      <div className="mt-4 flex flex-wrap gap-3">
+                      <div className="mt-4 space-y-3">
+                        <div className="flex flex-wrap gap-3">
                           {/* Akceptacja + kontakt — włączane flagą ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE. */}
                           <button
                             type="button"
@@ -1527,6 +1599,7 @@ export default function EnrollmentParentFlow({
                           >
                             {isContactStarting ? 'Przygotowanie…' : 'Kontakt ze szkołą'}
                           </button>
+                        </div>
                       </div>
                     )}
                     {/* Gdy akceptacja wyłączona, zostaw kontakt tylko dla starych PROPOSED (opcjonalnie). */}
@@ -1670,17 +1743,6 @@ export default function EnrollmentParentFlow({
       // Nie blokuj formularza samym AWAITING_CONTRACT — umowę generujemy po stronie rodzica.
       const commonProfileLocked =
         profileLocked || isReadOnlyPreview || isContractSigned;
-      const firstSettlementRequestId =
-        proposals.find((p) => {
-          const level = childAccessLevel(p);
-          const isPipeline =
-            level === 'ACCEPTED' ||
-            level === 'AWAITING_CONTRACT' ||
-            level === 'CONTRACT_READY' ||
-            (!ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && level === 'PROPOSED');
-          const isSignedDone = level === 'SIGNED' || level === 'COMPLETED';
-          return isPipeline && !isSignedDone;
-        })?.request_id ?? null;
 
       return (
         <section className="space-y-4">
@@ -1936,45 +1998,129 @@ export default function EnrollmentParentFlow({
                         (jedno dziecko = jedna umowa).
                       </p>
                     </div>
-                    <div className="space-y-3">
-                      {proposals.map((p) => {
+                    {(() => {
+                      const billingExempt = Boolean(contractPricing?.billingExempt);
+                      const settlementDiscountSettings = {
+                        LARGE_FAMILY_CARD:
+                          contractPricing?.discountSettings?.LARGE_FAMILY_CARD ?? 0,
+                        SIBLING: contractPricing?.discountSettings?.SIBLING ?? 0,
+                      };
+                      const hasPipelineChild = proposals.some((p) => {
                         const level = childAccessLevel(p);
                         const isPipeline =
                           level === 'ACCEPTED' ||
                           level === 'AWAITING_CONTRACT' ||
                           level === 'CONTRACT_READY' ||
                           (!ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && level === 'PROPOSED');
-                        const isPending =
-                          level === 'NEGOTIATING' ||
-                          (ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && level === 'PROPOSED');
                         const isSignedDone = level === 'SIGNED' || level === 'COMPLETED';
-                        const childPaymentType = paymentTypeByRequestId[p.request_id] ?? 'MONTHLY';
-                        const childLessonsPerWeek = lessonsPerWeekByRequestId[p.request_id] ?? 1;
-                        const billingExempt = Boolean(contractPricing?.billingExempt);
-                        const paymentRadiosLocked =
-                          isSignedDone ||
-                          (profileFieldsLocked && !allowContractRegenerate) ||
-                          isReadOnlyPreview;
-                        const showSettlementDiscounts =
-                          p.request_id === firstSettlementRequestId && !billingExempt;
-                        const amountFor = (type: 'MONTHLY' | 'YEARLY' | 'PER_LESSON') => {
-                          if (billingExempt) return 0;
-                          const base = resolveProposalPaymentAmount(p, type);
-                          // Za zajęcie — cena jednostkowa; ratalny/jednorazowy × częstotliwość.
-                          const scaled =
-                            type === 'PER_LESSON'
-                              ? base
-                              : scaleAmountByLessonsPerWeek(base, childLessonsPerWeek);
-                          return applyManualDiscountPercent(scaled, p.discount_percent);
-                        };
-                        const discountPct = parseManualDiscountPercent(p.discount_percent);
-                        const baseAmountFor = (type: 'MONTHLY' | 'YEARLY' | 'PER_LESSON') => {
-                          if (billingExempt) return 0;
-                          const base = resolveProposalPaymentAmount(p, type);
-                          if (type === 'PER_LESSON') return base;
-                          return scaleAmountByLessonsPerWeek(base, childLessonsPerWeek);
-                        };
-                        return (
+                        return isPipeline && !isSignedDone;
+                      });
+                      const settlementRadiosLocked =
+                        (profileFieldsLocked && !allowContractRegenerate) || isReadOnlyPreview;
+                      const sharedDiscountInfo = formatEffectiveDiscountInfo(
+                        resolveEffectiveDiscountPercent({
+                          mode: billingExempt ? 'complimentary' : 'contract',
+                          managerPercent: null,
+                          hasLargeFamilyCard: discountLargeFamily,
+                          hasSiblingDeclared: enrollingMultipleChildren,
+                          settings: settlementDiscountSettings,
+                        }),
+                      );
+                      return (
+                        <>
+                          {hasPipelineChild && !billingExempt ? (
+                            <div className="space-y-2 rounded-xl border border-white bg-white px-4 py-3">
+                              <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                                Zniżki
+                              </p>
+                              <p className="text-xs text-zinc-500">
+                                Rabaty się nie sumują — naliczamy najwyższy przysługujący. Dotyczy
+                                wszystkich dzieci poniżej.
+                              </p>
+                              <div className="flex flex-col gap-2">
+                                <label className="inline-flex items-start gap-2 text-sm text-zinc-700">
+                                  <input
+                                    type="checkbox"
+                                    className="mt-0.5 accent-[#0f6e56]"
+                                    disabled={settlementRadiosLocked}
+                                    checked={discountLargeFamily}
+                                    onChange={(e) => {
+                                      const checked = e.target.checked;
+                                      setDiscountLargeFamily(checked);
+                                      setAllowContractRegenerate(true);
+                                      setContractPricing((prev) =>
+                                        prev ? { ...prev, discountLargeFamily: checked } : prev,
+                                      );
+                                    }}
+                                  />
+                                  <span>posiadam kartę dużej rodziny</span>
+                                </label>
+                                <label className="inline-flex items-start gap-2 text-sm text-zinc-700">
+                                  <input
+                                    type="checkbox"
+                                    className="mt-0.5 accent-[#0f6e56]"
+                                    disabled={settlementRadiosLocked}
+                                    checked={enrollingMultipleChildren}
+                                    onChange={(e) => {
+                                      setEnrollingMultipleChildren(e.target.checked);
+                                      setAllowContractRegenerate(true);
+                                    }}
+                                  />
+                                  <span>zapisuję więcej niż jedno dziecko</span>
+                                </label>
+                              </div>
+                              {sharedDiscountInfo ? (
+                                <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-900">
+                                  {sharedDiscountInfo}
+                                </p>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          <div className="space-y-3">
+                            {proposals.map((p) => {
+                              const level = childAccessLevel(p);
+                              const isPipeline =
+                                level === 'ACCEPTED' ||
+                                level === 'AWAITING_CONTRACT' ||
+                                level === 'CONTRACT_READY' ||
+                                (!ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && level === 'PROPOSED');
+                              const isPending =
+                                level === 'NEGOTIATING' ||
+                                (ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && level === 'PROPOSED');
+                              const isSignedDone = level === 'SIGNED' || level === 'COMPLETED';
+                              const childPaymentType = paymentTypeByRequestId[p.request_id] ?? 'MONTHLY';
+                              const childLessonsPerWeek = lessonsPerWeekByRequestId[p.request_id] ?? 1;
+                              const paymentRadiosLocked =
+                                isSignedDone ||
+                                (profileFieldsLocked && !allowContractRegenerate) ||
+                                isReadOnlyPreview;
+                              const effective = resolveEffectiveDiscountPercent({
+                                mode: billingExempt ? 'complimentary' : 'contract',
+                                managerPercent: p.discount_percent,
+                                hasLargeFamilyCard: discountLargeFamily,
+                                hasSiblingDeclared: enrollingMultipleChildren,
+                                settings: settlementDiscountSettings,
+                              });
+                              const discountInfo = formatEffectiveDiscountInfo(effective);
+                              const amountFor = (type: 'MONTHLY' | 'YEARLY' | 'PER_LESSON') => {
+                                if (billingExempt) return 0;
+                                const base = resolveProposalPaymentAmount(p, type);
+                                const scaled =
+                                  type === 'PER_LESSON'
+                                    ? base
+                                    : scaleAmountByLessonsPerWeek(base, childLessonsPerWeek);
+                                return applyManualDiscountPercent(
+                                  scaled,
+                                  effective.percent > 0 ? effective.percent : null,
+                                );
+                              };
+                              const baseAmountFor = (type: 'MONTHLY' | 'YEARLY' | 'PER_LESSON') => {
+                                if (billingExempt) return 0;
+                                const base = resolveProposalPaymentAmount(p, type);
+                                if (type === 'PER_LESSON') return base;
+                                return scaleAmountByLessonsPerWeek(base, childLessonsPerWeek);
+                              };
+                              return (
                           <div
                             key={p.request_id}
                             className={`rounded-xl border px-4 py-3 ${
@@ -2058,46 +2204,12 @@ export default function EnrollmentParentFlow({
                                     <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
                                       Sposób rozliczeń
                                     </p>
-                                    {showSettlementDiscounts ? (
-                                      <div className="flex flex-col gap-2">
-                                        <label className="inline-flex items-start gap-2 text-sm text-zinc-700">
-                                          <input
-                                            type="checkbox"
-                                            className="mt-0.5 accent-[#0f6e56]"
-                                            disabled={paymentRadiosLocked}
-                                            checked={discountLargeFamily}
-                                            onChange={(e) => {
-                                              const checked = e.target.checked;
-                                              setDiscountLargeFamily(checked);
-                                              setAllowContractRegenerate(true);
-                                              setContractPricing((prev) =>
-                                                prev ? { ...prev, discountLargeFamily: checked } : prev,
-                                              );
-                                            }}
-                                          />
-                                          <span>posiadam kartę dużej rodziny</span>
-                                        </label>
-                                        <label className="inline-flex items-start gap-2 text-sm text-zinc-700">
-                                          <input
-                                            type="checkbox"
-                                            className="mt-0.5 accent-[#0f6e56]"
-                                            disabled={paymentRadiosLocked}
-                                            checked={enrollingMultipleChildren}
-                                            onChange={(e) => {
-                                              setEnrollingMultipleChildren(e.target.checked);
-                                              setAllowContractRegenerate(true);
-                                            }}
-                                          />
-                                          <span>zapisuję więcej niż jedno dziecko</span>
-                                        </label>
-                                      </div>
-                                    ) : null}
                                     <div className="flex flex-col gap-2">
                                       {(['MONTHLY', 'YEARLY', 'PER_LESSON'] as const).map((type) => {
                                         const amount = amountFor(type);
                                         const baseAmount = baseAmountFor(type);
                                         const showDiscountNote =
-                                          discountPct != null &&
+                                          effective.percent > 0 &&
                                           baseAmount != null &&
                                           amount != null &&
                                           amount !== baseAmount;
@@ -2131,8 +2243,8 @@ export default function EnrollmentParentFlow({
                                               </span>
                                               {showDiscountNote ? (
                                                 <span className="mt-0.5 block text-xs font-normal text-zinc-500">
-                                                  Cena wynika z ceny {formatPlnAmount(baseAmount)}
-                                                  uwzględniając {discountPct}% zniżki
+                                                  Cena wynika z {formatPlnAmount(baseAmount)}
+                                                  {discountInfo ? ` — ${discountInfo}` : ''}
                                                 </span>
                                               ) : null}
                                             </span>
@@ -2151,9 +2263,12 @@ export default function EnrollmentParentFlow({
                               ) : null}
                             </div>
                           </div>
-                        );
-                      })}
-                    </div>
+                              );
+                            })}
+                          </div>
+                        </>
+                      );
+                    })()}
 
                     {!commonProfileLocked && (
                       <div className="space-y-3 border-t border-emerald-100 pt-4">
@@ -2291,6 +2406,8 @@ export default function EnrollmentParentFlow({
                                     includedRequestIds: next.request_id
                                       ? [next.request_id]
                                       : undefined,
+                                    enrollingMultipleChildren,
+                                    discountLargeFamily,
                                   }),
                                 });
                                 const data = (await r.json().catch(() => ({}))) as {
@@ -2429,12 +2546,6 @@ export default function EnrollmentParentFlow({
       <RenewalParentFlowSection
         onFlash={setFlash}
         onUpdated={refreshUserAccessLevel}
-      />
-      <ParentAddChildSection
-        onSuccess={async () => {
-          setManualStepSelection(false);
-          await Promise.all([loadProposals(), refreshUserAccessLevel()]);
-        }}
       />
       <section className="space-y-6 rounded-3xl border border-emerald-100 bg-white p-5 md:p-6">
       <header>

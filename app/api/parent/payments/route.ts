@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  fetchComplimentaryParentPaymentOverview,
   fetchParentPaymentOverview,
   fetchParentPayments,
 } from "@/lib/parent-portal";
@@ -23,11 +24,30 @@ export async function GET(request: NextRequest) {
       : false;
 
     if (complimentary) {
+      const overview = await fetchComplimentaryParentPaymentOverview(parentId, schoolId);
+      const schoolYearsMap = new Map<
+        string,
+        { id: string; name: string; active: boolean; dateFrom: string | null }
+      >();
+      for (const child of overview.children) {
+        if (!child.schoolYearId || !child.schoolYearName) continue;
+        if (schoolYearsMap.has(child.schoolYearId)) continue;
+        schoolYearsMap.set(child.schoolYearId, {
+          id: child.schoolYearId,
+          name: child.schoolYearName,
+          active: true,
+          dateFrom: child.schoolYearDateFrom,
+        });
+      }
+      const schoolYears = Array.from(schoolYearsMap.values()).sort((a, b) =>
+        String(b.dateFrom ?? "").localeCompare(String(a.dateFrom ?? ""), "pl")
+      );
+
       return NextResponse.json({
         complimentaryAccess: true,
-        schoolYears: [],
+        schoolYears,
         payments: [],
-        overview: { children: [] },
+        overview,
       });
     }
 

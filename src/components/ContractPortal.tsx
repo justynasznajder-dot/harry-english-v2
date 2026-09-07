@@ -306,7 +306,6 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
   const [pickupAccepted, setPickupAccepted] = useState<Record<string, boolean>>({});
   const [contractAccepted, setContractAccepted] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [imageBusy, setImageBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const isSigned = contract?.status === 'SIGNED';
@@ -324,25 +323,10 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
     setPhase(hasPickup ? 'pickup' : 'contract');
   };
 
-  const acceptImageConsent = async () => {
-    setImageBusy(true);
+  const acceptImageConsent = () => {
     setActionError(null);
-    try {
-      // PDF od razu po zgodzie (podgląd); ostateczna wersja podpisana idzie w mailu przy umowie.
-      for (const item of imageItems) {
-        await downloadPreviewPdf({ doc: 'attachment1', childId: item.childId });
-      }
-      setImageConsent(true);
-      goAfterImage();
-    } catch (err) {
-      setActionError(
-        err instanceof Error && err.message
-          ? err.message
-          : 'Nie udało się wygenerować PDF oświadczenia o wizerunku. Spróbuj ponownie.',
-      );
-    } finally {
-      setImageBusy(false);
-    }
+    setImageConsent(true);
+    goAfterImage();
   };
 
   const declineImageConsent = () => {
@@ -463,7 +447,7 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
             <DocumentPreview
               key={item.key}
               title={`Załącznik nr 1 — Oświadczenie o wizerunku (${item.childName})`}
-              subtitle="Dobrowolny dokument. Po wyrażeniu zgody pobierzemy PDF od razu."
+              subtitle="Dobrowolny dokument. PDF będzie do pobrania po podpisaniu umowy — razem z pozostałymi załącznikami."
               html={item.html}
               pdfDoc="attachment1"
               childId={item.childId}
@@ -473,17 +457,15 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
           <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
             <button
               type="button"
-              disabled={imageBusy}
-              onClick={() => void acceptImageConsent()}
-              className="rounded-full bg-[#0f6e56] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={acceptImageConsent}
+              className="rounded-full bg-[#0f6e56] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#0b5a46]"
             >
-              {imageBusy ? 'Generowanie PDF…' : 'Wyrażam zgodę na wykorzystanie wizerunku'}
+              Wyrażam zgodę na wykorzystanie wizerunku
             </button>
             <button
               type="button"
-              disabled={imageBusy}
               onClick={declineImageConsent}
-              className="rounded-full border border-zinc-300 bg-white px-5 py-3 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-50 disabled:opacity-60"
+              className="rounded-full border border-zinc-300 bg-white px-5 py-3 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-50"
             >
               Nie wyrażam zgody — przejdź dalej
             </button>

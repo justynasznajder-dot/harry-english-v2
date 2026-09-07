@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getParentProfileByUserId, getUserById } from "@/lib/db";
+import { getParentProfileByUserId, getUserById, queryDb } from "@/lib/db";
 import {
   isParentContractProfileComplete,
   resolveBillingTypeFromProfile,
@@ -19,6 +19,7 @@ import {
 } from "@/lib/enrollment-contract-readiness";
 import { normalizePaymentType } from "@/lib/lesson-pricing";
 import { requireParentContext } from "@/lib/parent-portal-auth";
+import { setParentLargeFamilyCard } from "@/lib/parent-profile-discount";
 import { isComplimentaryForParent } from "@/lib/school-discounts";
 import { ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE } from "@/lib/enrollment-status";
 
@@ -64,6 +65,39 @@ export async function POST(request: NextRequest) {
         { message: "Wybierz sposób rozliczeń: ratalny, jednorazowy lub za pojedyncze zajęcia" },
         { status: 400 }
       );
+    }
+
+    const enrollingMultipleChildrenRaw =
+      body.enrollingMultipleChildren ?? body.enrolling_multiple_children;
+    if (enrollingMultipleChildrenRaw !== undefined) {
+      const enrollingMultipleChildren =
+        enrollingMultipleChildrenRaw === true ||
+        enrollingMultipleChildrenRaw === "true" ||
+        enrollingMultipleChildrenRaw === 1 ||
+        enrollingMultipleChildrenRaw === "1";
+      await queryDb(
+        `UPDATE enrollment_requests
+         SET enrolling_multiple_children = $3
+         WHERE school_id = $1
+           AND user_id = $2
+           AND UPPER(BTRIM(COALESCE(status::text, ''))) <> 'REJECTED'`,
+        [SCHOOL_ID, parentId, enrollingMultipleChildren]
+      );
+    }
+
+    const discountLargeFamilyRaw =
+      body.discountLargeFamily ?? body.discount_large_family;
+    if (discountLargeFamilyRaw !== undefined) {
+      const discountLargeFamily =
+        discountLargeFamilyRaw === true ||
+        discountLargeFamilyRaw === "true" ||
+        discountLargeFamilyRaw === 1 ||
+        discountLargeFamilyRaw === "1";
+      await setParentLargeFamilyCard({
+        schoolId: SCHOOL_ID,
+        parentUserId: parentId,
+        discountLargeFamily,
+      });
     }
 
     const profile = await getParentProfileByUserId(parentId);

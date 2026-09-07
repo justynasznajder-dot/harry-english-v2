@@ -114,9 +114,11 @@ export function formatLessonUnitPriceLabel(amount: number | string | null | unde
 export function buildPaymentSectionHtml(params: {
   paymentType: string | null | undefined;
   amountLabel: string;
+  contractNumber?: string | null;
 }): string {
   const paymentLabel = escapeHtmlText(formatPaymentTypeLabel(params.paymentType));
   const amountLabel = escapeHtmlText(params.amountLabel.trim() || "—");
+  const contractNumber = escapeHtmlText(params.contractNumber?.trim() || "—");
   const t = String(params.paymentType ?? "").trim().toUpperCase();
 
   let specificLi = "";
@@ -125,7 +127,7 @@ export function buildPaymentSectionHtml(params: {
       "<li>Wysokość miesięcznej opłaty ustalana jest na podstawie liczby zajęć, w których Słuchacz uczestniczył w danym miesiącu.</li>";
   } else if (t === "MONTHLY") {
     specificLi =
-      "<li>Wysokość rat oraz terminy płatności są wskazywane na wystawianych fakturach.</li>";
+      `<li>Każda faktura objęta jest dwutygodniowym terminem płatności. Wpłaty prosimy dokonywać na numer rachunku: 91 1050 1298 1000 0092 5894 4835, w tytule przelewu podając <span class="ph">${contractNumber}</span>.</li>`;
   } else if (t === "YEARLY") {
     specificLi =
       "<li>Klient zobowiązuje się do dokonania płatności w kwocie i terminie wskazanych na fakturze.</li>";
@@ -133,7 +135,7 @@ export function buildPaymentSectionHtml(params: {
 
   return `<ol class="contract-list">
   <li>Klient wybiera następującą formę płatności: <span class="ph">${paymentLabel}</span>, kwota: <span class="ph">${amountLabel}</span>.</li>
-  <li>Opłata za uczestnictwo w kursie uiszczana jest w formie elektronicznej, na podstawie faktury wystawionej przez Harry English, w terminie wskazanym na fakturze.</li>
+  <li>Opłata za uczestnictwo w kursie uiszczana jest w formie elektronicznej, na podstawie faktury wystawionej przez Harry English.</li>
   ${specificLi}
   <li>W przypadku opóźnienia w płatności Harry English może naliczyć odsetki ustawowe za opóźnienie.</li>
 </ol>`;
@@ -155,7 +157,11 @@ export function buildGroupSchedule(
 ): string {
   const parts = rows
     .map((row) => {
-      const day = POLISH_DAY_NAMES_1_7[row.day_of_week] ?? `dzień ${row.day_of_week}`;
+      const rawDay = POLISH_DAY_NAMES_1_7[row.day_of_week] ?? `dzień ${row.day_of_week}`;
+      const day =
+        rawDay.length > 0
+          ? rawDay.charAt(0).toLocaleUpperCase("pl-PL") + rawDay.slice(1)
+          : rawDay;
       const time = formatScheduleTime(row.start_time);
       return time ? `${day} ${time}` : day;
     })
@@ -307,11 +313,6 @@ export function buildTeacherFullName(
 ): string {
   const parts = [String(firstName ?? "").trim(), String(lastName ?? "").trim()].filter(Boolean);
   return parts.join(" ");
-}
-
-/** Suffix na numer dowodu lektora — brak w bazie, zostawiamy pusty lub spację przed ręcznym uzupełnieniem. */
-export function buildTeacherIdSuffix(): string {
-  return "";
 }
 
 /** Usuwa etykietę marketingową lokalizacji — nie powinna trafiać do dokumentów umowy. */

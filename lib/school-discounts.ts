@@ -10,7 +10,12 @@ import {
   MAX_DISCOUNT_PERCENT,
   hasIndividualPriceOverride,
   parseManualDiscountPercent,
+  resolveEffectiveDiscountPercent,
+  formatEffectiveDiscountInfo,
   type DiscountKey,
+  type EffectiveDiscountInput,
+  type EffectiveDiscountMode,
+  type EffectiveDiscountResult,
 } from "@/lib/discount-math";
 import type { ComplimentaryCandidate, ComplimentaryParentRow } from "@/lib/complimentary-parent-list";
 import { ensureChildrenFromEnrollmentRequests } from "@/lib/enrollment-sync";
@@ -26,7 +31,12 @@ export {
   MAX_DISCOUNT_PERCENT,
   hasIndividualPriceOverride,
   parseManualDiscountPercent,
+  resolveEffectiveDiscountPercent,
+  formatEffectiveDiscountInfo,
   type DiscountKey,
+  type EffectiveDiscountInput,
+  type EffectiveDiscountMode,
+  type EffectiveDiscountResult,
 };
 export type { ComplimentaryCandidate, ComplimentaryParentRow };
 export const ALL_DISCOUNT_KEYS: DiscountKey[] = [

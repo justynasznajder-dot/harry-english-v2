@@ -1,5 +1,9 @@
 import { extractContractNumber } from "@/lib/contract-html";
 import { POLISH_DAY_FROM_ST_SQL, queryDb } from "@/lib/db";
+import {
+  applyManualDiscountPercent,
+  parseManualDiscountPercent,
+} from "@/lib/discount-math";
 import { ensurePolishPublicHolidaysForSchoolYear } from "@/lib/ensure-polish-public-holidays";
 import { normalizePaymentType, parsePriceDecimal, type PaymentType } from "@/lib/lesson-pricing";
 
@@ -8,6 +12,8 @@ const INVOICE_DESC_MONTHLY_PREFIX = "Rata miesięczna";
 const INVOICE_DESC_YEARLY_PREFIX = "Płatność jednorazowa";
 const INVOICE_DESC_LESSON_PREFIX = "Rozliczenie za pojedyncze zajęcia";
 import {
+  normalizeLessonsPerWeek,
+  scaleAmountByLessonsPerWeek,
   sqlScheduleTemplateVisibleForStudent,
   sqlStudentAttendsLesson,
 } from "@/lib/lessons-per-week";
@@ -1153,6 +1159,220 @@ export async function fetchParentPaymentOverview(
           dueDate: ref.dueDate,
           paidAt: ref.paidAt,
           lessons: monthLessons,
+        };
+      });
+    }
+
+    children.push(base);
+  }
+
+  children.sort((a, b) => a.childName.localeCompare(b.childName, "pl"));
+  return { children };
+}
+
+/**
+ * Harmonogram kwot dla rodzica w trybie bez umowy (bez kontraktu, faktur i statusów).
+ * Preferuje raty miesięczne; gdy brak — jednorazową; gdy brak — rozliczenie za zajęcia.
+ */
+export async function fetchComplimentaryParentPaymentOverview(
+  parentId: string,
+  schoolId: string
+): Promise<ParentPaymentOverview> {
+  const childrenRes = await queryDb<{
+    child_id: string;
+    child_first_name: string;
+    child_last_name: string;
+    monthly_unit_price: string | null;
+    yearly_unit_price: string | null;
+    lesson_unit_price: string | null;
+    discount_percent: string | null;
+    lessons_per_week: number | null;
+    school_year_id: string | null;
+    school_year_name: string | null;
+    school_year_date_from: Date | string | null;
+    school_year_date_to: Date | string | null;
+  }>(
+    `SELECT
+       c.id AS child_id,
+       c.first_name AS child_first_name,
+       c.last_name AS child_last_name,
+       c.monthly_unit_price::text AS monthly_unit_price,
+       c.yearly_unit_price::text AS yearly_unit_price,
+       c.lesson_unit_price::text AS lesson_unit_price,
+       c.discount_percent::text AS discount_percent,
+       (
+         SELECT gs.lessons_per_week
+         FROM group_students gs
+         JOIN school_years sy2 ON sy2.id = gs.school_year_id AND sy2.active = TRUE
+         WHERE gs.child_id = c.id AND gs.left_at IS NULL
+         ORDER BY gs.enrolled_at DESC
+         LIMIT 1
+       ) AS lessons_per_week,
+       sy.id AS school_year_id,
+       sy.name AS school_year_name,
+       sy.date_from AS school_year_date_from,
+       sy.date_to AS school_year_date_to
+     FROM children c
+     LEFT JOIN school_years sy
+       ON sy.school_id = c.school_id AND sy.active = TRUE
+     WHERE c.parent_id = $1
+       AND c.school_id = $2
+       AND c.active = TRUE
+       AND UPPER(BTRIM(COALESCE(c.access_level::text, ''))) IN (
+         'COMPLETED', 'SIGNED', 'ACCEPTED', 'AWAITING_CONTRACT', 'CONTRACT_READY'
+       )
+     ORDER BY c.last_name ASC, c.first_name ASC`,
+    [parentId, schoolId]
+  );
+
+  if (childrenRes.rows.length === 0) {
+    return { children: [] };
+  }
+
+  const childIds = childrenRes.rows.map((r) => r.child_id);
+  const lessonRes = await queryDb<{
+    child_id: string;
+    lesson_id: string;
+    scheduled_at: Date | string;
+    attendance_status: string;
+    group_name: string;
+  }>(
+    `SELECT
+       c.id AS child_id,
+       l.id AS lesson_id,
+       ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at,
+       a.status::text AS attendance_status,
+       g.name AS group_name
+     FROM children c
+     JOIN group_students gs ON gs.child_id = c.id AND gs.left_at IS NULL
+     JOIN groups g ON g.id = gs.group_id
+     JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
+     JOIN lessons l ON l.group_id = g.id
+     JOIN attendance a ON a.lesson_id = l.id AND a.child_id = c.id
+     WHERE c.parent_id = $1
+       AND c.school_id = $2
+       AND c.id = ANY($3::text[])
+       AND c.active = TRUE
+       AND l.status IN ('COMPLETED', 'SCHEDULED')
+       AND a.status::text IN ('PRESENT', 'LATE')
+       AND ${sqlStudentAttendsLesson("gs", "g", "l")}
+     ORDER BY l.scheduled_at DESC
+     LIMIT 800`,
+    [parentId, schoolId, childIds]
+  );
+
+  const lessonsByChild = new Map<string, typeof lessonRes.rows>();
+  for (const lesson of lessonRes.rows) {
+    const list = lessonsByChild.get(lesson.child_id) ?? [];
+    list.push(lesson);
+    lessonsByChild.set(lesson.child_id, list);
+  }
+
+  const emptyInvoiceRef = {
+    paymentId: null as string | null,
+    invoiceNumber: null as string | null,
+    hasInvoicePdf: false,
+    dueDate: null as string | null,
+    paidAt: null as string | null,
+    displayStatus: "AWAITING_INVOICE" as ParentPaymentDisplayStatus,
+  };
+
+  const children: ParentPaymentChildOverview[] = [];
+
+  for (const row of childrenRes.rows) {
+    const childName =
+      `${String(row.child_first_name ?? "").trim()} ${String(row.child_last_name ?? "").trim()}`.trim();
+    const dateFrom = formatYmd(row.school_year_date_from);
+    const dateTo = formatYmd(row.school_year_date_to);
+    const lessonsPerWeek = normalizeLessonsPerWeek(row.lessons_per_week) ?? 1;
+    const discountPct = parseManualDiscountPercent(row.discount_percent);
+
+    const resolveAmount = (base: number | null): number => {
+      if (base == null || !Number.isFinite(base) || base < 0) return 0;
+      const afterDiscount = applyManualDiscountPercent(base, discountPct) ?? base;
+      return Math.floor(afterDiscount);
+    };
+
+    const monthlyBase = scaleAmountByLessonsPerWeek(
+      parsePriceDecimal(row.monthly_unit_price),
+      lessonsPerWeek
+    );
+    const yearlyBase = scaleAmountByLessonsPerWeek(
+      parsePriceDecimal(row.yearly_unit_price),
+      lessonsPerWeek
+    );
+    const lessonBase = parsePriceDecimal(row.lesson_unit_price);
+
+    let paymentType: PaymentType = "MONTHLY";
+    if (monthlyBase != null && monthlyBase > 0) {
+      paymentType = "MONTHLY";
+    } else if (yearlyBase != null && yearlyBase > 0) {
+      paymentType = "YEARLY";
+    } else if (lessonBase != null && lessonBase > 0) {
+      paymentType = "PER_LESSON";
+    } else {
+      continue;
+    }
+
+    const base: ParentPaymentChildOverview = {
+      childId: row.child_id,
+      childName,
+      contractId: `complimentary:${row.child_id}`,
+      paymentType,
+      schoolYearId: row.school_year_id,
+      schoolYearName: row.school_year_name,
+      schoolYearDateFrom: dateFrom,
+      schoolYearDateTo: dateTo,
+      installments: null,
+      yearly: null,
+      lessonMonths: null,
+      lessonUnitPrice: lessonBase != null ? moneyText(resolveAmount(lessonBase)) : null,
+    };
+
+    if (paymentType === "MONTHLY" && dateFrom && dateTo) {
+      const months = listMonthsInclusive(dateFrom, dateTo);
+      const amount = moneyText(resolveAmount(monthlyBase));
+      base.installments = months.map((periodMonth) => ({
+        periodMonth,
+        amount,
+        ...emptyInvoiceRef,
+      }));
+    } else if (paymentType === "YEARLY") {
+      base.yearly = {
+        periodMonth: periodMonthKey(dateFrom ?? new Date()),
+        label: "Płatność jednorazowa — rok szkolny",
+        amount: moneyText(resolveAmount(yearlyBase)),
+        ...emptyInvoiceRef,
+      };
+    } else {
+      const unit = resolveAmount(lessonBase);
+      const lessons = lessonsByChild.get(row.child_id) ?? [];
+      const monthMap = new Map<string, ParentPaymentLessonChargeRow[]>();
+      for (const lesson of lessons) {
+        const scheduledAt = toIso(lesson.scheduled_at);
+        const periodMonth = scheduledAt.slice(0, 7);
+        const list = monthMap.get(periodMonth) ?? [];
+        list.push({
+          lessonId: lesson.lesson_id,
+          scheduledAt,
+          attendanceStatus: lesson.attendance_status,
+          groupName: lesson.group_name,
+          unitPrice: moneyText(unit),
+          amount: moneyText(unit),
+          periodMonth,
+        });
+        monthMap.set(periodMonth, list);
+      }
+      const months = [...monthMap.keys()].sort((a, b) => b.localeCompare(a));
+      base.lessonMonths = months.map((periodMonth) => {
+        const monthLessons = monthMap.get(periodMonth) ?? [];
+        const computed = monthLessons.reduce((s, l) => s + (parsePriceDecimal(l.amount) ?? 0), 0);
+        return {
+          periodMonth,
+          lessonsCount: monthLessons.length,
+          amount: moneyText(computed),
+          lessons: monthLessons,
+          ...emptyInvoiceRef,
         };
       });
     }

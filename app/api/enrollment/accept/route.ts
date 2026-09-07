@@ -5,16 +5,17 @@ import {
   syncChildrenAccessLevelForEnrollment,
   syncParentUserAccessLevel,
 } from "@/lib/enrollment-sync";
+import { setParentLargeFamilyCard } from "@/lib/parent-profile-discount";
 import { requireParentContext } from "@/lib/parent-portal-auth";
 import { isComplimentaryForParent } from "@/lib/school-discounts";
 
 /**
  * Rodzic akceptuje propozycję grupy.
  *
- * Body (opcjonalne): `{ requestId?: string }`.
+ * Body (opcjonalne): `{ requestId?, discountLargeFamily?, enrollingMultipleChildren? }`.
  *
  * Tryb bez umowy: zapis kończy się od razu (COMPLETED), bez umowy/wizerunku;
- * ewentualnie generuje zgodę na odbiór przez lektora.
+ * ewentualnie generuje zgodę na odbiór przez lektora. Kwoty netto (po rabacie) trafiają na children.
  * Standardowo: ACCEPTED → uzupełnienie danych do umowy (bez auto-generowania).
  */
 export async function PUT(request: NextRequest) {
@@ -24,10 +25,32 @@ export async function PUT(request: NextRequest) {
   const { parentId, schoolId: SCHOOL_ID } = auth.ctx;
 
   let requestedId: string | null = null;
+  let discountLargeFamily: boolean | undefined;
+  let enrollingMultipleChildren: boolean | undefined;
   try {
-    const body = (await request.json().catch(() => ({}))) as { requestId?: unknown };
+    const body = (await request.json().catch(() => ({}))) as {
+      requestId?: unknown;
+      discountLargeFamily?: unknown;
+      discount_large_family?: unknown;
+      enrollingMultipleChildren?: unknown;
+      enrolling_multiple_children?: unknown;
+    };
     if (typeof body.requestId === "string" && body.requestId.trim().length > 0) {
       requestedId = body.requestId.trim();
+    }
+    const kdrRaw = body.discountLargeFamily ?? body.discount_large_family;
+    if (kdrRaw !== undefined) {
+      discountLargeFamily =
+        kdrRaw === true || kdrRaw === "true" || kdrRaw === 1 || kdrRaw === "1";
+    }
+    const siblingRaw =
+      body.enrollingMultipleChildren ?? body.enrolling_multiple_children;
+    if (siblingRaw !== undefined) {
+      enrollingMultipleChildren =
+        siblingRaw === true ||
+        siblingRaw === "true" ||
+        siblingRaw === 1 ||
+        siblingRaw === "1";
     }
   } catch {
     /* brak body — fallback poniżej */
@@ -78,6 +101,24 @@ export async function PUT(request: NextRequest) {
       parentId,
       parentEmail: parent.email,
     });
+
+    if (discountLargeFamily !== undefined) {
+      await setParentLargeFamilyCard({
+        schoolId: SCHOOL_ID,
+        parentUserId: parentId,
+        discountLargeFamily,
+      });
+    }
+    if (enrollingMultipleChildren !== undefined) {
+      await queryDb(
+        `UPDATE enrollment_requests
+         SET enrolling_multiple_children = $3
+         WHERE school_id = $1
+           AND user_id = $2
+           AND UPPER(BTRIM(COALESCE(status::text, ''))) <> 'REJECTED'`,
+        [SCHOOL_ID, parentId, enrollingMultipleChildren]
+      );
+    }
 
     let pickupConsentGenerated = false;
     let pickupConsentPreviewHtml: string | undefined;

@@ -338,9 +338,7 @@ export async function GET(request: NextRequest) {
     );
 
     const discountSettings = await getSchoolDiscountSettings(SCHOOL_ID);
-    const discountLargeFamily = complimentaryEnrollment
-      ? false
-      : await getParentLargeFamilyCard(parentId);
+    const discountLargeFamily = await getParentLargeFamilyCard(parentId);
 
     const multiChildrenRes = await queryDb<{ enrolling_multiple_children: boolean }>(
       `SELECT COALESCE(BOOL_OR(enrolling_multiple_children), FALSE) AS enrolling_multiple_children
@@ -351,7 +349,6 @@ export async function GET(request: NextRequest) {
       [SCHOOL_ID, parentId]
     );
     const enrollingMultipleChildren =
-      !complimentaryEnrollment &&
       multiChildrenRes.rows[0]?.enrolling_multiple_children === true;
 
     return NextResponse.json({

@@ -44,15 +44,41 @@ export function isPickupConsentPdfFilename(filename: string): boolean {
   );
 }
 
-/** Usuwa z HTML odniesienia, że dokument jest „załącznikiem nr 2 do umowy”. */
+/**
+ * Ujednolica HTML Załącznika 2:
+ * - nagłówek: „Załącznik nr 2 do umowy nr {numer}”
+ * - usuwa zbędny podtytuł „Zgoda na odebranie…”
+ * - naprawia skutek starej normalizacji (Zgoda… + numer w span)
+ */
 export function normalizePickupConsentDocumentHtml(html: string): string {
   return html
     .replace(
-      /Załącznik\s*nr\s*2\s*do\s*umowy\s*nr\s*[^<]*/gi,
-      PICKUP_CONSENT_DOCUMENT_TITLE,
+      /Zgoda\s+na\s+odebranie\s+dziecka\s+przez\s+lektora(?=\s*<span\b)/gi,
+      "Załącznik nr 2 do umowy nr ",
+    )
+    .replace(
+      /<(p|div)(\s[^>]*)?>\s*Zgoda\s+na\s+odebranie\s+dziecka\s+przez\s+lektora\s*<\/\1>\s*/gi,
+      "",
+    )
+    .replace(
+      /Imię,\s*nazwisko,\s*numer\s+dowodu\s+osobistego\s*:/gi,
+      "Imię i nazwisko:",
+    )
+    // Pusty span po imieniu lektora (dawny placeholder numeru dowodu).
+    .replace(
+      /(<span class="ph">[^<]*<\/span>)\s*<span class="ph">\s*<\/span>/gi,
+      "$1",
     )
     .replace(
       /Klient potwierdza zapoznanie się z treścią załącznika i akceptuje jego warunki\./gi,
       "Klient potwierdza zapoznanie się z treścią dokumentu i akceptuje jego warunki.",
     );
+}
+
+/** W trybie bez opłat nie ma umowy — usuń linię „Załącznik nr 2 do umowy nr …”. */
+export function stripPickupConsentContractReferenceLine(html: string): string {
+  return normalizePickupConsentDocumentHtml(html).replace(
+    /<(p|div|h[1-6])(\s[^>]*)?>[\s\S]*?Załącznik\s*nr\s*2\s*do\s*umowy[\s\S]*?<\/\1>\s*/gi,
+    "",
+  );
 }

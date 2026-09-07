@@ -9,7 +9,7 @@ import {
   fetchParentContractForPortal,
 } from "@/lib/parent-contract";
 import { requireParentContext } from "@/lib/parent-portal-auth";
-import { buildPickupConsentPdfFilename } from "@/lib/pickup-consent-notice";
+import { buildPickupConsentPdfFilename, normalizePickupConsentDocumentHtml } from "@/lib/pickup-consent-notice";
 import { isComplimentaryForParent } from "@/lib/school-discounts";
 
 /** Chromium PDF — dłużej niż domyślne 10 s. */
@@ -99,7 +99,10 @@ export async function GET(request: NextRequest) {
         if (!html) {
           return NextResponse.json({ message: "Brak zgody na odebranie" }, { status: 404 });
         }
-        html = withUnsignedPreviewBanner(html, isSigned);
+        html = withUnsignedPreviewBanner(
+          normalizePickupConsentDocumentHtml(html),
+          isSigned
+        );
         filename = buildPickupConsentPdfFilename(childName || "dziecko", contractNumber);
       }
     } else {
