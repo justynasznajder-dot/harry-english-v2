@@ -75,6 +75,7 @@ export async function GET(request: NextRequest) {
            WHEN BOOL_OR(UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'AWAITING_CONTRACT') THEN 'AWAITING_CONTRACT'
            WHEN BOOL_OR(UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'CONTRACT_READY') THEN 'CONTRACT_READY'
            WHEN BOOL_OR(UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'SIGNED') THEN 'SIGNED'
+           WHEN BOOL_OR(UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'COMPLETED') THEN 'COMPLETED'
            ELSE 'NEW'
          END AS access_level,
          BOOL_OR(
@@ -129,8 +130,7 @@ export async function GET(request: NextRequest) {
         AND c.last_name = er.child_last_name
        LEFT JOIN parent_profiles pp
          ON pp.user_id = COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id)
-       WHERE UPPER(BTRIM(COALESCE(er.status::text, ''))) NOT IN ('COMPLETED', 'SIGNED')
-         AND (
+       WHERE (
            COALESCE(u.id, NULLIF(BTRIM(er.user_id), '')) IS NOT NULL
            OR NULLIF(BTRIM(COALESCE(er.parent_email::text, '')), '') IS NOT NULL
          )

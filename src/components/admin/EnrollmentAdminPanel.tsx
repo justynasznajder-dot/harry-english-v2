@@ -30,6 +30,9 @@ type ProposalDraft = {
   discountPercent: string;
 };
 
+/** Domyślny % zniżki w trybie bez umowy (manager może zmienić). */
+const COMPLIMENTARY_DEFAULT_DISCOUNT_PERCENT = '14';
+
 function emptyProposalDraft(groupId = ''): ProposalDraft {
   return {
     groupId,
@@ -164,6 +167,9 @@ export default function EnrollmentAdminPanel({
 }: EnrollmentAdminPanelProps) {
   const [enrollmentStatusFilter, setEnrollmentStatusFilter] = useState('');
   const [studentNameSearch, setStudentNameSearch] = useState('');
+  const [expandedGroupPriceKeys, setExpandedGroupPriceKeys] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [proposalModalParentId, setProposalModalParentId] = useState<string | null>(null);
   const [submittingProposalRequestId, setSubmittingProposalRequestId] = useState<string | null>(null);
   const [rejectingParentResignationId, setRejectingParentResignationId] = useState<string | null>(
@@ -265,6 +271,8 @@ export default function EnrollmentAdminPanel({
             onComplimentaryParentsChange?.(data.complimentaryParents);
           }
           pushToast('success', 'Włączono tryb bez umowy');
+          // Odśwież listę — przy mailu już wysłanym zgłoszenia z grupą mogły się domknąć.
+          await onRefresh();
         } else {
           const existing = complimentaryParents.find((row) => {
             if (parentUserId && row.parentId === parentUserId) return true;
@@ -296,6 +304,7 @@ export default function EnrollmentAdminPanel({
             onComplimentaryParentsChange?.(data.complimentaryParents);
           }
           pushToast('success', 'Wyłączono tryb bez umowy');
+          await onRefresh();
         }
       } catch (err) {
         pushToast(
@@ -306,7 +315,7 @@ export default function EnrollmentAdminPanel({
         setSavingComplimentaryKey(null);
       }
     },
-    [complimentaryParents, onComplimentaryParentsChange, pushToast],
+    [complimentaryParents, onComplimentaryParentsChange, onRefresh, pushToast],
   );
 
   const proposalParent =
@@ -351,8 +360,9 @@ export default function EnrollmentAdminPanel({
     });
   /**
    * Zapisz: wystarczy pełne dane u jednego dziecka; pozostałe mogą być puste.
-   * Częściowe stawki (1–2 z 3) u któregokolwiek dziecka blokują zapis.
-   * Tryb bez umowy: jednorazowa + ratalna obowiązkowe; za zajęcia i % zniżki opcjonalne; grupa opcjonalna.
+   * Częściowe stawki u któregokolwiek dziecka blokują zapis.
+   * Tryb bez umowy: jednorazowa + ratalna u zapisywanego dziecka; grupa opcjonalna;
+   * przy rodzeństwie wystarczy jedno dziecko (reszta później).
    */
   const proposalBatchSaveReady =
     proposalNewChildren.length >= 1 &&
@@ -360,7 +370,7 @@ export default function EnrollmentAdminPanel({
       ? proposalNewChildren.every(
           (c) => !draftHasComplimentaryPartialPrices(proposalDrafts[c.requestId]),
         ) &&
-        proposalNewChildren.every((c) => draftIsComplimentarySaveable(proposalDrafts[c.requestId]))
+        proposalNewChildren.some((c) => draftIsComplimentarySaveable(proposalDrafts[c.requestId]))
       : proposalNewChildren.every((c) => !draftHasPartialPrices(proposalDrafts[c.requestId])) &&
         proposalNewChildren.some((c) => draftIsSaveable(proposalDrafts[c.requestId])));
   const proposalBatchSaveTitle = (() => {
@@ -370,7 +380,7 @@ export default function EnrollmentAdminPanel({
           Boolean((proposalDrafts[c.requestId]?.groupId ?? '').trim()),
         );
         return anyGroup
-          ? 'Zapisz grupę i stawki (bez umowy, bez e-maila)'
+          ? 'Zapisz grupę i stawki (bez umowy, bez e-maila) — pozostałe dzieci możesz uzupełnić później'
           : 'Zapisz stawki (tryb bez umowy) — grupę możesz przypisać później';
       }
       if (
@@ -380,7 +390,7 @@ export default function EnrollmentAdminPanel({
       ) {
         return 'Uzupełnij stawkę jednorazową i ratalną — za zajęcia jest opcjonalne';
       }
-      return 'Podaj stawkę jednorazową i ratalną dla każdego dziecka (za zajęcia opcjonalnie)';
+      return 'Podaj stawkę jednorazową i ratalną dla co najmniej jednego dziecka (za zajęcia opcjonalnie)';
     }
     if (proposalBatchSaveReady) {
       const allHaveGroup = proposalNewChildren
@@ -692,69 +702,122 @@ export default function EnrollmentAdminPanel({
           </div>
         ) : isByGroupPrices ? (
           <div className="space-y-3">
-            <p className="text-sm text-zinc-600">
-              Dzieci pogrupowane po proponowanej grupie — ceny z zgłoszenia (
-              <span className="font-medium text-zinc-800">jednorazowa / ratalna / za zajęcia</span>
-              ).
-            </p>
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <p className="text-sm text-zinc-600">
+                Dzieci pogrupowane po proponowanej grupie — ceny z zgłoszenia (
+                <span className="font-medium text-zinc-800">
+                  jednorazowa / ratalna / za zajęcia
+                </span>
+                ).
+              </p>
+              {filteredByGroupSections.length > 0 ? (
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className="rounded-lg border border-emerald-200 bg-white px-2.5 py-1 text-xs font-semibold text-[#0f6e56] hover:bg-emerald-50"
+                    onClick={() =>
+                      setExpandedGroupPriceKeys(
+                        new Set(filteredByGroupSections.map((s) => s.key)),
+                      )
+                    }
+                  >
+                    Rozwiń wszystkie
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 text-xs font-semibold text-zinc-600 hover:bg-zinc-50"
+                    onClick={() => setExpandedGroupPriceKeys(new Set())}
+                  >
+                    Zwiń
+                  </button>
+                </div>
+              ) : null}
+            </div>
             {filteredByGroupSections.length === 0 ? (
               <p className="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-8 text-center text-sm text-zinc-600">
                 {studentQuery ? 'Brak dzieci dla podanego wyszukiwania' : 'Brak dzieci'}
               </p>
             ) : (
-              <div className="grid gap-3 lg:grid-cols-2">
-                {filteredByGroupSections.map((section) => (
-                  <div
-                    key={section.key}
-                    className="rounded-xl border border-emerald-100 bg-emerald-50/30 p-4"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <h3 className="font-semibold text-zinc-900">{section.title}</h3>
-                        {section.subtitle ? (
-                          <p className="mt-0.5 text-xs text-zinc-500">{section.subtitle}</p>
-                        ) : null}
-                      </div>
-                      <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-zinc-600 ring-1 ring-emerald-100">
-                        {section.rows.length}
-                      </span>
+              <div className="space-y-2">
+                {filteredByGroupSections.map((section) => {
+                  const open =
+                    studentQuery.length > 0 || expandedGroupPriceKeys.has(section.key);
+                  return (
+                    <div
+                      key={section.key}
+                      className="overflow-hidden rounded-xl border border-emerald-100 bg-white"
+                    >
+                      <button
+                        type="button"
+                        aria-expanded={open}
+                        className="flex w-full items-start gap-3 px-4 py-3 text-left transition hover:bg-emerald-50/50"
+                        onClick={() => {
+                          if (studentQuery) return;
+                          setExpandedGroupPriceKeys((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(section.key)) next.delete(section.key);
+                            else next.add(section.key);
+                            return next;
+                          });
+                        }}
+                      >
+                        <span
+                          className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center text-zinc-500 transition ${
+                            open ? 'rotate-90' : ''
+                          }`}
+                          aria-hidden
+                        >
+                          ▸
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="font-semibold text-zinc-900">{section.title}</p>
+                          {section.subtitle ? (
+                            <p className="mt-0.5 text-xs text-zinc-500">{section.subtitle}</p>
+                          ) : null}
+                        </div>
+                        <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-zinc-600 ring-1 ring-emerald-100">
+                          {section.rows.length}
+                        </span>
+                      </button>
+                      {open ? (
+                        <ul className="divide-y divide-emerald-100 border-t border-emerald-100 bg-emerald-50/20 px-4">
+                          {section.rows.map(({ child, parent }) => (
+                            <li key={child.requestId} className="py-3">
+                              <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
+                                <p className="text-sm font-medium text-zinc-900">
+                                  {child.firstName} {child.lastName}
+                                </p>
+                                <p className="text-xs text-zinc-500">
+                                  {parent.firstName} {parent.lastName}
+                                </p>
+                              </div>
+                              <dl className="mt-1.5 grid grid-cols-3 gap-1 text-xs">
+                                <div>
+                                  <dt className="text-zinc-500">Jednorazowa</dt>
+                                  <dd className="font-semibold tabular-nums text-zinc-800">
+                                    {formatEnrollmentPrice(child.yearlyUnitPrice)}
+                                  </dd>
+                                </div>
+                                <div>
+                                  <dt className="text-zinc-500">Ratalna</dt>
+                                  <dd className="font-semibold tabular-nums text-zinc-800">
+                                    {formatEnrollmentPrice(child.monthlyUnitPrice)}
+                                  </dd>
+                                </div>
+                                <div>
+                                  <dt className="text-zinc-500">Za zajęcia</dt>
+                                  <dd className="font-semibold tabular-nums text-zinc-800">
+                                    {formatEnrollmentPrice(child.lessonUnitPrice)}
+                                  </dd>
+                                </div>
+                              </dl>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
                     </div>
-                    <ul className="mt-3 divide-y divide-emerald-100/80">
-                      {section.rows.map(({ child, parent }) => (
-                        <li key={child.requestId} className="py-2.5 first:pt-0 last:pb-0">
-                          <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
-                            <p className="text-sm font-medium text-zinc-900">
-                              {child.firstName} {child.lastName}
-                            </p>
-                            <p className="text-xs text-zinc-500">
-                              {parent.firstName} {parent.lastName}
-                            </p>
-                          </div>
-                          <dl className="mt-1.5 grid grid-cols-3 gap-1 text-xs">
-                            <div>
-                              <dt className="text-zinc-500">Jednorazowa</dt>
-                              <dd className="font-semibold tabular-nums text-zinc-800">
-                                {formatEnrollmentPrice(child.yearlyUnitPrice)}
-                              </dd>
-                            </div>
-                            <div>
-                              <dt className="text-zinc-500">Ratalna</dt>
-                              <dd className="font-semibold tabular-nums text-zinc-800">
-                                {formatEnrollmentPrice(child.monthlyUnitPrice)}
-                              </dd>
-                            </div>
-                            <div>
-                              <dt className="text-zinc-500">Za zajęcia</dt>
-                              <dd className="font-semibold tabular-nums text-zinc-800">
-                                {formatEnrollmentPrice(child.lessonUnitPrice)}
-                              </dd>
-                            </div>
-                          </dl>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -812,6 +875,8 @@ export default function EnrollmentAdminPanel({
                         }
                         if (child.discountPercent != null && child.discountPercent !== '') {
                           draft.discountPercent = String(child.discountPercent);
+                        } else if (parentIsComplimentary) {
+                          draft.discountPercent = COMPLIMENTARY_DEFAULT_DISCOUNT_PERCENT;
                         }
                         next[child.requestId] = draft;
                       }
@@ -891,7 +956,23 @@ export default function EnrollmentAdminPanel({
                             !(proposalParent.parentUserId ?? '').trim())
                         }
                         onChange={(e) => {
-                          void saveParentComplimentary(proposalParent, e.target.checked);
+                          const checked = e.target.checked;
+                          if (checked) {
+                            setProposalDrafts((prev) => {
+                              const next = { ...prev };
+                              for (const child of proposalParent.children) {
+                                const existing =
+                                  next[child.requestId] ??
+                                  emptyProposalDraft(child.proposedGroupId ?? '');
+                                next[child.requestId] = {
+                                  ...existing,
+                                  discountPercent: COMPLIMENTARY_DEFAULT_DISCOUNT_PERCENT,
+                                };
+                              }
+                              return next;
+                            });
+                          }
+                          void saveParentComplimentary(proposalParent, checked);
                         }}
                       />
                       Tryb bez umowy
@@ -1527,7 +1608,7 @@ export default function EnrollmentAdminPanel({
                           pushToast(
                             'error',
                             proposalParentIsComplimentary
-                              ? 'Podaj stawkę jednorazową i ratalną dla każdego dziecka'
+                              ? 'Podaj stawkę jednorazową i ratalną dla co najmniej jednego dziecka'
                               : 'Brak danych do zapisu',
                           );
                           return;

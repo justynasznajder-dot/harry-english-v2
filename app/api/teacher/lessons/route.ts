@@ -4,6 +4,7 @@ import { getUserById, isLektor, queryDb } from "@/lib/db";
 import { completePastScheduledLessons } from "@/lib/lesson-completion";
 import { ensurePolishPublicHolidaysForSchoolYear } from "@/lib/ensure-polish-public-holidays";
 import { listPolishPublicHolidays } from "@/lib/polish-public-holidays";
+import { sqlHolidayAppliesToAnyGroup } from "@/lib/school-holiday-scope";
 import { sqlSchoolTimestampAsTimestamptz, toIsoUtc } from "@/lib/school-timezone";
 
 async function ensureTeacherOwnsGroup(userId: string, groupId: string): Promise<boolean> {
@@ -106,8 +107,13 @@ export async function GET(request: NextRequest) {
                    h.school_year_id IS NULL
                    OR h.school_year_id = sy.id
                  )
+                 AND ${sqlHolidayAppliesToAnyGroup(
+                   "h",
+                   `SELECT g.id FROM groups g
+                    WHERE g.teacher_id = $4 AND g.active = TRUE AND g.school_id = $1`,
+                 )}
                ORDER BY h.date_from ASC`,
-              [teacherSchoolId, fromYmd, toYmd],
+              [teacherSchoolId, fromYmd, toYmd, userId],
             )
           : Promise.resolve({ rows: [] as Array<{
               id: string;

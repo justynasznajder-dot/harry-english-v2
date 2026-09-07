@@ -25,24 +25,49 @@ async function getParentsWithScheduledLessonsInRange(
   schoolId: string,
   dateFrom: string,
   dateTo: string,
+  groupIds?: string[] | null,
 ): Promise<ParentNotifyRow[]> {
-  const res = await queryDb<ParentNotifyRow>(
-    `SELECT DISTINCT u.id, u.first_name, u.last_name, u.email
-     FROM lessons l
-     INNER JOIN groups g ON g.id = l.group_id
-     INNER JOIN group_students gs ON gs.group_id = g.id AND gs.left_at IS NULL
-     INNER JOIN children c ON c.id = gs.child_id AND c.active = TRUE
-     INNER JOIN users u ON u.id = c.parent_id
-     WHERE g.school_id = $1
-       AND l.status = 'SCHEDULED'
-       AND l.scheduled_at::date >= $2::date
-       AND l.scheduled_at::date <= $3::date
-       AND u.role = 'PARENT'
-       AND u.active = TRUE
-       AND u.email IS NOT NULL
-       AND TRIM(u.email::text) <> ''`,
-    [schoolId, dateFrom, dateTo],
-  );
+  const scoped =
+    Array.isArray(groupIds) && groupIds.length > 0
+      ? groupIds.filter((id) => typeof id === "string" && id.trim())
+      : null;
+
+  const res = scoped
+    ? await queryDb<ParentNotifyRow>(
+        `SELECT DISTINCT u.id, u.first_name, u.last_name, u.email
+         FROM lessons l
+         INNER JOIN groups g ON g.id = l.group_id
+         INNER JOIN group_students gs ON gs.group_id = g.id AND gs.left_at IS NULL
+         INNER JOIN children c ON c.id = gs.child_id AND c.active = TRUE
+         INNER JOIN users u ON u.id = c.parent_id
+         WHERE g.school_id = $1
+           AND l.group_id = ANY($4::text[])
+           AND l.status = 'SCHEDULED'
+           AND l.scheduled_at::date >= $2::date
+           AND l.scheduled_at::date <= $3::date
+           AND u.role = 'PARENT'
+           AND u.active = TRUE
+           AND u.email IS NOT NULL
+           AND TRIM(u.email::text) <> ''`,
+        [schoolId, dateFrom, dateTo, scoped],
+      )
+    : await queryDb<ParentNotifyRow>(
+        `SELECT DISTINCT u.id, u.first_name, u.last_name, u.email
+         FROM lessons l
+         INNER JOIN groups g ON g.id = l.group_id
+         INNER JOIN group_students gs ON gs.group_id = g.id AND gs.left_at IS NULL
+         INNER JOIN children c ON c.id = gs.child_id AND c.active = TRUE
+         INNER JOIN users u ON u.id = c.parent_id
+         WHERE g.school_id = $1
+           AND l.status = 'SCHEDULED'
+           AND l.scheduled_at::date >= $2::date
+           AND l.scheduled_at::date <= $3::date
+           AND u.role = 'PARENT'
+           AND u.active = TRUE
+           AND u.email IS NOT NULL
+           AND TRIM(u.email::text) <> ''`,
+        [schoolId, dateFrom, dateTo],
+      );
   return res.rows;
 }
 
@@ -77,6 +102,20 @@ function ymdFromDbValue(v: unknown): string {
   return "";
 }
 
+function parseGroupIds(raw: unknown): string[] | null {
+  if (raw == null) return null;
+  if (!Array.isArray(raw)) return null;
+  const ids = [
+    ...new Set(
+      raw
+        .filter((v): v is string => typeof v === "string")
+        .map((v) => v.trim())
+        .filter(Boolean),
+    ),
+  ];
+  return ids;
+}
+
 export async function GET(request: NextRequest) {
   const ctx = await requireAdminSchoolContext(request);
   if (!ctx.ok) return ctx.response;
@@ -99,7 +138,14 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const withYearManager = `SELECT h.id, h.school_id, h.school_year_id, h.name, h.date_from::text, h.date_to::text, h.type, h.created_at
+    const withYearManager = `SELECT h.id, h.school_id, h.school_year_id, h.name, h.date_from::text, h.date_to::text, h.type, h.created_at,
+            COALESCE(
+              (SELECT array_agg(shg.group_id ORDER BY g.name)
+               FROM school_holiday_groups shg
+               LEFT JOIN groups g ON g.id = shg.group_id
+               WHERE shg.holiday_id = h.id),
+              '{}'::text[]
+            ) AS group_ids
            FROM school_holidays h
            INNER JOIN school_years sy ON sy.school_id = h.school_id AND sy.id = $2 AND sy.school_id = $1
            WHERE h.date_from <= sy.date_to
@@ -110,7 +156,14 @@ export async function GET(request: NextRequest) {
              )
            ORDER BY h.date_from ASC`;
 
-    const withYearAdmin = `SELECT h.id, h.school_id, h.school_year_id, h.name, h.date_from::text, h.date_to::text, h.type, h.created_at
+    const withYearAdmin = `SELECT h.id, h.school_id, h.school_year_id, h.name, h.date_from::text, h.date_to::text, h.type, h.created_at,
+            COALESCE(
+              (SELECT array_agg(shg.group_id ORDER BY g.name)
+               FROM school_holiday_groups shg
+               LEFT JOIN groups g ON g.id = shg.group_id
+               WHERE shg.holiday_id = h.id),
+              '{}'::text[]
+            ) AS group_ids
            FROM school_holidays h
            INNER JOIN school_years sy ON sy.school_id = h.school_id AND sy.id = $1
            WHERE h.date_from <= sy.date_to
@@ -130,17 +183,32 @@ export async function GET(request: NextRequest) {
       date_to: string;
       type: string;
       created_at: Date;
+      group_ids: string[] | null;
     }>(
       schoolYearId
         ? ctx.tenant.role === "MANAGER"
           ? withYearManager
           : withYearAdmin
         : ctx.tenant.role === "MANAGER"
-          ? `SELECT id, school_id, school_year_id, name, date_from::text, date_to::text, type, created_at
+          ? `SELECT id, school_id, school_year_id, name, date_from::text, date_to::text, type, created_at,
+                COALESCE(
+                  (SELECT array_agg(shg.group_id ORDER BY g.name)
+                   FROM school_holiday_groups shg
+                   LEFT JOIN groups g ON g.id = shg.group_id
+                   WHERE shg.holiday_id = school_holidays.id),
+                  '{}'::text[]
+                ) AS group_ids
            FROM school_holidays
            WHERE school_id = $1
            ORDER BY date_from DESC`
-          : `SELECT id, school_id, school_year_id, name, date_from::text, date_to::text, type, created_at
+          : `SELECT id, school_id, school_year_id, name, date_from::text, date_to::text, type, created_at,
+                COALESCE(
+                  (SELECT array_agg(shg.group_id ORDER BY g.name)
+                   FROM school_holiday_groups shg
+                   LEFT JOIN groups g ON g.id = shg.group_id
+                   WHERE shg.holiday_id = school_holidays.id),
+                  '{}'::text[]
+                ) AS group_ids
            FROM school_holidays
            ORDER BY date_from DESC`,
       schoolYearId
@@ -156,6 +224,8 @@ export async function GET(request: NextRequest) {
       ...row,
       date_from: String(row.date_from).slice(0, 10),
       date_to: String(row.date_to).slice(0, 10),
+      group_ids: Array.isArray(row.group_ids) ? row.group_ids : [],
+      applies_to_all_groups: !Array.isArray(row.group_ids) || row.group_ids.length === 0,
     }));
 
     return NextResponse.json({ holidays });
@@ -180,6 +250,8 @@ export async function POST(request: NextRequest) {
       parent_message,
       school_id: bodySchoolId,
       schoolId: bodySchoolIdCamel,
+      group_ids: bodyGroupIds,
+      groupIds: bodyGroupIdsCamel,
     } = body as {
       name?: string;
       date_from?: string;
@@ -189,6 +261,8 @@ export async function POST(request: NextRequest) {
       parent_message?: string;
       school_id?: string;
       schoolId?: string;
+      group_ids?: unknown;
+      groupIds?: unknown;
     };
     const shouldNotifyParents = notifyParentsRaw === true;
     if (!name?.trim() || !date_from || !date_to) {
@@ -215,6 +289,30 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const scopedGroupIds = parseGroupIds(bodyGroupIds ?? bodyGroupIdsCamel);
+    if (scopedGroupIds !== null && scopedGroupIds.length === 0) {
+      return NextResponse.json(
+        { message: "Wybierz co najmniej jedną grupę, której dotyczy dzień wolny" },
+        { status: 400 },
+      );
+    }
+
+    if (scopedGroupIds && scopedGroupIds.length > 0) {
+      const groupsCheck = await queryDb<{ id: string }>(
+        `SELECT id FROM groups
+         WHERE school_id = $1
+           AND id = ANY($2::text[])
+           AND deleted_at IS NULL`,
+        [insertSchoolId, scopedGroupIds],
+      );
+      if (groupsCheck.rows.length !== scopedGroupIds.length) {
+        return NextResponse.json(
+          { message: "Niektóre wybrane grupy nie należą do tej szkoły" },
+          { status: 400 },
+        );
+      }
+    }
+
     const active = await getActiveSchoolYear(insertSchoolId);
     if (!active) {
       return NextResponse.json({ message: "Brak aktywnego roku szkolnego" }, { status: 400 });
@@ -233,7 +331,7 @@ export async function POST(request: NextRequest) {
 
     const id = randomUUID();
     const parentsToNotify = shouldNotifyParents
-      ? await getParentsWithScheduledLessonsInRange(insertSchoolId, df, dt)
+      ? await getParentsWithScheduledLessonsInRange(insertSchoolId, df, dt, scopedGroupIds)
       : [];
 
     let messageActor: Awaited<ReturnType<typeof requireMessageActor>> | null = null;
@@ -251,7 +349,21 @@ export async function POST(request: NextRequest) {
       [id, insertSchoolId, yearId, name.trim(), df, dt, type]
     );
     const row = ins.rows[0] as Record<string, unknown>;
-    const deletion = await deleteScheduledLessonsInHolidayRange(insertSchoolId, df, dt);
+
+    if (scopedGroupIds && scopedGroupIds.length > 0) {
+      await queryDb(
+        `INSERT INTO school_holiday_groups (holiday_id, group_id)
+         SELECT $1, UNNEST($2::text[])`,
+        [id, scopedGroupIds],
+      );
+    }
+
+    const deletion = await deleteScheduledLessonsInHolidayRange(
+      insertSchoolId,
+      df,
+      dt,
+      scopedGroupIds,
+    );
     const topUp = await topUpLessonsAfterHolidayDeletion(insertSchoolId, deletion.byGroup);
 
     let parentsNotified = 0;
@@ -282,6 +394,9 @@ export async function POST(request: NextRequest) {
     }
 
     let message = "Dodano dzień wolny.";
+    if (scopedGroupIds && scopedGroupIds.length > 0) {
+      message += ` Dotyczy ${scopedGroupIds.length} grup.`;
+    }
     if (deletion.deleted > 0) {
       message += ` Usunięto ${deletion.deleted} zaplanowanych zajęć w tym okresie.`;
     }
@@ -304,6 +419,8 @@ export async function POST(request: NextRequest) {
         ...row,
         date_from: String(row.date_from).slice(0, 10),
         date_to: String(row.date_to).slice(0, 10),
+        group_ids: scopedGroupIds ?? [],
+        applies_to_all_groups: !scopedGroupIds || scopedGroupIds.length === 0,
       },
       lessonsCancelled: deletion.deleted,
       lessonsDeleted: deletion.deleted,

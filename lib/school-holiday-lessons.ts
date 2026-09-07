@@ -15,28 +15,54 @@ export type DeleteScheduledLessonsInHolidayRangeResult = {
  * - SCHEDULED
  * - CANCELLED z powodem „Dzień wolny” (stary flow anulowania)
  * COMPLETED zostają w historii. Czyści attendance / progress_notes.
+ *
+ * `groupIds` — jeśli podane i niepuste, tylko te grupy; w przeciwnym razie wszystkie grupy szkoły.
  */
 export async function deleteScheduledLessonsInHolidayRange(
   schoolId: string,
   dateFrom: string,
   dateTo: string,
+  groupIds?: string[] | null,
 ): Promise<DeleteScheduledLessonsInHolidayRangeResult> {
-  const scheduled = await queryDb<{ id: string; group_id: string }>(
-    `SELECT l.id, l.group_id
-     FROM lessons l
-     INNER JOIN groups g ON g.id = l.group_id
-     WHERE g.school_id = $1
-       AND l.scheduled_at::date >= $2::date
-       AND l.scheduled_at::date <= $3::date
-       AND (
-         l.status = 'SCHEDULED'
-         OR (
-           l.status = 'CANCELLED'
-           AND COALESCE(l.cancellation_reason, '') ILIKE '%dzień wolny%'
-         )
-       )`,
-    [schoolId, dateFrom, dateTo],
-  );
+  const scoped =
+    Array.isArray(groupIds) && groupIds.length > 0
+      ? groupIds.filter((id) => typeof id === "string" && id.trim())
+      : null;
+
+  const scheduled = scoped
+    ? await queryDb<{ id: string; group_id: string }>(
+        `SELECT l.id, l.group_id
+         FROM lessons l
+         INNER JOIN groups g ON g.id = l.group_id
+         WHERE g.school_id = $1
+           AND l.group_id = ANY($4::text[])
+           AND l.scheduled_at::date >= $2::date
+           AND l.scheduled_at::date <= $3::date
+           AND (
+             l.status = 'SCHEDULED'
+             OR (
+               l.status = 'CANCELLED'
+               AND COALESCE(l.cancellation_reason, '') ILIKE '%dzień wolny%'
+             )
+           )`,
+        [schoolId, dateFrom, dateTo, scoped],
+      )
+    : await queryDb<{ id: string; group_id: string }>(
+        `SELECT l.id, l.group_id
+         FROM lessons l
+         INNER JOIN groups g ON g.id = l.group_id
+         WHERE g.school_id = $1
+           AND l.scheduled_at::date >= $2::date
+           AND l.scheduled_at::date <= $3::date
+           AND (
+             l.status = 'SCHEDULED'
+             OR (
+               l.status = 'CANCELLED'
+               AND COALESCE(l.cancellation_reason, '') ILIKE '%dzień wolny%'
+             )
+           )`,
+        [schoolId, dateFrom, dateTo],
+      );
 
   if (scheduled.rows.length === 0) {
     return { deleted: 0, byGroup: [] };

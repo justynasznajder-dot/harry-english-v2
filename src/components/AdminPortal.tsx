@@ -23,8 +23,10 @@ import {
 } from '@/lib/school-timezone';
 import { defaultLessonsPerWeekForLevel, defaultTargetLessonsPerYear } from '@/lib/lessons-per-week';
 import {
+  classifyLocationForGroupLevel,
   compareGroupsYoungestToOldest,
   detectLevelFromGroupName,
+  getHarryEnglishLevelStage,
   isHarryEnglishLevelCode,
   locationMatchesGroupLevel,
 } from '@/src/data/harryEnglishLevels';
@@ -215,9 +217,30 @@ function formatHolidayLessonWhen(iso: string): string {
 
 type HolidayConflictLesson = {
   id: string;
+  group_id: string;
   group_name: string;
   scheduled_at: string;
 };
+
+type HolidayFacilityKind = 'preschool' | 'school';
+
+function classifyGroupFacilityKind(
+  group: { level: string | null; name: string; location_id: string | null },
+  locationsById: Map<string, SchoolLocationRow>,
+): HolidayFacilityKind | 'unknown' {
+  const loc = group.location_id ? locationsById.get(group.location_id) : undefined;
+  if (loc) {
+    const kind = classifyLocationForGroupLevel(loc);
+    if (kind === 'preschool') return 'preschool';
+    if (kind === 'school' || kind === 'special') return 'school';
+  }
+  const level =
+    (group.level && String(group.level).trim()) || detectLevelFromGroupName(group.name) || '';
+  const stage = getHarryEnglishLevelStage(level);
+  if (stage === 'preschool') return 'preschool';
+  if (stage === 'school' || stage === 'exam') return 'school';
+  return 'unknown';
+}
 
 function formatSettlementMonthPl(periodMonth: string): string {
   const parsed = new Date(`${periodMonth}-01T12:00:00`);
@@ -424,6 +447,8 @@ interface SchoolHolidayRow {
   date_from: string;
   date_to: string;
   type: string;
+  group_ids?: string[];
+  applies_to_all_groups?: boolean;
 }
 
 interface SchoolLocationRow {
@@ -934,6 +959,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     type: 'HOLIDAY' as 'HOLIDAY' | 'PUBLIC' | 'SCHOOL' | 'CANCELLED',
     notifyParents: false,
     parentMessage: '',
+    includePreschool: true,
+    includeSchool: true,
+    selectedGroupIds: [] as string[],
   });
   const [holidayCancelConfirm, setHolidayCancelConfirm] = useState<HolidayConflictLesson[] | null>(
     null,
@@ -1190,6 +1218,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
 
   const submitHolidaySave = useCallback(
     async (opts: { notifyParents: boolean; parentMessage: string }) => {
+      if (holidayForm.selectedGroupIds.length === 0) {
+        pushToast('error', 'Wybierz co najmniej jedną grupę');
+        return;
+      }
       setBusy(true);
       try {
         const res = await fetch('/api/admin/school-holidays', {
@@ -1200,6 +1232,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             date_from: holidayForm.dateFrom,
             date_to: holidayForm.dateTo,
             type: holidayForm.type,
+            group_ids: holidayForm.selectedGroupIds,
             notify_parents: opts.notifyParents,
             parent_message: opts.notifyParents
               ? opts.parentMessage.trim() || undefined
@@ -1229,21 +1262,37 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       pushToast('error', 'Uzupełnij pola');
       return;
     }
+    if (!holidayForm.includePreschool && !holidayForm.includeSchool) {
+      pushToast('error', 'Wybierz placówki: przedszkola i/lub szkoły');
+      return;
+    }
+    if (holidayForm.selectedGroupIds.length === 0) {
+      pushToast('error', 'Potwierdź grupy, których dotyczy dzień wolny');
+      return;
+    }
     setBusy(true);
     try {
       const res = await fetch(
         `/api/admin/lessons?from=${encodeURIComponent(holidayForm.dateFrom)}&to=${encodeURIComponent(holidayForm.dateTo)}`,
       );
       const data = (await res.json().catch(() => ({}))) as {
-        lessons?: Array<{ id: string; group_name: string; scheduled_at: string; status: string }>;
+        lessons?: Array<{
+          id: string;
+          group_id: string;
+          group_name: string;
+          scheduled_at: string;
+          status: string;
+        }>;
         message?: string;
       };
       if (!res.ok) throw new Error(data.message ?? 'Nie udało się sprawdzić zajęć');
 
+      const selected = new Set(holidayForm.selectedGroupIds);
       const conflicts = (data.lessons ?? [])
-        .filter((l) => l.status === 'SCHEDULED')
+        .filter((l) => l.status === 'SCHEDULED' && selected.has(l.group_id))
         .map((l) => ({
           id: l.id,
+          group_id: l.group_id,
           group_name: l.group_name,
           scheduled_at: l.scheduled_at,
         }));
@@ -1836,12 +1885,14 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     const needLocations =
       childModalOpen ||
       activeTab === 'classes' ||
-      (activeTab === 'organization' && organizationSubTab === 'locations') ||
+      holidayModalOpen ||
+      (activeTab === 'organization' &&
+        (organizationSubTab === 'locations' || organizationSubTab === 'schoolYear')) ||
       (activeTab === 'organization' &&
         organizationSubTab === 'users' &&
         usersSubTab === 'add');
     if (needLocations) void loadLocations();
-  }, [activeTab, organizationSubTab, usersSubTab, childModalOpen, loadLocations]);
+  }, [activeTab, organizationSubTab, usersSubTab, childModalOpen, holidayModalOpen, loadLocations]);
 
   useEffect(() => {
     if (mobileTab === 'organization') setActiveTab('organization');
@@ -1942,6 +1993,59 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     }
     return groups.filter((g) => (g.location_name ?? '') === organizeFilterLocation);
   }, [groups, organizeFilterLocation]);
+
+  const locationsById = useMemo(
+    () => new Map(schoolLocations.map((loc) => [loc.id, loc])),
+    [schoolLocations],
+  );
+
+  const holidayCandidateGroups = useMemo(() => {
+    const activeGroups = groups
+      .filter((g) => g.active)
+      .slice()
+      .sort(compareGroupsYoungestToOldest);
+    return activeGroups.map((g) => {
+      const facilityKind = classifyGroupFacilityKind(g, locationsById);
+      return {
+        id: g.id,
+        name: g.name,
+        locationName: g.location_name,
+        facilityKind,
+      };
+    });
+  }, [groups, locationsById]);
+
+  const holidayVisibleGroups = useMemo(() => {
+    return holidayCandidateGroups.filter((g) => {
+      if (g.facilityKind === 'preschool') return holidayForm.includePreschool;
+      if (g.facilityKind === 'school') return holidayForm.includeSchool;
+      // Nieokreślone — pokazuj gdy wybrano którykolwiek typ placówki
+      return holidayForm.includePreschool || holidayForm.includeSchool;
+    });
+  }, [
+    holidayCandidateGroups,
+    holidayForm.includePreschool,
+    holidayForm.includeSchool,
+  ]);
+
+  const syncHolidayGroupSelection = useCallback(
+    (includePreschool: boolean, includeSchool: boolean) => {
+      const nextIds = holidayCandidateGroups
+        .filter((g) => {
+          if (g.facilityKind === 'preschool') return includePreschool;
+          if (g.facilityKind === 'school') return includeSchool;
+          return false; // unknown: manager musi zaznaczyć ręcznie
+        })
+        .map((g) => g.id);
+      setHolidayForm((p) => ({
+        ...p,
+        includePreschool,
+        includeSchool,
+        selectedGroupIds: nextIds,
+      }));
+    },
+    [holidayCandidateGroups],
+  );
 
   const organizeFilterNameOptions = useMemo(() => {
     const set = new Set(groupsForOrganizeCascadedFilters.map((g) => g.name).filter(Boolean));
@@ -2148,19 +2252,16 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     [groupDetail?.locations, schoolLocations],
   );
 
-  const activeGroupNamesForPreview = useMemo(
-    () => groups.filter((g) => g.active).map((g) => g.name),
-    [groups],
-  );
-
   const computeAutoGroupName = useCallback(
-    (level: string, locationId: string) =>
+    (level: string, locationId: string, excludeGroupId?: string) =>
       previewAutoGroupName({
         level,
         locationName: resolveGroupLocationName(locationId),
-        activeGroupNames: activeGroupNamesForPreview,
+        activeGroupNames: groups
+          .filter((g) => g.active && (!excludeGroupId || g.id !== excludeGroupId))
+          .map((g) => g.name),
       }),
-    [activeGroupNamesForPreview, resolveGroupLocationName],
+    [groups, resolveGroupLocationName],
   );
 
   const locationsForGroupLevel = useCallback(
@@ -2176,7 +2277,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       const lpw = defaultLessonsPerWeekForLevel(level);
       setGenerateLessonsCount(String(defaultTargetLessonsPerYear(lpw)));
       setGroupForm((p) => {
-        if (p.id) return p;
         const allowed = schoolLocations.filter(
           (loc) => loc.active && locationMatchesGroupLevel(loc, level),
         );
@@ -2186,7 +2286,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           ...p,
           level,
           locationId,
-          name: computeAutoGroupName(level, locationId),
+          name: computeAutoGroupName(level, locationId, p.id || undefined),
           lessonsPerWeek: lpw,
         };
       });
@@ -2200,6 +2300,26 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       pushToast('error', 'Wybierz nauczyciela dla grupy');
       return;
     }
+    if (!groupForm.level.trim()) {
+      pushToast('error', 'Wybierz poziom z listy (P3–P6, Sz1–Sz8, Sz8E)');
+      return;
+    }
+    if (
+      !isHarryEnglishLevelCode(groupForm.level.trim()) &&
+      groupForm.level.trim() !==
+        ((groupDetail?.group.level && String(groupDetail.group.level).trim()) ||
+          (groupDetail?.group.name
+            ? detectLevelFromGroupName(groupDetail.group.name)
+            : '') ||
+          '')
+    ) {
+      pushToast('error', 'Wybierz poziom z listy (P3–P6, Sz1–Sz8, Sz8E)');
+      return;
+    }
+    if (!groupForm.locationId.trim()) {
+      pushToast('error', 'Wybierz lokalizację grupy');
+      return;
+    }
     if (!groupForm.name.trim()) {
       pushToast('error', 'Nazwa grupy jest wymagana');
       return;
@@ -2210,8 +2330,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          // TODO(tymczasowo): name edytowalne po zapisie — potem usunąć z body
           name: groupForm.name.trim(),
+          level: groupForm.level.trim(),
+          locationId: groupForm.locationId.trim(),
           teacherId: groupForm.teacherId,
           maxStudents: groupForm.maxStudents,
           active: groupForm.active,
@@ -2235,15 +2356,19 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     } finally {
       setGroupSaving(false);
     }
-  }, [groupForm, pushToast, loadData, loadGroupDetail, getGroupDetailReloadOptions]);
+  }, [groupForm, groupDetail, pushToast, loadData, loadGroupDetail, getGroupDetailReloadOptions]);
 
   const groupFormDirty = useMemo(() => {
     if (!groupForm.id || !groupDetail?.group || groupDetail.group.id !== groupForm.id) {
       return false;
     }
     const g = groupDetail.group;
+    const savedLevel =
+      (g.level && String(g.level).trim()) || detectLevelFromGroupName(g.name) || '';
     return (
       groupForm.name.trim() !== String(g.name ?? '').trim() ||
+      groupForm.level.trim() !== savedLevel ||
+      (groupForm.locationId || '') !== (g.location_id ?? '') ||
       (groupForm.teacherId || '') !== (g.teacher_id ?? '') ||
       Number(groupForm.maxStudents) !== Number(g.max_students) ||
       Boolean(groupForm.active) !== Boolean(g.active) ||
@@ -3164,6 +3289,15 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                             type="button"
                             disabled={busy || !active}
                             onClick={() => {
+                              const includePreschool = true;
+                              const includeSchool = true;
+                              const selectedGroupIds = holidayCandidateGroups
+                                .filter(
+                                  (g) =>
+                                    g.facilityKind === 'preschool' ||
+                                    g.facilityKind === 'school',
+                                )
+                                .map((g) => g.id);
                               setHolidayForm({
                                 name: '',
                                 dateFrom: active?.date_from ?? '',
@@ -3171,6 +3305,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                 type: 'HOLIDAY',
                                 notifyParents: false,
                                 parentMessage: '',
+                                includePreschool,
+                                includeSchool,
+                                selectedGroupIds,
                               });
                               setHolidayCancelConfirm(null);
                               setHolidayNotifyPrompt(false);
@@ -3225,6 +3362,16 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                       <p className="font-medium text-zinc-900">{h.name}</p>
                                       <p className="text-xs text-zinc-600">
                                         {h.date_from} — {h.date_to} · {h.type}
+                                      </p>
+                                      <p className="mt-0.5 text-xs text-zinc-500">
+                                        {h.applies_to_all_groups || !(h.group_ids?.length)
+                                          ? 'Wszystkie grupy'
+                                          : `${h.group_ids.length} grup: ${h.group_ids
+                                              .map(
+                                                (gid) =>
+                                                  groups.find((g) => g.id === gid)?.name ?? '…',
+                                              )
+                                              .join(', ')}`}
                                       </p>
                                     </div>
                                     <button
@@ -5184,8 +5331,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             className="contents"
             name={groupForm.name}
             level={groupForm.level}
-            locked
-            onLevelChange={() => {}}
+            onLevelChange={(level) => {
+              applyGroupLevelChange(level);
+            }}
             onNameChange={(name) => {
               setGroupForm((p) => ({ ...p, name }));
             }}
@@ -5193,19 +5341,45 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               <div className="space-y-1">
                 <label className="block text-sm font-medium text-zinc-700">Lokalizacja</label>
                 <select
-                  className="w-full rounded-xl border border-emerald-200 px-3 py-2 bg-zinc-50 text-zinc-600"
+                  className="w-full rounded-xl border border-emerald-200 px-3 py-2 bg-white disabled:bg-zinc-50 disabled:text-zinc-600"
                   value={groupForm.locationId}
-                  disabled
-                  title="Lokalizacja zablokowana po pierwszym zapisie"
+                  disabled={!groupForm.level.trim()}
+                  title={
+                    !groupForm.level.trim()
+                      ? 'Najpierw wybierz poziom'
+                      : 'Wybierz lokalizację — nazwa uzupełni się automatycznie'
+                  }
+                  onChange={(e) => {
+                    const locationId = e.target.value;
+                    setGroupForm((p) => ({
+                      ...p,
+                      locationId,
+                      name: computeAutoGroupName(p.level, locationId, p.id || undefined),
+                    }));
+                  }}
                 >
-                  <option value="">Brak lokalizacji</option>
-                  {(groupDetail?.locations ?? schoolLocations)
-                    .filter((loc) => ('active' in loc ? loc.active : true))
-                    .map((loc) => (
+                  <option value="">
+                    {!groupForm.level.trim()
+                      ? 'Najpierw wybierz poziom'
+                      : 'Wybierz lokalizację'}
+                  </option>
+                  {(() => {
+                    const allowed = locationsForGroupLevel(groupForm.level);
+                    const currentId = groupForm.locationId;
+                    const currentMissing =
+                      currentId &&
+                      !allowed.some((loc) => loc.id === currentId)
+                        ? (groupDetail?.locations ?? schoolLocations).find((loc) => loc.id === currentId)
+                        : null;
+                    return [
+                      ...(currentMissing ? [currentMissing] : []),
+                      ...allowed,
+                    ].map((loc) => (
                       <option key={loc.id} value={loc.id}>
                         {loc.name}
                       </option>
-                    ))}
+                    ));
+                  })()}
                 </select>
               </div>
             }
@@ -6300,7 +6474,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 className="space-y-3"
                 name={groupForm.name}
                 level={groupForm.level}
-                locked={Boolean(groupForm.id)}
                 onLevelChange={(level) => {
                   applyGroupLevelChange(level);
                 }}
@@ -6313,21 +6486,18 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     <select
                       className="w-full rounded-xl border border-emerald-200 px-3 py-2 bg-white disabled:bg-zinc-50 disabled:text-zinc-600"
                       value={groupForm.locationId}
-                      disabled={Boolean(groupForm.id) || !groupForm.level.trim()}
+                      disabled={!groupForm.level.trim()}
                       title={
-                        groupForm.id
-                          ? 'Lokalizacja zablokowana po pierwszym zapisie'
-                          : !groupForm.level.trim()
-                            ? 'Najpierw wybierz poziom'
-                            : undefined
+                        !groupForm.level.trim()
+                          ? 'Najpierw wybierz poziom'
+                          : 'Wybierz lokalizację — nazwa uzupełni się automatycznie'
                       }
                       onChange={(e) => {
-                        if (groupForm.id) return;
                         const locationId = e.target.value;
                         setGroupForm((p) => ({
                           ...p,
                           locationId,
-                          name: computeAutoGroupName(p.level, locationId),
+                          name: computeAutoGroupName(p.level, locationId, p.id || undefined),
                         }));
                       }}
                     >
@@ -8441,15 +8611,16 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
 
       {holidayModalOpen && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
-            <h3 className="text-lg font-semibold">Dzień wolny</h3>
-            <p className="mt-1 text-sm text-zinc-500">
-              Zaplanowane zajęcia w tym okresie zostaną usunięte, a brakująca liczba zajęć w
-              grupach zostanie automatycznie uzupełniona kolejnymi terminami. Domyślnie rodzice
-              nie dostaną
-              powiadomienia — możesz je wysłać poniżej.
-            </p>
-            <div className="mt-4 space-y-3">
+          <div className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
+            <div className="shrink-0 border-b border-emerald-100 px-5 py-4">
+              <h3 className="text-lg font-semibold">Dzień wolny</h3>
+              <p className="mt-1 text-sm text-zinc-500">
+                Zaplanowane zajęcia w wybranych grupach zostaną usunięte, a brakująca liczba zajęć
+                zostanie uzupełniona kolejnymi terminami. Domyślnie rodzice nie dostaną
+                powiadomienia — możesz je wysłać poniżej.
+              </p>
+            </div>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
               <label className="block text-sm">
                 <span className="mb-1 block font-semibold text-zinc-700">Nazwa</span>
                 <input
@@ -8496,6 +8667,115 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   <option value="CANCELLED">CANCELLED</option>
                 </select>
               </label>
+
+              <fieldset className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
+                <legend className="px-1 text-sm font-semibold text-zinc-700">
+                  Placówki bez zajęć
+                </legend>
+                <p className="mb-2 text-xs text-zinc-500">
+                  Zaznacz, czy dzień wolny dotyczy przedszkoli, szkół, czy obu.
+                </p>
+                <div className="flex flex-wrap gap-4 text-sm text-zinc-800">
+                  <label className="inline-flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      className="accent-[#0f6e56]"
+                      checked={holidayForm.includePreschool}
+                      onChange={(e) =>
+                        syncHolidayGroupSelection(e.target.checked, holidayForm.includeSchool)
+                      }
+                    />
+                    Przedszkola
+                  </label>
+                  <label className="inline-flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      className="accent-[#0f6e56]"
+                      checked={holidayForm.includeSchool}
+                      onChange={(e) =>
+                        syncHolidayGroupSelection(holidayForm.includePreschool, e.target.checked)
+                      }
+                    />
+                    Szkoły
+                  </label>
+                </div>
+              </fieldset>
+
+              <div className="rounded-xl border border-emerald-100 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold text-zinc-700">Potwierdź grupy</p>
+                    <p className="text-xs text-zinc-500">
+                      Zaznaczono {holidayForm.selectedGroupIds.length} z {holidayVisibleGroups.length}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className="rounded-lg border border-emerald-200 bg-white px-2.5 py-1 text-xs font-semibold text-[#0f6e56] hover:bg-emerald-50"
+                      onClick={() =>
+                        setHolidayForm((p) => ({
+                          ...p,
+                          selectedGroupIds: holidayVisibleGroups.map((g) => g.id),
+                        }))
+                      }
+                    >
+                      Zaznacz wszystkie
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 text-xs font-semibold text-zinc-600 hover:bg-zinc-50"
+                      onClick={() => setHolidayForm((p) => ({ ...p, selectedGroupIds: [] }))}
+                    >
+                      Odznacz
+                    </button>
+                  </div>
+                </div>
+                {holidayVisibleGroups.length === 0 ? (
+                  <p className="mt-3 text-sm text-zinc-500">
+                    Brak aktywnych grup dla wybranych placówek.
+                  </p>
+                ) : (
+                  <ul className="mt-3 max-h-48 space-y-1.5 overflow-y-auto">
+                    {holidayVisibleGroups.map((g) => {
+                      const checked = holidayForm.selectedGroupIds.includes(g.id);
+                      const kindLabel =
+                        g.facilityKind === 'preschool'
+                          ? 'przedszkole'
+                          : g.facilityKind === 'school'
+                            ? 'szkoła'
+                            : 'nieokreślone';
+                      return (
+                        <li key={g.id}>
+                          <label className="flex cursor-pointer items-start gap-2 rounded-lg px-1.5 py-1 hover:bg-emerald-50/60">
+                            <input
+                              type="checkbox"
+                              className="mt-0.5 accent-[#0f6e56]"
+                              checked={checked}
+                              onChange={(e) => {
+                                setHolidayForm((p) => ({
+                                  ...p,
+                                  selectedGroupIds: e.target.checked
+                                    ? [...p.selectedGroupIds, g.id]
+                                    : p.selectedGroupIds.filter((id) => id !== g.id),
+                                }));
+                              }}
+                            />
+                            <span className="min-w-0 text-sm">
+                              <span className="font-medium text-zinc-900">{g.name}</span>
+                              <span className="mt-0.5 block text-xs text-zinc-500">
+                                {kindLabel}
+                                {g.locationName ? ` · ${g.locationName}` : ''}
+                              </span>
+                            </span>
+                          </label>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+
               <label className="flex items-start gap-2 text-sm text-zinc-800">
                 <input
                   type="checkbox"
@@ -8512,7 +8792,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 <span>
                   <span className="font-semibold text-zinc-700">Wyślij wiadomość do rodziców</span>
                   <span className="mt-0.5 block text-xs text-zinc-500">
-                    Powiadomienie w panelu oraz e-mail do rodziców dzieci z zajęciami w dniu wolnym.
+                    Powiadomienie w panelu oraz e-mail do rodziców dzieci z zajęciami w dniu wolnym
+                    (tylko wybrane grupy).
                   </span>
                 </span>
               </label>
@@ -8531,7 +8812,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 </label>
               ) : null}
             </div>
-            <div className="mt-5 flex justify-end gap-2">
+            <div className="flex shrink-0 justify-end gap-2 border-t border-emerald-100 px-5 py-4">
               <button
                 type="button"
                 className="rounded-xl bg-zinc-200 px-4 py-2"

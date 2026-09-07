@@ -283,8 +283,9 @@ export async function PUT(
   try {
     const body = await request.json();
     const {
-      // TODO(tymczasowo): name edytowalne po zapisie — potem usunąć
       name: bodyName,
+      level: bodyLevel,
+      locationId: bodyLocationId,
       teacherId,
       maxStudents,
       active,
@@ -321,18 +322,54 @@ export async function PUT(
       );
     }
 
+    const nextLevelRaw =
+      typeof bodyLevel === "string" ? bodyLevel.trim() : (existing.level ?? "");
     const nextNameRaw =
       typeof bodyName === "string" ? bodyName.trim() : existing.name;
     const naming = validateHarryEnglishGroupNaming({
       name: nextNameRaw,
-      level: existing.level ?? "",
-      requireLevel: Boolean(existing.level),
+      level: nextLevelRaw,
+      requireLevel: true,
       allowLegacyLevel: true,
     });
     if (!naming.ok) {
       return NextResponse.json({ message: naming.message }, { status: 400 });
     }
     const nextName = naming.name;
+    const nextLevel = naming.level;
+
+    let nextLocationId = existing.location_id;
+    if (typeof bodyLocationId === "string") {
+      const locationIdTrim = bodyLocationId.trim();
+      if (!locationIdTrim) {
+        return NextResponse.json(
+          { message: "Wybierz lokalizację grupy" },
+          { status: 400 }
+        );
+      }
+      const locRes = await queryDb<{ id: string }>(
+        `SELECT id FROM locations
+         WHERE id = $1 AND school_id = $2 AND active = TRUE
+         LIMIT 1`,
+        [locationIdTrim, existing.school_id]
+      );
+      if (!locRes.rows[0]) {
+        // Pozwól zachować dotychczasową (np. nieaktywną) lokalizację bez zmiany.
+        if (locationIdTrim !== existing.location_id) {
+          return NextResponse.json(
+            { message: "Nie znaleziono lokalizacji" },
+            { status: 404 }
+          );
+        }
+      }
+      nextLocationId = locationIdTrim;
+    }
+    if (!nextLocationId) {
+      return NextResponse.json(
+        { message: "Wybierz lokalizację grupy" },
+        { status: 400 }
+      );
+    }
 
     const nextActive = active == null ? existing.active : Boolean(active);
     const nameChanged =
@@ -359,19 +396,23 @@ export async function PUT(
     await queryDb(
       `UPDATE groups
        SET name = $2,
-           teacher_id = $3,
-           max_students = COALESCE($4, max_students),
-           active = $5,
-           price_monthly = $6,
-           price_yearly = $7,
-           price_per_lesson = $8,
-           teacher_pickup_consent = COALESCE($9, teacher_pickup_consent),
-           lessons_per_week = COALESCE($10, lessons_per_week)
-       WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $11" : ""}`,
+           level = $3,
+           location_id = $4,
+           teacher_id = $5,
+           max_students = COALESCE($6, max_students),
+           active = $7,
+           price_monthly = $8,
+           price_yearly = $9,
+           price_per_lesson = $10,
+           teacher_pickup_consent = COALESCE($11, teacher_pickup_consent),
+           lessons_per_week = COALESCE($12, lessons_per_week)
+       WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $13" : ""}`,
       tenant.role === "MANAGER"
         ? [
             id,
             nextName,
+            nextLevel,
+            nextLocationId,
             teacherId ?? null,
             maxStudents ?? null,
             nextActive,
@@ -385,6 +426,8 @@ export async function PUT(
         : [
             id,
             nextName,
+            nextLevel,
+            nextLocationId,
             teacherId ?? null,
             maxStudents ?? null,
             nextActive,

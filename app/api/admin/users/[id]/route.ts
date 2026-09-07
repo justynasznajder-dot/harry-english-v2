@@ -97,6 +97,7 @@ export async function GET(
         access_level: target.access_level,
         phone: target.phone,
         pesel: target.pesel,
+        id_card_number: target.id_card_number,
         school_id: target.school_id,
         resignation_date: target.resignation_date,
         created_at: target.created_at,
@@ -217,6 +218,12 @@ export async function PUT(
         updateData.pesel = digits;
       }
     }
+    if (body.id_card_number !== undefined) {
+      const raw =
+        body.id_card_number == null ? "" : String(body.id_card_number).trim();
+      updateData.id_card_number =
+        raw === "" ? null : raw.slice(0, 32).toUpperCase();
+    }
 
     if (Object.keys(updateData).length === 0) {
       return NextResponse.json({ message: "Brak danych do aktualizacji" }, { status: 400 });
@@ -262,6 +269,7 @@ export async function PUT(
       active: user.active,
       phone: user.phone,
       pesel: user.pesel,
+      id_card_number: user.id_card_number,
       access_level: user.access_level,
       resignation_date: user.resignation_date,
       created_at: user.created_at,

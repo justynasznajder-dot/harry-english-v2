@@ -15,6 +15,7 @@ type AdminUserDetail = {
   active: boolean;
   phone: string | null;
   pesel: string | null;
+  id_card_number: string | null;
   client_number?: string | null;
 };
 
@@ -43,6 +44,7 @@ export default function AdminUserProfilePage() {
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [pesel, setPesel] = useState('');
+  const [idCardNumber, setIdCardNumber] = useState('');
   const [confirmed, setConfirmed] = useState(false);
 
   const load = useCallback(async () => {
@@ -66,6 +68,7 @@ export default function AdminUserProfilePage() {
       setEmail(u.email ?? '');
       setPhone(u.phone ?? '');
       setPesel(u.pesel ?? '');
+      setIdCardNumber(u.id_card_number ?? '');
       setConfirmed(Boolean(u.confirmed));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Błąd ładowania');
@@ -103,6 +106,7 @@ export default function AdminUserProfilePage() {
           confirmed,
           phone: phone.trim() || null,
           pesel: pesel.trim() || null,
+          id_card_number: idCardNumber.trim() || null,
         }),
       });
       const data = await res.json();
@@ -117,6 +121,7 @@ export default function AdminUserProfilePage() {
               email: email.trim(),
               phone: phone.trim() || null,
               pesel: pesel.trim() || null,
+              id_card_number: idCardNumber.trim() || null,
               confirmed,
             }
           : prev
@@ -252,6 +257,21 @@ export default function AdminUserProfilePage() {
                     value={pesel}
                     onChange={(e) => setPesel(e.target.value.replace(/\D/g, '').slice(0, 11))}
                     placeholder="11 cyfr (opcjonalnie)"
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm text-zinc-700 sm:col-span-2">
+                  Nr dowodu
+                  <input
+                    type="text"
+                    maxLength={32}
+                    className="rounded-xl border border-emerald-200 px-3 py-2 text-zinc-900 uppercase"
+                    value={idCardNumber}
+                    onChange={(e) =>
+                      setIdCardNumber(
+                        e.target.value.replace(/[^a-zA-Z0-9]/g, '').slice(0, 32).toUpperCase(),
+                      )
+                    }
+                    placeholder="opcjonalnie"
                   />
                 </label>
                 <div className="text-sm text-zinc-700 sm:col-span-2">

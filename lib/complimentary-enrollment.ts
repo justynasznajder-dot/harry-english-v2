@@ -270,7 +270,11 @@ async function resolveComplimentaryParentIds(
 
 /**
  * Po dodaniu rodzica do trybu bez opłat: domknij otwarte zgłoszenia z już przypisaną grupą
- * (bez etapu umowy). Zgłoszenia bez grupy zostają — admin przypisze ją później.
+ * (bez etapu umowy).
+ * - Status po mailu (≠ NEW) → domknij od razu.
+ * - Szkic NEW z grupą + stawkami (jednorazowa + ratalna) → też domknij (→ potwierdzony).
+ * - Szkic NEW z samą grupą bez stawek → zostaw (manager dopisze stawki i kliknie Zapisz).
+ * Zgłoszenia bez grupy zostają — admin przypisze ją później.
  */
 export async function completeOpenComplimentaryEnrollmentsForParent(
   schoolId: string,
@@ -292,7 +296,16 @@ export async function completeOpenComplimentaryEnrollmentsForParent(
      JOIN users u ON u.id = c.parent_id
      WHERE er.school_id = $1
        AND er.proposed_group_id IS NOT NULL
-       AND UPPER(BTRIM(COALESCE(er.status::text, ''))) NOT IN ('COMPLETED', 'REJECTED', 'SIGNED')
+       AND UPPER(BTRIM(COALESCE(er.status::text, ''))) NOT IN (
+         'COMPLETED', 'REJECTED', 'SIGNED'
+       )
+       AND (
+         UPPER(BTRIM(COALESCE(er.status::text, ''))) <> 'NEW'
+         OR (
+           er.yearly_unit_price IS NOT NULL
+           AND er.monthly_unit_price IS NOT NULL
+         )
+       )
        AND (
          ($2 <> '' AND c.parent_id = $2)
          OR ($3 <> '' AND LOWER(BTRIM(u.email)) = $3)

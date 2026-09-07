@@ -152,7 +152,7 @@ export function resolveStudentListPipelineStage(input: {
   return "Zgłoszenie";
 }
 
-/** Filtry listy zgłoszeń w panelu admina. SIGNED/COMPLETED nie wchodzą na listę (proces zakończony). */
+/** Filtry listy zgłoszeń w panelu admina. „Wszystkie” obejmuje też SIGNED/COMPLETED. */
 export const ENROLLMENT_LIST_FILTERS = [
   { value: "", label: "Wszystkie" },
   { value: "NEW", label: "Nowe" },
@@ -162,7 +162,7 @@ export const ENROLLMENT_LIST_FILTERS = [
   { value: "CONTRACT_READY", label: "Umowa do podpisu" },
 ] as const;
 
-/** Statusy ukończone — nie pokazujemy ich w widoku Zgłoszeń. */
+/** Statusy ukończone — ukryte w filtrach roboczych (Nowe / Grupa / Umowa), widoczne w „Wszystkie” i „Tryb bez umowy”. */
 const ENROLLMENT_LIST_HIDDEN_STATUSES: ReadonlySet<EnrollmentStatus> = new Set([
   "SIGNED",
   "COMPLETED",
@@ -179,28 +179,32 @@ export type EnrollmentStatusFilterOptions = {
 
 /**
  * Filtr listy zgłoszeń.
+ * „Wszystkie” = wszystkie statusy, w tym zakończone (SIGNED/COMPLETED).
  * „Grupa przypisana” = status ACCEPTED albo szkic NEW z już wybraną grupą (Zapisz bez wysyłki).
  * „Nowe” = NEW bez przypisanej grupy i bez trybu bez umowy.
- * „Tryb bez umowy” = dzieci rodzica w trybie complimentary (widoczne statusy).
+ * „Tryb bez umowy” = dzieci rodzica w trybie complimentary (także zakończone).
  */
 export function filterEnrollmentChildrenByStatus<
   T extends { status: EnrollmentStatus; proposedGroupId?: string | null },
 >(children: T[], filter: string, options?: EnrollmentStatusFilterOptions): T[] {
-  const visible = children.filter((child) => !ENROLLMENT_LIST_HIDDEN_STATUSES.has(child.status));
   const parentIsComplimentary = Boolean(options?.parentIsComplimentary);
+  const activeOnly = children.filter(
+    (child) => !ENROLLMENT_LIST_HIDDEN_STATUSES.has(child.status),
+  );
+
+  // „Wszystkie” — pełna historia, także przepracowane.
+  if (!filter) return children;
 
   if (filter === "COMPLIMENTARY") {
-    return parentIsComplimentary ? visible : [];
+    return parentIsComplimentary ? children : [];
   }
-
-  if (!filter) return visible;
 
   if (filter === "NEW") {
     if (parentIsComplimentary) return [];
-    return visible.filter((child) => child.status === "NEW" && !hasProposedGroup(child));
+    return activeOnly.filter((child) => child.status === "NEW" && !hasProposedGroup(child));
   }
   if (filter === "ACCEPTED") {
-    return visible.filter(
+    return activeOnly.filter(
       (child) =>
         child.status === "ACCEPTED" ||
         (child.status === "NEW" && hasProposedGroup(child)),
@@ -208,7 +212,7 @@ export function filterEnrollmentChildrenByStatus<
   }
 
   const status = filter as EnrollmentStatus;
-  return visible.filter((child) => child.status === status);
+  return activeOnly.filter((child) => child.status === status);
 }
 
 export function enrollmentMatchesStatusFilter(

@@ -575,8 +575,12 @@ export async function submitEnrollmentProposal(
     persistToChild: true,
   });
 
+  // Domknięcie bez umowy: wysyłka maila ALBO Zapisz szkicu z już wybraną grupą
+  // (np. najpierw grupa, potem włączenie trybu bez umowy i stawki — mail jeszcze nie poszedł).
   const complimentaryCompleted =
-    !draftOnly && !ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && complimentary;
+    complimentary &&
+    Boolean(groupId.trim()) &&
+    (draftOnly || !ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE);
 
   if (complimentaryCompleted) {
     try {
@@ -587,7 +591,9 @@ export async function submitEnrollmentProposal(
       return {
         ok: false,
         status: 500,
-        message: `Zapis w trybie bez opłat nie dokończył się (${detail}). Spróbuj ponownie „Wyślij maila”.`,
+        message: draftOnly
+          ? `Zapis w trybie bez umowy nie dokończył się (${detail}). Spróbuj ponownie „Zapisz”.`
+          : `Zapis w trybie bez opłat nie dokończył się (${detail}). Spróbuj ponownie „Wyślij maila”.`,
       };
     }
   } else if (!draftOnly) {

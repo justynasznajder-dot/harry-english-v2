@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { getActiveSchoolYear, queryDb } from "@/lib/db";
 import { ensurePolishPublicHolidaysForSchoolYear } from "@/lib/ensure-polish-public-holidays";
 import type { HolidayLessonDeletionByGroup } from "@/lib/school-holiday-lessons";
+import { sqlHolidayAppliesToGroup } from "@/lib/school-holiday-scope";
 import { SCHOOL_TIMEZONE, sqlSchoolTimestampAsTimestamptz, sqlSchoolWallTimestamp } from "@/lib/school-timezone";
 
 const TZ = SCHOOL_TIMEZONE;
@@ -91,6 +92,7 @@ export function sqlExistsUnfilledFutureScheduleSlot(
           AND (h_gap.school_year_id = sy_gap.id OR h_gap.school_year_id IS NULL)
           AND h_gap.date_from <= d_gap.day::date
           AND h_gap.date_to >= d_gap.day::date
+          AND ${sqlHolidayAppliesToGroup("h_gap", groupIdSql)}
       )
       AND NOT EXISTS (
         SELECT 1 FROM lessons l_gap
@@ -224,13 +226,15 @@ export async function generateLessonsForGroup(opts: {
   const retroactive = dateFrom < todayYmd;
 
   const holidays = await queryDb<{ date_from: string; date_to: string }>(
-    `SELECT date_from::text, date_to::text
-     FROM school_holidays
-     WHERE school_id = $1
-       AND (school_year_id = $2 OR school_year_id IS NULL)
-       AND date_from <= $3::date
-       AND date_to >= $4::date`,
-    [schoolId, yearId, dateTo, dateFrom],
+    `SELECT h.date_from::text, h.date_to::text
+     FROM school_holidays h
+     WHERE h.school_id = $1
+       AND (h.school_year_id = $2 OR h.school_year_id IS NULL)
+       AND h.date_from <= $3::date
+       AND h.date_to >= $4::date
+       AND ${sqlHolidayAppliesToGroup("h", "$5")}
+    `,
+    [schoolId, yearId, dateTo, dateFrom, groupId],
   );
 
   const templates = await queryDb<{

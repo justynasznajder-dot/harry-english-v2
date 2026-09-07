@@ -140,6 +140,8 @@ export interface User {
   phone: string | null;
   /** PESEL (opcjonalny) — m.in. lektorzy. */
   pesel: string | null;
+  /** Numer dowodu osobistego (opcjonalny). */
+  id_card_number: string | null;
   active: boolean;
   confirmed: boolean;
   must_change_password: boolean;
@@ -297,6 +299,10 @@ function mapUserRow(row: QueryResultRow): User {
     pesel:
       row.pesel != null && String(row.pesel).trim() !== ""
         ? String(row.pesel).trim().slice(0, 11)
+        : null,
+    id_card_number:
+      row.id_card_number != null && String(row.id_card_number).trim() !== ""
+        ? String(row.id_card_number).trim().slice(0, 32)
         : null,
     active: row.active === undefined ? true : Boolean(row.active),
     confirmed: Boolean(row.confirmed),
@@ -531,6 +537,7 @@ export async function updateUser(
     confirmed: boolean;
     phone: string | null;
     pesel: string | null;
+    id_card_number: string | null;
   }>
 ): Promise<boolean> {
   const sets: string[] = [];
@@ -564,6 +571,10 @@ export async function updateUser(
   if (data.pesel !== undefined) {
     sets.push(`pesel = $${i++}`);
     vals.push(data.pesel);
+  }
+  if (data.id_card_number !== undefined) {
+    sets.push(`id_card_number = $${i++}`);
+    vals.push(data.id_card_number);
   }
 
   if (sets.length === 0) return false;

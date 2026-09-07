@@ -12,13 +12,10 @@ import {
 type GroupNamingFieldsProps = {
   name: string;
   level: string;
-  /** Po pierwszym zapisie — poziom i lokalizacja zablokowane. */
-  locked: boolean;
+  /** Zostawione dla kompatybilności — poziom jest zawsze edytowalny. */
+  locked?: boolean;
   onLevelChange: (level: string) => void;
-  /**
-   * Edycja nazwy. Tymczasowo dozwolona także po zapisie (gdy podane).
-   * Potem z powrotem: tylko gdy `!locked`.
-   */
+  /** Edycja nazwy (gdy podane). */
   onNameChange?: (name: string) => void;
   /** Select lokalizacji (kolejność: poziom → lokalizacja → nazwa). */
   locationField: ReactNode;
@@ -29,12 +26,11 @@ type GroupNamingFieldsProps = {
 
 /**
  * Poziom + lokalizacja (slot) + nazwa auto.
- * Poziom/lokalizacja blokowane po pierwszym zapisie; nazwa tymczasowo edytowalna także potem.
+ * Poziom, lokalizacja i nazwa pozostają edytowalne także po zapisie.
  */
 export default function GroupNamingFields({
   name,
   level,
-  locked,
   onLevelChange,
   onNameChange,
   locationField,
@@ -43,7 +39,6 @@ export default function GroupNamingFields({
   nameInputClassName = 'w-full rounded-xl border border-emerald-200 px-3 py-2 bg-white disabled:bg-zinc-50 disabled:text-zinc-600',
 }: GroupNamingFieldsProps) {
   const legacyLevel = level && !isHarryEnglishLevelCode(level) ? level : null;
-  // TODO(tymczasowo): nazwa edytowalna także po zapisie — potem: `!locked && typeof onNameChange === 'function'`
   const nameEditable = typeof onNameChange === 'function';
 
   return (
@@ -53,13 +48,8 @@ export default function GroupNamingFields({
         <select
           className={levelSelectClassName}
           value={level}
-          disabled={locked}
           onChange={(e) => onLevelChange(e.target.value)}
-          title={
-            locked
-              ? 'Poziom zablokowany po pierwszym zapisie'
-              : 'Wybierz poziom — nazwa uzupełni się automatycznie'
-          }
+          title="Wybierz poziom — nazwa uzupełni się automatycznie"
         >
           <option value="">Wybierz poziom</option>
           {legacyLevel ? (
@@ -91,7 +81,7 @@ export default function GroupNamingFields({
           placeholder={`np. Sz1${GROUP_NAME_SEP}Bemowo`}
           title={
             nameEditable
-              ? 'Możesz zmienić nazwę (także po zapisie — tymczasowo)'
+              ? 'Możesz zmienić nazwę ręcznie'
               : 'Nazwa generowana automatycznie z poziomu i lokalizacji'
           }
         />

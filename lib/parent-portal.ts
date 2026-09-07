@@ -14,6 +14,7 @@ import {
   sqlStudentAttendsLesson,
 } from "@/lib/lessons-per-week";
 import { listPolishPublicHolidays } from "@/lib/polish-public-holidays";
+import { sqlHolidayAppliesToAnyGroup } from "@/lib/school-holiday-scope";
 import {
   addMonthsYmd,
   pgDateToYmd,
@@ -1495,8 +1496,26 @@ export async function fetchParentCalendar(
            h.school_year_id IS NULL
            OR h.school_year_id = sy.id
          )
+         AND ${sqlHolidayAppliesToAnyGroup(
+           "h",
+           `SELECT gs.group_id
+            FROM children c
+            JOIN group_students gs ON gs.child_id = c.id AND gs.left_at IS NULL
+            JOIN school_years sy2 ON sy2.id = gs.school_year_id AND sy2.active = TRUE
+            WHERE c.parent_id = $4
+              AND c.school_id = $1
+              AND c.active = TRUE
+            UNION
+            SELECT er.proposed_group_id
+            FROM children c
+            JOIN enrollment_requests er ON er.id = c.enrollment_request_id
+            WHERE c.parent_id = $4
+              AND c.school_id = $1
+              AND c.active = TRUE
+              AND er.proposed_group_id IS NOT NULL`,
+         )}
        ORDER BY h.date_from ASC`,
-      [schoolId, fromYmd, toYmd]
+      [schoolId, fromYmd, toYmd, parentId]
     ),
   ]);
 

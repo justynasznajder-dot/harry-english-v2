@@ -128,7 +128,7 @@ export function buildPaymentSectionHtml(params: {
   }
 
   const paymentTermsLi =
-    `<li>Każda faktura objęta jest dwutygodniowym terminem płatności. Wpłaty prosimy dokonywać na numer rachunku: 91 1050 1298 1000 0092 5894 4835, w tytule przelewu podając <span class="ph">${contractNumber}</span>.</li>`;
+    `<li>Każda faktura objęta jest dwutygodniowym terminem płatności. Wpłaty prosimy dokonywać na numer rachunku: <strong>91 1050 1298 1000 0092 5894 4835</strong>, w tytule przelewu podając <span class="ph">${contractNumber}</span>.</li>`;
 
   return `<ol class="contract-list">
   <li>Klient wybiera następującą formę płatności: <span class="ph">${paymentLabel}</span>, kwota: <span class="ph">${amountLabel}</span>.</li>

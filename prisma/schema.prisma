@@ -295,6 +295,7 @@ model groups {
   enrollment_requests    enrollment_requests[]
   group_materials        group_materials[]
   group_students         group_students[]
+  school_holiday_groups  school_holiday_groups[]
   locations              locations?            @relation(fields: [location_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   schools                schools               @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   users                  users                 @relation(fields: [teacher_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -621,11 +622,24 @@ model school_holidays {
   school_year_id String?
   schools        schools       @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   school_years   school_years? @relation(fields: [school_year_id], references: [id], onUpdate: NoAction)
+  /// Puste = dzień wolny dotyczy wszystkich grup szkoły (np. święta państwowe).
+  school_holiday_groups school_holiday_groups[]
 
   @@index([date_from, date_to], map: "idx_school_holidays_date")
   @@index([school_id], map: "idx_school_holidays_school")
   @@index([school_id], map: "idx_school_holidays_school_id")
   @@index([school_year_id], map: "idx_school_holidays_school_year")
+}
+
+/// Zakres dnia wolnego per grupa. Brak wierszy dla holiday_id = wszystkie grupy.
+model school_holiday_groups {
+  holiday_id String
+  group_id   String
+  school_holidays school_holidays @relation(fields: [holiday_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  groups          groups          @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([holiday_id, group_id])
+  @@index([group_id], map: "idx_school_holiday_groups_group")
 }
 
 model school_year_close_logs {
@@ -970,6 +984,8 @@ model users {
   phone                                 String?                        @db.VarChar(50)
   /// PESEL (opcjonalny) — np. lektorzy; nie wymagany przy rejestracji
   pesel                                 String?                        @db.VarChar(11)
+  /// Numer dowodu osobistego (opcjonalny)
+  id_card_number                        String?                        @db.VarChar(32)
   active                                Boolean                        @default(true)
   confirmed                             Boolean                        @default(false)
   reset_token                           String?                        @db.VarChar(255)

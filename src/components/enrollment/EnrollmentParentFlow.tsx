@@ -574,6 +574,10 @@ export default function EnrollmentParentFlow({
   const [savedDiscountLargeFamily, setSavedDiscountLargeFamily] = useState(false);
   /** Deklaracja rodzica — zapisuję więcej niż jedno dziecko (`enrollment_requests.enrolling_multiple_children`). */
   const [enrollingMultipleChildren, setEnrollingMultipleChildren] = useState(false);
+  const [savedEnrollingMultipleChildren, setSavedEnrollingMultipleChildren] = useState(false);
+  const [savingSummaryDiscounts, setSavingSummaryDiscounts] = useState(false);
+  /** Po „Zapisz” zniżki w Podsumowaniu są tylko do odczytu. */
+  const [summaryDiscountsLocked, setSummaryDiscountsLocked] = useState(false);
   const [, setProfileLoaded] = useState(false);
   const [profileComplete, setProfileComplete] = useState(false);
   const [profileLocked, setProfileLocked] = useState(false);
@@ -706,14 +710,19 @@ export default function EnrollmentParentFlow({
         const kdr = Boolean(data.contractPricing.discountLargeFamily);
         setDiscountLargeFamily(kdr);
         setSavedDiscountLargeFamily(kdr);
+        if (kdr) setSummaryDiscountsLocked(true);
       }
       if (typeof data.enrollingMultipleChildren === 'boolean') {
         setEnrollingMultipleChildren(data.enrollingMultipleChildren);
+        setSavedEnrollingMultipleChildren(data.enrollingMultipleChildren);
+        if (data.enrollingMultipleChildren) setSummaryDiscountsLocked(true);
       } else {
         const activeChildrenCount = incoming.filter(
           (p) => childAccessLevel(p) !== 'REJECTED',
         ).length;
-        setEnrollingMultipleChildren(activeChildrenCount >= 2);
+        const inferred = activeChildrenCount >= 2;
+        setEnrollingMultipleChildren(inferred);
+        setSavedEnrollingMultipleChildren(inferred);
       }
       setContractReadiness(
         data.contractReadiness ?? {
@@ -2606,11 +2615,6 @@ export default function EnrollmentParentFlow({
         ) : null}
         {enrolledChildren.length > 0 ? (
           <div className="space-y-3">
-            <p className="text-sm text-zinc-600">
-              {enrolledChildren.length === 1
-                ? 'Twoje dziecko uczęszcza do grupy:'
-                : 'Twoje dzieci uczęszczają do grup:'}
-            </p>
             {userInfo.complimentaryAccess ? (
               (() => {
                 const summaryDiscountSettings = {
@@ -2618,34 +2622,67 @@ export default function EnrollmentParentFlow({
                     contractPricing?.discountSettings?.LARGE_FAMILY_CARD || 10,
                   SIBLING: contractPricing?.discountSettings?.SIBLING || 5,
                 };
+                const effectiveSibling =
+                  enrollingMultipleChildren && !discountLargeFamily;
                 const sharedDiscountInfo = formatEffectiveDiscountInfo(
                   resolveEffectiveDiscountPercent({
                     mode: 'complimentary',
                     managerPercent: null,
                     hasLargeFamilyCard: discountLargeFamily,
-                    hasSiblingDeclared:
-                      enrollingMultipleChildren && !discountLargeFamily,
+                    hasSiblingDeclared: effectiveSibling,
                     settings: summaryDiscountSettings,
                   }),
                 );
-                const persistSummaryDiscounts = async (next: {
-                  discountLargeFamily: boolean;
-                  enrollingMultipleChildren: boolean;
-                }) => {
+                const summaryDiscountsDirty =
+                  discountLargeFamily !== savedDiscountLargeFamily ||
+                  effectiveSibling !== savedEnrollingMultipleChildren;
+                const saveSummaryDiscounts = async () => {
+                  setSavingSummaryDiscounts(true);
                   try {
-                    await fetch('/api/enrollment/discounts', {
+                    const res = await fetch('/api/enrollment/discounts', {
                       method: 'PATCH',
                       headers: { 'Content-Type': 'application/json' },
                       credentials: 'include',
-                      body: JSON.stringify(next),
+                      body: JSON.stringify({
+                        discountLargeFamily,
+                        enrollingMultipleChildren: effectiveSibling,
+                      }),
                     });
+                    const data = (await res.json().catch(() => ({}))) as {
+                      message?: string;
+                    };
+                    if (!res.ok) {
+                      setFlash({
+                        kind: 'error',
+                        message: data.message ?? 'Nie udało się zapisać zniżek',
+                      });
+                      return;
+                    }
+                    setSavedDiscountLargeFamily(discountLargeFamily);
+                    setSavedEnrollingMultipleChildren(effectiveSibling);
+                    setSummaryDiscountsLocked(true);
+                    setContractPricing((prev) =>
+                      prev ? { ...prev, discountLargeFamily } : prev,
+                    );
+                    setFlash({ kind: 'success', message: 'Zapisano zniżki' });
+                    await loadProposals();
                   } catch {
-                    /* ignore — lokalny stan i tak aktualizuje kwoty */
+                    setFlash({
+                      kind: 'error',
+                      message: 'Nie udało się zapisać zniżek',
+                    });
+                  } finally {
+                    setSavingSummaryDiscounts(false);
                   }
                 };
+                const discountsDisabled =
+                  isReadOnlyPreview || savingSummaryDiscounts || summaryDiscountsLocked;
                 return (
                   <>
                     <div className="space-y-2 rounded-2xl border border-emerald-200 bg-white px-4 py-3">
+                      <p className="text-sm text-zinc-700">
+                        Oznacz odpowiednie pole poniżej jeżeli przysługuje Ci zniżka.
+                      </p>
                       <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
                         Zniżki
                       </p>
@@ -2653,46 +2690,38 @@ export default function EnrollmentParentFlow({
                         Po zaznaczeniu KDR opcja rodzeństwa jest niedostępna.
                       </p>
                       <div className="flex flex-col gap-2">
-                        <label className="inline-flex items-start gap-2 text-sm text-zinc-700">
+                        <label
+                          className={`inline-flex items-start gap-2 text-sm ${
+                            discountsDisabled ? 'text-zinc-500' : 'text-zinc-700'
+                          }`}
+                        >
                           <input
                             type="checkbox"
                             className="mt-0.5 accent-[#0f6e56]"
-                            disabled={isReadOnlyPreview}
+                            disabled={discountsDisabled}
                             checked={discountLargeFamily}
                             onChange={(e) => {
                               const checked = e.target.checked;
                               setDiscountLargeFamily(checked);
                               if (checked) setEnrollingMultipleChildren(false);
-                              setContractPricing((prev) =>
-                                prev ? { ...prev, discountLargeFamily: checked } : prev,
-                              );
-                              void persistSummaryDiscounts({
-                                discountLargeFamily: checked,
-                                enrollingMultipleChildren: checked
-                                  ? false
-                                  : enrollingMultipleChildren,
-                              });
                             }}
                           />
                           <span>posiadam kartę dużej rodziny</span>
                         </label>
                         <label
                           className={`inline-flex items-start gap-2 text-sm ${
-                            discountLargeFamily ? 'text-zinc-400' : 'text-zinc-700'
+                            discountLargeFamily || discountsDisabled
+                              ? 'text-zinc-400'
+                              : 'text-zinc-700'
                           }`}
                         >
                           <input
                             type="checkbox"
                             className="mt-0.5 accent-[#0f6e56]"
-                            disabled={isReadOnlyPreview || discountLargeFamily}
-                            checked={enrollingMultipleChildren && !discountLargeFamily}
+                            disabled={discountsDisabled || discountLargeFamily}
+                            checked={effectiveSibling}
                             onChange={(e) => {
-                              const checked = e.target.checked;
-                              setEnrollingMultipleChildren(checked);
-                              void persistSummaryDiscounts({
-                                discountLargeFamily,
-                                enrollingMultipleChildren: checked,
-                              });
+                              setEnrollingMultipleChildren(e.target.checked);
                             }}
                           />
                           <span>zapisuję więcej niż jedno dziecko</span>
@@ -2703,7 +2732,27 @@ export default function EnrollmentParentFlow({
                           {sharedDiscountInfo}
                         </p>
                       ) : null}
+                      {!isReadOnlyPreview && !summaryDiscountsLocked ? (
+                        <button
+                          type="button"
+                          disabled={!summaryDiscountsDirty || savingSummaryDiscounts}
+                          onClick={() => {
+                            void saveSummaryDiscounts();
+                          }}
+                          className="mt-1 rounded-full bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {savingSummaryDiscounts ? 'Zapisywanie…' : 'Zapisz'}
+                        </button>
+                      ) : null}
+                      {summaryDiscountsLocked && !isReadOnlyPreview ? (
+                        <p className="text-xs text-zinc-500">Zniżki zostały zapisane.</p>
+                      ) : null}
                     </div>
+                    <p className="text-sm text-zinc-600">
+                      {enrolledChildren.length === 1
+                        ? 'Twoje dziecko uczęszcza do grupy:'
+                        : 'Twoje dzieci uczęszczają do grup:'}
+                    </p>
                     {enrolledChildren.map((p) => {
                       const effective = resolveEffectiveDiscountPercent({
                         mode: 'complimentary',
@@ -2769,24 +2818,31 @@ export default function EnrollmentParentFlow({
                 );
               })()
             ) : (
-              enrolledChildren.map((p) => (
-                <div
-                  key={p.request_id}
-                  className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4"
-                >
-                  <p className="text-base font-semibold text-zinc-900">
-                    {p.child_first_name} {p.child_last_name}
-                  </p>
-                  <div className="mt-3 grid gap-1.5 text-sm text-zinc-800 sm:grid-cols-[max-content_1fr]">
-                    <span className="font-semibold text-zinc-900">Grupa:</span>
-                    <span>{p.group_name ?? 'Do ustalenia'}</span>
-                    <span className="font-semibold text-zinc-900">Lokalizacja:</span>
-                    <span>{p.location_name}</span>
-                    <span className="font-semibold text-zinc-900">Termin zajęć:</span>
-                    <span>{p.schedule}</span>
+              <>
+                <p className="text-sm text-zinc-600">
+                  {enrolledChildren.length === 1
+                    ? 'Twoje dziecko uczęszcza do grupy:'
+                    : 'Twoje dzieci uczęszczają do grup:'}
+                </p>
+                {enrolledChildren.map((p) => (
+                  <div
+                    key={p.request_id}
+                    className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4"
+                  >
+                    <p className="text-base font-semibold text-zinc-900">
+                      {p.child_first_name} {p.child_last_name}
+                    </p>
+                    <div className="mt-3 grid gap-1.5 text-sm text-zinc-800 sm:grid-cols-[max-content_1fr]">
+                      <span className="font-semibold text-zinc-900">Grupa:</span>
+                      <span>{p.group_name ?? 'Do ustalenia'}</span>
+                      <span className="font-semibold text-zinc-900">Lokalizacja:</span>
+                      <span>{p.location_name}</span>
+                      <span className="font-semibold text-zinc-900">Termin zajęć:</span>
+                      <span>{p.schedule}</span>
+                    </div>
                   </div>
-                </div>
-              ))
+                ))}
+              </>
             )}
           </div>
         ) : (
