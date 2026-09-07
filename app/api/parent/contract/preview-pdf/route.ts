@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { buildAttachmentContentDisposition } from "@/lib/content-disposition";
 import { buildUmowaPdfFilename, buildImageConsentPdfFilename, renderHtmlToPdf } from "@/lib/contract-pdf";
 import { extractContractNumber } from "@/lib/contract-html";
 import { getUserById } from "@/lib/db";
@@ -42,7 +43,7 @@ export async function GET(request: NextRequest) {
     // W trybie bez opłat: tylko zgoda na odbiór; umowa i wizerunek niedostępne.
     if (complimentary && doc !== "attachment2") {
       return NextResponse.json(
-        { message: "Tryb bez opłat — wcześniejsze dokumenty nie są dostępne do pobrania" },
+        { message: "Tryb bez umowy — wcześniejsze dokumenty nie są dostępne do pobrania" },
         { status: 403 },
       );
     }
@@ -114,7 +115,7 @@ export async function GET(request: NextRequest) {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Content-Disposition": buildAttachmentContentDisposition(filename),
         "Cache-Control": "private, no-store",
       },
     });

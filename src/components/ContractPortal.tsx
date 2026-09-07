@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
+import { parseContentDispositionFilename } from '@/lib/content-disposition';
+
 export interface ContractChildAttachment {
   child_id: string;
   first_name: string;
@@ -79,8 +81,7 @@ async function downloadPreviewPdf(params: {
   }
   const blob = await res.blob();
   const disposition = res.headers.get('Content-Disposition') ?? '';
-  const match = /filename="([^"]+)"/i.exec(disposition);
-  const filename = match?.[1] ?? 'umowa-podglad.pdf';
+  const filename = parseContentDispositionFilename(disposition) ?? 'umowa-podglad.pdf';
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -306,6 +307,7 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
   const [contractAccepted, setContractAccepted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [imageBusy, setImageBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const isSigned = contract?.status === 'SIGNED';
 
@@ -324,6 +326,7 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
 
   const acceptImageConsent = async () => {
     setImageBusy(true);
+    setActionError(null);
     try {
       // PDF od razu po zgodzie (podgląd); ostateczna wersja podpisana idzie w mailu przy umowie.
       for (const item of imageItems) {
@@ -331,14 +334,19 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
       }
       setImageConsent(true);
       goAfterImage();
-    } catch {
-      alert('Nie udało się wygenerować PDF oświadczenia o wizerunku. Spróbuj ponownie.');
+    } catch (err) {
+      setActionError(
+        err instanceof Error && err.message
+          ? err.message
+          : 'Nie udało się wygenerować PDF oświadczenia o wizerunku. Spróbuj ponownie.',
+      );
     } finally {
       setImageBusy(false);
     }
   };
 
   const declineImageConsent = () => {
+    setActionError(null);
     setImageConsent(false);
     goAfterImage();
   };
@@ -358,6 +366,7 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
       // pickup already confirmed when entering contract via continueFromPickup
     }
     setBusy(true);
+    setActionError(null);
     try {
       const res = await fetch('/api/enrollment/sign', {
         method: 'POST',
@@ -368,7 +377,7 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
       if (!res.ok) throw new Error('Podpis nie powiódł się');
       onSigned?.(data);
     } catch {
-      alert('Nie udało się podpisać umowy.');
+      setActionError('Nie udało się podpisać umowy. Sprawdź połączenie i spróbuj ponownie.');
     } finally {
       setBusy(false);
     }
@@ -412,6 +421,38 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
 
   return (
     <div className="space-y-4">
+      {actionError ? (
+        <div
+          role="alert"
+          className="flex gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-950 shadow-sm"
+        >
+          <span
+            aria-hidden
+            className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-rose-100 text-rose-700"
+          >
+            <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+              <path
+                fillRule="evenodd"
+                d="M10 18a8 8 0 100-16 8 8 0 000 16zm-.75-11.25a.75.75 0 011.5 0v4.5a.75.75 0 01-1.5 0v-4.5zM10 14.5a1 1 0 100-2 1 1 0 000 2z"
+                clipRule="evenodd"
+              />
+            </svg>
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold text-rose-900">Nie udało się dokończyć tej czynności</p>
+            <p className="mt-0.5 text-rose-800/90">{actionError}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActionError(null)}
+            className="shrink-0 self-start rounded-lg px-2 py-1 text-xs font-semibold text-rose-800 transition hover:bg-rose-100"
+            aria-label="Zamknij komunikat"
+          >
+            Zamknij
+          </button>
+        </div>
+      ) : null}
+
       {phase === 'image' ? (
         <>
           <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">

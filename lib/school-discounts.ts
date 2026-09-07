@@ -2,12 +2,14 @@ import bcrypt from "bcryptjs";
 import { createUser, findUserBySchoolAndEmail, queryDb } from "@/lib/db";
 import {
   applyDiscountsToAmount,
+  applyManualDiscountPercent,
   clampMaxDiscountPercent,
   DEFAULT_MAX_DISCOUNT_PERCENT,
   DISCOUNT_KEYS,
   DISCOUNT_LABELS,
   MAX_DISCOUNT_PERCENT,
   hasIndividualPriceOverride,
+  parseManualDiscountPercent,
   type DiscountKey,
 } from "@/lib/discount-math";
 import type { ComplimentaryCandidate, ComplimentaryParentRow } from "@/lib/complimentary-parent-list";
@@ -16,12 +18,14 @@ import { formatPersonName } from "@/lib/format-person-name";
 import { generateTempPassword } from "@/lib/password";
 export {
   applyDiscountsToAmount,
+  applyManualDiscountPercent,
   clampMaxDiscountPercent,
   DEFAULT_MAX_DISCOUNT_PERCENT,
   DISCOUNT_KEYS,
   DISCOUNT_LABELS,
   MAX_DISCOUNT_PERCENT,
   hasIndividualPriceOverride,
+  parseManualDiscountPercent,
   type DiscountKey,
 };
 export type { ComplimentaryCandidate, ComplimentaryParentRow };

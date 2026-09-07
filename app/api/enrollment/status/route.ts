@@ -66,6 +66,8 @@ export async function GET(request: NextRequest) {
 
       lessons_per_week: number | null;
 
+      discount_percent: string | null;
+
     }>(
 
       `SELECT
@@ -122,7 +124,9 @@ export async function GET(request: NextRequest) {
              er.lessons_per_week,
              g.lessons_per_week
            )
-         ) AS lessons_per_week
+         ) AS lessons_per_week,
+
+         c.discount_percent::text AS discount_percent
 
        FROM children c
 
@@ -165,7 +169,7 @@ export async function GET(request: NextRequest) {
 
                 g.name, er.proposed_at, er.created_at, c.created_at, g.price_monthly, g.price_yearly,
                 g.price_per_lesson, g.teacher_pickup_consent, g.lessons_per_week, er.lesson_unit_price,
-                er.monthly_unit_price, er.yearly_unit_price
+                er.monthly_unit_price, er.yearly_unit_price, c.discount_percent
 
        ORDER BY er.created_at ASC, c.created_at ASC, c.id ASC`,
 
@@ -315,6 +319,8 @@ export async function GET(request: NextRequest) {
       yearly_unit_price: row.yearly_unit_price,
 
       lessons_per_week: row.lessons_per_week,
+
+      discount_percent: row.discount_percent,
 
     }));
 

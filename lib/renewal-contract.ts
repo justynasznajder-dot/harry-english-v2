@@ -36,6 +36,7 @@ export async function fetchParentRenewalContractChildren(
        c.lesson_unit_price::text AS lesson_unit_price,
        c.monthly_unit_price::text AS monthly_unit_price,
        c.yearly_unit_price::text AS yearly_unit_price,
+       c.discount_percent::text AS discount_percent,
        NULL::text AS preferred_location,
        COALESCE(MAX(l.name), NULL) AS preferred_location_name,
        u.first_name AS teacher_first_name,
@@ -55,7 +56,7 @@ export async function fetchParentRenewalContractChildren(
        ${idFilter}
      GROUP BY
        c.id, r.id, c.first_name, c.last_name, c.birth_date,
-       c.lesson_unit_price, c.monthly_unit_price, c.yearly_unit_price,
+       c.lesson_unit_price, c.monthly_unit_price, c.yearly_unit_price, c.discount_percent,
        g.id, g.name, g.price_monthly, g.price_yearly, g.price_per_lesson,
        g.teacher_pickup_consent, u.first_name, u.last_name
      ORDER BY c.last_name, c.first_name`,
@@ -78,6 +79,7 @@ export async function fetchParentRenewalContractChildren(
     lesson_unit_price: row.lesson_unit_price,
     monthly_unit_price: row.monthly_unit_price,
     yearly_unit_price: row.yearly_unit_price,
+    discount_percent: row.discount_percent,
     preferred_location: row.preferred_location,
     preferred_location_name: row.preferred_location_name,
     teacher_first_name: row.teacher_first_name,

@@ -70,7 +70,7 @@ function PipelineTable({
   complimentaryMode = false,
 }: {
   rows: PipelineRow[];
-  /** Tryb bez opłat — bez kolumn umowy; flow kończy się na grupie. */
+  /** Tryb bez umowy — bez kolumn umowy; flow kończy się na grupie. */
   complimentaryMode?: boolean;
 }) {
   if (rows.length === 0) {
@@ -109,7 +109,7 @@ function PipelineTable({
               !complimentaryMode &&
               (current === 'Umowa wysłana' ||
                 STAGE_ORDER[current] > STAGE_ORDER['Umowa wysłana'])
-                ? row.contractStatus?.trim() || 'Tak'
+                ? 'Tak'
                 : null;
             const signedLabel =
               !complimentaryMode && current === 'Umowa podpisana' ? 'Tak' : null;
@@ -284,7 +284,7 @@ export default function StudentPipelinePanel({
               <span className="font-normal text-zinc-500">({withoutContracts.length})</span>
             </h3>
             <p className="text-xs text-zinc-500">
-              Tryb bez opłat — zgłoszenie → przypisany do grupy (bez umowy).
+              Tryb bez umowy — zgłoszenie → przypisany do grupy (bez umowy).
             </p>
             <PipelineTable rows={withoutContracts} complimentaryMode />
           </section>

@@ -460,7 +460,7 @@ const organizationTabs: Array<{ key: OrganizationSubTab; label: string }> = [
   { key: 'schoolYear', label: 'Rok szkolny' },
   { key: 'teachers', label: 'Nauczyciele' },
   { key: 'locations', label: 'Lokalizacje' },
-  { key: 'discounts', label: 'Tryb bez opłat' },
+  { key: 'discounts', label: 'Tryb bez umowy' },
   { key: 'groups', label: 'Grupy' },
   { key: 'users', label: 'Użytkownicy' },
   { key: 'history', label: 'Historia' },
@@ -4297,7 +4297,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           {organizationSubTab === 'discounts' && (
             <div className="mt-4 space-y-6">
               <p className="text-sm text-zinc-600">
-                Rodzice w trybie bez opłat (bez faktur i płatności). Zniżki procentowe (KDR /
+                Rodzice w trybie bez umowy (bez faktur i płatności). Zniżki procentowe (KDR /
                 rodzeństwo) są wyłączone — ceny ustala manager ręcznie przy propozycji grupy.
               </p>
 
@@ -4317,7 +4317,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   */}
 
                   <div className="rounded-xl border border-emerald-100 bg-white p-4">
-                    <h4 className="font-semibold text-[#0f6e56]">Tryb bez opłat</h4>
+                    <h4 className="font-semibold text-[#0f6e56]">Tryb bez umowy</h4>
                     <p className="mt-1 text-sm text-zinc-600">
                       Rodzice z tej listy kończą zapis po akceptacji grupy — bez umowy, faktur i
                       płatności. Tryb włączasz na profilu rodzica.
@@ -4348,12 +4348,12 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     </p>
 
                     <h5 className="mt-4 text-sm font-semibold text-[#0f6e56]">
-                      Rodzice bez opłat
+                      Rodzice bez umowy
                     </h5>
                     <div className="mt-2 max-h-64 space-y-2 overflow-y-auto">
                       {complimentaryParents.length === 0 ? (
                         <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
-                          Brak rodziców w trybie bez opłat.
+                          Brak rodziców w trybie bez umowy.
                         </p>
                       ) : filteredComplimentaryParents.length === 0 ? (
                         <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
@@ -4404,7 +4404,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                   if (Array.isArray(data.complimentaryCandidates)) {
                                     setComplimentaryCandidates(data.complimentaryCandidates);
                                   }
-                                  pushToast('success', 'Usunięto z trybu bez opłat');
+                                  pushToast('success', 'Usunięto z trybu bez umowy');
                                 } catch {
                                   pushToast('error', 'Błąd usuwania rodzica');
                                 } finally {
@@ -4420,7 +4420,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     </div>
 
                     <h5 className="mt-4 text-sm font-semibold text-[#0f6e56]">
-                      Dodaj do trybu bez opłat
+                      Dodaj do trybu bez umowy
                     </h5>
                     <div className="mt-2 space-y-2">
                       <div className="max-h-56 overflow-y-auto rounded-xl border border-emerald-200">
@@ -4528,7 +4528,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                               );
                             }
                             setSelectedComplimentaryCandidateKey('');
-                            pushToast('success', 'Dodano rodzica do trybu bez opłat');
+                            pushToast('success', 'Dodano rodzica do trybu bez umowy');
                           } catch {
                             pushToast('error', 'Błąd dodawania rodzica');
                           } finally {
@@ -6918,7 +6918,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   <div>
                     <h5 className="font-semibold text-zinc-900">Faktury ratalne</h5>
                     <p className="mt-1 text-sm text-zinc-600">
-                      Podpisane umowy miesięczne (bez trybu bez opłat). Kwoty z umów — tak trafią na
+                      Podpisane umowy miesięczne (bez trybu bez umowy). Kwoty z umów — tak trafią na
                       fakturę. Checkbox „Wstrzymaj” wyłącza konkretne dziecko tylko w wybranym
                       miesiącu (kolejny miesiąc startuje bez wstrzymań). Przy częściowym
                       wstrzymaniu faktura automatyczna wystawi się tylko na pozostałe dzieci;

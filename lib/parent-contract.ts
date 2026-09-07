@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { formatPersonName } from "@/lib/format-person-name";
 import {
   // applyDiscountsToAmount, // wyłączone — sezon cen ręcznych
+  applyManualDiscountPercent,
   DISCOUNT_KEYS,
   getSchoolDiscountSettings,
   hasIndividualPriceOverride,
@@ -86,6 +87,8 @@ export type ParentContractChildRow = {
   lesson_unit_price: string | null;
   monthly_unit_price: string | null;
   yearly_unit_price: string | null;
+  /** Ręczny % zniżki z profilu dziecka (null = brak). */
+  discount_percent: string | null;
   preferred_location: string | null;
   preferred_location_name: string | null;
   teacher_first_name: string | null;
@@ -280,6 +283,7 @@ export async function fetchParentEnrollmentChildren(
        er.lesson_unit_price::text AS lesson_unit_price,
        er.monthly_unit_price::text AS monthly_unit_price,
        er.yearly_unit_price::text AS yearly_unit_price,
+       c.discount_percent::text AS discount_percent,
        er.preferred_location,
        loc.name AS preferred_location_name,
        u.first_name AS teacher_first_name,
@@ -394,19 +398,31 @@ export function buildChildRateSnapshots(
   monthly_unit_price: number | null;
   yearly_unit_price: number | null;
 }> {
-  return included.map((child) => ({
-    child_id: child.child_id,
-    name: `${formatPersonName(child.first_name)} ${formatPersonName(child.last_name)}`.trim(),
-    lesson_unit_price: resolveChildLessonUnitPriceForContract(child),
-    monthly_unit_price: scaleAmountByLessonsPerWeek(
-      resolveChildMonthlyUnitPriceForContract(child),
-      lessonsPerWeek
-    ),
-    yearly_unit_price: scaleAmountByLessonsPerWeek(
-      resolveChildYearlyUnitPriceForContract(child),
-      lessonsPerWeek
-    ),
-  }));
+  return included.map((child) => {
+    const discountPercent = child.discount_percent;
+    return {
+      child_id: child.child_id,
+      name: `${formatPersonName(child.first_name)} ${formatPersonName(child.last_name)}`.trim(),
+      lesson_unit_price: applyManualDiscountPercent(
+        resolveChildLessonUnitPriceForContract(child),
+        discountPercent
+      ),
+      monthly_unit_price: applyManualDiscountPercent(
+        scaleAmountByLessonsPerWeek(
+          resolveChildMonthlyUnitPriceForContract(child),
+          lessonsPerWeek
+        ),
+        discountPercent
+      ),
+      yearly_unit_price: applyManualDiscountPercent(
+        scaleAmountByLessonsPerWeek(
+          resolveChildYearlyUnitPriceForContract(child),
+          lessonsPerWeek
+        ),
+        discountPercent
+      ),
+    };
+  });
 }
 
 export function buildParentContractAmountBreakdown(
@@ -795,7 +811,7 @@ export async function generateParentContract(
   );
   const paymentAmountRaw =
     paymentType === "PER_LESSON"
-      ? resolveChildLessonUnitPriceForContract(child)
+      ? childRates[0]?.lesson_unit_price ?? null
       : amount;
   const paymentAmountLabel = formatLessonUnitPriceLabel(
     billingExempt ? 0 : paymentAmountRaw
@@ -805,7 +821,7 @@ export async function generateParentContract(
     amountLabel: paymentAmountLabel,
   });
   const lessonUnitPriceLabel = formatLessonUnitPriceLabel(
-    billingExempt ? 0 : resolveChildLessonUnitPriceForContract(child)
+    billingExempt ? 0 : childRates[0]?.lesson_unit_price ?? null
   );
 
   if (!schoolYearId) {
@@ -929,7 +945,7 @@ export async function generateParentContract(
       ? buildPerLessonClause([
           {
             name: childFullName,
-            unitPrice: resolveChildLessonUnitPriceForContract(child) ?? 0,
+            unitPrice: childRates[0]?.lesson_unit_price ?? 0,
           },
         ])
       : buildAmountClause(paymentTypeToClauseKey(paymentType), amount);

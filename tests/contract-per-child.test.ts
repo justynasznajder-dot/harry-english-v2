@@ -100,6 +100,7 @@ describe("umowa per dziecko — sibling i walidacja", () => {
       lesson_unit_price: null,
       monthly_unit_price: null,
       yearly_unit_price: null,
+      discount_percent: null,
       preferred_location: null,
       preferred_location_name: null,
       teacher_first_name: null,

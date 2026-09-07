@@ -84,8 +84,8 @@ function filenameMatchesContractNumber(
   if (!slug) return false;
   const base = (filename.split(/[/\\]/).pop() ?? filename).replace(/\.pdf$/i, '');
   const escaped = slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // `Umowa-{slug}` albo `…-{slug}` na końcu nazwy (jak przy generowaniu PDF).
-  return new RegExp(`(?:^|[-_])${escaped}$`, 'i').test(base);
+  // `Umowa _ Imię _ {slug}` albo `Umowa-{slug}` — separator może mieć spacje wokół `_`/`-`.
+  return new RegExp(`(?:^|[-_\\s])${escaped}$`, 'i').test(base);
 }
 
 function pdfMatchesContractNumbers(file: PdfFile, contracts: ContractDoc[]): boolean {
@@ -296,12 +296,15 @@ export default function ParentDocumentsTab({
 
     const assignedKeys = new Set<string>();
 
-    // 1) Umowy PDF — wyłącznie po numerze umowy dziecka.
+    // 1) Umowy PDF — po numerze umowy albo imieniu dziecka w nazwie pliku.
     for (const group of byChildId.values()) {
+      const child = group.childId ? childById.get(group.childId) : null;
       for (const file of filteredPdfFiles) {
         if (assignedKeys.has(file.key)) continue;
         if (!isMainContractPdf(file.filename)) continue;
-        if (!pdfMatchesContractNumbers(file, group.contracts)) continue;
+        const byNumber = pdfMatchesContractNumbers(file, group.contracts);
+        const byName = child ? pdfMatchesChildName(file, child) : false;
+        if (!byNumber && !byName) continue;
         group.pdfFiles.push(file);
         assignedKeys.add(file.key);
       }
@@ -322,7 +325,7 @@ export default function ParentDocumentsTab({
       }
     }
 
-    // 3) Zgody bez kontraktu (np. tryb bez opłat) — po imieniu z nazwy pliku.
+    // 3) Zgody bez kontraktu (np. Tryb bez umowy) — po imieniu z nazwy pliku.
     for (const file of filteredPdfFiles) {
       if (assignedKeys.has(file.key)) continue;
       const fromPickup = childNameFromPickupFilename(file.filename);
@@ -405,7 +408,7 @@ export default function ParentDocumentsTab({
       ) : contracts.length === 0 && pdfFiles.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-10 text-center text-sm text-zinc-600">
           {complimentaryAccess
-            ? 'Tryb bez opłat — wcześniejsze umowy i dokumenty płatne nie są dostępne. Ewentualna zgoda na odbiór przez lektora pojawi się poniżej, jeśli jest wymagana.'
+            ? 'Tryb bez umowy — wcześniejsze umowy i dokumenty płatne nie są dostępne. Ewentualna zgoda na odbiór przez lektora pojawi się poniżej, jeśli jest wymagana.'
             : 'Brak podpisanych dokumentów. Po podpisaniu umowy pojawią się tu pliki PDF dla każdego dziecka.'}
         </div>
       ) : emptyForYear ? (

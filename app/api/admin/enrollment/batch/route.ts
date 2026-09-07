@@ -117,8 +117,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         message: complimentaryMode
           ? anyWithGroup
-            ? "Zapisano grupę i stawki (tryb bez opłat, bez e-maila)"
-            : "Zapisano stawki (tryb bez opłat) — grupę możesz przypisać później"
+            ? "Zapisano grupę i stawki (tryb bez umowy, bez e-maila)"
+            : "Zapisano stawki (tryb bez umowy) — grupę możesz przypisać później"
           : anyWithGroup
             ? "Zapisano dane i dodano dziecko do grupy (niepotwierdzone — bez wysyłki e-mail)"
             : "Zapisano stawki (bez grupy — możesz uzupełnić później)",
@@ -160,6 +160,9 @@ export async function POST(request: NextRequest) {
     const emailItems: ProposalEmailItem[] = [];
     let complimentaryCompleted = false;
 
+    // PROPOSED: retry po częściowym sukcesie (np. PDF zgody na odbiór padł przed COMPLETED).
+    const allowedStatuses = complimentaryMode ? (["NEW", "PROPOSED"] as const) : (["NEW"] as const);
+
     for (const p of proposals) {
       const result = await submitEnrollmentProposal(
         {
@@ -173,7 +176,8 @@ export async function POST(request: NextRequest) {
         sharedParent,
         {
           ...schoolRestrict,
-          allowedStatuses: ["NEW"],
+          allowedStatuses: [...allowedStatuses],
+          complimentaryPrices: complimentaryMode,
         }
       );
       if (!result.ok) {
@@ -224,6 +228,14 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error("Admin enrollment batch POST error:", error);
-    return NextResponse.json({ message: "Błąd wysyłania propozycji zbiorczej" }, { status: 500 });
+    const detail = error instanceof Error ? error.message.trim() : "";
+    return NextResponse.json(
+      {
+        message: detail
+          ? `Błąd wysyłania propozycji zbiorczej: ${detail}`
+          : "Błąd wysyłania propozycji zbiorczej",
+      },
+      { status: 500 }
+    );
   }
 }

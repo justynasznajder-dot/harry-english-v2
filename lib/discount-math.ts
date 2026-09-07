@@ -69,3 +69,22 @@ export function applyDiscountsToAmount(
   const result = baseAmount * (1 - totalPercent / 100);
   return Math.round(result * 100) / 100;
 }
+
+/** Ręczny % zniżki z profilu dziecka (0–100). null = brak / nieprawidłowy. */
+export function parseManualDiscountPercent(raw: unknown): number | null {
+  if (raw == null || String(raw).trim() === "") return null;
+  const parsed = Number(String(raw).replace(",", "."));
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.min(100, Math.max(0, parsed));
+}
+
+/** Odlicza ręczny % zniżki od kwoty (zaokrąglenie do 0,01 PLN). */
+export function applyManualDiscountPercent(
+  amount: number | null | undefined,
+  discountPercent: unknown
+): number | null {
+  if (amount == null || !Number.isFinite(amount)) return amount ?? null;
+  const pct = parseManualDiscountPercent(discountPercent);
+  if (pct == null) return amount;
+  return Math.round(amount * (1 - pct / 100) * 100) / 100;
+}

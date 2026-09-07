@@ -923,12 +923,12 @@ Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logow
 `;
 
   const introHtml = options?.complimentaryCompleted
-    ? `Przygotowaliśmy grupę dla ${safeChildName}. Zapis został zakończony (tryb bez opłat) — zaloguj się do portalu, aby zobaczyć szczegóły.`
+    ? `Przygotowaliśmy grupę dla ${safeChildName}. Zapis został zakończony (tryb bez umowy) — zaloguj się do portalu, aby zobaczyć szczegóły.`
     : ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
       ? `Przygotowaliśmy nową propozycję grupy dla ${safeChildName}. Zaakceptuj ją w portalu, a następnie uzupełnij dane do umowy. Umowę przygotuje szkoła.`
       : `Przygotowaliśmy grupę dla ${safeChildName}. Zaloguj się do portalu i uzupełnij dane do umowy — dokument przygotuje szkoła.`;
   const introText = options?.complimentaryCompleted
-    ? `Przygotowaliśmy grupę dla ${childNameText}. Zapis został zakończony (tryb bez opłat) — zaloguj się do portalu, aby zobaczyć szczegóły:`
+    ? `Przygotowaliśmy grupę dla ${childNameText}. Zapis został zakończony (tryb bez umowy) — zaloguj się do portalu, aby zobaczyć szczegóły:`
     : ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
       ? `Przygotowaliśmy nową propozycję grupy dla ${childNameText}. Zaakceptuj ją w portalu, a następnie uzupełnij dane do umowy. Umowę przygotuje szkoła:`
       : `Przygotowaliśmy grupę dla ${childNameText}. Zaloguj się do portalu i uzupełnij dane do umowy — dokument przygotuje szkoła:`;
@@ -1074,7 +1074,7 @@ ${
       ? "Przygotowaliśmy propozycję grupy dla Twojego dziecka."
       : `Przygotowaliśmy propozycje grup dla ${childCount} dzieci.`;
   const introAction = options?.complimentaryCompleted
-    ? "Zapis został zakończony (tryb bez opłat) — zaloguj się do portalu, aby zobaczyć szczegóły."
+    ? "Zapis został zakończony (tryb bez umowy) — zaloguj się do portalu, aby zobaczyć szczegóły."
     : ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
       ? "Zaakceptuj je w portalu, uzupełnij dane do umowy — dokument przygotuje szkoła po zatwierdzeniu grupy."
       : "Zaloguj się do portalu i uzupełnij dane do umowy — dokument przygotuje szkoła po zatwierdzeniu grupy.";

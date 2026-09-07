@@ -208,7 +208,7 @@ export async function POST(request: NextRequest) {
     const complimentaryCandidates = await listComplimentaryCandidates(schoolId);
 
     return NextResponse.json({
-      message: "Rodzic dodany do trybu bez opłat",
+      message: "Rodzic dodany do trybu bez umowy",
       complimentaryParents,
       complimentaryCandidates,
     });
@@ -250,7 +250,7 @@ export async function DELETE(request: NextRequest) {
     const complimentaryCandidates = await listComplimentaryCandidates(schoolId);
 
     return NextResponse.json({
-      message: "Rodzic usunięty z trybu bez opłat",
+      message: "Rodzic usunięty z trybu bez umowy",
       complimentaryParents,
       complimentaryCandidates,
     });

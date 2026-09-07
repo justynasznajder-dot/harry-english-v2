@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { buildAttachmentContentDisposition } from "@/lib/content-disposition";
 import { getUserById } from "@/lib/db";
 import { isPickupConsentPdfFilename } from "@/lib/pickup-consent-notice";
 import { requireParentContext } from "@/lib/parent-portal-auth";
@@ -36,7 +37,7 @@ export async function GET(request: NextRequest) {
       const filename = key.split("/").pop() ?? "";
       if (!isPickupConsentPdfFilename(filename)) {
         return NextResponse.json(
-          { message: "Tryb bez opłat — wcześniejsze dokumenty nie są dostępne do pobrania" },
+          { message: "Tryb bez umowy — wcześniejsze dokumenty nie są dostępne do pobrania" },
           { status: 403 },
         );
       }
@@ -51,7 +52,7 @@ export async function GET(request: NextRequest) {
       status: 200,
       headers: {
         "Content-Type": contentType,
-        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Content-Disposition": buildAttachmentContentDisposition(filename),
         "Cache-Control": "private, no-store",
       },
     });

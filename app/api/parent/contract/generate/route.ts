@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           message:
-            "Tryb bez opłat — umowa nie jest wymagana. Zapis kończy się po akceptacji grupy.",
+            "Tryb bez umowy — umowa nie jest wymagana. Zapis kończy się po akceptacji grupy.",
         },
         { status: 403 }
       );

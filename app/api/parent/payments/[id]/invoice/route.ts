@@ -27,7 +27,7 @@ export async function GET(
     });
     if (complimentary) {
       return NextResponse.json(
-        { message: "Tryb bez opłat — faktury nie są dostępne do pobrania" },
+        { message: "Tryb bez umowy — faktury nie są dostępne do pobrania" },
         { status: 403 },
       );
     }

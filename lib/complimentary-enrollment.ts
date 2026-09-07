@@ -9,6 +9,7 @@ import {
 /**
  * Kończy zapis po akceptacji grupy — bez umowy i bez zgody na wizerunek (tryb bez opłat).
  * Jeśli grupa wymaga zgody na odbiór przez lektora — generuje PDF zgody (nie załącznik).
+ * Błąd PDF nie blokuje COMPLETED ani maila z logowaniem (dokument można wygenerować później).
  */
 export async function completeComplimentaryEnrollment(
   enrollmentRequestId: string,
@@ -19,13 +20,29 @@ export async function completeComplimentaryEnrollment(
   pickupConsentPreviewHtml?: string;
   pickupConsentChildName?: string;
   pickupConsentDownloadKey?: string | null;
+  pickupConsentError?: string;
 }> {
-  // Najpierw dokument (przed COMPLETED), żeby przy błędzie rodzic mógł ponowić akceptację.
-  const pickup = await generateComplimentaryPickupConsentIfNeeded({
-    enrollmentRequestId,
-    parentId,
-    schoolId,
-  });
+  let pickup: {
+    generated: boolean;
+    previewHtml?: string;
+    childName?: string;
+    downloadKey?: string | null;
+  } = { generated: false };
+  let pickupConsentError: string | undefined;
+
+  try {
+    pickup = await generateComplimentaryPickupConsentIfNeeded({
+      enrollmentRequestId,
+      parentId,
+      schoolId,
+    });
+  } catch (err) {
+    pickupConsentError = err instanceof Error ? err.message : "nieznany błąd PDF zgody na odbiór";
+    console.error(
+      "complimentary pickup consent PDF failed (enrollment will still complete):",
+      err
+    );
+  }
 
   await queryDb(
     `UPDATE enrollment_requests
@@ -56,6 +73,7 @@ export async function completeComplimentaryEnrollment(
     pickupConsentPreviewHtml: pickup.previewHtml,
     pickupConsentChildName: pickup.childName,
     pickupConsentDownloadKey: pickup.downloadKey ?? null,
+    pickupConsentError,
   };
 }
 

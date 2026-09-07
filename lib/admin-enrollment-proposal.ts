@@ -74,7 +74,7 @@ export type ProposalInput = {
   discountPercent?: number | string | null;
 };
 
-export type EnrollmentProposalStatus = "NEW" | "NEGOTIATING";
+export type EnrollmentProposalStatus = "NEW" | "NEGOTIATING" | "PROPOSED";
 
 /**
  * Dane logowania do maila z propozycją.
@@ -129,7 +129,7 @@ export async function submitEnrollmentProposal(
     draftOnly?: boolean;
     /** Przy draftOnly — puste stawki jako NULL. */
     allowEmptyPrices?: boolean;
-    /** Tryb bez opłat: wszystkie 3 stawki opcjonalne (można zostawić puste). */
+    /** Tryb bez umowy: wszystkie 3 stawki opcjonalne (można zostawić puste). */
     complimentaryPrices?: boolean;
   }
 ): Promise<
@@ -137,7 +137,7 @@ export async function submitEnrollmentProposal(
       ok: true;
       sharedParent: SharedParentState;
       emailItem: ProposalEmailItem;
-      /** Tryb bez opłat — zapis domknięty przy propozycji (gdy akceptacja wyłączona). */
+      /** Tryb bez umowy — zapis domknięty przy propozycji (gdy akceptacja wyłączona). */
       complimentaryCompleted: boolean;
       childId: string;
       groupChanged: boolean;
@@ -572,7 +572,17 @@ export async function submitEnrollmentProposal(
     !draftOnly && !ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && complimentary;
 
   if (complimentaryCompleted) {
-    await completeComplimentaryEnrollment(requestId, parentUserId, parentSchoolId);
+    try {
+      await completeComplimentaryEnrollment(requestId, parentUserId, parentSchoolId);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "nieznany błąd";
+      console.error("completeComplimentaryEnrollment failed:", err);
+      return {
+        ok: false,
+        status: 500,
+        message: `Zapis w trybie bez opłat nie dokończył się (${detail}). Spróbuj ponownie „Wyślij maila”.`,
+      };
+    }
   } else if (!draftOnly) {
     await syncParentUserAccessLevel(parentUserId);
   }

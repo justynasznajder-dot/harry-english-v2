@@ -39,7 +39,7 @@ export async function downloadEnrollmentListXlsx(input: {
         Uczeń: `${child.firstName} ${child.lastName}`.trim(),
         Rodzic: `${parent.firstName} ${parent.lastName}`.trim(),
         Email: parent.email,
-        "Tryb bez opłat": parent.complimentary ? "Tak" : "Nie",
+        "Tryb bez umowy": parent.complimentary ? "Tak" : "Nie",
         Status: badge.label,
         "Status (kod)":
           ENROLLMENT_STATUS_LABELS[child.status] ?? String(child.status),
@@ -60,7 +60,7 @@ export async function downloadEnrollmentListXlsx(input: {
             Uczeń: "",
             Rodzic: "",
             Email: "",
-            "Tryb bez opłat": "",
+            "Tryb bez umowy": "",
             Status: "",
             "Status (kod)": "",
             "Data urodzenia": "",

@@ -380,7 +380,7 @@ export default function ParentPaymentsTab({ complimentaryAccess }: { complimenta
       <section className="space-y-4 rounded-3xl border border-emerald-100 bg-white p-5 md:p-6">
         <h2 className="text-xl font-bold text-zinc-900 md:text-2xl">Płatności</h2>
         <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-6 text-sm text-sky-900">
-          <p className="font-semibold">Tryb bez opłat</p>
+          <p className="font-semibold">Tryb bez umowy</p>
           <p className="mt-2">
             Twoje konto korzysta z dostępu do systemu bez generowania faktur i bez pobierania
             płatności.

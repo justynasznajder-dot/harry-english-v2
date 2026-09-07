@@ -9,6 +9,9 @@ const nextConfig: NextConfig = {
     "@sparticuz/chromium",
     "puppeteer",
     "puppeteer-core",
+    "@puppeteer/browsers",
+    "proxy-agent",
+    "socks-proxy-agent",
   ],
   outputFileTracingIncludes: {
     "/api/enrollment/sign": chromiumTracingIncludes,

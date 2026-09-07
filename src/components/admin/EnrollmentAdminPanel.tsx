@@ -211,7 +211,7 @@ export default function EnrollmentAdminPanel({
       const parentUserId = (parent.parentUserId ?? '').trim();
       const saveKey = parentUserId || parent.id;
       if (checked && !email && !parentUserId) {
-        pushToast('error', 'Brak e-maila rodzica — nie można oznaczyć trybu bez opłat');
+        pushToast('error', 'Brak e-maila rodzica — nie można oznaczyć trybu bez umowy');
         return;
       }
 
@@ -232,13 +232,13 @@ export default function EnrollmentAdminPanel({
             complimentaryParents?: ComplimentaryParentRow[];
           };
           if (!res.ok) {
-            pushToast('error', data.message ?? 'Nie udało się włączyć trybu bez opłat');
+            pushToast('error', data.message ?? 'Nie udało się włączyć trybu bez umowy');
             return;
           }
           if (Array.isArray(data.complimentaryParents)) {
             onComplimentaryParentsChange?.(data.complimentaryParents);
           }
-          pushToast('success', 'Włączono tryb bez opłat');
+          pushToast('success', 'Włączono tryb bez umowy');
         } else {
           const existing = complimentaryParents.find((row) => {
             if (parentUserId && row.parentId === parentUserId) return true;
@@ -263,18 +263,18 @@ export default function EnrollmentAdminPanel({
             complimentaryParents?: ComplimentaryParentRow[];
           };
           if (!res.ok) {
-            pushToast('error', data.message ?? 'Nie udało się wyłączyć trybu bez opłat');
+            pushToast('error', data.message ?? 'Nie udało się wyłączyć trybu bez umowy');
             return;
           }
           if (Array.isArray(data.complimentaryParents)) {
             onComplimentaryParentsChange?.(data.complimentaryParents);
           }
-          pushToast('success', 'Wyłączono tryb bez opłat');
+          pushToast('success', 'Wyłączono tryb bez umowy');
         }
       } catch (err) {
         pushToast(
           'error',
-          err instanceof Error ? err.message : 'Błąd zapisu trybu bez opłat',
+          err instanceof Error ? err.message : 'Błąd zapisu trybu bez umowy',
         );
       } finally {
         setSavingComplimentaryKey(null);
@@ -295,12 +295,6 @@ export default function EnrollmentAdminPanel({
           if (em.length > 0 && pid.includes('@') && em === pid.toLowerCase()) return true;
           return false;
         }) ?? null;
-  const proposalNewChildren =
-    proposalParent?.children.filter((c) => c.status === 'NEW') ?? [];
-  const hasAcceptedSibling = (requestId: string) =>
-    proposalParent?.children.some(
-      (c) => c.requestId !== requestId && c.status === 'ACCEPTED',
-    ) ?? false;
   const proposalParentIsComplimentary = useMemo(
     () =>
       proposalParent
@@ -308,6 +302,17 @@ export default function EnrollmentAdminPanel({
         : false,
     [proposalParent, complimentaryParents],
   );
+  /** NEW + PROPOSED (retry trybu bez umowy po częściowym zapisie przed COMPLETED). */
+  const proposalNewChildren =
+    proposalParent?.children.filter(
+      (c) =>
+        c.status === 'NEW' ||
+        (proposalParentIsComplimentary && c.status === 'PROPOSED'),
+    ) ?? [];
+  const hasAcceptedSibling = (requestId: string) =>
+    proposalParent?.children.some(
+      (c) => c.requestId !== requestId && c.status === 'ACCEPTED',
+    ) ?? false;
   const proposalEmailEnabled = isEnrollmentProposalEmailEnabled(proposalParent?.schoolId);
   const proposalBatchReady =
     proposalNewChildren.length >= 1 &&
@@ -320,7 +325,7 @@ export default function EnrollmentAdminPanel({
   /**
    * Zapisz: wystarczy pełne dane u jednego dziecka; pozostałe mogą być puste.
    * Częściowe stawki (1–2 z 3) u któregokolwiek dziecka blokują zapis (tylko płatni rodzice).
-   * Tryb bez opłat: stawki opcjonalne; grupa opcjonalna.
+   * Tryb bez umowy: stawki opcjonalne; grupa opcjonalna.
    */
   const proposalBatchSaveReady =
     proposalNewChildren.length >= 1 &&
@@ -334,8 +339,8 @@ export default function EnrollmentAdminPanel({
         Boolean((proposalDrafts[c.requestId]?.groupId ?? '').trim()),
       );
       return anyGroup
-        ? 'Zapisz grupę oraz opcjonalne stawki (bez opłat, bez e-maila)'
-        : 'Zapisz (tryb bez opłat) — stawki i grupa opcjonalne';
+        ? 'Zapisz grupę oraz opcjonalne stawki (bez umowy, bez e-maila)'
+        : 'Zapisz (tryb bez umowy) — stawki i grupa opcjonalne';
     }
     if (proposalBatchSaveReady) {
       const allHaveGroup = proposalNewChildren
@@ -564,7 +569,7 @@ export default function EnrollmentAdminPanel({
                   </p>
                   <p className="text-sm text-zinc-600">{parent.email}</p>
                   {parentIsComplimentary && (
-                    <p className="mt-1 text-xs font-medium text-sky-800">Tryb bez opłat</p>
+                    <p className="mt-1 text-xs font-medium text-sky-800">Tryb bez umowy</p>
                   )}
                 </div>
                 <button
@@ -668,7 +673,7 @@ export default function EnrollmentAdminPanel({
                           void saveParentComplimentary(proposalParent, e.target.checked);
                         }}
                       />
-                      Tryb bez opłat
+                      Tryb bez umowy
                     </label>
                     <p className="mt-1 text-xs text-zinc-500">
                       Po akceptacji grupy zapis kończy się bez umowy, faktur i płatności. Działa
@@ -689,7 +694,7 @@ export default function EnrollmentAdminPanel({
                   </div>
                   {proposalParentIsComplimentary && (
                     <p className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
-                      Rodzic jest w trybie bez opłat — wyślij potwierdzenie o przypisaniu do
+                      Rodzic jest w trybie bez umowy — wyślij potwierdzenie o przypisaniu do
                       grupy i terminie zajęć.
                     </p>
                   )}
@@ -1339,7 +1344,7 @@ export default function EnrollmentAdminPanel({
                           'success',
                           data.message ??
                             (proposalParentIsComplimentary
-                              ? `Zapisano (${data.count ?? proposals.length}) — bez opłat`
+                              ? `Zapisano (${data.count ?? proposals.length}) — bez umowy`
                               : `Zapisano dane propozycji (${data.count ?? proposals.length}) — dziecko w grupie jako niepotwierdzone`),
                         );
                         setProposalModalParentId(null);
@@ -1381,7 +1386,10 @@ export default function EnrollmentAdminPanel({
                         const res = await fetch('/api/admin/enrollment/batch', {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ proposals }),
+                          body: JSON.stringify({
+                            proposals,
+                            complimentaryMode: proposalParentIsComplimentary,
+                          }),
                         });
                         const data = (await res.json().catch(() => ({}))) as {
                           message?: string;

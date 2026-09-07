@@ -13,7 +13,7 @@ import { isComplimentaryForParent } from "@/lib/school-discounts";
  *
  * Body (opcjonalne): `{ requestId?: string }`.
  *
- * Tryb bez opłat: zapis kończy się od razu (COMPLETED), bez umowy/wizerunku;
+ * Tryb bez umowy: zapis kończy się od razu (COMPLETED), bez umowy/wizerunku;
  * ewentualnie generuje zgodę na odbiór przez lektora.
  * Standardowo: ACCEPTED → uzupełnienie danych do umowy (bez auto-generowania).
  */
@@ -114,7 +114,7 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({
       message: complimentary
         ? remaining === 0
-          ? "Propozycja zaakceptowana — zapis został zakończony (tryb bez opłat)."
+          ? "Propozycja zaakceptowana — zapis został zakończony (tryb bez umowy)."
           : "Propozycja zaakceptowana — zapis tego dziecka zakończony. Pozostałe propozycje czekają na decyzję."
         : remaining === 0
           ? "Propozycja zaakceptowana — przejdź do uzupełnienia danych do umowy."

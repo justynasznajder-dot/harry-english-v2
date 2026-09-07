@@ -8,7 +8,12 @@ import type { ContractPricingContext } from '@/lib/contract-pricing-preview';
 import { resolveChildBaseAmount } from '@/lib/enrollment-pricing';
 import { ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE } from '@/lib/enrollment-status';
 import { resolveLessonUnitPrice } from '@/lib/lesson-pricing';
+import {
+  applyManualDiscountPercent,
+  parseManualDiscountPercent,
+} from '@/lib/discount-math';
 import { validateParentContractProfileInput } from '@/lib/parent-contract-profile';
+import { parseContentDispositionFilename } from '@/lib/content-disposition';
 import { paymentTypeShortLabel } from '@/lib/payment-labels';
 import {
   lessonsPerWeekLabel,
@@ -65,6 +70,7 @@ interface EnrollmentProposal {
   monthly_unit_price?: number | null;
   yearly_unit_price?: number | null;
   lessons_per_week?: number | null;
+  discount_percent?: string | number | null;
   teacher_pickup_consent?: boolean;
 }
 
@@ -153,8 +159,7 @@ async function downloadSignedContractPdf(params: {
   }
   const blob = await res.blob();
   const disposition = res.headers.get('Content-Disposition') ?? '';
-  const match = /filename="([^"]+)"/i.exec(disposition);
-  const filename = match?.[1] ?? 'dokument.pdf';
+  const filename = parseContentDispositionFilename(disposition) ?? 'dokument.pdf';
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -1381,7 +1386,7 @@ export default function EnrollmentParentFlow({
                   . Zaakceptuj{' '}
                   {pendingProposalCount > 1 ? 'je' : 'ją'}, aby
                   {userInfo.complimentaryAccess
-                    ? ' zakończyć zapis (tryb bez opłat — bez umowy).'
+                    ? ' zakończyć zapis (tryb bez umowy).'
                     : ' przejść dalej w procesie zapisu.'}
                   {!userInfo.complimentaryAccess &&
                     proposals.some((p) => childAccessLevel(p) === 'ACCEPTED') &&
@@ -1930,6 +1935,16 @@ export default function EnrollmentParentFlow({
                           if (billingExempt) return 0;
                           const base = resolveProposalPaymentAmount(p, type);
                           // Za zajęcie — cena jednostkowa; ratalny/jednorazowy × częstotliwość.
+                          const scaled =
+                            type === 'PER_LESSON'
+                              ? base
+                              : scaleAmountByLessonsPerWeek(base, childLessonsPerWeek);
+                          return applyManualDiscountPercent(scaled, p.discount_percent);
+                        };
+                        const discountPct = parseManualDiscountPercent(p.discount_percent);
+                        const baseAmountFor = (type: 'MONTHLY' | 'YEARLY' | 'PER_LESSON') => {
+                          if (billingExempt) return 0;
+                          const base = resolveProposalPaymentAmount(p, type);
                           if (type === 'PER_LESSON') return base;
                           return scaleAmountByLessonsPerWeek(base, childLessonsPerWeek);
                         };
@@ -2020,6 +2035,12 @@ export default function EnrollmentParentFlow({
                                     <div className="flex flex-col gap-2">
                                       {(['MONTHLY', 'YEARLY', 'PER_LESSON'] as const).map((type) => {
                                         const amount = amountFor(type);
+                                        const baseAmount = baseAmountFor(type);
+                                        const showDiscountNote =
+                                          discountPct != null &&
+                                          baseAmount != null &&
+                                          amount != null &&
+                                          amount !== baseAmount;
                                         return (
                                           <label
                                             key={type}
@@ -2048,6 +2069,12 @@ export default function EnrollmentParentFlow({
                                                   : ''}
                                                 )
                                               </span>
+                                              {showDiscountNote ? (
+                                                <span className="mt-0.5 block text-xs font-normal text-zinc-500">
+                                                  Cena wynika z ceny {formatPlnAmount(baseAmount)}
+                                                  uwzględniając {discountPct}% zniżki
+                                                </span>
+                                              ) : null}
                                             </span>
                                           </label>
                                         );
@@ -2281,7 +2308,7 @@ export default function EnrollmentParentFlow({
         ) : null}
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-900">
           {userInfo.complimentaryAccess
-            ? `Zapis został zakończony (tryb bez opłat). ${
+            ? `Zapis został zakończony (tryb bez umowy). ${
                 enrolledChildren.length > 1 ? 'Dzieci są aktywnymi uczestnikami' : 'Dziecko jest aktywnym uczestnikiem'
               } zajęć${
                 schoolYearName ? ` w roku szkolnym ${schoolYearName}` : ''

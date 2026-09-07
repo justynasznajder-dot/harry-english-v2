@@ -101,7 +101,7 @@ export function resolveStudentListPipelineStage(input: {
   enrollmentStatus?: string | null;
   hasGroup?: boolean;
   contractStatus?: string | null;
-  /** Tryb bez opłat — flow kończy się na przypisaniu do grupy (bez etapów umowy). */
+  /** Tryb bez umowy — flow kończy się na przypisaniu do grupy (bez etapów umowy). */
   complimentary?: boolean;
 }): StudentListPipelineStage {
   const level = String(input.enrollmentStatus ?? "")
@@ -156,7 +156,7 @@ export function resolveStudentListPipelineStage(input: {
 export const ENROLLMENT_LIST_FILTERS = [
   { value: "", label: "Wszystkie" },
   { value: "NEW", label: "Nowe" },
-  { value: "COMPLIMENTARY", label: "Tryb bez opłat" },
+  { value: "COMPLIMENTARY", label: "Tryb bez umowy" },
   /** Dzieci z przypisaną grupą (szkic NEW + proposed_group / legacy ACCEPTED). */
   { value: "ACCEPTED", label: "Grupa przypisana" },
   { value: "CONTRACT_READY", label: "Umowa do podpisu" },
@@ -173,15 +173,15 @@ function hasProposedGroup(child: { proposedGroupId?: string | null }): boolean {
 }
 
 export type EnrollmentStatusFilterOptions = {
-  /** Rodzic na liście school_complimentary_parents — wyklucza z „Nowe”, włącza do „Tryb bez opłat”. */
+  /** Rodzic na liście school_complimentary_parents — wyklucza z „Nowe”, włącza do „Tryb bez umowy”. */
   parentIsComplimentary?: boolean;
 };
 
 /**
  * Filtr listy zgłoszeń.
  * „Grupa przypisana” = status ACCEPTED albo szkic NEW z już wybraną grupą (Zapisz bez wysyłki).
- * „Nowe” = NEW bez przypisanej grupy i bez trybu bez opłat.
- * „Tryb bez opłat” = dzieci rodzica w trybie complimentary (widoczne statusy).
+ * „Nowe” = NEW bez przypisanej grupy i bez trybu bez umowy.
+ * „Tryb bez umowy” = dzieci rodzica w trybie complimentary (widoczne statusy).
  */
 export function filterEnrollmentChildrenByStatus<
   T extends { status: EnrollmentStatus; proposedGroupId?: string | null },

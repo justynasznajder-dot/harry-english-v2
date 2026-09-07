@@ -47,7 +47,7 @@ function pipelineCells(
     !complimentaryMode &&
     (current === "Umowa wysłana" ||
       STAGE_ORDER[current] > STAGE_ORDER["Umowa wysłana"])
-      ? row.contractStatus?.trim() || "Tak"
+      ? "Tak"
       : "";
 
   const contractSigned =
@@ -102,7 +102,7 @@ export async function downloadStudentPipelineXlsx(input: {
     ["Wygenerowano", new Date().toLocaleString("pl-PL")],
     ["Przepływ", STUDENT_LIST_PIPELINE_STAGES.join(" → ")],
     ["Z umowami", String(input.withContracts.length)],
-    ["Bez umów (tryb bez opłat)", String(input.withoutContracts.length)],
+    ["Bez umów (tryb bez umowy)", String(input.withoutContracts.length)],
     ["Razem", String(input.withContracts.length + input.withoutContracts.length)],
   ]);
   XLSX.utils.book_append_sheet(wb, meta, "Info");

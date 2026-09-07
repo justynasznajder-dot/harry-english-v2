@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
     });
     if (complimentary) {
       return NextResponse.json(
-        { message: "Tryb bez opłat — dane do umowy nie są wymagane." },
+        { message: "Tryb bez umowy — dane do umowy nie są wymagane." },
         { status: 403 }
       );
     }
