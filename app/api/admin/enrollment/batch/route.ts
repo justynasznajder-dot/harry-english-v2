@@ -18,20 +18,12 @@ type BatchProposalBody = {
   lessonUnitPrice?: number | string | null;
   monthlyUnitPrice?: number | string | null;
   yearlyUnitPrice?: number | string | null;
+  discountPercent?: number | string | null;
 };
 
 function hasAllPriceInputs(p: BatchProposalBody): boolean {
   const vals = [p.lessonUnitPrice, p.monthlyUnitPrice, p.yearlyUnitPrice];
   return vals.every((v) => v != null && String(v).trim() !== "");
-}
-
-function hasComplimentaryPriceInputs(p: BatchProposalBody): boolean {
-  return (
-    p.monthlyUnitPrice != null &&
-    String(p.monthlyUnitPrice).trim() !== "" &&
-    p.yearlyUnitPrice != null &&
-    String(p.yearlyUnitPrice).trim() !== ""
-  );
 }
 
 export async function POST(request: NextRequest) {
@@ -63,18 +55,13 @@ export async function POST(request: NextRequest) {
         const groupId = typeof p.groupId === "string" ? p.groupId.trim() : "";
         if (!groupId) {
           if (complimentaryMode) {
-            if (!hasComplimentaryPriceInputs(p)) {
-              return NextResponse.json(
-                { message: "Podaj stawkę jednorazową i ratalną dla każdego dziecka" },
-                { status: 400 }
-              );
-            }
             const result = await saveEnrollmentRequestPrices(
               {
                 requestId: p.requestId,
-                lessonUnitPrice: null,
+                lessonUnitPrice: p.lessonUnitPrice,
                 monthlyUnitPrice: p.monthlyUnitPrice,
                 yearlyUnitPrice: p.yearlyUnitPrice,
+                discountPercent: p.discountPercent,
               },
               { ...schoolRestrict, complimentaryPrices: true }
             );
@@ -95,6 +82,7 @@ export async function POST(request: NextRequest) {
               lessonUnitPrice: p.lessonUnitPrice,
               monthlyUnitPrice: p.monthlyUnitPrice,
               yearlyUnitPrice: p.yearlyUnitPrice,
+              discountPercent: p.discountPercent,
             },
             schoolRestrict
           );
@@ -104,20 +92,14 @@ export async function POST(request: NextRequest) {
           continue;
         }
 
-        if (complimentaryMode && !hasComplimentaryPriceInputs(p)) {
-          return NextResponse.json(
-            { message: "Podaj stawkę jednorazową i ratalną dla każdego dziecka" },
-            { status: 400 }
-          );
-        }
-
         const result = await saveEnrollmentProposalDraft(
           {
             requestId: p.requestId,
             groupId,
-            lessonUnitPrice: complimentaryMode ? null : p.lessonUnitPrice,
+            lessonUnitPrice: p.lessonUnitPrice,
             monthlyUnitPrice: p.monthlyUnitPrice,
             yearlyUnitPrice: p.yearlyUnitPrice,
+            discountPercent: p.discountPercent,
           },
           {
             ...schoolRestrict,
@@ -186,6 +168,7 @@ export async function POST(request: NextRequest) {
           lessonUnitPrice: p.lessonUnitPrice,
           monthlyUnitPrice: p.monthlyUnitPrice,
           yearlyUnitPrice: p.yearlyUnitPrice,
+          discountPercent: p.discountPercent,
         },
         sharedParent,
         {

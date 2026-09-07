@@ -343,7 +343,15 @@ export default function ParentProfileSection({
               {billingTypeLocked ? (
                 <p className="text-xs text-zinc-500">
                   Sposób rozliczenia (osoba prywatna / firma) można zmienić tylko przy generowaniu
-                  kolejnej umowy w zakładce Proces zapisu.
+                  kolejnej umowy w zakładce Proces zapisu. Jeżeli chciałbyś podpisać aneks,
+                  skontaktuj się ze szkołą za pomocą modułu wiadomości albo mailowo:{' '}
+                  <a
+                    href="mailto:kontakt@harry-english.pl"
+                    className="font-medium text-[#0f6e56] underline-offset-2 hover:underline"
+                  >
+                    kontakt@harry-english.pl
+                  </a>
+                  .
                 </p>
               ) : null}
             </div>

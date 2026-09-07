@@ -20,6 +20,7 @@ import {
   buildGroupSchedule,
   buildParentAddress,
   buildParentPeselOrId,
+  buildPaymentSectionHtml,
   buildPerLessonClause,
   buildScheduleDayLabel,
   buildSchedulePlaceLabel,
@@ -107,7 +108,7 @@ export type ParentContractContext = {
   excludedRequestIds: string[];
   paymentType: PaymentType;
   includeAttachment2: boolean;
-  /** Częstotliwość zajęć wybrana przez rodzica (1 lub 2× w tygodniu). */
+  /** Częstotliwość zajęć (1 lub 2×) — z oznaczenia managera w grupie. */
   lessonsPerWeek?: LessonsPerWeek | null;
   /** Umowa odnowienia — rok docelowy zamiast aktywnego. */
   schoolYearOverride?: { id: string; name: string };
@@ -716,7 +717,8 @@ export async function generateParentContract(
     throw new Error("Brak aktywnego szablonu umowy — skontaktuj się ze szkołą");
   }
 
-  // Zgoda na wizerunek jest w treści umowy (§4) — osobny ATTACHMENT_1 wyłączony.
+  // Zgoda na wizerunek (Załącznik 1) — generowana zawsze; rodzic może odmówić przy podpisie.
+  const attachment1Template = await findContractTemplate(schoolId, schoolYearName, "ATTACHMENT_1");
   const attachment2Template = includeAttachment2
     ? await findContractTemplate(schoolId, schoolYearName, "ATTACHMENT_2")
     : null;
@@ -791,6 +793,17 @@ export async function generateParentContract(
   const plannedLessonsLabel = formatPlannedLessonsLabel(
     defaultTargetLessonsPerYear(lessonsPerWeek ?? 1)
   );
+  const paymentAmountRaw =
+    paymentType === "PER_LESSON"
+      ? resolveChildLessonUnitPriceForContract(child)
+      : amount;
+  const paymentAmountLabel = formatLessonUnitPriceLabel(
+    billingExempt ? 0 : paymentAmountRaw
+  );
+  const paymentSection = buildPaymentSectionHtml({
+    paymentType,
+    amountLabel: paymentAmountLabel,
+  });
   const lessonUnitPriceLabel = formatLessonUnitPriceLabel(
     billingExempt ? 0 : resolveChildLessonUnitPriceForContract(child)
   );
@@ -944,6 +957,8 @@ export async function generateParentContract(
     schedule_place: schedulePlace,
     planned_lessons_label: plannedLessonsLabel,
     lesson_unit_price_label: lessonUnitPriceLabel,
+    payment_amount_label: paymentAmountLabel,
+    payment_section: paymentSection,
     lessons_per_week: lessonsPerWeek ? String(lessonsPerWeek) : "",
     lessons_per_week_label: lessonsPerWeek ? lessonsPerWeekLabel(lessonsPerWeek) : "",
     payment_type: formatPaymentTypeLabel(paymentType),
@@ -961,7 +976,9 @@ export async function generateParentContract(
   const contentHtml = generateContractHtml(template.content_html, placeholders);
 
   const childPlaceholders = buildSingleChildAttachmentPlaceholders(placeholders, child);
-  const childAttachment1: string | null = null;
+  const childAttachment1 = attachment1Template
+    ? generateContractHtml(attachment1Template.content_html, childPlaceholders)
+    : null;
 
   let childAttachment2: string | null = null;
   if (includeAttachment2) {
@@ -1345,6 +1362,135 @@ export async function fetchParentContractForPortal(
       first_name: c.first_name,
       last_name: c.last_name,
     })),
+    child_attachments: childrenRes.rows.map((c) => ({
+      child_id: c.child_id,
+      request_id: c.request_id,
+      first_name: c.first_name,
+      last_name: c.last_name,
+      attachment_1_html: showDocs ? c.attachment_1_html : null,
+      attachment_2_html: showDocs ? c.attachment_2_html : null,
+    })),
+  };
+}
+
+export type SignedContractDownloadInfo = {
+  contractId: string;
+  childId: string;
+  requestId: string | null;
+  firstName: string;
+  lastName: string;
+  hasAttachment1: boolean;
+  hasAttachment2: boolean;
+  signedAt: string | null;
+};
+
+/** Podpisane umowy w aktywnym roku — do przycisków pobierania PDF przy boxach dzieci. */
+export async function fetchSignedContractDownloadsForParent(
+  parentId: string,
+  schoolId: string
+): Promise<SignedContractDownloadInfo[]> {
+  const activeYear = await getActiveSchoolYear(schoolId);
+  const yearId = activeYear?.id ? String(activeYear.id) : null;
+  if (!yearId) return [];
+
+  const res = await queryDb<{
+    contract_id: string;
+    child_id: string;
+    request_id: string | null;
+    first_name: string;
+    last_name: string;
+    has_attachment_1: boolean;
+    has_attachment_2: boolean;
+    signed_at: Date | string | null;
+  }>(
+    `SELECT c.id AS contract_id,
+            cc.child_id,
+            cc.enrollment_request_id AS request_id,
+            ch.first_name,
+            ch.last_name,
+            (
+              cc.attachment_1_html IS NOT NULL
+              AND BTRIM(cc.attachment_1_html) <> ''
+            ) AS has_attachment_1,
+            (
+              cc.attachment_2_html IS NOT NULL
+              AND BTRIM(cc.attachment_2_html) <> ''
+            ) AS has_attachment_2,
+            c.signed_at
+     FROM contracts c
+     JOIN contract_children cc ON cc.contract_id = c.id
+     JOIN children ch ON ch.id = cc.child_id
+     WHERE c.parent_id = $1
+       AND c.school_id = $2
+       AND c.school_year_id = $3
+       AND c.status = 'SIGNED'
+     ORDER BY c.signed_at DESC NULLS LAST, cc.sort_order ASC`,
+    [parentId, schoolId, yearId]
+  );
+
+  return res.rows.map((row) => ({
+    contractId: row.contract_id,
+    childId: row.child_id,
+    requestId: row.request_id,
+    firstName: row.first_name,
+    lastName: row.last_name,
+    hasAttachment1: Boolean(row.has_attachment_1),
+    hasAttachment2: Boolean(row.has_attachment_2),
+    signedAt: row.signed_at ? new Date(row.signed_at).toISOString() : null,
+  }));
+}
+
+/** Konkretna umowa rodzica (np. PDF z boxa dziecka) — z weryfikacją ownership. */
+export async function fetchParentContractByIdForPortal(
+  parentId: string,
+  schoolId: string,
+  contractId: string
+): Promise<{
+  id: string;
+  status: string;
+  content_html: string | null;
+  child_attachments: ParentContractChildAttachment[];
+} | null> {
+  const res = await queryDb<{
+    id: string;
+    status: string;
+    content_html: string | null;
+  }>(
+    `SELECT id, status, content_html
+     FROM contracts
+     WHERE id = $1
+       AND parent_id = $2
+       AND school_id = $3
+       AND status IN ('SENT', 'SIGNED')
+     LIMIT 1`,
+    [contractId, parentId, schoolId]
+  );
+  const row = res.rows[0];
+  if (!row) return null;
+
+  const childrenRes = await queryDb<{
+    child_id: string;
+    request_id: string;
+    first_name: string;
+    last_name: string;
+    attachment_1_html: string | null;
+    attachment_2_html: string | null;
+  }>(
+    `SELECT cc.child_id, cc.enrollment_request_id AS request_id,
+            c.first_name, c.last_name,
+            cc.attachment_1_html, cc.attachment_2_html
+     FROM contract_children cc
+     JOIN children c ON c.id = cc.child_id
+     WHERE cc.contract_id = $1
+     ORDER BY cc.sort_order ASC`,
+    [row.id]
+  );
+
+  const showDocs = row.status === "SENT" || row.status === "SIGNED";
+  return {
+    id: row.id,
+    status: row.status,
+    content_html: showDocs ? row.content_html : null,
     child_attachments: childrenRes.rows.map((c) => ({
       child_id: c.child_id,
       request_id: c.request_id,

@@ -37,7 +37,8 @@ interface ContractPortalProps {
   readOnly?: boolean;
 }
 
-type WizardPhase = 'contract' | 'attachments' | 'sign';
+/** Kolejność: wizerunek → odbiór (opcjonalnie) → umowa (podpis + mail). */
+type WizardPhase = 'image' | 'pickup' | 'contract';
 
 function formatSignedAt(value: string | null | undefined): string | null {
   if (!value) return null;
@@ -98,6 +99,7 @@ function DocumentPreview({
   pdfDoc,
   childId,
   preferPdfDownload,
+  downloadOnly = false,
 }: {
   title: string;
   subtitle?: string;
@@ -105,6 +107,8 @@ function DocumentPreview({
   pdfDoc: 'contract' | 'attachment1' | 'attachment2';
   childId?: string;
   preferPdfDownload: boolean;
+  /** Po podpisaniu — bez podglądu HTML, tylko pobranie PDF. */
+  downloadOnly?: boolean;
 }) {
   const [downloading, setDownloading] = useState(false);
   const [downloaded, setDownloaded] = useState(false);
@@ -122,6 +126,28 @@ function DocumentPreview({
       setDownloading(false);
     }
   };
+
+  if (downloadOnly) {
+    return (
+      <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-zinc-800">{title}</p>
+            {subtitle ? <p className="text-xs text-zinc-500">{subtitle}</p> : null}
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleDownload()}
+            disabled={downloading}
+            className="shrink-0 rounded-full bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {downloading ? 'Generowanie PDF…' : downloaded ? 'Pobierz PDF ponownie' : 'Pobierz PDF'}
+          </button>
+        </div>
+        {error ? <p className="px-4 pb-3 text-xs font-medium text-rose-700">{error}</p> : null}
+      </div>
+    );
+  }
 
   if (preferPdfDownload) {
     return (
@@ -186,38 +212,45 @@ function ChildAttachmentDocuments({
   childAttachments,
   readOnlySubtitle,
   preferPdfDownload,
+  downloadOnly = false,
+  includeImage,
 }: {
   childAttachments: ContractChildAttachment[];
   readOnlySubtitle?: string;
   preferPdfDownload: boolean;
+  downloadOnly?: boolean;
+  includeImage?: boolean;
 }) {
   return (
     <>
       {childAttachments.map((child) => {
         const name = childDisplayName(child);
+        const showImage = includeImage !== false && Boolean(child.attachment_1_html);
         return (
           <div key={child.child_id} className="space-y-4">
             {childAttachments.length > 1 ? (
               <p className="text-sm font-semibold text-zinc-800">Dokumenty: {name}</p>
             ) : null}
-            {child.attachment_1_html ? (
+            {showImage ? (
               <DocumentPreview
-                title={`Załącznik nr 1 — Zgoda na wykorzystanie wizerunku (${name})`}
+                title={`Załącznik nr 1 — Oświadczenie o wizerunku (${name})`}
                 subtitle={readOnlySubtitle}
-                html={child.attachment_1_html}
+                html={child.attachment_1_html!}
                 pdfDoc="attachment1"
                 childId={child.child_id}
                 preferPdfDownload={preferPdfDownload}
+                downloadOnly={downloadOnly}
               />
             ) : null}
             {child.attachment_2_html ? (
               <DocumentPreview
-                title={`Zgoda na odebranie dziecka przez lektora (${name})`}
+                title={`Załącznik nr 2 — Odbiór dziecka przez lektora (${name})`}
                 subtitle={readOnlySubtitle}
                 html={child.attachment_2_html}
                 pdfDoc="attachment2"
                 childId={child.child_id}
                 preferPdfDownload={preferPdfDownload}
+                downloadOnly={downloadOnly}
               />
             ) : null}
           </div>
@@ -227,12 +260,52 @@ function ChildAttachmentDocuments({
   );
 }
 
+function initialPhase(hasImage: boolean, hasPickup: boolean): WizardPhase {
+  if (hasImage) return 'image';
+  if (hasPickup) return 'pickup';
+  return 'contract';
+}
+
 export default function ContractPortal({ contract, onSigned, readOnly = false }: ContractPortalProps) {
   const preferPdfDownload = useIsMobileContractView();
-  const [phase, setPhase] = useState<WizardPhase>('contract');
+
+  const imageItems = useMemo(() => {
+    const items: Array<{ key: string; childId: string; childName: string; html: string }> = [];
+    for (const child of contract?.child_attachments ?? []) {
+      if (!child.attachment_1_html) continue;
+      items.push({
+        key: `${child.child_id}-att1`,
+        childId: child.child_id,
+        childName: childDisplayName(child),
+        html: child.attachment_1_html,
+      });
+    }
+    return items;
+  }, [contract?.child_attachments]);
+
+  const pickupItems = useMemo(() => {
+    const items: Array<{ key: string; childId: string; childName: string; html: string }> = [];
+    for (const child of contract?.child_attachments ?? []) {
+      if (!child.attachment_2_html) continue;
+      items.push({
+        key: `${child.child_id}-att2`,
+        childId: child.child_id,
+        childName: childDisplayName(child),
+        html: child.attachment_2_html,
+      });
+    }
+    return items;
+  }, [contract?.child_attachments]);
+
+  const hasImage = imageItems.length > 0;
+  const hasPickup = pickupItems.length > 0;
+
+  const [phase, setPhase] = useState<WizardPhase>(() => initialPhase(hasImage, hasPickup));
+  const [imageConsent, setImageConsent] = useState<boolean | null>(hasImage ? null : false);
+  const [pickupAccepted, setPickupAccepted] = useState<Record<string, boolean>>({});
   const [contractAccepted, setContractAccepted] = useState(false);
-  const [attachmentAccepted, setAttachmentAccepted] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
+  const [imageBusy, setImageBusy] = useState(false);
 
   const isSigned = contract?.status === 'SIGNED';
 
@@ -242,52 +315,55 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
     [contract?.child_attachments],
   );
 
-  const attachmentItems = useMemo(() => {
-    const items: Array<{
-      key: string;
-      childId: string;
-      childName: string;
-      type: 1 | 2;
-      html: string;
-    }> = [];
-    for (const child of childAttachments) {
-      const name = childDisplayName(child);
-      if (child.attachment_1_html) {
-        items.push({
-          key: `${child.child_id}-att1`,
-          childId: child.child_id,
-          childName: name,
-          type: 1,
-          html: child.attachment_1_html,
-        });
+  const allPickupAccepted =
+    pickupItems.length === 0 || pickupItems.every((item) => pickupAccepted[item.key]);
+
+  const goAfterImage = () => {
+    setPhase(hasPickup ? 'pickup' : 'contract');
+  };
+
+  const acceptImageConsent = async () => {
+    setImageBusy(true);
+    try {
+      // PDF od razu po zgodzie (podgląd); ostateczna wersja podpisana idzie w mailu przy umowie.
+      for (const item of imageItems) {
+        await downloadPreviewPdf({ doc: 'attachment1', childId: item.childId });
       }
-      if (child.attachment_2_html) {
-        items.push({
-          key: `${child.child_id}-att2`,
-          childId: child.child_id,
-          childName: name,
-          type: 2,
-          html: child.attachment_2_html,
-        });
-      }
+      setImageConsent(true);
+      goAfterImage();
+    } catch {
+      alert('Nie udało się wygenerować PDF oświadczenia o wizerunku. Spróbuj ponownie.');
+    } finally {
+      setImageBusy(false);
     }
-    return items;
-  }, [childAttachments]);
+  };
 
-  const allAttachmentsAccepted =
-    attachmentItems.length === 0 ||
-    attachmentItems.every((item) => attachmentAccepted[item.key]);
+  const declineImageConsent = () => {
+    setImageConsent(false);
+    goAfterImage();
+  };
 
-  const signContract = async (opts?: {
-    contractOk?: boolean;
-    attachmentsOk?: boolean;
-  }) => {
+  const continueFromPickup = () => {
+    const next: Record<string, boolean> = {};
+    for (const item of pickupItems) next[item.key] = true;
+    setPickupAccepted(next);
+    setPhase('contract');
+  };
+
+  const signContract = async (opts?: { contractOk?: boolean }) => {
     const contractOk = opts?.contractOk ?? contractAccepted;
-    const attachmentsOk = opts?.attachmentsOk ?? allAttachmentsAccepted;
-    if (!contractOk || !attachmentsOk || !contract || readOnly || isSigned) return;
+    if (!contractOk || !contract || readOnly || isSigned) return;
+    if (hasImage && imageConsent === null) return;
+    if (hasPickup && !allPickupAccepted && phase === 'contract') {
+      // pickup already confirmed when entering contract via continueFromPickup
+    }
     setBusy(true);
     try {
-      const res = await fetch('/api/enrollment/sign', { method: 'POST' });
+      const res = await fetch('/api/enrollment/sign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageConsent: imageConsent === true }),
+      });
       const data = (await res.json().catch(() => ({}))) as ContractSignResult;
       if (!res.ok) throw new Error('Podpis nie powiódł się');
       onSigned?.(data);
@@ -296,31 +372,6 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
     } finally {
       setBusy(false);
     }
-  };
-
-  const acceptContractAndContinue = () => {
-    setContractAccepted(true);
-    if (attachmentItems.length > 0) {
-      setPhase('attachments');
-      return;
-    }
-    if (preferPdfDownload) {
-      void signContract({ contractOk: true, attachmentsOk: true });
-      return;
-    }
-    setPhase('sign');
-  };
-
-  const acceptAttachmentsAndContinue = () => {
-    const nextAccepted: Record<string, boolean> = {};
-    for (const item of attachmentItems) nextAccepted[item.key] = true;
-    setAttachmentAccepted(nextAccepted);
-    setContractAccepted(true);
-    if (preferPdfDownload) {
-      void signContract({ contractOk: true, attachmentsOk: true });
-      return;
-    }
-    setPhase('sign');
   };
 
   if (!contract) {
@@ -339,53 +390,150 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
               <strong>{signedAtLabel}</strong>
             </>
           ) : null}
-          . Poniżej możesz w każdej chwili zapoznać się z jej treścią.
+          . Możesz pobrać dokumenty PDF poniżej.
         </div>
         <DocumentPreview
-          title="Podgląd umowy"
-          subtitle="Dokument podpisany — tylko do odczytu."
+          title="Umowa"
+          subtitle="Dokument podpisany"
           html={contract.content_html}
           pdfDoc="contract"
           preferPdfDownload={preferPdfDownload}
+          downloadOnly
         />
         <ChildAttachmentDocuments
           childAttachments={childAttachments}
-          readOnlySubtitle="Dokument podpisany — tylko do odczytu."
+          readOnlySubtitle="Dokument podpisany"
           preferPdfDownload={preferPdfDownload}
+          downloadOnly
         />
       </div>
     );
   }
 
-  const hasImageConsent = attachmentItems.some((item) => item.type === 1);
-  const hasPickupConsent = attachmentItems.some((item) => item.type === 2);
-
-  const attachmentTitle = (type: 1 | 2, childName: string) =>
-    type === 1
-      ? `Załącznik nr 1 — Zgoda na wykorzystanie wizerunku (${childName})`
-      : `Zgoda na odebranie dziecka przez lektora (${childName})`;
-
-  const attachmentSubtitle = (type: 1 | 2) =>
-    type === 1
-      ? 'Dobrowolny dokument — brak podpisu nie wpływa na ważność umowy.'
-      : 'Tej zgody nie podpisuje się elektronicznie. Pobierz PDF z Dokumentów, wydrukuj i przynieś z podpisem ręcznym na pierwsze zajęcia. Jeśli nie możesz wydrukować — nauczyciel będzie miał druki na zajęciach.';
-
-  const signButtonLabel = () => {
-    if (busy) return 'Podpisywanie…';
-    if (preferPdfDownload) return 'Zapoznałem/am się z treścią i akceptuję umowę';
-    if (hasImageConsent) return 'Podpisuję umowę i załączniki';
-    return 'Podpisuję umowę';
-  };
-
   return (
     <div className="space-y-4">
+      {phase === 'image' ? (
+        <>
+          <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+            Krok 1 z {hasPickup ? '3' : '2'}: oświadczenie o wizerunku. Zgoda jest dobrowolna —
+            możesz wyrazić zgodę albo odmówić i przejść dalej.
+          </div>
+          {imageItems.map((item) => (
+            <DocumentPreview
+              key={item.key}
+              title={`Załącznik nr 1 — Oświadczenie o wizerunku (${item.childName})`}
+              subtitle="Dobrowolny dokument. Po wyrażeniu zgody pobierzemy PDF od razu."
+              html={item.html}
+              pdfDoc="attachment1"
+              childId={item.childId}
+              preferPdfDownload={preferPdfDownload}
+            />
+          ))}
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+            <button
+              type="button"
+              disabled={imageBusy}
+              onClick={() => void acceptImageConsent()}
+              className="rounded-full bg-[#0f6e56] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {imageBusy ? 'Generowanie PDF…' : 'Wyrażam zgodę na wykorzystanie wizerunku'}
+            </button>
+            <button
+              type="button"
+              disabled={imageBusy}
+              onClick={declineImageConsent}
+              className="rounded-full border border-zinc-300 bg-white px-5 py-3 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-50 disabled:opacity-60"
+            >
+              Nie wyrażam zgody — przejdź dalej
+            </button>
+          </div>
+        </>
+      ) : null}
+
+      {phase === 'pickup' ? (
+        <>
+          <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+            Krok {hasImage ? '2' : '1'} z {hasImage ? '3' : '2'}: zgoda na odebranie dziecka przez
+            lektora. Tej zgody nie podpisuje się elektronicznie — PDF będzie w mailu po podpisaniu
+            umowy; wydrukuj i przynieś z podpisem ręcznym na pierwsze zajęcia.
+          </div>
+          {pickupItems.map((item) => (
+            <div key={item.key} className="space-y-3">
+              <DocumentPreview
+                title={`Załącznik nr 2 — Odbiór dziecka przez lektora (${item.childName})`}
+                subtitle="Dokument do wydruku — bez podpisu elektronicznego."
+                html={item.html}
+                pdfDoc="attachment2"
+                childId={item.childId}
+                preferPdfDownload={preferPdfDownload}
+              />
+              {!preferPdfDownload ? (
+                <div className="rounded-xl border border-zinc-200 bg-white px-4 py-4">
+                  <label className="flex cursor-pointer items-start gap-3">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 accent-[#0f6e56]"
+                      checked={Boolean(pickupAccepted[item.key])}
+                      onChange={(e) =>
+                        setPickupAccepted((prev) => ({
+                          ...prev,
+                          [item.key]: e.target.checked,
+                        }))
+                      }
+                    />
+                    <span className="text-sm text-zinc-800">
+                      Zapoznałem/am się z treścią zgody na odebranie ({item.childName}). Wiem, że
+                      dokument trzeba wydrukować i podpisać ręcznie.
+                    </span>
+                  </label>
+                </div>
+              ) : null}
+            </div>
+          ))}
+          <div className="flex flex-wrap gap-3">
+            {hasImage ? (
+              <button
+                type="button"
+                onClick={() => setPhase('image')}
+                className="rounded-full border border-zinc-300 bg-white px-5 py-2.5 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-50"
+              >
+                Wróć
+              </button>
+            ) : null}
+            {preferPdfDownload ? (
+              <button
+                type="button"
+                onClick={continueFromPickup}
+                className="rounded-full bg-[#0f6e56] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#0b5a46]"
+              >
+                Zapoznałem/am się — dalej do umowy
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={!allPickupAccepted}
+                onClick={continueFromPickup}
+                className="rounded-full bg-[#0f6e56] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Dalej do umowy
+              </button>
+            )}
+          </div>
+        </>
+      ) : null}
+
       {phase === 'contract' ? (
         <>
+          <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+            Ostatni krok: umowa. Po podpisaniu wyślemy jeden e-mail z umową
+            {imageConsent ? ', oświadczeniem o wizerunku' : ''}
+            {hasPickup ? ' i zgodą na odebranie' : ''}.
+          </div>
           <DocumentPreview
             title="Podgląd umowy"
             subtitle={
               preferPdfDownload
-                ? 'Pobierz PDF, przeczytaj na telefonie, potem zaakceptuj poniżej.'
+                ? 'Pobierz PDF, przeczytaj na telefonie, potem podpisz poniżej.'
                 : 'Przewiń dokument poniżej, aby zapoznać się z pełną treścią.'
             }
             html={contract.content_html}
@@ -394,18 +542,25 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
           />
           <div className="rounded-xl border border-zinc-200 bg-white px-4 py-4">
             {preferPdfDownload ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={acceptContractAndContinue}
-                className="w-full rounded-full bg-[#0f6e56] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {busy
-                  ? 'Zapisywanie akceptacji…'
-                  : attachmentItems.length > 0
-                    ? 'Zapoznałem/am się z treścią i akceptuję — dalej'
-                    : 'Zapoznałem/am się z treścią i akceptuję'}
-              </button>
+              <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+                {hasPickup || hasImage ? (
+                  <button
+                    type="button"
+                    onClick={() => setPhase(hasPickup ? 'pickup' : 'image')}
+                    className="rounded-full border border-zinc-300 bg-white px-5 py-2.5 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-50"
+                  >
+                    Wróć
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void signContract({ contractOk: true })}
+                  className="rounded-full bg-[#0f6e56] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {busy ? 'Podpisywanie…' : 'Podpisuję umowę'}
+                </button>
+              </div>
             ) : (
               <>
                 <label className="flex cursor-pointer items-start gap-3">
@@ -419,141 +574,27 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
                     Zapoznałem/am się z treścią umowy i akceptuję jej warunki.
                   </span>
                 </label>
-                <button
-                  type="button"
-                  disabled={!contractAccepted}
-                  onClick={() => setPhase(attachmentItems.length > 0 ? 'attachments' : 'sign')}
-                  className="mt-4 rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {attachmentItems.length > 0
-                    ? hasImageConsent && hasPickupConsent
-                      ? 'Przejdź do kolejnych dokumentów'
-                      : hasPickupConsent
-                        ? 'Przejdź do zgody na odebranie'
-                        : hasImageConsent
-                          ? 'Przejdź do załączników'
-                          : 'Przejdź do podpisu'
-                    : 'Przejdź do podpisu'}
-                </button>
+                <div className="mt-4 flex flex-wrap gap-3">
+                  {hasPickup || hasImage ? (
+                    <button
+                      type="button"
+                      onClick={() => setPhase(hasPickup ? 'pickup' : 'image')}
+                      className="rounded-full border border-zinc-300 bg-white px-5 py-2.5 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-50"
+                    >
+                      Wróć
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    disabled={!contractAccepted || busy}
+                    onClick={() => void signContract()}
+                    className="rounded-full bg-[#0f6e56] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {busy ? 'Podpisywanie…' : 'Podpisuję umowę'}
+                  </button>
+                </div>
               </>
             )}
-          </div>
-        </>
-      ) : null}
-
-      {phase === 'attachments' ? (
-        <>
-          <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-            Umowa zaakceptowana. Zapoznaj się z pozostałymi dokumentami
-            {childAttachments.length > 1 ? ' dla każdego dziecka' : ''}
-            {preferPdfDownload ? ' (pobierz PDF), potem zaakceptuj poniżej.' : ' i potwierdź każdy osobno.'}
-          </div>
-
-          {attachmentItems.map((item) => (
-            <div key={item.key} className="space-y-3">
-              <DocumentPreview
-                title={attachmentTitle(item.type, item.childName)}
-                subtitle={attachmentSubtitle(item.type)}
-                html={item.html}
-                pdfDoc={item.type === 1 ? 'attachment1' : 'attachment2'}
-                childId={item.childId}
-                preferPdfDownload={preferPdfDownload}
-              />
-              {!preferPdfDownload ? (
-                <div className="rounded-xl border border-zinc-200 bg-white px-4 py-4">
-                  <label className="flex cursor-pointer items-start gap-3">
-                    <input
-                      type="checkbox"
-                      className="mt-0.5 accent-[#0f6e56]"
-                      checked={Boolean(attachmentAccepted[item.key])}
-                      onChange={(e) =>
-                        setAttachmentAccepted((prev) => ({
-                          ...prev,
-                          [item.key]: e.target.checked,
-                        }))
-                      }
-                    />
-                    <span className="text-sm text-zinc-800">
-                      {item.type === 2
-                        ? `Zapoznałem/am się z treścią zgody na odebranie (${item.childName}). Wiem, że dokument trzeba wydrukować i podpisać ręcznie — nie podpisuję go elektronicznie.`
-                        : `Zapoznałem/am się z treścią tego załącznika (${item.childName}) i akceptuję jego warunki.`}
-                    </span>
-                  </label>
-                </div>
-              ) : null}
-            </div>
-          ))}
-
-          <div className="flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={() => setPhase('contract')}
-              className="rounded-full border border-zinc-300 bg-white px-5 py-2.5 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-50"
-            >
-              Wróć do umowy
-            </button>
-            {preferPdfDownload ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={acceptAttachmentsAndContinue}
-                className="w-full rounded-full bg-[#0f6e56] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
-              >
-                {busy
-                  ? 'Zapisywanie akceptacji…'
-                  : 'Zapoznałem/am się z treścią i akceptuję'}
-              </button>
-            ) : (
-              <button
-                type="button"
-                disabled={!allAttachmentsAccepted}
-                onClick={() => setPhase('sign')}
-                className="rounded-full bg-[#0f6e56] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Przejdź do podpisu
-              </button>
-            )}
-          </div>
-        </>
-      ) : null}
-
-      {phase === 'sign' ? (
-        <>
-          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-            {preferPdfDownload
-              ? 'Dokumenty zostały zaakceptowane. Potwierdź poniżej — to równoznaczne z podpisem umowy w systemie.'
-              : `Wszystkie dokumenty zostały zaakceptowane. Kliknij poniżej, aby podpisać umowę${
-                  hasImageConsent ? ' i załącznik o wizerunku' : ''
-                }. Po podpisie wygenerujemy pliki PDF i zapiszemy dokumenty w systemie.`}
-          </div>
-          <div className="rounded-xl border border-zinc-200 bg-white px-4 py-4">
-            <ul className="space-y-1 text-sm text-zinc-700">
-              <li>✓ Umowa — zaakceptowana</li>
-              {attachmentItems.map((item) => (
-                <li key={item.key}>
-                  ✓ {attachmentTitle(item.type, item.childName)} — zaakceptowany
-                </li>
-              ))}
-            </ul>
-            <div className="mt-4 flex flex-wrap gap-3">
-              <button
-                type="button"
-                onClick={() =>
-                  setPhase(attachmentItems.length > 0 ? 'attachments' : 'contract')
-                }
-                className="rounded-full border border-zinc-300 bg-white px-5 py-2.5 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-50"
-              >
-                Wróć
-              </button>
-              <button
-                type="button"
-                onClick={() => void signContract()}
-                disabled={!contractAccepted || !allAttachmentsAccepted || busy}
-                className="w-full rounded-full bg-[#0f6e56] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
-              >
-                {signButtonLabel()}
-              </button>
-            </div>
           </div>
         </>
       ) : null}

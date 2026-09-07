@@ -95,22 +95,48 @@ export function formatLessonDurationLabel(durationMin: number | null | undefined
   return minutes ? `${minutes} minut` : "";
 }
 
-/** Odmiana „spotkanie/spotkania/spotkań” dla planowanej liczby zajęć. */
+/** Planowana liczba zajęć — sama liczba (np. „33”), bez odmiany słowa. */
 export function formatPlannedLessonsLabel(count: number | null | undefined): string {
   if (count == null || !Number.isFinite(count) || count <= 0) return "";
-  const n = Math.round(count);
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  let word = "spotkań";
-  if (mod10 === 1 && mod100 !== 11) word = "spotkanie";
-  else if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) word = "spotkania";
-  return `${n} ${word}`;
+  return String(Math.round(count));
 }
 
 export function formatLessonUnitPriceLabel(amount: number | string | null | undefined): string {
   const formatted = formatContractAmount(amount);
   if (!formatted) return "";
   return `${formatted} zł brutto`;
+}
+
+/**
+ * §2 tylko dla wybranej formy płatności — bez punktów o pozostałych trybach.
+ * `amountLabel` już sformatowane, np. „20,00 zł brutto”.
+ */
+export function buildPaymentSectionHtml(params: {
+  paymentType: string | null | undefined;
+  amountLabel: string;
+}): string {
+  const paymentLabel = escapeHtmlText(formatPaymentTypeLabel(params.paymentType));
+  const amountLabel = escapeHtmlText(params.amountLabel.trim() || "—");
+  const t = String(params.paymentType ?? "").trim().toUpperCase();
+
+  let specificLi = "";
+  if (t === "PER_LESSON") {
+    specificLi =
+      "<li>Wysokość miesięcznej opłaty ustalana jest na podstawie liczby zajęć, w których Słuchacz uczestniczył w danym miesiącu.</li>";
+  } else if (t === "MONTHLY") {
+    specificLi =
+      "<li>Wysokość rat oraz terminy płatności są wskazywane na wystawianych fakturach.</li>";
+  } else if (t === "YEARLY") {
+    specificLi =
+      "<li>Klient zobowiązuje się do dokonania płatności w kwocie i terminie wskazanych na fakturze.</li>";
+  }
+
+  return `<ol class="contract-list">
+  <li>Klient wybiera następującą formę płatności: <span class="ph">${paymentLabel}</span>, kwota: <span class="ph">${amountLabel}</span>.</li>
+  <li>Opłata za uczestnictwo w kursie uiszczana jest w formie elektronicznej, na podstawie faktury wystawionej przez Harry English, w terminie wskazanym na fakturze.</li>
+  ${specificLi}
+  <li>W przypadku opóźnienia w płatności Harry English może naliczyć odsetki ustawowe za opóźnienie.</li>
+</ol>`;
 }
 
 export function formatScheduleTime(value: Date | string | null | undefined): string {

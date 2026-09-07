@@ -900,7 +900,7 @@ export async function fetchParentPaymentOverview(
          i.invoice_number,
          i.pdf_key AS invoice_pdf_key,
          ii.child_id AS item_child_id,
-         ii.amount::text AS item_amount
+         ii.value::text AS item_amount
        FROM payments p
        LEFT JOIN LATERAL (
          SELECT inv.id, inv.invoice_number, inv.pdf_key

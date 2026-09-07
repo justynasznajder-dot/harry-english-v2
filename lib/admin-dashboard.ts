@@ -398,8 +398,8 @@ export type PipelineRow = {
 };
 
 /**
- * Lista uczniów w Zgłoszeniach — ten sam zestaw co filtr „Wszystkie”
- * (otwarte enrollment_requests, bez SIGNED/COMPLETED), nie tylko aktywne `children`.
+ * Lista uczniów w „Status zapisów” — pełny pipeline łącznie z umową podpisaną.
+ * (Filtr „Wszystkie” w Zgłoszeniach nadal pomija SIGNED/COMPLETED.)
  */
 export async function fetchStudentPipeline(
   schoolId: string,
@@ -518,7 +518,7 @@ export async function fetchStudentPipeline(
        LIMIT 1
      ) rn ON TRUE
      WHERE er.school_id = $1
-       AND UPPER(BTRIM(COALESCE(er.status::text, ''))) NOT IN ('COMPLETED', 'SIGNED')
+       AND UPPER(BTRIM(COALESCE(er.status::text, ''))) NOT IN ('REJECTED')
        AND COALESCE(c.first_name, er.child_first_name, '') <> ''
        AND COALESCE(c.last_name, er.child_last_name, '') <> ''
        AND (

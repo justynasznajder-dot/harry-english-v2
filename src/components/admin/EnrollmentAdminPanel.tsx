@@ -27,10 +27,17 @@ type ProposalDraft = {
   lessonUnitPrice: string;
   monthlyUnitPrice: string;
   yearlyUnitPrice: string;
+  discountPercent: string;
 };
 
 function emptyProposalDraft(groupId = ''): ProposalDraft {
-  return { groupId, lessonUnitPrice: '', monthlyUnitPrice: '', yearlyUnitPrice: '' };
+  return {
+    groupId,
+    lessonUnitPrice: '',
+    monthlyUnitPrice: '',
+    yearlyUnitPrice: '',
+    discountPercent: '',
+  };
 }
 
 function groupServesPreferredLocation(
@@ -91,17 +98,9 @@ function draftIsSaveable(draft?: ProposalDraft): boolean {
   return Boolean((draft?.groupId ?? '').trim()) || draftHasRequiredPrices(draft);
 }
 
-function draftHasComplimentaryRequiredPrices(draft?: ProposalDraft): boolean {
-  if (!draft) return false;
-  return (
-    parsePriceDecimal(draft.yearlyUnitPrice) != null &&
-    parsePriceDecimal(draft.monthlyUnitPrice) != null
-  );
-}
-
-/** W trybie bez opłat: wymagane jednorazowa + ratalna; grupa opcjonalna. */
-function draftIsComplimentarySaveable(draft?: ProposalDraft): boolean {
-  return draftHasComplimentaryRequiredPrices(draft);
+/** W trybie bez opłat: zawsze można zapisać (stawki i grupa opcjonalne). */
+function draftIsComplimentarySaveable(_draft?: ProposalDraft): boolean {
+  return true;
 }
 
 /*
@@ -315,35 +314,28 @@ export default function EnrollmentAdminPanel({
     proposalNewChildren.every((c) => {
       const draft = proposalDrafts[c.requestId];
       if (!(draft?.groupId ?? '').trim()) return false;
-      if (proposalParentIsComplimentary) {
-        return draftHasComplimentaryRequiredPrices(draft);
-      }
+      if (proposalParentIsComplimentary) return true;
       return draftHasRequiredPrices(draft);
     });
   /**
    * Zapisz: wystarczy pełne dane u jednego dziecka; pozostałe mogą być puste.
-   * Częściowe stawki (1–2 z 3) u któregokolwiek dziecka blokują zapis.
-   * Tryb bez opłat: wymagane jednorazowa + ratalna u każdego dziecka NEW; grupa opcjonalna.
+   * Częściowe stawki (1–2 z 3) u któregokolwiek dziecka blokują zapis (tylko płatni rodzice).
+   * Tryb bez opłat: stawki opcjonalne; grupa opcjonalna.
    */
   const proposalBatchSaveReady =
     proposalNewChildren.length >= 1 &&
     (proposalParentIsComplimentary
-      ? proposalNewChildren.every((c) =>
-          draftHasComplimentaryRequiredPrices(proposalDrafts[c.requestId]),
-        )
+      ? true
       : proposalNewChildren.every((c) => !draftHasPartialPrices(proposalDrafts[c.requestId])) &&
         proposalNewChildren.some((c) => draftIsSaveable(proposalDrafts[c.requestId])));
   const proposalBatchSaveTitle = (() => {
     if (proposalParentIsComplimentary) {
-      if (!proposalBatchSaveReady) {
-        return 'Podaj stawkę jednorazową i ratalną dla każdego dziecka';
-      }
       const anyGroup = proposalNewChildren.some((c) =>
         Boolean((proposalDrafts[c.requestId]?.groupId ?? '').trim()),
       );
       return anyGroup
-        ? 'Zapisz grupę oraz stawki (bez opłat, bez e-maila)'
-        : 'Zapisz stawki (tryb bez opłat) — grupę możesz przypisać później';
+        ? 'Zapisz grupę oraz opcjonalne stawki (bez opłat, bez e-maila)'
+        : 'Zapisz (tryb bez opłat) — stawki i grupa opcjonalne';
     }
     if (proposalBatchSaveReady) {
       const allHaveGroup = proposalNewChildren
@@ -373,11 +365,10 @@ export default function EnrollmentAdminPanel({
         return {
           requestId: child.requestId,
           groupId: draft?.groupId ?? '',
-          lessonUnitPrice: proposalParentIsComplimentary
-            ? null
-            : draft?.lessonUnitPrice?.trim() || null,
+          lessonUnitPrice: draft?.lessonUnitPrice?.trim() || null,
           monthlyUnitPrice: draft?.monthlyUnitPrice?.trim() || null,
           yearlyUnitPrice: draft?.yearlyUnitPrice?.trim() || null,
+          discountPercent: draft?.discountPercent?.trim() || null,
         };
       });
 
@@ -592,6 +583,9 @@ export default function EnrollmentAdminPanel({
                         }
                         if (child.yearlyUnitPrice != null && child.yearlyUnitPrice !== '') {
                           draft.yearlyUnitPrice = String(child.yearlyUnitPrice);
+                        }
+                        if (child.discountPercent != null && child.discountPercent !== '') {
+                          draft.discountPercent = String(child.discountPercent);
                         }
                         next[child.requestId] = draft;
                       }
@@ -813,7 +807,7 @@ export default function EnrollmentAdminPanel({
                                   ? 'Szkic: grupa zapisana, propozycja jeszcze nie wysłana.'
                                   : ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
                                     ? 'Rodzic uzupełnia dane do umowy.'
-                                    : 'Czekamy na podpisanie umowy przez nauczyciela.'}
+                                    : 'Czekamy na podpisanie umowy przez rodzica.'}
                               </p>
                             </div>
                           )}
@@ -984,148 +978,121 @@ export default function EnrollmentAdminPanel({
                                     </>
                                   );
                                 })()}
-                                {proposalParentIsComplimentary ? (
-                                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:items-end">
-                                    <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
-                                      <span className="leading-snug">
-                                        Jednorazowa{' '}
-                                        <span className="font-normal text-zinc-400">(PLN)</span>
-                                      </span>
-                                      <input
-                                        type="text"
-                                        inputMode="decimal"
-                                        required
-                                        className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
-                                        disabled={!proposalAllowed}
-                                        placeholder="np. 1200"
-                                        value={
-                                          proposalDrafts[child.requestId]?.yearlyUnitPrice ?? ''
-                                        }
-                                        onChange={(e) =>
-                                          setProposalDrafts((prev) => ({
-                                            ...prev,
-                                            [child.requestId]: {
-                                              ...emptyProposalDraft(),
-                                              ...prev[child.requestId],
-                                              yearlyUnitPrice: e.target.value,
-                                            },
-                                          }))
-                                        }
-                                      />
-                                    </label>
-                                    <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
-                                      <span className="leading-snug">
-                                        Ratalna{' '}
-                                        <span className="font-normal text-zinc-400">(PLN)</span>
-                                      </span>
-                                      <input
-                                        type="text"
-                                        inputMode="decimal"
-                                        required
-                                        className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
-                                        disabled={!proposalAllowed}
-                                        placeholder="np. 150"
-                                        value={
-                                          proposalDrafts[child.requestId]?.monthlyUnitPrice ?? ''
-                                        }
-                                        onChange={(e) =>
-                                          setProposalDrafts((prev) => ({
-                                            ...prev,
-                                            [child.requestId]: {
-                                              ...emptyProposalDraft(),
-                                              ...prev[child.requestId],
-                                              monthlyUnitPrice: e.target.value,
-                                            },
-                                          }))
-                                        }
-                                      />
-                                    </label>
-                                  </div>
-                                ) : (
-                                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:items-end">
-                                    <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
-                                      <span className="leading-snug">
-                                        Jednorazowa{' '}
-                                        <span className="font-normal text-zinc-400">(PLN)</span>
-                                      </span>
-                                      <input
-                                        type="text"
-                                        inputMode="decimal"
-                                        required
-                                        className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
-                                        disabled={!proposalAllowed}
-                                        placeholder="np. 1200"
-                                        value={
-                                          proposalDrafts[child.requestId]?.yearlyUnitPrice ?? ''
-                                        }
-                                        onChange={(e) =>
-                                          setProposalDrafts((prev) => ({
-                                            ...prev,
-                                            [child.requestId]: {
-                                              ...emptyProposalDraft(),
-                                              ...prev[child.requestId],
-                                              yearlyUnitPrice: e.target.value,
-                                            },
-                                          }))
-                                        }
-                                      />
-                                    </label>
-                                    <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
-                                      <span className="leading-snug">
-                                        Ratalna{' '}
-                                        <span className="font-normal text-zinc-400">(PLN)</span>
-                                      </span>
-                                      <input
-                                        type="text"
-                                        inputMode="decimal"
-                                        required
-                                        className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
-                                        disabled={!proposalAllowed}
-                                        placeholder="np. 150"
-                                        value={
-                                          proposalDrafts[child.requestId]?.monthlyUnitPrice ?? ''
-                                        }
-                                        onChange={(e) =>
-                                          setProposalDrafts((prev) => ({
-                                            ...prev,
-                                            [child.requestId]: {
-                                              ...emptyProposalDraft(),
-                                              ...prev[child.requestId],
-                                              monthlyUnitPrice: e.target.value,
-                                            },
-                                          }))
-                                        }
-                                      />
-                                    </label>
-                                    <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
-                                      <span className="leading-snug">
-                                        Za zajęcia{' '}
-                                        <span className="font-normal text-zinc-400">(PLN)</span>
-                                      </span>
-                                      <input
-                                        type="text"
-                                        inputMode="decimal"
-                                        required
-                                        className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
-                                        disabled={!proposalAllowed}
-                                        placeholder="np. 50"
-                                        value={
-                                          proposalDrafts[child.requestId]?.lessonUnitPrice ?? ''
-                                        }
-                                        onChange={(e) =>
-                                          setProposalDrafts((prev) => ({
-                                            ...prev,
-                                            [child.requestId]: {
-                                              ...emptyProposalDraft(),
-                                              ...prev[child.requestId],
-                                              lessonUnitPrice: e.target.value,
-                                            },
-                                          }))
-                                        }
-                                      />
-                                    </label>
-                                  </div>
-                                )}
+                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4 sm:items-end">
+                                  <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
+                                    <span className="leading-snug">
+                                      Jednorazowa{' '}
+                                      <span className="font-normal text-zinc-400">(PLN)</span>
+                                      {proposalParentIsComplimentary ? (
+                                        <span className="font-normal text-zinc-400"> · opcjonalnie</span>
+                                      ) : null}
+                                    </span>
+                                    <input
+                                      type="text"
+                                      inputMode="decimal"
+                                      required={!proposalParentIsComplimentary}
+                                      className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
+                                      disabled={!proposalAllowed}
+                                      placeholder="np. 1200"
+                                      value={
+                                        proposalDrafts[child.requestId]?.yearlyUnitPrice ?? ''
+                                      }
+                                      onChange={(e) =>
+                                        setProposalDrafts((prev) => ({
+                                          ...prev,
+                                          [child.requestId]: {
+                                            ...emptyProposalDraft(),
+                                            ...prev[child.requestId],
+                                            yearlyUnitPrice: e.target.value,
+                                          },
+                                        }))
+                                      }
+                                    />
+                                  </label>
+                                  <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
+                                    <span className="leading-snug">
+                                      Ratalna{' '}
+                                      <span className="font-normal text-zinc-400">(PLN)</span>
+                                      {proposalParentIsComplimentary ? (
+                                        <span className="font-normal text-zinc-400"> · opcjonalnie</span>
+                                      ) : null}
+                                    </span>
+                                    <input
+                                      type="text"
+                                      inputMode="decimal"
+                                      required={!proposalParentIsComplimentary}
+                                      className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
+                                      disabled={!proposalAllowed}
+                                      placeholder="np. 150"
+                                      value={
+                                        proposalDrafts[child.requestId]?.monthlyUnitPrice ?? ''
+                                      }
+                                      onChange={(e) =>
+                                        setProposalDrafts((prev) => ({
+                                          ...prev,
+                                          [child.requestId]: {
+                                            ...emptyProposalDraft(),
+                                            ...prev[child.requestId],
+                                            monthlyUnitPrice: e.target.value,
+                                          },
+                                        }))
+                                      }
+                                    />
+                                  </label>
+                                  <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
+                                    <span className="leading-snug">
+                                      Za zajęcia{' '}
+                                      <span className="font-normal text-zinc-400">(PLN)</span>
+                                      {proposalParentIsComplimentary ? (
+                                        <span className="font-normal text-zinc-400"> · opcjonalnie</span>
+                                      ) : null}
+                                    </span>
+                                    <input
+                                      type="text"
+                                      inputMode="decimal"
+                                      required={!proposalParentIsComplimentary}
+                                      className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
+                                      disabled={!proposalAllowed}
+                                      placeholder="np. 50"
+                                      value={
+                                        proposalDrafts[child.requestId]?.lessonUnitPrice ?? ''
+                                      }
+                                      onChange={(e) =>
+                                        setProposalDrafts((prev) => ({
+                                          ...prev,
+                                          [child.requestId]: {
+                                            ...emptyProposalDraft(),
+                                            ...prev[child.requestId],
+                                            lessonUnitPrice: e.target.value,
+                                          },
+                                        }))
+                                      }
+                                    />
+                                  </label>
+                                  <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
+                                    <span className="leading-snug">% zniżki</span>
+                                    <input
+                                      type="text"
+                                      inputMode="decimal"
+                                      className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
+                                      disabled={!proposalAllowed}
+                                      placeholder="opcjonalnie"
+                                      value={
+                                        proposalDrafts[child.requestId]?.discountPercent ?? ''
+                                      }
+                                      onChange={(e) =>
+                                        setProposalDrafts((prev) => ({
+                                          ...prev,
+                                          [child.requestId]: {
+                                            ...emptyProposalDraft(),
+                                            ...prev[child.requestId],
+                                            discountPercent: e.target.value,
+                                          },
+                                        }))
+                                      }
+                                    />
+                                  </label>
+                                </div>
                                 {(() => {
                                   const selectedGroupId =
                                     proposalDrafts[child.requestId]?.groupId ?? '';
@@ -1181,16 +1148,6 @@ export default function EnrollmentAdminPanel({
                                         );
                                         return;
                                       }
-                                      if (
-                                        proposalParentIsComplimentary &&
-                                        !draftHasComplimentaryRequiredPrices(draft)
-                                      ) {
-                                        pushToast(
-                                          'error',
-                                          'Podaj stawkę jednorazową i ratalną',
-                                        );
-                                        return;
-                                      }
                                       setSubmittingProposalRequestId(child.requestId);
                                       try {
                                         const res = await fetch('/api/admin/enrollment', {
@@ -1199,15 +1156,17 @@ export default function EnrollmentAdminPanel({
                                           body: JSON.stringify({
                                             requestId: child.requestId,
                                             groupId,
-                                            lessonUnitPrice: proposalParentIsComplimentary
-                                              ? null
-                                              : proposalDrafts[child.requestId]?.lessonUnitPrice?.trim() ||
-                                                null,
+                                            lessonUnitPrice:
+                                              proposalDrafts[child.requestId]?.lessonUnitPrice?.trim() ||
+                                              null,
                                             monthlyUnitPrice:
                                               proposalDrafts[child.requestId]?.monthlyUnitPrice?.trim() ||
                                               null,
                                             yearlyUnitPrice:
                                               proposalDrafts[child.requestId]?.yearlyUnitPrice?.trim() ||
+                                              null,
+                                            discountPercent:
+                                              proposalDrafts[child.requestId]?.discountPercent?.trim() ||
                                               null,
                                           }),
                                         });

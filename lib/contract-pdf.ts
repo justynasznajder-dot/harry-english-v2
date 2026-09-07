@@ -1,10 +1,17 @@
 import { extractContractNumber } from "@/lib/contract-html";
+import {
+  buildImageConsentPdfFilename,
+  IMAGE_CONSENT_PDF_TITLE,
+} from "@/lib/image-consent-notice";
 import { buildPickupConsentPdfFilename } from "@/lib/pickup-consent-notice";
 
 export type ContractPdfFile = {
   filename: string;
   content: Buffer;
 };
+
+/** Re-export dla kodu serwerowego — klient nie powinien importować tego pliku. */
+export { buildImageConsentPdfFilename, IMAGE_CONSENT_PDF_TITLE };
 
 function safePdfSlug(value: string): string {
   return value
@@ -19,6 +26,30 @@ function safePdfSlug(value: string): string {
 export function buildContractPdfFilename(label: string, contractNumber: string | null): string {
   const suffix = contractNumber ? safePdfSlug(contractNumber.replace(/\//g, "-")) : "dokument";
   return `${safePdfSlug(label)}-${suffix}.pdf`;
+}
+
+function sanitizePdfDisplayName(value: string): string {
+  return value
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function sanitizeContractNumberForFilename(contractNumber: string | null | undefined): string | null {
+  const raw = String(contractNumber ?? "").trim();
+  if (!raw) return null;
+  return raw.replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "");
+}
+
+/** `Umowa _ Imię Nazwisko _ 00035-2-2026.pdf` */
+export function buildUmowaPdfFilename(
+  childFullName: string,
+  contractNumber?: string | null
+): string {
+  const name = sanitizePdfDisplayName(childFullName);
+  const number = sanitizeContractNumberForFilename(contractNumber);
+  const base = `Umowa _ ${name || "dziecko"}`;
+  return number ? `${base} _ ${number}.pdf` : `${base}.pdf`;
 }
 
 function isServerlessRuntime(): boolean {
@@ -94,29 +125,27 @@ export async function buildSignedContractPdfFiles(params: {
   childAttachments: SignedChildAttachmentPdf[];
 }): Promise<ContractPdfFile[]> {
   const contractNumber = extractContractNumber(params.contentHtml);
+  const childName =
+    params.childAttachments.map((c) => c.childName.trim()).filter(Boolean)[0] || "dziecko";
   const files: ContractPdfFile[] = [];
   const browser = await launchPdfBrowser();
 
   try {
     files.push({
-      filename: buildContractPdfFilename("Umowa", contractNumber),
+      filename: buildUmowaPdfFilename(childName, contractNumber),
       content: await renderHtmlToPdfWithBrowser(browser, params.contentHtml),
     });
 
     for (const child of params.childAttachments) {
-      const childSlug = safePdfSlug(child.childName);
       if (child.attachment1Html) {
         files.push({
-          filename: buildContractPdfFilename(
-            childSlug ? `Zalacznik-1-wizerunek-${childSlug}` : "Zalacznik-1-wizerunek",
-            contractNumber
-          ),
+          filename: buildImageConsentPdfFilename(child.childName || "dziecko", contractNumber),
           content: await renderHtmlToPdfWithBrowser(browser, child.attachment1Html),
         });
       }
       if (child.attachment2Html) {
         files.push({
-          filename: buildPickupConsentPdfFilename(child.childName || "dziecko"),
+          filename: buildPickupConsentPdfFilename(child.childName || "dziecko", contractNumber),
           content: await renderHtmlToPdfWithBrowser(browser, child.attachment2Html),
         });
       }

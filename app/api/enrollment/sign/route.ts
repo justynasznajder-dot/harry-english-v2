@@ -52,6 +52,14 @@ export async function POST(request: NextRequest) {
 
   const { parentId, schoolId: SCHOOL_ID } = auth.ctx;
 
+  let imageConsent = false;
+  try {
+    const body = (await request.json()) as { imageConsent?: unknown };
+    imageConsent = body?.imageConsent === true;
+  } catch {
+    imageConsent = false;
+  }
+
   try {
 
     const parentRes = await queryDb<{
@@ -205,12 +213,13 @@ export async function POST(request: NextRequest) {
     }> = [];
 
     for (const row of included) {
-      const signedAttachment1 = row.attachment_1_html
-        ? applyContractSignaturesToDocumentHtml(
-            applySchoolYearToDocumentHtml(row.attachment_1_html, signedAt),
-            { signedAt, parentFullName }
-          )
-        : null;
+      const signedAttachment1 =
+        imageConsent && row.attachment_1_html
+          ? applyContractSignaturesToDocumentHtml(
+              applySchoolYearToDocumentHtml(row.attachment_1_html, signedAt),
+              { signedAt, parentFullName }
+            )
+          : null;
       const signedAttachment2 = row.attachment_2_html
         ? applyContractSignaturesToDocumentHtml(
             normalizePickupConsentDocumentHtml(
@@ -230,14 +239,12 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      if (signedAttachment1 || signedAttachment2) {
-        await queryDb(
-          `UPDATE contract_children
-           SET attachment_1_html = $2, attachment_2_html = $3
-           WHERE contract_id = $1 AND child_id = $4`,
-          [contract.id, signedAttachment1, signedAttachment2, row.child_id]
-        );
-      }
+      await queryDb(
+        `UPDATE contract_children
+         SET attachment_1_html = $2, attachment_2_html = $3
+         WHERE contract_id = $1 AND child_id = $4`,
+        [contract.id, signedAttachment1, signedAttachment2, row.child_id]
+      );
     }
 
     await finalizeContractPricingAtSign(contract.id, signedAt);

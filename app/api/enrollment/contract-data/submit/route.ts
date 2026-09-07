@@ -64,8 +64,6 @@ export async function POST(request: NextRequest) {
       payment_type?: unknown;
       paymentTypeByRequestId?: unknown;
       payment_type_by_request_id?: unknown;
-      lessonsPerWeekByRequestId?: unknown;
-      lessons_per_week_by_request_id?: unknown;
       includedRequestIds?: unknown;
       included_request_ids?: unknown;
     };
@@ -76,14 +74,6 @@ export async function POST(request: NextRequest) {
         : body.payment_type_by_request_id &&
             typeof body.payment_type_by_request_id === "object"
           ? (body.payment_type_by_request_id as Record<string, unknown>)
-          : {};
-
-    const lessonsPerWeekByRequestIdRaw =
-      body.lessonsPerWeekByRequestId && typeof body.lessonsPerWeekByRequestId === "object"
-        ? (body.lessonsPerWeekByRequestId as Record<string, unknown>)
-        : body.lessons_per_week_by_request_id &&
-            typeof body.lessons_per_week_by_request_id === "object"
-          ? (body.lessons_per_week_by_request_id as Record<string, unknown>)
           : {};
 
     const profile = await getParentProfileByUserId(parentId);
@@ -205,39 +195,37 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const lessonsPerWeek: LessonsPerWeek | null = normalizeLessonsPerWeek(
-      lessonsPerWeekByRequestIdRaw[single.child.request_id]
-    );
+    // Frekwencję ustawia manager (grupa / członkostwo) — rodzic jej nie wybiera.
+    let lessonsPerWeek: LessonsPerWeek | null = null;
+    if (single.child.group_id) {
+      const membershipFreq = await queryDb<{ lessons_per_week: number | null }>(
+        `SELECT lessons_per_week
+         FROM group_students
+         WHERE child_id = $1 AND group_id = $2 AND left_at IS NULL
+         ORDER BY enrolled_at DESC
+         LIMIT 1`,
+        [single.child.child_id, single.child.group_id]
+      );
+      lessonsPerWeek = normalizeLessonsPerWeek(membershipFreq.rows[0]?.lessons_per_week);
+    }
     if (!lessonsPerWeek) {
-      return NextResponse.json(
-        {
-          message: `Wybierz częstotliwość zajęć (1× lub 2× w tygodniu) dla: ${single.child.first_name} ${single.child.last_name}`,
-        },
-        { status: 400 }
+      const freqRes = await queryDb<{ lessons_per_week: number | null }>(
+        `SELECT lessons_per_week
+         FROM enrollment_requests
+         WHERE id = $1 AND school_id = $2 AND user_id = $3
+         LIMIT 1`,
+        [single.child.request_id, SCHOOL_ID, parentId]
       );
+      lessonsPerWeek = normalizeLessonsPerWeek(freqRes.rows[0]?.lessons_per_week);
     }
-
-    // Zapisz częstotliwość dla wszystkich dzieci z mapy (kolejne umowy użyją zapisanego wyboru).
-    for (const [requestId, raw] of Object.entries(lessonsPerWeekByRequestIdRaw)) {
-      const value = normalizeLessonsPerWeek(raw);
-      if (!value || !requestId.trim()) continue;
-      await queryDb(
-        `UPDATE enrollment_requests
-         SET lessons_per_week = $2
-         WHERE id = $1
-           AND school_id = $3
-           AND user_id = $4`,
-        [requestId.trim(), value, SCHOOL_ID, parentId]
+    if (!lessonsPerWeek && single.child.group_id) {
+      const groupFreq = await queryDb<{ lessons_per_week: number | null }>(
+        `SELECT lessons_per_week FROM groups WHERE id = $1 LIMIT 1`,
+        [single.child.group_id]
       );
+      lessonsPerWeek = normalizeLessonsPerWeek(groupFreq.rows[0]?.lessons_per_week);
     }
-    await queryDb(
-      `UPDATE enrollment_requests
-       SET lessons_per_week = $2
-       WHERE id = $1
-         AND school_id = $3
-         AND user_id = $4`,
-      [single.child.request_id, lessonsPerWeek, SCHOOL_ID, parentId]
-    );
+    lessonsPerWeek = lessonsPerWeek ?? 1;
 
     const included = [single.child];
     const includeAttachment2 = resolveIncludeAttachment2FromGroups(included);

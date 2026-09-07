@@ -2,6 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { paymentTypeShortLabel } from '@/lib/payment-labels';
+import {
+  PICKUP_CONSENT_DOCUMENT_TITLE,
+  PICKUP_CONSENT_PDF_TITLE,
+} from '@/lib/pickup-consent-notice';
+import { IMAGE_CONSENT_PDF_TITLE } from '@/lib/image-consent-notice';
+
+type ContractChild = { childId: string; firstName: string; lastName: string };
 
 type ContractDoc = {
   id: string;
@@ -10,7 +17,7 @@ type ContractDoc = {
   paymentType: string | null;
   schoolYearName: string | null;
   contractNumber: string | null;
-  children: Array<{ childId: string; firstName: string; lastName: string }>;
+  children: ContractChild[];
 };
 
 type PdfFile = {
@@ -19,6 +26,14 @@ type PdfFile = {
   size: number | null;
   lastModified: string | null;
   downloadUrl: string;
+};
+
+type ChildDocumentsGroup = {
+  key: string;
+  childId: string | null;
+  displayName: string;
+  contracts: ContractDoc[];
+  pdfFiles: PdfFile[];
 };
 
 const ALL_YEARS = 'all';
@@ -38,25 +53,124 @@ function yearFromPdf(file: PdfFile): number | null {
 
 function contractNumberSlug(value: string | null | undefined): string | null {
   if (!value) return null;
-  return value.replace(/\//g, '-');
+  const slug = value
+    .trim()
+    .replace(/\//g, '-')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w.-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  return slug || null;
 }
 
-function pdfMatchesContracts(file: PdfFile, contracts: ContractDoc[]): boolean {
-  if (contracts.length === 0) return false;
+function childNameSlug(firstName: string, lastName: string): string {
+  return `${firstName} ${lastName}`
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w.-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80)
+    .toLowerCase();
+}
 
-  const numberSlugs = contracts
-    .map((c) => contractNumberSlug(c.contractNumber))
-    .filter((s): s is string => Boolean(s));
-  if (numberSlugs.some((slug) => file.filename.includes(slug))) {
-    return true;
+/** Dopasuj PDF do numeru umowy — bez fallbacku po roku (ten myli dzieci). */
+function filenameMatchesContractNumber(
+  filename: string,
+  contractNumber: string | null | undefined
+): boolean {
+  const slug = contractNumberSlug(contractNumber);
+  if (!slug) return false;
+  const base = (filename.split(/[/\\]/).pop() ?? filename).replace(/\.pdf$/i, '');
+  const escaped = slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // `Umowa-{slug}` albo `…-{slug}` na końcu nazwy (jak przy generowaniu PDF).
+  return new RegExp(`(?:^|[-_])${escaped}$`, 'i').test(base);
+}
+
+function pdfMatchesContractNumbers(file: PdfFile, contracts: ContractDoc[]): boolean {
+  return contracts.some((c) => filenameMatchesContractNumber(file.filename, c.contractNumber));
+}
+
+/** Filtr listy PDF po wybranym roku kalendarzowym. */
+function pdfBelongsToYearFilter(file: PdfFile, contracts: ContractDoc[], year: number): boolean {
+  if (contracts.some((c) => filenameMatchesContractNumber(file.filename, c.contractNumber))) {
+    const matched = contracts.find((c) =>
+      filenameMatchesContractNumber(file.filename, c.contractNumber)
+    );
+    return yearFromIso(matched?.signedAt) === year || yearFromPdf(file) === year;
+  }
+  return yearFromPdf(file) === year;
+}
+
+function pdfMatchesChildName(file: PdfFile, child: ContractChild): boolean {
+  const filename = file.filename.toLowerCase();
+  const slug = childNameSlug(child.firstName, child.lastName);
+  if (slug && filename.includes(slug)) return true;
+  const fullName = `${child.firstName} ${child.lastName}`.trim().toLowerCase();
+  return fullName.length > 0 && filename.includes(fullName);
+}
+
+function isMainContractPdf(filename: string): boolean {
+  const base = (filename.split(/[/\\]/).pop() ?? filename).trim().toLowerCase();
+  return /^umowa(\s+_|\s*[-_])/i.test(base) || /^umowa[-_]/i.test(base);
+}
+
+function isAttachmentPdf(filename: string): boolean {
+  const base = (filename.split(/[/\\]/).pop() ?? filename).toLowerCase();
+  return (
+    base.startsWith('zalacznik-') ||
+    base.startsWith(IMAGE_CONSENT_PDF_TITLE.toLowerCase()) ||
+    base.startsWith(PICKUP_CONSENT_PDF_TITLE.toLowerCase()) ||
+    base.includes('wizerunek') ||
+    Boolean(childNameFromPickupFilename(filename)) ||
+    Boolean(childNameFromImageConsentFilename(filename))
+  );
+}
+
+function childNameFromImageConsentFilename(filename: string): string | null {
+  const base = (filename.split(/[/\\]/).pop() ?? filename).trim();
+  const lower = base.toLowerCase();
+  const title = IMAGE_CONSENT_PDF_TITLE.toLowerCase();
+  if (!lower.startsWith(title)) return null;
+  const after = base.slice(IMAGE_CONSENT_PDF_TITLE.length).replace(/\.pdf$/i, '').trim();
+  const parts = after
+    .replace(/^_+\s*/, '')
+    .split(/\s+_\s+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  // Imię Nazwisko [_ numer umowy]
+  return parts[0] || null;
+}
+
+function childNameFromPickupFilename(filename: string): string | null {
+  const base = (filename.split(/[/\\]/).pop() ?? filename).trim();
+  const lower = base.toLowerCase();
+
+  if (lower.startsWith(PICKUP_CONSENT_PDF_TITLE.toLowerCase())) {
+    const after = base.slice(PICKUP_CONSENT_PDF_TITLE.length).replace(/\.pdf$/i, '').trim();
+    const parts = after
+      .replace(/^_+\s*/, '')
+      .split(/\s+_\s+/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    return parts[0] || null;
   }
 
-  const calendarYears = new Set(
-    contracts.map((c) => yearFromIso(c.signedAt)).filter((y): y is number => y != null)
-  );
-  if (calendarYears.size === 0) return false;
-  const fileYear = yearFromPdf(file);
-  return fileYear != null && calendarYears.has(fileYear);
+  const legacyPrefix = `${PICKUP_CONSENT_DOCUMENT_TITLE}_`;
+  if (lower.startsWith(legacyPrefix.toLowerCase())) {
+    const name = base.slice(legacyPrefix.length).replace(/\.pdf$/i, '').trim();
+    return name || null;
+  }
+  return null;
+}
+
+function formatSignedDate(value: string): string {
+  return new Date(value).toLocaleDateString('pl-PL', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
 }
 
 export default function ParentDocumentsTab({
@@ -120,10 +234,12 @@ export default function ParentDocumentsTab({
 
   const yearOptions = useMemo(() => {
     const years = Array.from(
-      new Set([
-        ...contracts.map((c) => yearFromIso(c.signedAt)),
-        ...pdfFiles.map((f) => yearFromPdf(f)),
-      ].filter((y): y is number => y != null))
+      new Set(
+        [
+          ...contracts.map((c) => yearFromIso(c.signedAt)),
+          ...pdfFiles.map((f) => yearFromPdf(f)),
+        ].filter((y): y is number => y != null)
+      )
     ).sort((a, b) => b - a);
 
     const options: Array<{ id: string; label: string }> = years.map((y) => ({
@@ -146,21 +262,111 @@ export default function ParentDocumentsTab({
 
   const filteredPdfFiles = useMemo(() => {
     if (selectedYear === ALL_YEARS) return pdfFiles;
-    if (filteredContracts.length === 0) {
-      const year = Number(selectedYear);
-      return pdfFiles.filter((f) => yearFromPdf(f) === year);
-    }
-    const matched = pdfFiles.filter((f) => pdfMatchesContracts(f, filteredContracts));
-    if (matched.length > 0) return matched;
     const year = Number(selectedYear);
-    return pdfFiles.filter((f) => yearFromPdf(f) === year);
+    return pdfFiles.filter((f) => pdfBelongsToYearFilter(f, filteredContracts, year));
   }, [pdfFiles, filteredContracts, selectedYear]);
+
+  const childGroups = useMemo((): ChildDocumentsGroup[] => {
+    const byChildId = new Map<string, ChildDocumentsGroup>();
+    const childById = new Map<string, ContractChild>();
+
+    const ensureChild = (child: ContractChild): ChildDocumentsGroup => {
+      childById.set(child.childId, child);
+      const existing = byChildId.get(child.childId);
+      if (existing) return existing;
+      const group: ChildDocumentsGroup = {
+        key: child.childId,
+        childId: child.childId,
+        displayName: `${child.firstName} ${child.lastName}`.trim(),
+        contracts: [],
+        pdfFiles: [],
+      };
+      byChildId.set(child.childId, group);
+      return group;
+    };
+
+    for (const contract of filteredContracts) {
+      for (const child of contract.children) {
+        const group = ensureChild(child);
+        if (!group.contracts.some((c) => c.id === contract.id)) {
+          group.contracts.push(contract);
+        }
+      }
+    }
+
+    const assignedKeys = new Set<string>();
+
+    // 1) Umowy PDF — wyłącznie po numerze umowy dziecka.
+    for (const group of byChildId.values()) {
+      for (const file of filteredPdfFiles) {
+        if (assignedKeys.has(file.key)) continue;
+        if (!isMainContractPdf(file.filename)) continue;
+        if (!pdfMatchesContractNumbers(file, group.contracts)) continue;
+        group.pdfFiles.push(file);
+        assignedKeys.add(file.key);
+      }
+    }
+
+    // 2) Załączniki — po numerze umowy albo imieniu dziecka.
+    for (const group of byChildId.values()) {
+      const child = group.childId ? childById.get(group.childId) : null;
+      if (!child) continue;
+      for (const file of filteredPdfFiles) {
+        if (assignedKeys.has(file.key)) continue;
+        if (isMainContractPdf(file.filename)) continue;
+        const byNumber = pdfMatchesContractNumbers(file, group.contracts);
+        const byName = isAttachmentPdf(file.filename) && pdfMatchesChildName(file, child);
+        if (!byNumber && !byName) continue;
+        group.pdfFiles.push(file);
+        assignedKeys.add(file.key);
+      }
+    }
+
+    // 3) Zgody bez kontraktu (np. tryb bez opłat) — po imieniu z nazwy pliku.
+    for (const file of filteredPdfFiles) {
+      if (assignedKeys.has(file.key)) continue;
+      const fromPickup = childNameFromPickupFilename(file.filename);
+      if (!fromPickup) continue;
+      const key = `name:${fromPickup.toLowerCase()}`;
+      let group = Array.from(byChildId.values()).find(
+        (g) => g.displayName.toLowerCase() === fromPickup.toLowerCase()
+      );
+      if (!group) {
+        group = {
+          key,
+          childId: null,
+          displayName: fromPickup,
+          contracts: [],
+          pdfFiles: [],
+        };
+        byChildId.set(key, group);
+      }
+      group.pdfFiles.push(file);
+      assignedKeys.add(file.key);
+    }
+
+    const groups = Array.from(byChildId.values()).sort((a, b) =>
+      a.displayName.localeCompare(b.displayName, 'pl')
+    );
+
+    const leftovers = filteredPdfFiles.filter((f) => !assignedKeys.has(f.key));
+    if (leftovers.length > 0) {
+      groups.push({
+        key: 'other',
+        childId: null,
+        displayName: 'Pozostałe dokumenty',
+        contracts: [],
+        pdfFiles: leftovers,
+      });
+    }
+
+    return groups.filter((g) => g.contracts.length > 0 || g.pdfFiles.length > 0);
+  }, [filteredContracts, filteredPdfFiles]);
 
   const emptyForYear =
     !loading &&
     !error &&
-    filteredContracts.length === 0 &&
-    filteredPdfFiles.length === 0 &&
+    childGroups.length === 0 &&
     (contracts.length > 0 || pdfFiles.length > 0);
 
   return (
@@ -169,7 +375,7 @@ export default function ParentDocumentsTab({
         <div>
           <h2 className="text-xl font-bold text-zinc-900 md:text-2xl">Moje dokumenty</h2>
           <p className="mt-1 text-sm text-zinc-600">
-            Tutaj znajdziesz wszystkie dokumenty w formacie pdf.
+            Dokumenty PDF pogrupowane według dziecka.
           </p>
         </div>
         {showYearSelector && !loading && !error ? (
@@ -200,7 +406,7 @@ export default function ParentDocumentsTab({
         <div className="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-10 text-center text-sm text-zinc-600">
           {complimentaryAccess
             ? 'Tryb bez opłat — wcześniejsze umowy i dokumenty płatne nie są dostępne. Ewentualna zgoda na odbiór przez lektora pojawi się poniżej, jeśli jest wymagana.'
-            : 'Brak podpisanych dokumentów. Po podpisaniu umowy pojawi się tutaj podsumowanie i pliki PDF.'}
+            : 'Brak podpisanych dokumentów. Po podpisaniu umowy pojawią się tu pliki PDF dla każdego dziecka.'}
         </div>
       ) : emptyForYear ? (
         <div className="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-10 text-center text-sm text-zinc-600">
@@ -208,75 +414,58 @@ export default function ParentDocumentsTab({
         </div>
       ) : (
         <div className="space-y-4">
-          {filteredContracts.length > 0 ? (
-            <div className="space-y-3">
-              <h3 className="text-sm font-semibold text-zinc-900">Podpisane umowy</h3>
-              {filteredContracts.map((c) => (
-                <article
-                  key={c.id}
-                  className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4"
-                >
-                  <p className="font-semibold text-zinc-900">
-                    Umowa {c.schoolYearName ? `— ${c.schoolYearName}` : ''}
-                  </p>
-                  {c.signedAt ? (
-                    <p className="mt-1 text-sm text-zinc-600">
-                      Podpisano:{' '}
-                      {new Date(c.signedAt).toLocaleDateString('pl-PL', {
-                        day: 'numeric',
-                        month: 'long',
-                        year: 'numeric',
-                      })}
-                    </p>
-                  ) : null}
-                  {c.paymentType ? (
-                    <p className="text-sm text-zinc-600">
-                      Rozliczenie: {paymentTypeShortLabel(c.paymentType)}
-                    </p>
-                  ) : null}
-                  {c.children.length > 0 ? (
-                    <p className="mt-2 text-sm text-zinc-700">
-                      Dzieci:{' '}
-                      {c.children.map((ch) => `${ch.firstName} ${ch.lastName}`).join(', ')}
-                    </p>
-                  ) : null}
-                </article>
-              ))}
-            </div>
-          ) : null}
+          {childGroups.map((group) => (
+            <article
+              key={group.key}
+              className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4"
+            >
+              <h3 className="text-base font-semibold text-zinc-900">{group.displayName}</h3>
 
-          {filteredPdfFiles.length > 0 ? (
-            <div className="space-y-3">
-              <h3 className="text-sm font-semibold text-zinc-900">Pliki PDF</h3>
-              <ul className="space-y-2">
-                {filteredPdfFiles.map((f) => (
-                  <li
-                    key={f.key}
-                    className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-200 bg-white px-4 py-3"
-                  >
-                    <div>
-                      <p className="text-sm font-medium text-zinc-900">{f.filename}</p>
-                      {f.lastModified ? (
-                        <p className="text-xs text-zinc-500">
-                          {new Date(f.lastModified).toLocaleDateString('pl-PL')}
-                        </p>
-                      ) : null}
-                    </div>
-                    <a
-                      href={f.downloadUrl}
-                      className="rounded-full bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white hover:bg-[#0b5a46]"
+              {group.contracts.length > 0 ? (
+                <ul className="mt-2 space-y-1 text-sm text-zinc-600">
+                  {group.contracts.map((c) => (
+                    <li key={c.id}>
+                      Umowa{c.schoolYearName ? ` — ${c.schoolYearName}` : ''}
+                      {c.signedAt ? ` · podpisano ${formatSignedDate(c.signedAt)}` : ''}
+                      {c.paymentType
+                        ? ` · ${paymentTypeShortLabel(c.paymentType)}`
+                        : ''}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+
+              {group.pdfFiles.length > 0 ? (
+                <ul className="mt-3 space-y-2">
+                  {group.pdfFiles.map((f) => (
+                    <li
+                      key={f.key}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-200 bg-white px-4 py-3"
                     >
-                      Pobierz PDF
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : filteredContracts.length > 0 ? (
-            <p className="text-sm text-zinc-600">
-              Pliki PDF są też wysyłane na Twój adres e-mail po podpisaniu umowy.
-            </p>
-          ) : null}
+                      <div>
+                        <p className="text-sm font-medium text-zinc-900">{f.filename}</p>
+                        {f.lastModified ? (
+                          <p className="text-xs text-zinc-500">
+                            {new Date(f.lastModified).toLocaleDateString('pl-PL')}
+                          </p>
+                        ) : null}
+                      </div>
+                      <a
+                        href={f.downloadUrl}
+                        className="rounded-full bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white hover:bg-[#0b5a46]"
+                      >
+                        Pobierz PDF
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-3 text-sm text-zinc-600">
+                  Pliki PDF są też wysyłane mailem po podpisaniu umowy.
+                </p>
+              )}
+            </article>
+          ))}
         </div>
       )}
     </section>

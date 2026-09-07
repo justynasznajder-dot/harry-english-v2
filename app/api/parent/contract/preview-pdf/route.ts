@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { buildContractPdfFilename, renderHtmlToPdf } from "@/lib/contract-pdf";
+import { buildUmowaPdfFilename, buildImageConsentPdfFilename, renderHtmlToPdf } from "@/lib/contract-pdf";
 import { extractContractNumber } from "@/lib/contract-html";
 import { getUserById } from "@/lib/db";
-import { fetchParentContractForPortal } from "@/lib/parent-contract";
+import {
+  fetchParentContractByIdForPortal,
+  fetchParentContractForPortal,
+} from "@/lib/parent-contract";
 import { requireParentContext } from "@/lib/parent-portal-auth";
 import { buildPickupConsentPdfFilename } from "@/lib/pickup-consent-notice";
 import { isComplimentaryForParent } from "@/lib/school-discounts";
@@ -28,6 +31,7 @@ export async function GET(request: NextRequest) {
   const { parentId, schoolId } = auth.ctx;
   const doc = (request.nextUrl.searchParams.get("doc") ?? "contract").trim().toLowerCase();
   const childId = request.nextUrl.searchParams.get("childId")?.trim() ?? "";
+  const contractId = request.nextUrl.searchParams.get("contractId")?.trim() ?? "";
 
   try {
     const parentUser = await getUserById(parentId);
@@ -43,7 +47,9 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const contract = await fetchParentContractForPortal(parentId, schoolId);
+    const contract = contractId
+      ? await fetchParentContractByIdForPortal(parentId, schoolId, contractId)
+      : await fetchParentContractForPortal(parentId, schoolId);
     if (!contract) {
       return NextResponse.json({ message: "Brak umowy do podglądu" }, { status: 404 });
     }
@@ -58,10 +64,18 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ message: "Brak umowy do podglądu" }, { status: 404 });
       }
       html = withUnsignedPreviewBanner(contentHtml, isSigned);
-      filename = buildContractPdfFilename(
-        isSigned ? "Umowa" : "Umowa-podglad",
-        extractContractNumber(contentHtml),
-      );
+      const contractNumber = extractContractNumber(contentHtml);
+      const childFromParam = childId
+        ? contract.child_attachments.find((c) => c.child_id === childId)
+        : null;
+      const child =
+        childFromParam ??
+        contract.child_attachments[0] ??
+        null;
+      const childName = child
+        ? `${child.first_name} ${child.last_name}`.trim()
+        : "dziecko";
+      filename = buildUmowaPdfFilename(childName || "dziecko", contractNumber);
     } else if (doc === "attachment1" || doc === "attachment2") {
       if (!childId) {
         return NextResponse.json({ message: "Brak childId dla załącznika" }, { status: 400 });
@@ -71,25 +85,21 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ message: "Nie znaleziono załącznika" }, { status: 404 });
       }
       const childName = `${child.first_name} ${child.last_name}`.trim();
+      const contractNumber = extractContractNumber(contract.content_html ?? "");
       if (doc === "attachment1") {
         html = child.attachment_1_html;
         if (!html) {
           return NextResponse.json({ message: "Brak załącznika nr 1" }, { status: 404 });
         }
         html = withUnsignedPreviewBanner(html, isSigned);
-        filename = buildContractPdfFilename(
-          isSigned ? `Zalacznik-1-wizerunek` : `Zalacznik-1-podglad`,
-          extractContractNumber(contract.content_html ?? ""),
-        );
+        filename = buildImageConsentPdfFilename(childName || "dziecko", contractNumber);
       } else {
         html = child.attachment_2_html;
         if (!html) {
           return NextResponse.json({ message: "Brak zgody na odebranie" }, { status: 404 });
         }
         html = withUnsignedPreviewBanner(html, isSigned);
-        filename = isSigned
-          ? buildPickupConsentPdfFilename(childName || "dziecko")
-          : `Zgoda-odbior-podglad-${childName || "dziecko"}.pdf`.replace(/\s+/g, "-");
+        filename = buildPickupConsentPdfFilename(childName || "dziecko", contractNumber);
       }
     } else {
       return NextResponse.json({ message: "Nieznany typ dokumentu" }, { status: 400 });

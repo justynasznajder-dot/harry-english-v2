@@ -70,6 +70,8 @@ export type ProposalInput = {
   lessonUnitPrice?: number | string | null;
   monthlyUnitPrice?: number | string | null;
   yearlyUnitPrice?: number | string | null;
+  /** Opcjonalny % zniżki na profilu dziecka (0–100). */
+  discountPercent?: number | string | null;
 };
 
 export type EnrollmentProposalStatus = "NEW" | "NEGOTIATING";
@@ -100,6 +102,20 @@ export function resolveProposalEmailCredentials(params: {
   };
 }
 
+function parseOptionalDiscountPercent(
+  raw: number | string | null | undefined
+): { ok: true; value: number | null } | { ok: false; message: string } {
+  if (raw == null || raw === "") return { ok: true, value: null };
+  const n = typeof raw === "number" ? raw : Number(String(raw).replace(",", "."));
+  if (!Number.isFinite(n)) {
+    return { ok: false, message: "Nieprawidłowy % zniżki" };
+  }
+  if (n < 0 || n > 100) {
+    return { ok: false, message: "% zniżki musi być w zakresie 0–100" };
+  }
+  return { ok: true, value: Math.round(n * 100) / 100 };
+}
+
 export async function submitEnrollmentProposal(
   input: ProposalInput,
   sharedParent: SharedParentState | null,
@@ -113,7 +129,7 @@ export async function submitEnrollmentProposal(
     draftOnly?: boolean;
     /** Przy draftOnly — puste stawki jako NULL. */
     allowEmptyPrices?: boolean;
-    /** Tryb bez opłat: wymagane tylko jednorazowa + ratalna (za zajęcia = NULL). */
+    /** Tryb bez opłat: wszystkie 3 stawki opcjonalne (można zostawić puste). */
     complimentaryPrices?: boolean;
   }
 ): Promise<
@@ -128,7 +144,14 @@ export async function submitEnrollmentProposal(
     }
   | { ok: false; status: number; message: string }
 > {
-  const { requestId, groupId, lessonUnitPrice, monthlyUnitPrice, yearlyUnitPrice } = input;
+  const {
+    requestId,
+    groupId,
+    lessonUnitPrice,
+    monthlyUnitPrice,
+    yearlyUnitPrice,
+    discountPercent,
+  } = input;
   const allowedStatuses = options?.allowedStatuses ?? ["NEW", "NEGOTIATING"];
   const draftOnly = options?.draftOnly === true;
 
@@ -363,11 +386,13 @@ export async function submitEnrollmentProposal(
   let parsedYearly: number | null = null;
 
   if (options?.complimentaryPrices || complimentary) {
-    const monthly = parseUnitPrice(monthlyUnitPrice, "ratalna", true);
+    const lesson = parseUnitPrice(lessonUnitPrice, "za pojedyncze zajęcia", false);
+    if (!lesson.ok) return { ok: false, status: 400, message: lesson.message };
+    const monthly = parseUnitPrice(monthlyUnitPrice, "ratalna", false);
     if (!monthly.ok) return { ok: false, status: 400, message: monthly.message };
-    const yearly = parseUnitPrice(yearlyUnitPrice, "jednorazowa", true);
+    const yearly = parseUnitPrice(yearlyUnitPrice, "jednorazowa", false);
     if (!yearly.ok) return { ok: false, status: 400, message: yearly.message };
-    parsedLesson = null;
+    parsedLesson = lesson.value;
     parsedMonthly = monthly.value;
     parsedYearly = yearly.value;
   } else if (draftOnly && options?.allowEmptyPrices) {
@@ -391,6 +416,12 @@ export async function submitEnrollmentProposal(
     parsedMonthly = monthly.value;
     parsedYearly = yearly.value;
   }
+
+  const discountParsed = parseOptionalDiscountPercent(discountPercent);
+  if (!discountParsed.ok) {
+    return { ok: false, status: 400, message: discountParsed.message };
+  }
+  const parsedDiscount = discountParsed.value;
 
   // draftOnly: status zostaje NEW — tylko zapis + członkostwo niepotwierdzone.
   const initialStatus = draftOnly
@@ -476,7 +507,8 @@ export async function submitEnrollmentProposal(
              END,
              lesson_unit_price = COALESCE($4, lesson_unit_price),
              monthly_unit_price = COALESCE($5, monthly_unit_price),
-             yearly_unit_price = COALESCE($6, yearly_unit_price)
+             yearly_unit_price = COALESCE($6, yearly_unit_price),
+             discount_percent = $7
          WHERE id = $1`,
         [
           existingChildId,
@@ -485,6 +517,7 @@ export async function submitEnrollmentProposal(
           parsedLesson,
           parsedMonthly,
           parsedYearly,
+          parsedDiscount,
         ]
       );
     });
@@ -501,8 +534,8 @@ export async function submitEnrollmentProposal(
         `INSERT INTO children (
            id, school_id, parent_id, client_number, first_name, last_name, birth_date,
            active, confirmed, enrollment_request_id, access_level,
-           lesson_unit_price, monthly_unit_price, yearly_unit_price
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7::date, TRUE, FALSE, $8, $9, $10, $11, $12)`,
+           lesson_unit_price, monthly_unit_price, yearly_unit_price, discount_percent
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7::date, TRUE, FALSE, $8, $9, $10, $11, $12, $13)`,
         [
           childId,
           parentSchoolId,
@@ -516,6 +549,7 @@ export async function submitEnrollmentProposal(
           parsedLesson,
           parsedMonthly,
           parsedYearly,
+          parsedDiscount,
         ]
       );
     });
@@ -620,6 +654,7 @@ export async function saveEnrollmentRequestPrices(
     lessonUnitPrice?: number | string | null;
     monthlyUnitPrice?: number | string | null;
     yearlyUnitPrice?: number | string | null;
+    discountPercent?: number | string | null;
   },
   options?: { restrictToSchoolId?: string; complimentaryPrices?: boolean }
 ): Promise<{ ok: true } | { ok: false; status: number; message: string }> {
@@ -640,33 +675,34 @@ export async function saveEnrollmentRequestPrices(
     };
   }
 
+  const discountParsed = parseOptionalDiscountPercent(input.discountPercent);
+  if (!discountParsed.ok) {
+    return { ok: false, status: 400, message: discountParsed.message };
+  }
+
   if (options?.complimentaryPrices) {
+    const lesson = parseOptionalUnitPrice(input.lessonUnitPrice, "za pojedyncze zajęcia");
+    if (!lesson.ok) return { ok: false, status: 400, message: lesson.message };
     const monthly = parseOptionalUnitPrice(input.monthlyUnitPrice, "ratalna");
     if (!monthly.ok) return { ok: false, status: 400, message: monthly.message };
     const yearly = parseOptionalUnitPrice(input.yearlyUnitPrice, "jednorazowa");
     if (!yearly.ok) return { ok: false, status: 400, message: yearly.message };
-    if (monthly.value == null || yearly.value == null) {
-      return {
-        ok: false,
-        status: 400,
-        message: "Podaj stawkę jednorazową i ratalną",
-      };
-    }
     await queryDb(
       `UPDATE enrollment_requests
-       SET lesson_unit_price = NULL,
-           monthly_unit_price = $2,
-           yearly_unit_price = $3
+       SET lesson_unit_price = $2,
+           monthly_unit_price = $3,
+           yearly_unit_price = $4
        WHERE id = $1`,
-      [input.requestId, monthly.value, yearly.value]
+      [input.requestId, lesson.value, monthly.value, yearly.value]
     );
     await queryDb(
       `UPDATE children
-       SET lesson_unit_price = NULL,
-           monthly_unit_price = $2,
-           yearly_unit_price = $3
+       SET lesson_unit_price = $2,
+           monthly_unit_price = $3,
+           yearly_unit_price = $4,
+           discount_percent = $5
        WHERE enrollment_request_id = $1`,
-      [input.requestId, monthly.value, yearly.value]
+      [input.requestId, lesson.value, monthly.value, yearly.value, discountParsed.value]
     );
     return { ok: true };
   }
@@ -699,9 +735,10 @@ export async function saveEnrollmentRequestPrices(
     `UPDATE children
      SET lesson_unit_price = $2,
          monthly_unit_price = $3,
-         yearly_unit_price = $4
+         yearly_unit_price = $4,
+         discount_percent = $5
      WHERE enrollment_request_id = $1`,
-    [input.requestId, lesson.value, monthly.value, yearly.value]
+    [input.requestId, lesson.value, monthly.value, yearly.value, discountParsed.value]
   );
 
   return { ok: true };

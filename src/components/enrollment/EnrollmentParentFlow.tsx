@@ -92,6 +92,17 @@ interface ParentContractDocument {
   }>;
 }
 
+interface SignedContractDownload {
+  contractId: string;
+  childId: string;
+  requestId: string | null;
+  firstName: string;
+  lastName: string;
+  hasAttachment1: boolean;
+  hasAttachment2: boolean;
+  signedAt: string | null;
+}
+
 interface ContractReadiness {
   hasPendingDecisions: boolean;
   allDecisionsResolved: boolean;
@@ -120,6 +131,114 @@ interface ParentProfileForm {
 function formatPlnAmount(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '—';
   return `${value.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} PLN`;
+}
+
+async function downloadSignedContractPdf(params: {
+  doc: 'contract' | 'attachment1' | 'attachment2';
+  contractId: string;
+  childId?: string;
+}): Promise<void> {
+  const qs = new URLSearchParams({
+    doc: params.doc,
+    contractId: params.contractId,
+  });
+  if (params.childId) qs.set('childId', params.childId);
+  const res = await fetch(`/api/parent/contract/preview-pdf?${qs.toString()}`, {
+    credentials: 'include',
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { message?: string };
+    throw new Error(data.message ?? 'Nie udało się pobrać PDF');
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get('Content-Disposition') ?? '';
+  const match = /filename="([^"]+)"/i.exec(disposition);
+  const filename = match?.[1] ?? 'dokument.pdf';
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function ChildSignedPdfButtons({ doc }: { doc: SignedContractDownload }) {
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+
+  const run = async (key: string, action: () => Promise<void>) => {
+    setBusyKey(key);
+    try {
+      await action();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Nie udało się pobrać PDF');
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const btnClass =
+    'rounded-full bg-[#0f6e56] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60';
+
+  return (
+    <div className="mt-3 flex flex-wrap gap-2 border-t border-zinc-200 pt-3">
+      <button
+        type="button"
+        disabled={busyKey !== null}
+        className={btnClass}
+        onClick={() =>
+          void run('contract', () =>
+            downloadSignedContractPdf({
+              doc: 'contract',
+              contractId: doc.contractId,
+              childId: doc.childId,
+            }),
+          )
+        }
+      >
+        {busyKey === 'contract' ? 'PDF…' : 'Pobierz umowę'}
+      </button>
+      {doc.hasAttachment1 ? (
+        <button
+          type="button"
+          disabled={busyKey !== null}
+          className={btnClass}
+          onClick={() =>
+            void run('att1', () =>
+              downloadSignedContractPdf({
+                doc: 'attachment1',
+                contractId: doc.contractId,
+                childId: doc.childId,
+              }),
+            )
+          }
+        >
+          {busyKey === 'att1' ? 'PDF…' : 'Pobierz wizerunek'}
+        </button>
+      ) : null}
+      {doc.hasAttachment2 ? (
+        <button
+          type="button"
+          disabled={busyKey !== null}
+          className={btnClass}
+          onClick={() =>
+            void run('att2', () =>
+              downloadSignedContractPdf({
+                doc: 'attachment2',
+                contractId: doc.contractId,
+                childId: doc.childId,
+              }),
+            )
+          }
+        >
+          {busyKey === 'att2' ? 'PDF…' : 'Pobierz zgodę na odbiór'}
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
 function resolveProposalLessonUnitPrice(p: EnrollmentProposal): number | null {
@@ -395,11 +514,14 @@ export default function EnrollmentParentFlow({
   });
   const [savingContract, setSavingContract] = useState(false);
   const [parentContract, setParentContract] = useState<ParentContractDocument | null>(null);
+  const [signedContractDownloads, setSignedContractDownloads] = useState<SignedContractDownload[]>(
+    [],
+  );
   /** Sposób rozliczeń osobno dla każdego zgłoszenia (request_id). */
   const [paymentTypeByRequestId, setPaymentTypeByRequestId] = useState<
     Record<string, 'MONTHLY' | 'YEARLY' | 'PER_LESSON'>
   >({});
-  /** Częstotliwość zajęć (1× / 2× w tygodniu) per zgłoszenie. */
+  /** Częstotliwość zajęć (1× / 2×) — ustawiana przez managera; tylko do wyceny w UI. */
   const [lessonsPerWeekByRequestId, setLessonsPerWeekByRequestId] = useState<
     Record<string, LessonsPerWeek>
   >({});
@@ -478,6 +600,7 @@ export default function EnrollmentParentFlow({
       const data = (await r.json()) as {
         proposals?: EnrollmentProposal[];
         parentContract?: ParentContractDocument | null;
+        signedContractDownloads?: SignedContractDownload[];
         contractReadiness?: ContractReadiness;
         contractPricing?: ContractPricing | null;
         enrollmentRequestSummary?: EnrollmentRequestSummary | null;
@@ -504,6 +627,9 @@ export default function EnrollmentParentFlow({
       }
       setProposals(sortProposalsByStableOrder(incoming, proposalOrderRef.current));
       setParentContract(data.parentContract ?? null);
+      setSignedContractDownloads(
+        Array.isArray(data.signedContractDownloads) ? data.signedContractDownloads : [],
+      );
       setPaymentTypeByRequestId((prev) => {
         const next = { ...prev };
         for (const p of incoming) {
@@ -786,19 +912,12 @@ export default function EnrollmentParentFlow({
     const resolvedPaymentTypes: Record<string, 'MONTHLY' | 'YEARLY' | 'PER_LESSON'> = {
       ...paymentTypeByRequestId,
     };
-    const resolvedLessonsPerWeek: Record<string, LessonsPerWeek> = {
-      ...lessonsPerWeekByRequestId,
-    };
     for (const p of priced) {
       if (!resolvedPaymentTypes[p.request_id]) {
         resolvedPaymentTypes[p.request_id] = 'MONTHLY';
       }
-      if (!resolvedLessonsPerWeek[p.request_id]) {
-        resolvedLessonsPerWeek[p.request_id] = 1;
-      }
     }
     setPaymentTypeByRequestId(resolvedPaymentTypes);
-    setLessonsPerWeekByRequestId(resolvedLessonsPerWeek);
 
     setSavingContract(true);
     try {
@@ -808,7 +927,6 @@ export default function EnrollmentParentFlow({
         credentials: 'include',
         body: JSON.stringify({
           paymentTypeByRequestId: resolvedPaymentTypes,
-          lessonsPerWeekByRequestId: resolvedLessonsPerWeek,
           includedRequestIds: priced.map((p) => p.request_id),
         }),
       });
@@ -860,7 +978,6 @@ export default function EnrollmentParentFlow({
     isEditingContractProfile,
     loadParentProfile,
     loadProposals,
-    lessonsPerWeekByRequestId,
     paymentTypeByRequestId,
     profileComplete,
     proposals,
@@ -1287,7 +1404,7 @@ export default function EnrollmentParentFlow({
                     {proposals.length > 1 ? ' dla dzieci' : ' dla Twojego dziecka'}.
                     {ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
                       ? ' Przejdź do kroku „Umowa”, aby uzupełnić dane — dokument przygotuje szkoła.'
-                      : ' Oczekujemy na przygotowanie i podpisanie umowy przez nauczyciela.'}
+                      : ' Oczekujemy na podpisanie umowy przez rodzica.'}
                   </p>
                 )}
               {!userInfo.complimentaryAccess &&
@@ -1786,8 +1903,8 @@ export default function EnrollmentParentFlow({
                     <div>
                       <p className="text-base font-semibold text-zinc-900">Dzieci i sposób rozliczeń</p>
                       <p className="mt-1 text-sm text-zinc-600">
-                        Dla każdego dziecka wybierz częstotliwość zajęć i sposób płatności. Umowy
-                        generują się po kolei (jedno dziecko = jedna umowa).
+                        Dla każdego dziecka wybierz sposób płatności. Umowy generują się po kolei
+                        (jedno dziecko = jedna umowa).
                       </p>
                     </div>
                     <div className="space-y-3">
@@ -1821,7 +1938,7 @@ export default function EnrollmentParentFlow({
                             key={p.request_id}
                             className={`rounded-xl border px-4 py-3 ${
                               isSignedDone
-                                ? 'border-zinc-200 bg-zinc-100/80 opacity-80'
+                                ? 'border-zinc-200 bg-zinc-100/80'
                                 : 'border-white bg-white'
                             }`}
                           >
@@ -1829,7 +1946,7 @@ export default function EnrollmentParentFlow({
                               <div>
                                 <p
                                   className={`font-semibold ${
-                                    isSignedDone ? 'text-zinc-500' : 'text-zinc-900'
+                                    isSignedDone ? 'text-zinc-700' : 'text-zinc-900'
                                   }`}
                                 >
                                   {p.child_first_name} {p.child_last_name}
@@ -1837,7 +1954,7 @@ export default function EnrollmentParentFlow({
                                 {p.group_name ? (
                                   <p
                                     className={`mt-1 text-sm ${
-                                      isSignedDone ? 'text-zinc-400' : 'text-zinc-600'
+                                      isSignedDone ? 'text-zinc-500' : 'text-zinc-600'
                                     }`}
                                   >
                                     {p.group_name}
@@ -1866,14 +1983,6 @@ export default function EnrollmentParentFlow({
                                     Umowa gotowa do podpisu
                                   </span>
                                 ) : null}
-                                {level === 'ACCEPTED' ||
-                                (!ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE && level === 'PROPOSED') ? (
-                                  <span className="mt-1 inline-flex rounded-full bg-teal-100 px-2 py-0.5 text-xs font-semibold text-teal-900">
-                                    {ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
-                                      ? 'Uzupełnij / potwierdź dane'
-                                      : 'Oczekuje na podpisanie umowy przez nauczyciela'}
-                                  </span>
-                                ) : null}
                                 {isPending && (
                                   <span className="mt-1 block text-xs text-amber-800">
                                     {ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
@@ -1888,37 +1997,22 @@ export default function EnrollmentParentFlow({
                                 )}
                               </div>
 
+                              {isSignedDone
+                                ? (() => {
+                                    const signedDoc =
+                                      signedContractDownloads.find(
+                                        (d) =>
+                                          (p.child_id && d.childId === p.child_id) ||
+                                          (d.requestId != null && d.requestId === p.request_id),
+                                      ) ?? null;
+                                    return signedDoc ? (
+                                      <ChildSignedPdfButtons doc={signedDoc} />
+                                    ) : null;
+                                  })()
+                                : null}
+
                               {isPipeline && !isSignedDone ? (
                                 <div className="space-y-3 border-t border-emerald-100 pt-3">
-                                  <div className="space-y-2">
-                                    <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                                      Częstotliwość zajęć
-                                    </p>
-                                    <div className="flex flex-col gap-2">
-                                      {([1, 2] as const).map((freq) => (
-                                        <label
-                                          key={freq}
-                                          className="inline-flex items-start gap-2 text-sm text-zinc-700"
-                                        >
-                                          <input
-                                            type="radio"
-                                            name={`lessonsPerWeek-${p.request_id}`}
-                                            className="mt-0.5 accent-[#0f6e56]"
-                                            disabled={paymentRadiosLocked}
-                                            checked={childLessonsPerWeek === freq}
-                                            onChange={() => {
-                                              setAllowContractRegenerate(true);
-                                              setLessonsPerWeekByRequestId((prev) => ({
-                                                ...prev,
-                                                [p.request_id]: freq,
-                                              }));
-                                            }}
-                                          />
-                                          <span>{lessonsPerWeekLabel(freq)}</span>
-                                        </label>
-                                      ))}
-                                    </div>
-                                  </div>
                                   <div className="space-y-2">
                                     <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
                                       Sposób rozliczeń
@@ -2070,89 +2164,86 @@ export default function EnrollmentParentFlow({
                       </div>
                     )}
 
-                    {isContractSigned && contractPreview ? (
-                      <ContractPortal contract={contractPreview} readOnly />
-                    ) : (
-                      <div className="space-y-4">
-                        {contractPreview && !isContractSigned ? (
-                          <div className="space-y-4 border-t border-emerald-200 pt-4">
-                            <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-                              Zaakceptuj umowę i pozostałe dokumenty, a następnie podpisz.
-                            </div>
-                            <ContractPortal
-                              contract={contractPreview}
-                              onSigned={async (result) => {
-                                const next = result?.nextChildToContract;
-                                const pdfOk = result?.pdfGenerated !== false;
-                                const base = next
-                                  ? `Umowa podpisana. Generuję umowę dla: ${next.first_name} ${next.last_name}`.trim()
-                                  : 'Umowa podpisana. Dziękujemy!';
-                                setFlash({
-                                  kind: pdfOk ? 'success' : 'error',
-                                  message: pdfOk
-                                    ? base
-                                    : 'Umowa podpisana. Uwaga: nie udało się wygenerować PDF — skontaktuj się ze szkołą.',
+                    {contractPreview && !isContractSigned ? (
+                      <div className="space-y-4 border-t border-emerald-200 pt-4">
+                        <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+                          Zaakceptuj dokumenty w kolejności: wizerunek (opcjonalnie), odbiór (jeśli
+                          dotyczy), na końcu umowa.
+                        </div>
+                        <ContractPortal
+                          contract={contractPreview}
+                          onSigned={async (result) => {
+                            const next = result?.nextChildToContract;
+                            const pdfOk = result?.pdfGenerated !== false;
+                            const base = next
+                              ? `Umowa podpisana. Generuję umowę dla: ${next.first_name} ${next.last_name}`.trim()
+                              : 'Umowa podpisana. Dziękujemy!';
+                            setFlash({
+                              kind: pdfOk ? 'success' : 'error',
+                              message: pdfOk
+                                ? base
+                                : 'Umowa podpisana. Uwaga: nie udało się wygenerować PDF — skontaktuj się ze szkołą.',
+                            });
+                            await loadProposals();
+                            await refreshUserAccessLevel();
+                            if (next && pdfOk) {
+                              const nextPaymentType =
+                                (next.request_id && paymentTypeByRequestId[next.request_id]) ||
+                                'MONTHLY';
+                              setAllowContractRegenerate(true);
+                              setDataConfirmed(true);
+                              setSavingContract(true);
+                              try {
+                                const r = await fetch('/api/enrollment/contract-data/submit', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  credentials: 'include',
+                                  body: JSON.stringify({
+                                    paymentType: nextPaymentType,
+                                    paymentTypeByRequestId,
+                                    includedRequestIds: next.request_id
+                                      ? [next.request_id]
+                                      : undefined,
+                                  }),
                                 });
-                                await loadProposals();
-                                await refreshUserAccessLevel();
-                                if (next && pdfOk) {
-                                  const nextPaymentType =
-                                    (next.request_id &&
-                                      paymentTypeByRequestId[next.request_id]) ||
-                                    'MONTHLY';
-                                  setAllowContractRegenerate(true);
-                                  setDataConfirmed(true);
-                                  setSavingContract(true);
-                                  try {
-                                    const r = await fetch('/api/enrollment/contract-data/submit', {
-                                      method: 'POST',
-                                      headers: { 'Content-Type': 'application/json' },
-                                      credentials: 'include',
-                                      body: JSON.stringify({
-                                        paymentType: nextPaymentType,
-                                        paymentTypeByRequestId,
-                                        lessonsPerWeekByRequestId,
-                                        includedRequestIds: next.request_id
-                                          ? [next.request_id]
-                                          : undefined,
-                                      }),
-                                    });
-                                    const data = (await r.json().catch(() => ({}))) as {
-                                      message?: string;
-                                    };
-                                    if (!r.ok) {
-                                      setFlash({
-                                        kind: 'error',
-                                        message:
-                                          data.message ??
-                                          'Umowa podpisana, ale nie udało się wygenerować kolejnej — użyj przycisku poniżej.',
-                                      });
-                                    } else {
-                                      setAllowContractRegenerate(false);
-                                      setFlash({
-                                        kind: 'success',
-                                        message:
-                                          data.message ??
-                                          'Kolejna umowa wygenerowana — zapoznaj się z dokumentami i podpisz.',
-                                      });
-                                      await loadProposals();
-                                    }
-                                  } catch {
-                                    setFlash({
-                                      kind: 'error',
-                                      message:
-                                        'Umowa podpisana, ale nie udało się wygenerować kolejnej — użyj przycisku poniżej.',
-                                    });
-                                  } finally {
-                                    setSavingContract(false);
-                                  }
+                                const data = (await r.json().catch(() => ({}))) as {
+                                  message?: string;
+                                };
+                                if (!r.ok) {
+                                  setFlash({
+                                    kind: 'error',
+                                    message:
+                                      data.message ??
+                                      'Umowa podpisana, ale nie udało się wygenerować kolejnej — użyj przycisku poniżej.',
+                                  });
+                                } else {
+                                  setAllowContractRegenerate(false);
+                                  setFlash({
+                                    kind: 'success',
+                                    message:
+                                      data.message ??
+                                      'Kolejna umowa wygenerowana — zapoznaj się z dokumentami i podpisz.',
+                                  });
+                                  await loadProposals();
                                 }
-                              }}
-                            />
-                          </div>
-                        ) : null}
+                              } catch {
+                                setFlash({
+                                  kind: 'error',
+                                  message:
+                                    'Umowa podpisana, ale nie udało się wygenerować kolejnej — użyj przycisku poniżej.',
+                                });
+                              } finally {
+                                setSavingContract(false);
+                              }
+                            }
+                          }}
+                        />
                       </div>
-                    )}
+                    ) : isContractSigned && signedContractDownloads.length > 0 ? (
+                      <p className="border-t border-emerald-200 pt-4 text-sm text-zinc-600">
+                        Podpisane PDF-y pobierzesz przy boxie każdego dziecka powyżej.
+                      </p>
+                    ) : null}
                   </div>
                   )}
 

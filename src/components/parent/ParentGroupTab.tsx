@@ -51,7 +51,7 @@ function proposedStatusLabel(accessLevel: string): string {
     case 'ACCEPTED':
       return ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
         ? 'Grupa przypisana — uzupełnij dane do umowy'
-        : 'Grupa przypisana — oczekuje na podpisanie umowy przez nauczyciela';
+        : 'Grupa przypisana — oczekuje na podpisanie umowy przez rodzica';
     case 'AWAITING_CONTRACT':
       return 'Oczekuje na wygenerowanie umowy przez szkołę';
     case 'CONTRACT_READY':

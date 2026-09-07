@@ -255,6 +255,7 @@ export async function generateComplimentaryPickupConsentIfNeeded(params: {
     lesson_duration: lessonDuration || formatLessonDuration(60),
     group_schedule: groupSchedule,
     payment_type: "Tryb bez opłat",
+    payment_section: "",
     amount_clause: "",
     signed_at_line: "",
     parent_signature_line: "",

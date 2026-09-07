@@ -11,7 +11,7 @@ import {
   computeEnrollmentContractReadiness,
   fetchParentEnrollmentPipelineStatuses,
 } from "@/lib/enrollment-contract-readiness";
-import { fetchParentContractForPortal } from "@/lib/parent-contract";
+import { fetchParentContractForPortal, fetchSignedContractDownloadsForParent } from "@/lib/parent-contract";
 import { requireParentContext } from "@/lib/parent-portal-auth";
 import { getSchoolDiscountSettings, isComplimentaryForParent } from "@/lib/school-discounts";
 import { getParentLargeFamilyCard } from "@/lib/parent-profile-discount";
@@ -108,7 +108,21 @@ export async function GET(request: NextRequest) {
 
          er.yearly_unit_price,
 
-         er.lessons_per_week
+         MAX(
+           COALESCE(
+             (
+               SELECT gs2.lessons_per_week
+               FROM group_students gs2
+               WHERE gs2.child_id = c.id
+                 AND gs2.group_id = g.id
+                 AND gs2.left_at IS NULL
+               ORDER BY gs2.enrolled_at DESC
+               LIMIT 1
+             ),
+             er.lessons_per_week,
+             g.lessons_per_week
+           )
+         ) AS lessons_per_week
 
        FROM children c
 
@@ -151,7 +165,7 @@ export async function GET(request: NextRequest) {
 
                 g.name, er.proposed_at, er.created_at, c.created_at, g.price_monthly, g.price_yearly,
                 g.price_per_lesson, g.teacher_pickup_consent, g.lessons_per_week, er.lesson_unit_price,
-                er.monthly_unit_price, er.yearly_unit_price, er.lessons_per_week
+                er.monthly_unit_price, er.yearly_unit_price
 
        ORDER BY er.created_at ASC, c.created_at ASC, c.id ASC`,
 
@@ -256,6 +270,10 @@ export async function GET(request: NextRequest) {
 
 
     const parentContract = await fetchParentContractForPortal(parentId, SCHOOL_ID);
+    const signedContractDownloads = await fetchSignedContractDownloadsForParent(
+      parentId,
+      SCHOOL_ID
+    );
     const activeSchoolYear = await getActiveSchoolYear(SCHOOL_ID);
     const schoolYearName =
       activeSchoolYear && typeof activeSchoolYear.name === "string"
@@ -357,6 +375,8 @@ export async function GET(request: NextRequest) {
           }
 
         : null,
+
+      signedContractDownloads,
 
       contractReadiness: {
         ...contractReadinessState,

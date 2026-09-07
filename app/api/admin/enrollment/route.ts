@@ -100,6 +100,7 @@ export async function GET(request: NextRequest) {
                'lessonUnitPrice', er.lesson_unit_price::text,
                'monthlyUnitPrice', er.monthly_unit_price::text,
                'yearlyUnitPrice', er.yearly_unit_price::text,
+               'discountPercent', c.discount_percent::text,
                'lessonsPerWeek', er.lessons_per_week
              )
            ) FILTER (
@@ -221,12 +222,13 @@ export async function POST(request: NextRequest) {
     if (!ctx.ok) return ctx.response;
 
     const body = await request.json();
-    const { requestId, groupId, lessonUnitPrice, monthlyUnitPrice, yearlyUnitPrice } = body as {
+    const { requestId, groupId, lessonUnitPrice, monthlyUnitPrice, yearlyUnitPrice, discountPercent } = body as {
       requestId?: string;
       groupId?: string;
       lessonUnitPrice?: number | string | null;
       monthlyUnitPrice?: number | string | null;
       yearlyUnitPrice?: number | string | null;
+      discountPercent?: number | string | null;
     };
     if (!requestId || !groupId) {
       return NextResponse.json({ message: "Brak wymaganych pól" }, { status: 400 });
@@ -239,6 +241,7 @@ export async function POST(request: NextRequest) {
         lessonUnitPrice,
         monthlyUnitPrice,
         yearlyUnitPrice,
+        discountPercent,
       },
       null,
       {
