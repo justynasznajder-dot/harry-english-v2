@@ -5,6 +5,13 @@ import { requireAdminSchoolContext } from "@/lib/admin-school-context";
 import { ensurePolishPublicHolidaysForSchoolYear } from "@/lib/ensure-polish-public-holidays";
 import { listPolishPublicHolidays } from "@/lib/polish-public-holidays";
 import {
+  classifyGroupFacilityKindForHoliday,
+  holidayAudienceLabel,
+  resolveHolidayCalendarScope,
+  type HolidayCalendarScope,
+  type HolidayFacilityKind,
+} from "@/lib/holiday-calendar-scope";
+import {
   SCHOOL_TIMEZONE,
   sqlSchoolTimestampAsTimestamptz,
   toIsoUtc,
@@ -23,6 +30,11 @@ function parseIdList(raw: string | null): string[] {
     .split(",")
     .map((x) => x.trim())
     .filter((x) => x.length > 0);
+}
+
+function normalizeGroupIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((id): id is string => typeof id === "string" && id.trim().length > 0);
 }
 
 export async function GET(request: NextRequest) {
@@ -122,7 +134,19 @@ export async function GET(request: NextRequest) {
       WHERE ${lessonWhere.join(" AND ")}
       ORDER BY l.scheduled_at ASC`;
 
-    const holidaysSql = `SELECT h.id, h.name, h.date_from::text, h.date_to::text, h.type
+    const holidaysSql = `SELECT
+        h.id,
+        h.school_id,
+        h.name,
+        h.date_from::text,
+        h.date_to::text,
+        h.type,
+        COALESCE(
+          (SELECT array_agg(shg.group_id ORDER BY shg.group_id)
+           FROM school_holiday_groups shg
+           WHERE shg.holiday_id = h.id),
+          '{}'
+        ) AS group_ids
       FROM school_holidays h
       WHERE ${holidayWhere.join(" AND ")}
       ORDER BY h.date_from ASC`;
@@ -143,10 +167,12 @@ export async function GET(request: NextRequest) {
       }>(lessonsSql, lessonParams),
       queryDb<{
         id: string;
+        school_id: string;
         name: string;
         date_from: string;
         date_to: string;
         type: string;
+        group_ids: string[] | null;
       }>(holidaysSql, holidayParams),
     ]);
 
@@ -164,13 +190,74 @@ export async function GET(request: NextRequest) {
       teacher_name: row.teacher_name,
     }));
 
-    const holidays = holidaysRes.rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      date_from: String(row.date_from).slice(0, 10),
-      date_to: String(row.date_to).slice(0, 10),
-      type: row.type,
-    }));
+    const allScopedGroupIds = [
+      ...new Set(holidaysRes.rows.flatMap((row) => normalizeGroupIds(row.group_ids))),
+    ];
+    const groupKindById = new Map<string, HolidayFacilityKind>();
+    if (allScopedGroupIds.length > 0) {
+      const groupsRes = await queryDb<{
+        id: string;
+        name: string;
+        level: string | null;
+        location_id: string | null;
+        location_facility: string | null;
+        location_name: string | null;
+        location_is_special: boolean | null;
+      }>(
+        `SELECT g.id, g.name, g.level, g.location_id,
+                loc.facility AS location_facility,
+                loc.name AS location_name,
+                loc.is_special AS location_is_special
+         FROM groups g
+         LEFT JOIN locations loc ON loc.id = g.location_id
+         WHERE g.id = ANY($1::text[])`,
+        [allScopedGroupIds],
+      );
+      for (const g of groupsRes.rows) {
+        groupKindById.set(
+          g.id,
+          classifyGroupFacilityKindForHoliday({
+            level: g.level,
+            name: g.name,
+            location_id: g.location_id,
+            location_facility: g.location_facility,
+            location_name: g.location_name,
+            location_is_special: g.location_is_special,
+          }),
+        );
+      }
+    }
+
+    const holidays: Array<{
+      id: string;
+      name: string;
+      date_from: string;
+      date_to: string;
+      type: string;
+      group_ids: string[];
+      applies_to_all_groups: boolean;
+      scope: HolidayCalendarScope;
+      audience_label: string | null;
+    }> = holidaysRes.rows.map((row) => {
+      const gids = normalizeGroupIds(row.group_ids);
+      const kinds = gids.map((id) => groupKindById.get(id) ?? "unknown");
+      const scope = resolveHolidayCalendarScope({
+        type: row.type,
+        groupIds: gids,
+        groupKinds: kinds,
+      });
+      return {
+        id: row.id,
+        name: row.name,
+        date_from: String(row.date_from).slice(0, 10),
+        date_to: String(row.date_to).slice(0, 10),
+        type: row.type,
+        group_ids: gids,
+        applies_to_all_groups: gids.length === 0,
+        scope,
+        audience_label: holidayAudienceLabel(scope),
+      };
+    });
 
     const coveredDates = new Set<string>();
     for (const h of holidays) {
@@ -190,6 +277,10 @@ export async function GET(request: NextRequest) {
         date_from: h.date,
         date_to: h.date,
         type: "PUBLIC",
+        group_ids: [],
+        applies_to_all_groups: true,
+        scope: "all",
+        audience_label: null,
       });
     }
     holidays.sort((a, b) => a.date_from.localeCompare(b.date_from));

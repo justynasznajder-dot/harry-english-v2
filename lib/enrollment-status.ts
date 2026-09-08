@@ -157,8 +157,9 @@ export const ENROLLMENT_LIST_FILTERS = [
   { value: "", label: "Wszystkie" },
   { value: "NEW", label: "Nowe" },
   { value: "COMPLIMENTARY", label: "Tryb bez umowy" },
-  /** Dzieci z przypisaną grupą (szkic NEW + proposed_group / legacy ACCEPTED). */
+  /** Szkic: grupa zapisana (Zapisz), mail z loginem jeszcze niewysłany. */
   { value: "ACCEPTED", label: "Grupa przypisana" },
+  /** Mail z danymi do logowania wysłany — rodzic może wygenerować / podpisać umowę. */
   { value: "CONTRACT_READY", label: "Umowa do podpisu" },
 ] as const;
 
@@ -180,7 +181,8 @@ export type EnrollmentStatusFilterOptions = {
 /**
  * Filtr listy zgłoszeń.
  * „Wszystkie” = wszystkie statusy, w tym zakończone (SIGNED/COMPLETED).
- * „Grupa przypisana” = status ACCEPTED albo szkic NEW z już wybraną grupą (Zapisz bez wysyłki).
+ * „Grupa przypisana” = szkic NEW z już wybraną grupą (Zapisz bez wysyłki).
+ * „Umowa do podpisu” = mail z loginem wysłany (ACCEPTED) + AWAITING_CONTRACT / CONTRACT_READY.
  * „Nowe” = NEW bez przypisanej grupy i bez trybu bez umowy.
  * „Tryb bez umowy” = dzieci rodzica w trybie complimentary (także zakończone).
  */
@@ -204,10 +206,15 @@ export function filterEnrollmentChildrenByStatus<
     return activeOnly.filter((child) => child.status === "NEW" && !hasProposedGroup(child));
   }
   if (filter === "ACCEPTED") {
+    // Tylko szkic przed wysyłką — po mailu status = ACCEPTED → „Umowa do podpisu”.
+    return activeOnly.filter((child) => child.status === "NEW" && hasProposedGroup(child));
+  }
+  if (filter === "CONTRACT_READY") {
     return activeOnly.filter(
       (child) =>
         child.status === "ACCEPTED" ||
-        (child.status === "NEW" && hasProposedGroup(child)),
+        child.status === "AWAITING_CONTRACT" ||
+        child.status === "CONTRACT_READY",
     );
   }
 

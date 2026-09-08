@@ -20,6 +20,13 @@ function renderEventContent(arg: EventContentArg) {
   if (arg.event.display === 'background') {
     return true;
   }
+  if (arg.event.extendedProps?.isHolidayLabel) {
+    return (
+      <div className="classes-fc-holiday-label-body" title={arg.event.title}>
+        {arg.event.title}
+      </div>
+    );
+  }
   const groupName =
     (arg.event.extendedProps?.groupName as string | undefined)?.trim() ||
     arg.event.title;
@@ -83,6 +90,7 @@ export default function ClassesCalendarInner({
         eventClick={(arg) => {
           if (!onLessonClick) return;
           if (arg.event.display === 'background') return;
+          if (arg.event.extendedProps?.isHolidayLabel) return;
           onLessonClick(arg);
         }}
         eventContent={renderEventContent}
@@ -91,9 +99,11 @@ export default function ClassesCalendarInner({
           const tip = info.event.extendedProps?.tooltip as string | undefined;
           if (tip) info.el.setAttribute('title', tip);
         }}
-        eventClassNames={(arg) =>
-          arg.event.display === 'background' ? [] : ['cursor-pointer', 'classes-fc-lesson']
-        }
+        eventClassNames={(arg) => {
+          if (arg.event.display === 'background') return [];
+          if (arg.event.extendedProps?.isHolidayLabel) return ['classes-fc-holiday-label'];
+          return ['cursor-pointer', 'classes-fc-lesson'];
+        }}
         height="100%"
         nowIndicator
         eventTimeFormat={{ hour: '2-digit', minute: '2-digit', meridiem: false }}

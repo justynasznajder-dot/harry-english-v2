@@ -13,6 +13,7 @@ import { topUpLessonsAfterHolidayDeletion } from "@/lib/lesson-generation";
 import { notifyParents, type ParentNotifyRow } from "@/lib/parent-notifications";
 import { requireMessageActor } from "@/lib/messages";
 import { deleteScheduledLessonsInHolidayRange } from "@/lib/school-holiday-lessons";
+import { expandHolidayGroupIdsByFacilityKinds } from "@/lib/holiday-calendar-scope";
 
 const HOLIDAY_TYPES = ["HOLIDAY", "PUBLIC", "SCHOOL", "CANCELLED"] as const;
 
@@ -289,7 +290,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const scopedGroupIds = parseGroupIds(bodyGroupIds ?? bodyGroupIdsCamel);
+    let scopedGroupIds = parseGroupIds(bodyGroupIds ?? bodyGroupIdsCamel);
     if (scopedGroupIds !== null && scopedGroupIds.length === 0) {
       return NextResponse.json(
         { message: "Wybierz co najmniej jedną grupę, której dotyczy dzień wolny" },
@@ -298,6 +299,10 @@ export async function POST(request: NextRequest) {
     }
 
     if (scopedGroupIds && scopedGroupIds.length > 0) {
+      scopedGroupIds = await expandHolidayGroupIdsByFacilityKinds(
+        insertSchoolId,
+        scopedGroupIds,
+      );
       const groupsCheck = await queryDb<{ id: string }>(
         `SELECT id FROM groups
          WHERE school_id = $1

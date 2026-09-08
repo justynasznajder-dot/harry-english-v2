@@ -30,6 +30,8 @@ export type EnrollmentParentRow = {
   schoolId?: string | null;
   accessLevel: EnrollmentStatus;
   discountLargeFamily?: boolean;
+  /** To samo pole co checkbox rodzica: enrollment_requests.enrolling_multiple_children */
+  enrollingMultipleChildren?: boolean;
   children: EnrollmentChildRow[];
 };
 

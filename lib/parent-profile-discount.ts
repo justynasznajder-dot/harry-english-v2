@@ -72,6 +72,52 @@ export async function setEnrollmentPendingLargeFamilyCard(params: {
 }
 
 /**
+ * Deklaracja „więcej niż jedno dziecko” — to samo pole co checkbox rodzica:
+ * `enrollment_requests.enrolling_multiple_children`.
+ * Aktualizuje po user_id i/lub e-mailu (staging przed kontem).
+ */
+export async function setEnrollmentSiblingDiscount(params: {
+  schoolId: string;
+  parentUserId?: string | null;
+  parentEmail?: string | null;
+  enrollingMultipleChildren: boolean;
+}): Promise<number> {
+  const parentUserId = String(params.parentUserId ?? "").trim();
+  const email = String(params.parentEmail ?? "").trim().toLowerCase();
+  if (!parentUserId && !email) return 0;
+
+  const res = await queryDb(
+    `UPDATE enrollment_requests
+     SET enrolling_multiple_children = $3
+     WHERE school_id = $1
+       AND UPPER(BTRIM(COALESCE(status::text, ''))) NOT IN ('REJECTED', 'COMPLETED')
+       AND (
+         ($4::text <> '' AND user_id = $4)
+         OR ($2::text <> '' AND LOWER(BTRIM(parent_email::text)) = $2)
+       )`,
+    [
+      params.schoolId,
+      email,
+      params.enrollingMultipleChildren,
+      parentUserId,
+    ]
+  );
+  return res.rowCount ?? 0;
+}
+
+/** Czyść deklarację rodzeństwa (np. gdy włączono KDR). */
+export async function clearEnrollmentSiblingDiscount(params: {
+  schoolId: string;
+  parentUserId?: string | null;
+  parentEmail?: string | null;
+}): Promise<number> {
+  return setEnrollmentSiblingDiscount({
+    ...params,
+    enrollingMultipleChildren: false,
+  });
+}
+
+/**
  * Po utworzeniu konta rodzica: przenieś staging KDR ze zgłoszeń na parent_profiles.
  * Zwraca true, gdy oznaczono KDR na profilu.
  */

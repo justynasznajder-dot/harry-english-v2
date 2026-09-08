@@ -15,7 +15,10 @@ import { fetchParentContractForPortal, fetchSignedContractDownloadsForParent } f
 import { requireParentContext } from "@/lib/parent-portal-auth";
 import { getSchoolDiscountSettings, isComplimentaryForParent } from "@/lib/school-discounts";
 import { resolveContractDiscountSettings } from "@/lib/contract-pricing-preview";
-import { getParentLargeFamilyCard } from "@/lib/parent-profile-discount";
+import {
+  getParentLargeFamilyCard,
+  promotePendingLargeFamilyCardToParent,
+} from "@/lib/parent-profile-discount";
 import { sqlScheduleTemplateVisibleForStudent } from "@/lib/lessons-per-week";
 
 
@@ -351,15 +354,47 @@ export async function GET(request: NextRequest) {
     const discountSettings = resolveContractDiscountSettings(
       await getSchoolDiscountSettings(SCHOOL_ID)
     );
-    const discountLargeFamily = await getParentLargeFamilyCard(parentId);
+
+    // Staging KDR z oznaczenia managera → profil przy pierwszym wejściu rodzica.
+    if (parentEmail) {
+      await promotePendingLargeFamilyCardToParent({
+        schoolId: SCHOOL_ID,
+        parentUserId: parentId,
+        parentEmail,
+      });
+    }
+
+    let discountLargeFamily = await getParentLargeFamilyCard(parentId);
+    if (!discountLargeFamily && parentEmail) {
+      const stagingKdr = await queryDb<{ v: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM enrollment_requests
+           WHERE school_id = $1
+             AND discount_large_family = TRUE
+             AND UPPER(BTRIM(COALESCE(status::text, ''))) <> 'REJECTED'
+             AND (
+               user_id = $2
+               OR LOWER(BTRIM(parent_email::text)) = $3
+             )
+         ) AS v`,
+        [SCHOOL_ID, parentId, parentEmail]
+      );
+      discountLargeFamily = stagingKdr.rows[0]?.v === true;
+    }
 
     const multiChildrenRes = await queryDb<{ enrolling_multiple_children: boolean }>(
       `SELECT COALESCE(BOOL_OR(enrolling_multiple_children), FALSE) AS enrolling_multiple_children
        FROM enrollment_requests
        WHERE school_id = $1
-         AND user_id = $2
-         AND UPPER(BTRIM(COALESCE(status::text, ''))) <> 'REJECTED'`,
-      [SCHOOL_ID, parentId]
+         AND UPPER(BTRIM(COALESCE(status::text, ''))) <> 'REJECTED'
+         AND (
+           user_id = $2
+           OR (
+             $3::text <> ''
+             AND LOWER(BTRIM(parent_email::text)) = LOWER(BTRIM($3::text))
+           )
+         )`,
+      [SCHOOL_ID, parentId, parentEmail ?? ""]
     );
     const enrollingMultipleChildren =
       multiChildrenRes.rows[0]?.enrolling_multiple_children === true;

@@ -216,20 +216,25 @@ export default function EnrollmentAdminPanel({
   const [showOtherLocationGroups, setShowOtherLocationGroups] = useState<
     Record<string, boolean>
   >({});
-  // const [savingParentDiscountId, setSavingParentDiscountId] = useState<string | null>(null);
+  const [savingParentDiscountId, setSavingParentDiscountId] = useState<string | null>(null);
   const [savingComplimentaryKey, setSavingComplimentaryKey] = useState<string | null>(null);
   const [exportingList, setExportingList] = useState(false);
-  void _discountSettings; // zniżki % wyłączone — prop zostaje dla kompatybilności AdminPortal
+  const discountSettings = _discountSettings;
 
-  /*
-  const saveParentLargeFamilyCard = useCallback(
+  /** KDR / rodzeństwo — te same pola co checkboxy rodzica. */
+  const saveParentDiscounts = useCallback(
     async (
       parent: {
         id: string;
         parentUserId?: string | null;
         email: string;
+        discountLargeFamily?: boolean;
+        enrollingMultipleChildren?: boolean;
       },
-      checked: boolean,
+      patch: {
+        discountLargeFamily?: boolean;
+        enrollingMultipleChildren?: boolean;
+      },
     ) => {
       const saveKey = parent.parentUserId ?? parent.id;
       setSavingParentDiscountId(saveKey);
@@ -240,12 +245,11 @@ export default function EnrollmentAdminPanel({
           body: JSON.stringify({
             parentUserId: parent.parentUserId,
             parentEmail: parent.email,
-            discountLargeFamily: checked,
+            ...patch,
           }),
         });
         const data = (await res.json().catch(() => ({}))) as {
           message?: string;
-          parentUserId?: string;
         };
         if (!res.ok) {
           pushToast('error', data?.message ?? 'Nie udało się zapisać zniżki');
@@ -263,7 +267,6 @@ export default function EnrollmentAdminPanel({
     },
     [onRefresh, pushToast],
   );
-  */
 
   const saveParentComplimentary = useCallback(
     async (
@@ -1078,16 +1081,85 @@ export default function EnrollmentAdminPanel({
                       jednorazową i ratalną — widoczne w panelu rodzica; za zajęcia i % zniżki
                       opcjonalne. Grupę możesz przypisać później.
                     </p>
-                    {/*
-                     * KDR / zniżki procentowe — wyłączone (sezon cen ręcznych).
                     {!proposalParentIsComplimentary && (
-                      <>
-                        <label className="mt-3 inline-flex items-center gap-2 text-sm text-zinc-800">
-                          ... Karta Dużej Rodziny ...
+                      <div className="mt-3 space-y-2">
+                        <p className="text-xs text-zinc-500">
+                          Rabaty jak u rodzica — nie sumują się (najwyższy: szkoła / KDR{' '}
+                          {discountSettings.LARGE_FAMILY_CARD}% / rodzeństwo{' '}
+                          {discountSettings.SIBLING}%). Po pierwszym logowaniu rodzic widzi
+                          zaznaczone opcje i naliczone rabaty.
+                        </p>
+                        <label
+                          className={`inline-flex items-center gap-2 text-sm ${
+                            Boolean(proposalParent.enrollingMultipleChildren)
+                              ? 'text-zinc-400'
+                              : 'text-zinc-800'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={
+                              Boolean(proposalParent.discountLargeFamily) &&
+                              !Boolean(proposalParent.enrollingMultipleChildren)
+                            }
+                            disabled={
+                              savingParentDiscountId ===
+                                (proposalParent.parentUserId ?? proposalParent.id) ||
+                              Boolean(proposalParent.enrollingMultipleChildren) ||
+                              (!(proposalParent.email ?? '').trim() &&
+                                !(proposalParent.parentUserId ?? '').trim())
+                            }
+                            onChange={(e) => {
+                              void saveParentDiscounts(proposalParent, {
+                                discountLargeFamily: e.target.checked,
+                                enrollingMultipleChildren: e.target.checked
+                                  ? false
+                                  : Boolean(proposalParent.enrollingMultipleChildren),
+                              });
+                            }}
+                          />
+                          Karta Dużej Rodziny ({discountSettings.LARGE_FAMILY_CARD}%)
                         </label>
-                      </>
+                        <label
+                          className={`flex items-center gap-2 text-sm ${
+                            Boolean(proposalParent.discountLargeFamily)
+                              ? 'text-zinc-400'
+                              : 'text-zinc-800'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={
+                              Boolean(proposalParent.enrollingMultipleChildren) &&
+                              !Boolean(proposalParent.discountLargeFamily)
+                            }
+                            disabled={
+                              savingParentDiscountId ===
+                                (proposalParent.parentUserId ?? proposalParent.id) ||
+                              Boolean(proposalParent.discountLargeFamily) ||
+                              (!(proposalParent.email ?? '').trim() &&
+                                !(proposalParent.parentUserId ?? '').trim())
+                            }
+                            onChange={(e) => {
+                              void saveParentDiscounts(proposalParent, {
+                                enrollingMultipleChildren: e.target.checked,
+                                discountLargeFamily: e.target.checked
+                                  ? false
+                                  : Boolean(proposalParent.discountLargeFamily),
+                              });
+                            }}
+                          />
+                          Więcej niż jedno dziecko ({discountSettings.SIBLING}%)
+                        </label>
+                        {!(proposalParent.parentUserId ?? '').trim() &&
+                          Boolean((proposalParent.email ?? '').trim()) && (
+                            <p className="text-xs text-zinc-500">
+                              Zapis na zgłoszeniu; po utworzeniu konta rodzic zobaczy to przy
+                              pierwszym logowaniu.
+                            </p>
+                          )}
+                      </div>
                     )}
-                    */}
                   </div>
                   {proposalParentIsComplimentary && (
                     <p className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">

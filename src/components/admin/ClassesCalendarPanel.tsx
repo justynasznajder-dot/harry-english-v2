@@ -33,6 +33,11 @@ export type CalendarHolidayRow = {
   date_from: string;
   date_to: string;
   type: string;
+  group_ids?: string[];
+  applies_to_all_groups?: boolean;
+  /** all = pełny dzień wolny (szary); preschool/school/mixed = połowiczny (żółty) */
+  scope?: 'all' | 'preschool' | 'school' | 'mixed';
+  audience_label?: string | null;
 };
 
 function addDaysYmd(ymd: string, days: number): string {
@@ -69,16 +74,63 @@ function lessonTooltip(row: CalendarLessonRow): string {
   return parts.join(' · ');
 }
 
+function holidayIsFullDay(h: CalendarHolidayRow): boolean {
+  if (String(h.type).toUpperCase() === 'PUBLIC') return true;
+  if (h.scope === 'preschool' || h.scope === 'school' || h.scope === 'mixed') return false;
+  if (h.scope === 'all') return true;
+  if (h.applies_to_all_groups) return true;
+  if (!h.group_ids || h.group_ids.length === 0) return true;
+  return true;
+}
+
+function holidayTitle(h: CalendarHolidayRow): string {
+  const audience = h.audience_label?.trim();
+  if (audience && !holidayIsFullDay(h)) {
+    return `Dzień wolny: ${h.name} · ${audience}`;
+  }
+  return `Dzień wolny: ${h.name}`;
+}
+
 function buildEventInputs(lessons: CalendarLessonRow[], holidays: CalendarHolidayRow[]): EventInput[] {
-  const holidayBg: EventInput[] = holidays.map((h) => ({
-    id: `holiday-${h.id}`,
-    title: `Dzień wolny: ${h.name}`,
-    start: h.date_from,
-    end: addDaysYmd(h.date_to, 1),
-    allDay: true,
-    display: 'background',
-    color: 'rgba(250, 204, 21, 0.28)',
-  }));
+  const holidayEv: EventInput[] = [];
+  for (const h of holidays) {
+    const full = holidayIsFullDay(h);
+    const title = holidayTitle(h);
+    const end = addDaysYmd(h.date_to, 1);
+    holidayEv.push({
+      id: `holiday-bg-${h.id}`,
+      title,
+      start: h.date_from,
+      end,
+      allDay: true,
+      display: 'background',
+      color: full ? 'rgba(161, 161, 170, 0.42)' : 'rgba(250, 204, 21, 0.28)',
+      extendedProps: {
+        isHoliday: true,
+        holidayScope: full ? 'all' : h.scope ?? 'mixed',
+        audienceLabel: h.audience_label ?? null,
+      },
+    });
+    holidayEv.push({
+      id: `holiday-label-${h.id}`,
+      title,
+      start: h.date_from,
+      end,
+      allDay: true,
+      display: 'block',
+      classNames: ['classes-fc-holiday-label'],
+      backgroundColor: 'transparent',
+      borderColor: 'transparent',
+      textColor: full ? '#52525b' : '#854d0e',
+      editable: false,
+      extendedProps: {
+        isHolidayLabel: true,
+        holidayScope: full ? 'all' : h.scope ?? 'mixed',
+        audienceLabel: h.audience_label ?? null,
+        tooltip: title,
+      },
+    });
+  }
 
   const lessonEv: EventInput[] = lessons.map((l) => {
     const startMs = new Date(l.scheduled_at).getTime();
@@ -100,7 +152,7 @@ function buildEventInputs(lessons: CalendarLessonRow[], holidays: CalendarHolida
     };
   });
 
-  return [...holidayBg, ...lessonEv];
+  return [...holidayEv, ...lessonEv];
 }
 
 type ToastKind = 'success' | 'error';
@@ -220,7 +272,7 @@ export default function ClassesCalendarPanel({
   const handleLessonClick = useCallback(
     (arg: EventClickArg) => {
       const id = arg.event.id;
-      if (!id || id.startsWith('holiday-')) return;
+      if (!id || id.startsWith('holiday-') || arg.event.extendedProps?.isHolidayLabel) return;
 
       const status = String(arg.event.extendedProps.status ?? 'SCHEDULED');
       if (status === 'CANCELLED') {
@@ -281,7 +333,8 @@ export default function ClassesCalendarPanel({
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <h3 className="text-lg font-semibold text-[#0f6e56]">Zajęcia</h3>
         <p className="text-xs text-zinc-500 md:text-right">
-          Strefa czasowa: {TZ}. Szare tło: weekendy. Żółte tło: dni wolne / święta.
+          Strefa czasowa: {TZ}. Szare: weekendy, święta PL i pełne dni wolne. Żółte: dzień wolny tylko
+          dla szkół albo tylko dla przedszkoli.
         </p>
       </div>
 

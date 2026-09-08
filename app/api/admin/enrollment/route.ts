@@ -44,6 +44,7 @@ export async function GET(request: NextRequest) {
       school_id: string;
       access_level: EnrollmentStatus;
       discount_large_family: boolean;
+      enrolling_multiple_children: boolean;
       children_json: string;
     }>(
       `SELECT
@@ -83,6 +84,7 @@ export async function GET(request: NextRequest) {
            COALESCE(pp.discount_large_family, FALSE)
            OR COALESCE(er.discount_large_family, FALSE)
          ) AS discount_large_family,
+         BOOL_OR(COALESCE(er.enrolling_multiple_children, FALSE)) AS enrolling_multiple_children,
          COALESCE(
            JSON_AGG(
              DISTINCT JSONB_BUILD_OBJECT(
@@ -207,6 +209,7 @@ export async function GET(request: NextRequest) {
         schoolId: row.school_id,
         accessLevel: row.access_level,
         discountLargeFamily: row.discount_large_family === true,
+        enrollingMultipleChildren: row.enrolling_multiple_children === true,
         children: JSON.parse(row.children_json),
       })),
       groups: groupsRes.rows,

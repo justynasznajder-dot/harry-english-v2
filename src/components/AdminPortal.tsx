@@ -3379,14 +3379,26 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                       disabled={busy}
                                       onClick={async () => {
                                         if (!confirm('Usunąć ten dzień wolny?')) return;
+                                        const restoreLessons = confirm(
+                                          'Ustawić zajęcia w tych dniach zgodnie z harmonogramem?\n\n' +
+                                            'OK — dodamy brakujące terminy z harmonogramu i usuniemy tyle samo ostatnich zajęć z końca kalendarza (liczba zajęć grupy bez zmian).\n' +
+                                            'Anuluj — tylko usuniemy dzień wolny, bez zmian w zajęciach.',
+                                        );
                                         setBusy(true);
                                         try {
                                           const res = await fetch(`/api/admin/school-holidays/${h.id}`, {
                                             method: 'DELETE',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({ restoreLessons }),
                                           });
                                           const data = await res.json().catch(() => ({}));
                                           if (!res.ok) throw new Error(data.message ?? 'Błąd');
-                                          pushToast('success', 'Usunięto dzień wolny');
+                                          pushToast(
+                                            'success',
+                                            typeof data.message === 'string'
+                                              ? data.message
+                                              : 'Usunięto dzień wolny',
+                                          );
                                           setClassesCalRefreshSignal((s) => s + 1);
                                           await loadSchoolYearData();
                                         } catch (e) {
