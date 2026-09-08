@@ -13,6 +13,7 @@ import {
 } from '@/lib/enrollment-status';
 import { downloadEnrollmentListXlsx } from '@/lib/enrollment-list-xlsx';
 import { parsePriceDecimal } from '@/lib/lesson-pricing';
+import { parseManualDiscountPercent } from '@/lib/discount-math';
 import { isParentInComplimentaryList } from '@/lib/complimentary-parent-list';
 import { isEnrollmentProposalEmailEnabled } from '@/lib/enrollment-proposal-email';
 import { compareGroupsYoungestToOldest } from '@/src/data/harryEnglishLevels';
@@ -724,6 +725,12 @@ export default function EnrollmentAdminPanel({
     }
 
     const groupNameById = new Map(groups.map((g) => [g.id, g.name]));
+    const assignedCountByGroupId = new Map<string, number>();
+    for (const row of allRows) {
+      const gid = (row.child.proposedGroupId ?? '').trim();
+      if (!gid) continue;
+      assignedCountByGroupId.set(gid, (assignedCountByGroupId.get(gid) ?? 0) + 1);
+    }
 
     const byBirthYear = new Map<string, ReportedChildRow[]>();
     for (const row of rowsForLocation) {
@@ -765,6 +772,7 @@ export default function EnrollmentAdminPanel({
       assignedInLocation,
       unassignedInLocation,
       groupNameById,
+      assignedCountByGroupId,
     };
   }, [parents, groups, reportedChildrenLocationKey, reportedChildrenGroupFilter]);
 
@@ -1083,7 +1091,17 @@ export default function EnrollmentAdminPanel({
                           </p>
                         ) : (
                           <ul className="divide-y divide-emerald-100 border-t border-emerald-100 bg-emerald-50/20 px-4">
-                            {displayRows.map(({ child, parent }) => (
+                            {displayRows.map(({ child, parent }) => {
+                              const managerPct = parseManualDiscountPercent(child.discountPercent);
+                              const hasKdr = Boolean(parent.discountLargeFamily);
+                              const hasSibling = Boolean(parent.enrollingMultipleChildren);
+                              const isComplimentary = isParentInComplimentaryList(
+                                parent,
+                                complimentaryParents,
+                              );
+                              const hasAnyDiscount =
+                                isComplimentary || hasKdr || hasSibling || managerPct != null;
+                              return (
                               <li key={child.requestId} className="py-3">
                                 <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
                                   <p className="text-sm font-medium text-zinc-900">
@@ -1097,6 +1115,30 @@ export default function EnrollmentAdminPanel({
                                     {parent.firstName} {parent.lastName}
                                   </button>
                                 </div>
+                                {hasAnyDiscount ? (
+                                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                    {isComplimentary ? (
+                                      <span className="inline-flex items-center rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-900 ring-1 ring-inset ring-sky-200">
+                                        Tryb bez umowy
+                                      </span>
+                                    ) : null}
+                                    {hasKdr ? (
+                                      <span className="inline-flex items-center rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-800 ring-1 ring-inset ring-violet-200">
+                                        KDR {discountSettings.LARGE_FAMILY_CARD}%
+                                      </span>
+                                    ) : null}
+                                    {hasSibling ? (
+                                      <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-900 ring-1 ring-inset ring-emerald-200">
+                                        Rodzeństwo {discountSettings.SIBLING}%
+                                      </span>
+                                    ) : null}
+                                    {managerPct != null ? (
+                                      <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-900 ring-1 ring-inset ring-amber-200">
+                                        Manager {managerPct}%
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                ) : null}
                                 <dl className="mt-1.5 grid grid-cols-3 gap-1 text-xs">
                                   <div>
                                     <dt className="text-zinc-500">Jednorazowa</dt>
@@ -1118,7 +1160,8 @@ export default function EnrollmentAdminPanel({
                                   </div>
                                 </dl>
                               </li>
-                            ))}
+                              );
+                            })}
                           </ul>
                         )
                       ) : null}
@@ -1216,6 +1259,9 @@ export default function EnrollmentAdminPanel({
                           ? reportedChildrenView.groupNameById.get(groupId) ??
                             `Nieznana grupa (${groupId.slice(0, 8)}…)`
                           : null;
+                        const groupAssignedCount = groupId
+                          ? (reportedChildrenView.assignedCountByGroupId.get(groupId) ?? 0)
+                          : 0;
                         return (
                           <li
                             key={child.requestId}
@@ -1239,11 +1285,13 @@ export default function EnrollmentAdminPanel({
                             </div>
                             <p className="min-w-0 text-left text-sm text-zinc-700">
                               <span className="font-medium text-zinc-900">
-                                {groupName ?? 'nieprzypisana'}
+                                {groupName
+                                  ? `${groupName} (${groupAssignedCount})`
+                                  : 'nieprzypisana'}
                               </span>
                             </p>
                             <span
-                              className={`${ENROLLMENT_STATUS_BADGE_BASE} ${badge.colorClass} justify-self-start sm:justify-self-end`}
+                              className={`${ENROLLMENT_STATUS_BADGE_BASE} ${badge.colorClass} h-auto max-w-[11rem] justify-self-start whitespace-normal py-1 text-center text-[10px] leading-snug sm:justify-self-end`}
                             >
                               {badge.label}
                             </span>
