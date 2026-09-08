@@ -3,6 +3,12 @@ import {
   resolveEnrollmentListBadge,
   type EnrollmentStatus,
 } from "@/lib/enrollment-status";
+import {
+  applyManualDiscountPercent,
+  applyWinningDiscountPercent,
+  resolveEffectiveDiscountPercent,
+} from "@/lib/discount-math";
+import { parsePriceDecimal } from "@/lib/lesson-pricing";
 
 export type EnrollmentListExportChild = {
   firstName: string;
@@ -101,55 +107,117 @@ export type ReportedChildrenExportRow = {
   statusLabel: string;
   groupName: string;
   groupAssignedCount: number | null;
+  /** Ceny z enrollment_requests (wpisane przez managera). */
+  yearlyUnitPrice?: string | number | null;
+  monthlyUnitPrice?: string | number | null;
+  lessonUnitPrice?: string | number | null;
+};
+
+function exportPriceCell(
+  raw: string | number | null | undefined
+): number | "" {
+  const n = parsePriceDecimal(raw);
+  return n == null ? "" : n;
+}
+
+function exportDiscountedPriceCell(
+  raw: string | number | null | undefined,
+  percent: number,
+  mode: "contract" | "complimentary"
+): number | "" {
+  const base = parsePriceDecimal(raw);
+  if (base == null) return "";
+  if (percent <= 0) return base;
+  if (mode === "complimentary") {
+    return applyManualDiscountPercent(base, percent) ?? base;
+  }
+  return applyWinningDiscountPercent(base, percent);
+}
+
+const REPORTED_CHILDREN_EMPTY_ROW = {
+  Uczeń: "",
+  "Rok urodzenia": "",
+  "Data urodzenia": "",
+  "Preferowana lokalizacja": "",
+  Rodzic: "",
+  Email: "",
+  "Tryb bez umowy": "",
+  KDR: "",
+  Rodzeństwo: "",
+  "Rabat manager (%)": "",
+  "Rabat efektywny (%)": "",
+  Status: "",
+  Grupa: "",
+  "Dzieci w grupie": "",
+  "Jednorazowa (wpisana)": "",
+  "Ratalna (wpisana)": "",
+  "Za zajęcia (wpisana)": "",
+  "Jednorazowa po rabacie": "",
+  "Ratalna po rabacie": "",
+  "Za zajęcia po rabacie": "",
 };
 
 /** Eksport widoku „Zgłoszone dzieci” (lokalizacja + rok urodzenia). */
 export async function downloadReportedChildrenXlsx(input: {
   rows: ReportedChildrenExportRow[];
   filterLabel: string;
+  discountSettings: { LARGE_FAMILY_CARD: number; SIBLING: number };
   fileName?: string;
 }): Promise<void> {
   const XLSX = await import("xlsx");
 
-  const flat = input.rows.map((row) => ({
-    Uczeń: `${row.childFirstName} ${row.childLastName}`.trim(),
-    "Rok urodzenia": row.birthYear || "",
-    "Data urodzenia": row.birthDate ?? "",
-    "Preferowana lokalizacja": row.preferredLocation ?? "",
-    Rodzic: `${row.parentFirstName} ${row.parentLastName}`.trim(),
-    Email: row.parentEmail,
-    "Tryb bez umowy": row.complimentary ? "Tak" : "Nie",
-    KDR: row.hasKdr ? "Tak" : "Nie",
-    Rodzeństwo: row.hasSibling ? "Tak" : "Nie",
-    "Rabat manager (%)":
-      row.managerDiscountPercent != null ? String(row.managerDiscountPercent) : "",
-    Status: row.statusLabel,
-    Grupa: row.groupName,
-    "Dzieci w grupie":
-      row.groupAssignedCount != null ? String(row.groupAssignedCount) : "",
-  }));
+  const flat = input.rows.map((row) => {
+    const mode = row.complimentary ? "complimentary" : "contract";
+    const effective = resolveEffectiveDiscountPercent({
+      mode,
+      managerPercent: row.managerDiscountPercent,
+      hasLargeFamilyCard: row.hasKdr,
+      hasSiblingDeclared: row.hasSibling,
+      settings: input.discountSettings,
+    });
+    const pct = effective.percent;
+
+    return {
+      Uczeń: `${row.childFirstName} ${row.childLastName}`.trim(),
+      "Rok urodzenia": row.birthYear || "",
+      "Data urodzenia": row.birthDate ?? "",
+      "Preferowana lokalizacja": row.preferredLocation ?? "",
+      Rodzic: `${row.parentFirstName} ${row.parentLastName}`.trim(),
+      Email: row.parentEmail,
+      "Tryb bez umowy": row.complimentary ? "Tak" : "Nie",
+      KDR: row.hasKdr ? "Tak" : "Nie",
+      Rodzeństwo: row.hasSibling ? "Tak" : "Nie",
+      "Rabat manager (%)":
+        row.managerDiscountPercent != null ? String(row.managerDiscountPercent) : "",
+      "Rabat efektywny (%)": pct > 0 ? String(pct) : "",
+      Status: row.statusLabel,
+      Grupa: row.groupName,
+      "Dzieci w grupie":
+        row.groupAssignedCount != null ? String(row.groupAssignedCount) : "",
+      "Jednorazowa (wpisana)": exportPriceCell(row.yearlyUnitPrice),
+      "Ratalna (wpisana)": exportPriceCell(row.monthlyUnitPrice),
+      "Za zajęcia (wpisana)": exportPriceCell(row.lessonUnitPrice),
+      "Jednorazowa po rabacie": exportDiscountedPriceCell(
+        row.yearlyUnitPrice,
+        pct,
+        mode
+      ),
+      "Ratalna po rabacie": exportDiscountedPriceCell(
+        row.monthlyUnitPrice,
+        pct,
+        mode
+      ),
+      "Za zajęcia po rabacie": exportDiscountedPriceCell(
+        row.lessonUnitPrice,
+        pct,
+        mode
+      ),
+    };
+  });
 
   const wb = XLSX.utils.book_new();
   const sheet = XLSX.utils.json_to_sheet(
-    flat.length > 0
-      ? flat
-      : [
-          {
-            Uczeń: "",
-            "Rok urodzenia": "",
-            "Data urodzenia": "",
-            "Preferowana lokalizacja": "",
-            Rodzic: "",
-            Email: "",
-            "Tryb bez umowy": "",
-            KDR: "",
-            Rodzeństwo: "",
-            "Rabat manager (%)": "",
-            Status: "",
-            Grupa: "",
-            "Dzieci w grupie": "",
-          },
-        ]
+    flat.length > 0 ? flat : [REPORTED_CHILDREN_EMPTY_ROW]
   );
   XLSX.utils.book_append_sheet(wb, sheet, "Zgłoszone dzieci");
 
@@ -158,6 +226,10 @@ export async function downloadReportedChildrenXlsx(input: {
     ["Filtr", input.filterLabel],
     ["Wygenerowano", new Date().toLocaleString("pl-PL")],
     ["Liczba uczniów", String(flat.length)],
+    [
+      "Rabaty",
+      "Bez umowy: manager + KDR + rodzeństwo (suma). Z umową: najwyższy z dostępnych.",
+    ],
   ]);
   XLSX.utils.book_append_sheet(wb, meta, "Info");
 

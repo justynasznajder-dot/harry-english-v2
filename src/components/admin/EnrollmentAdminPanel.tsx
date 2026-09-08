@@ -1274,6 +1274,9 @@ export default function EnrollmentAdminPanel({
                             groupAssignedCount: groupId
                               ? (reportedChildrenView.assignedCountByGroupId.get(groupId) ?? 0)
                               : null,
+                            yearlyUnitPrice: child.yearlyUnitPrice,
+                            monthlyUnitPrice: child.monthlyUnitPrice,
+                            lessonUnitPrice: child.lessonUnitPrice,
                           };
                         }),
                       );
@@ -1296,6 +1299,7 @@ export default function EnrollmentAdminPanel({
                           .join(' · ');
                         await downloadReportedChildrenXlsx({
                           filterLabel,
+                          discountSettings,
                           rows: exportRows,
                         });
                       } catch (e) {
@@ -1378,13 +1382,13 @@ export default function EnrollmentAdminPanel({
                         return (
                           <li
                             key={child.requestId}
-                            className="grid grid-cols-1 items-center gap-x-4 gap-y-2 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
+                            className="grid grid-cols-1 items-start gap-x-4 gap-y-2 py-3 sm:grid-cols-[minmax(0,42%)_minmax(0,1fr)_minmax(7rem,auto)]"
                           >
-                            <div className="min-w-0">
+                            <div className="min-w-0 overflow-hidden">
                               <p className="text-sm font-medium text-zinc-900">
                                 {child.firstName} {child.lastName}
                               </p>
-                              <p className="mt-0.5 text-xs text-zinc-500">
+                              <p className="mt-0.5 truncate text-xs text-zinc-500">
                                 Rodzic:{' '}
                                 <button
                                   type="button"
@@ -1396,7 +1400,7 @@ export default function EnrollmentAdminPanel({
                                 {parent.email ? ` · ${parent.email}` : ''}
                               </p>
                               {hasAnyDiscount ? (
-                                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                <div className="mt-1.5 flex max-w-full flex-wrap gap-1.5">
                                   {isComplimentary ? (
                                     <span className="inline-flex items-center rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-900 ring-1 ring-inset ring-sky-200">
                                       Tryb bez umowy
@@ -1420,7 +1424,7 @@ export default function EnrollmentAdminPanel({
                                 </div>
                               ) : null}
                             </div>
-                            <p className="min-w-0 text-left text-sm text-zinc-700">
+                            <p className="min-w-0 self-center text-left text-sm text-zinc-700">
                               <span className="font-medium text-zinc-900">
                                 {groupName
                                   ? `${groupName} (${groupAssignedCount})`
@@ -1428,7 +1432,7 @@ export default function EnrollmentAdminPanel({
                               </span>
                             </p>
                             <span
-                              className={`${ENROLLMENT_STATUS_BADGE_BASE} ${badge.colorClass} h-auto max-w-[11rem] justify-self-start whitespace-normal py-1 text-center text-[10px] leading-snug sm:justify-self-end`}
+                              className={`${ENROLLMENT_STATUS_BADGE_BASE} ${badge.colorClass} h-auto max-w-[11rem] justify-self-start self-center whitespace-normal py-1 text-center text-[10px] leading-snug sm:justify-self-end`}
                             >
                               {badge.label}
                             </span>
