@@ -678,8 +678,9 @@ function parseOptionalUnitPrice(
 }
 
 /**
- * Zapis samych stawek na zgłoszeniu NEW — bez grupy, konta rodzica i członkostwa.
- * Manager może wrócić później i dopisać grupę.
+ * Zapis samych stawek na zgłoszeniu NEW — bez grupy i członkostwa.
+ * Tworzy/powiązuje konto rodzica i kartę dziecka, żeby % zniżki (na `children`)
+ * dało się utrwalić także bez wybranej grupy.
  */
 export async function saveEnrollmentRequestPrices(
   input: {
@@ -691,8 +692,28 @@ export async function saveEnrollmentRequestPrices(
   },
   options?: { restrictToSchoolId?: string; complimentaryPrices?: boolean }
 ): Promise<{ ok: true } | { ok: false; status: number; message: string }> {
-  const enrollmentRes = await queryDb<{ id: string }>(
-    `SELECT er.id
+  const enrollmentRes = await queryDb<{
+    id: string;
+    user_id: string | null;
+    parent_first_name: string;
+    parent_last_name: string;
+    parent_email: string;
+    parent_phone: string | null;
+    school_id: string;
+    child_first_name: string;
+    child_last_name: string;
+    child_birth_date: string;
+  }>(
+    `SELECT er.id,
+            er.user_id,
+            er.parent_first_name,
+            er.parent_last_name,
+            er.parent_email,
+            er.parent_phone,
+            er.school_id,
+            er.child_first_name,
+            er.child_last_name,
+            er.child_birth_date::text AS child_birth_date
      FROM enrollment_requests er
      WHERE er.id = $1
        AND ($2::text IS NULL OR er.school_id = $2::text)
@@ -700,7 +721,8 @@ export async function saveEnrollmentRequestPrices(
      LIMIT 1`,
     [input.requestId, options?.restrictToSchoolId ?? null]
   );
-  if (!enrollmentRes.rows[0]) {
+  const enrollment = enrollmentRes.rows[0];
+  if (!enrollment) {
     return {
       ok: false,
       status: 409,
@@ -712,6 +734,10 @@ export async function saveEnrollmentRequestPrices(
   if (!discountParsed.ok) {
     return { ok: false, status: 400, message: discountParsed.message };
   }
+
+  let parsedLesson: number | null;
+  let parsedMonthly: number | null;
+  let parsedYearly: number | null;
 
   if (options?.complimentaryPrices) {
     const lesson = parseOptionalUnitPrice(input.lessonUnitPrice, "za pojedyncze zajęcia");
@@ -727,59 +753,156 @@ export async function saveEnrollmentRequestPrices(
         message: "Podaj stawkę jednorazową i ratalną (za zajęcia opcjonalnie)",
       };
     }
-    await queryDb(
-      `UPDATE enrollment_requests
-       SET lesson_unit_price = $2,
-           monthly_unit_price = $3,
-           yearly_unit_price = $4
-       WHERE id = $1`,
-      [input.requestId, lesson.value, monthly.value, yearly.value]
-    );
-    await queryDb(
-      `UPDATE children
-       SET lesson_unit_price = $2,
-           monthly_unit_price = $3,
-           yearly_unit_price = $4,
-           discount_percent = $5
-       WHERE enrollment_request_id = $1`,
-      [input.requestId, lesson.value, monthly.value, yearly.value, discountParsed.value]
-    );
-    return { ok: true };
+    parsedLesson = lesson.value;
+    parsedMonthly = monthly.value;
+    parsedYearly = yearly.value;
+  } else {
+    const lesson = parseOptionalUnitPrice(input.lessonUnitPrice, "za pojedyncze zajęcia");
+    if (!lesson.ok) return { ok: false, status: 400, message: lesson.message };
+    const monthly = parseOptionalUnitPrice(input.monthlyUnitPrice, "ratalna");
+    if (!monthly.ok) return { ok: false, status: 400, message: monthly.message };
+    const yearly = parseOptionalUnitPrice(input.yearlyUnitPrice, "jednorazowa");
+    if (!yearly.ok) return { ok: false, status: 400, message: yearly.message };
+
+    if (lesson.value == null || monthly.value == null || yearly.value == null) {
+      return {
+        ok: false,
+        status: 400,
+        message: "Podaj wszystkie 3 stawki albo wybierz grupę",
+      };
+    }
+    parsedLesson = lesson.value;
+    parsedMonthly = monthly.value;
+    parsedYearly = yearly.value;
   }
 
-  const lesson = parseOptionalUnitPrice(input.lessonUnitPrice, "za pojedyncze zajęcia");
-  if (!lesson.ok) return { ok: false, status: 400, message: lesson.message };
-  const monthly = parseOptionalUnitPrice(input.monthlyUnitPrice, "ratalna");
-  if (!monthly.ok) return { ok: false, status: 400, message: monthly.message };
-  const yearly = parseOptionalUnitPrice(input.yearlyUnitPrice, "jednorazowa");
-  if (!yearly.ok) return { ok: false, status: 400, message: yearly.message };
+  const parentSchoolId = enrollment.school_id;
+  const parentEmail = String(enrollment.parent_email || "")
+    .trim()
+    .toLowerCase();
+  if (!parentEmail) {
+    return { ok: false, status: 400, message: "Brak adresu email rodzica w zgłoszeniu" };
+  }
 
-  if (lesson.value == null || monthly.value == null || yearly.value == null) {
-    return {
-      ok: false,
-      status: 400,
-      message: "Podaj wszystkie 3 stawki albo wybierz grupę",
-    };
+  let parentUserId: string;
+  if (enrollment.user_id && String(enrollment.user_id).trim().length > 0) {
+    parentUserId = enrollment.user_id;
+  } else {
+    const existing = await findUserBySchoolAndEmail(parentSchoolId, parentEmail);
+    if (existing) {
+      parentUserId = existing.id;
+    } else {
+      const tempPassword = generateTempPassword();
+      const passwordHash = await bcrypt.hash(tempPassword, 10);
+      const newUser = await createUser({
+        email: parentEmail,
+        passwordHash,
+        firstName: formatPersonName(enrollment.parent_first_name?.trim() || "Rodzic"),
+        lastName: formatPersonName(enrollment.parent_last_name?.trim() || ""),
+        role: "PARENT",
+        schoolId: parentSchoolId,
+        phone: enrollment.parent_phone ?? null,
+        confirmed: false,
+        accessLevel: "PENDING",
+        mustChangePassword: true,
+      });
+      parentUserId = newUser.id;
+    }
   }
 
   await queryDb(
     `UPDATE enrollment_requests
-     SET lesson_unit_price = $2,
-         monthly_unit_price = $3,
-         yearly_unit_price = $4
+     SET user_id = COALESCE(user_id, $2),
+         lesson_unit_price = $3,
+         monthly_unit_price = $4,
+         yearly_unit_price = $5
      WHERE id = $1`,
-    [input.requestId, lesson.value, monthly.value, yearly.value]
+    [input.requestId, parentUserId, parsedLesson, parsedMonthly, parsedYearly]
   );
 
-  await queryDb(
-    `UPDATE children
-     SET lesson_unit_price = $2,
-         monthly_unit_price = $3,
-         yearly_unit_price = $4,
-         discount_percent = $5
-     WHERE enrollment_request_id = $1`,
-    [input.requestId, lesson.value, monthly.value, yearly.value, discountParsed.value]
+  const childFirst = formatPersonName(enrollment.child_first_name ?? "");
+  const childLast = formatPersonName(enrollment.child_last_name ?? "");
+  const childBirth = String(enrollment.child_birth_date ?? "").slice(0, 10);
+
+  const existingChildRes = await queryDb<{ id: string }>(
+    `SELECT id FROM children
+     WHERE school_id = $1
+       AND (
+         enrollment_request_id = $2
+         OR (
+           parent_id = $3
+           AND first_name = $4
+           AND last_name = $5
+         )
+       )
+     ORDER BY CASE WHEN enrollment_request_id = $2 THEN 0 ELSE 1 END
+     LIMIT 1`,
+    [parentSchoolId, input.requestId, parentUserId, childFirst, childLast]
   );
+  let childId = existingChildRes.rows[0]?.id ?? null;
+
+  if (childId) {
+    await runPgTransaction(async (client) => {
+      await ensureChildClientNumber(client, childId!, parentSchoolId, parentUserId);
+      await client.query(
+        `UPDATE children
+         SET active = TRUE,
+             parent_id = $2,
+             enrollment_request_id = $3,
+             lesson_unit_price = $4,
+             monthly_unit_price = $5,
+             yearly_unit_price = $6,
+             discount_percent = $7
+         WHERE id = $1`,
+        [
+          childId,
+          parentUserId,
+          input.requestId,
+          parsedLesson,
+          parsedMonthly,
+          parsedYearly,
+          discountParsed.value,
+        ]
+      );
+    });
+  } else {
+    if (!childFirst || !childLast || !childBirth) {
+      return {
+        ok: false,
+        status: 400,
+        message: "Brak danych dziecka w zgłoszeniu — nie można zapisać zniżki",
+      };
+    }
+    childId = randomUUID();
+    await runPgTransaction(async (client) => {
+      const childClientNumber = await allocateChildClientNumber(
+        client,
+        parentSchoolId,
+        parentUserId
+      );
+      await client.query(
+        `INSERT INTO children (
+           id, school_id, parent_id, client_number, first_name, last_name, birth_date,
+           active, confirmed, enrollment_request_id, access_level,
+           lesson_unit_price, monthly_unit_price, yearly_unit_price, discount_percent
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7::date, TRUE, FALSE, $8, 'NEW', $9, $10, $11, $12)`,
+        [
+          childId,
+          parentSchoolId,
+          parentUserId,
+          childClientNumber,
+          childFirst,
+          childLast,
+          childBirth,
+          input.requestId,
+          parsedLesson,
+          parsedMonthly,
+          parsedYearly,
+          discountParsed.value,
+        ]
+      );
+    });
+  }
 
   return { ok: true };
 }

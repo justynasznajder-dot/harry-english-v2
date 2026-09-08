@@ -548,6 +548,10 @@ export default function EnrollmentParentFlow({
     childName: string;
     downloadUrl: string | null;
   } | null>(null);
+  const [generatingPickupConsentId, setGeneratingPickupConsentId] = useState<string | null>(null);
+  const [pickupConsentDownloadByRequestId, setPickupConsentDownloadByRequestId] = useState<
+    Record<string, string>
+  >({});
   const [contractProfile, setContractProfile] = useState<ParentProfileForm>({
     firstName: userInfo.firstName ?? '',
     lastName: userInfo.lastName ?? '',
@@ -1110,6 +1114,12 @@ export default function EnrollmentParentFlow({
             childName: data.pickupConsentChildName?.trim() || 'dziecko',
             downloadUrl: data.pickupConsentDownloadUrl?.trim() || null,
           });
+          if (data.pickupConsentDownloadUrl?.trim()) {
+            setPickupConsentDownloadByRequestId((prev) => ({
+              ...prev,
+              [requestId]: data.pickupConsentDownloadUrl!.trim(),
+            }));
+          }
         }
         setFlash({
           kind: 'success',
@@ -1130,6 +1140,59 @@ export default function EnrollmentParentFlow({
     },
     [discountLargeFamily, enrollingMultipleChildren, loadProposals, refreshUserAccessLevel]
   );
+
+  const handleGeneratePickupConsent = useCallback(async (requestId: string) => {
+    if (generatingPickupConsentId) return;
+    setGeneratingPickupConsentId(requestId);
+    try {
+      const res = await fetch('/api/parent/pickup-consent/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ requestId }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        message?: string;
+        previewHtml?: string | null;
+        childName?: string | null;
+        downloadUrl?: string | null;
+      };
+      if (!res.ok) {
+        setFlash({
+          kind: 'error',
+          message: data.message ?? 'Nie udało się wygenerować zgody na odbiór.',
+        });
+        return;
+      }
+      const downloadUrl = data.downloadUrl?.trim() || null;
+      if (downloadUrl) {
+        setPickupConsentDownloadByRequestId((prev) => ({
+          ...prev,
+          [requestId]: downloadUrl,
+        }));
+      }
+      if (data.previewHtml) {
+        setPickupConsentModal({
+          previewHtml: data.previewHtml,
+          childName: data.childName?.trim() || 'dziecko',
+          downloadUrl,
+        });
+      }
+      setFlash({
+        kind: 'success',
+        message: downloadUrl
+          ? 'Zgoda wygenerowana — możesz ją pobrać.'
+          : 'Zgoda wygenerowana.',
+      });
+    } catch {
+      setFlash({
+        kind: 'error',
+        message: 'Nie udało się wygenerować zgody na odbiór.',
+      });
+    } finally {
+      setGeneratingPickupConsentId(null);
+    }
+  }, [generatingPickupConsentId]);
 
   const handleContactSchool = useCallback(
     async (p: EnrollmentProposal) => {
@@ -1547,9 +1610,12 @@ export default function EnrollmentParentFlow({
                       <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950">
                         <p className="font-semibold">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.required}</p>
                         <p className="mt-1 text-amber-900">
-                          Po akceptacji otrzymasz zgodę do pobrania w Dokumentach. Nie podpisuje się
-                          jej elektronicznie — trzeba przynieść wydruk z podpisem ręcznym na pierwsze
-                          zajęcia.
+                          {PICKUP_CONSENT_PRINT_INSTRUCTIONS.scopeNote}
+                        </p>
+                        <p className="mt-1 text-amber-900">
+                          {userInfo.complimentaryAccess
+                            ? 'Po zakończeniu zapisu wygenerujesz zgodę w Podsumowaniu — pobierz, wydrukuj i podpisz ręcznie na pierwsze zajęcia.'
+                            : 'Po akceptacji otrzymasz zgodę do pobrania w Dokumentach. Nie podpisuje się jej elektronicznie — trzeba przynieść wydruk z podpisem ręcznym na pierwsze zajęcia.'}
                         </p>
                       </div>
                     ) : null}
@@ -2112,7 +2178,8 @@ export default function EnrollmentParentFlow({
                       const sharedDiscountInfo = formatEffectiveDiscountInfo(
                         resolveEffectiveDiscountPercent({
                           mode: billingExempt ? 'complimentary' : 'contract',
-                          managerPercent: null,
+                          managerPercent: proposals.find((p) => p.discount_percent != null)
+                            ?.discount_percent ?? null,
                           hasLargeFamilyCard: discountLargeFamily,
                           hasSiblingDeclared:
                             enrollingMultipleChildren && !discountLargeFamily,
@@ -2127,7 +2194,8 @@ export default function EnrollmentParentFlow({
                                 Zniżki
                               </p>
                               <p className="text-xs text-zinc-500">
-                                Rabaty się nie sumują. KDR: 10%, rodzeństwo: 5%.
+                                Rabaty się nie sumują — wchodzi najwyższy (rabat szkoły, KDR
+                                10% lub rodzeństwo 5%).
                               </p>
                               <div className="flex flex-col gap-2">
                                 <label
@@ -2210,7 +2278,7 @@ export default function EnrollmentParentFlow({
                                 isReadOnlyPreview;
                               const effective = resolveEffectiveDiscountPercent({
                                 mode: billingExempt ? 'complimentary' : 'contract',
-                                managerPercent: billingExempt ? p.discount_percent : null,
+                                managerPercent: p.discount_percent,
                                 hasLargeFamilyCard: discountLargeFamily,
                                 hasSiblingDeclared:
                                   enrollingMultipleChildren && !discountLargeFamily,
@@ -2606,9 +2674,69 @@ export default function EnrollmentParentFlow({
             schoolYearName ? ` w roku szkolnym ${schoolYearName}` : ''
           }.`}
         </div>
-        {enrolledChildren.some((p) => p.teacher_pickup_consent) ? (
+        {userInfo.complimentaryAccess && enrolledChildren.length > 0 ? (
           <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-4 text-sm text-amber-950">
             <p className="font-semibold text-amber-950">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.title}</p>
+            <p className="mt-2">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.scopeNote}</p>
+            <p className="mt-2">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.noESign}</p>
+            <p className="mt-2">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.teacherBlankForms}</p>
+            <ul className="mt-4 space-y-3">
+              {enrolledChildren.map((p) => {
+                const downloadUrl = pickupConsentDownloadByRequestId[p.request_id];
+                const busy = generatingPickupConsentId === p.request_id;
+                return (
+                  <li
+                    key={`pickup-${p.request_id}`}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-white/80 px-3 py-3"
+                  >
+                    <span className="font-medium text-zinc-900">
+                      {p.child_first_name} {p.child_last_name}
+                    </span>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={isReadOnlyPreview || Boolean(generatingPickupConsentId)}
+                        onClick={() => {
+                          void handleGeneratePickupConsent(p.request_id);
+                        }}
+                        className="rounded-full bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {busy
+                          ? 'Generowanie…'
+                          : downloadUrl
+                            ? 'Wygeneruj ponownie'
+                            : 'Wygeneruj zgodę'}
+                      </button>
+                      {downloadUrl ? (
+                        <a
+                          href={downloadUrl}
+                          download
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="rounded-full border border-[#0f6e56] bg-white px-4 py-2 text-sm font-semibold text-[#0f6e56] hover:bg-emerald-50"
+                        >
+                          Pobierz
+                        </a>
+                      ) : null}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+            {onNavigateToDocuments ? (
+              <button
+                type="button"
+                onClick={onNavigateToDocuments}
+                className="mt-3 rounded-full border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-950 hover:bg-amber-100"
+              >
+                Przejdź do Dokumentów
+              </button>
+            ) : null}
+          </div>
+        ) : enrolledChildren.some((p) => p.teacher_pickup_consent) ? (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-4 text-sm text-amber-950">
+            <p className="font-semibold text-amber-950">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.title}</p>
+            <p className="mt-2">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.scopeNote}</p>
             <p className="mt-2">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.required}</p>
             <p className="mt-2">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.noESign}</p>
             <p className="mt-2">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.downloadInDocuments}</p>
@@ -2905,7 +3033,7 @@ export default function EnrollmentParentFlow({
               ) : null}
             </div>
             <div className="space-y-3 overflow-y-auto px-5 py-4 text-sm text-zinc-800">
-              <p className="font-medium text-zinc-900">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.required}</p>
+              <p className="font-medium text-zinc-900">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.scopeNote}</p>
               <p>{PICKUP_CONSENT_PRINT_INSTRUCTIONS.noESign}</p>
               <p>{PICKUP_CONSENT_PRINT_INSTRUCTIONS.downloadInDocuments}</p>
               <p>{PICKUP_CONSENT_PRINT_INSTRUCTIONS.teacherBlankForms}</p>

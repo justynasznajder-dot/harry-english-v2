@@ -3,6 +3,7 @@ import { createUser, findUserBySchoolAndEmail, queryDb } from "@/lib/db";
 import {
   applyDiscountsToAmount,
   applyManualDiscountPercent,
+  applyWinningDiscountPercent,
   clampMaxDiscountPercent,
   DEFAULT_MAX_DISCOUNT_PERCENT,
   DISCOUNT_KEYS,
@@ -24,6 +25,7 @@ import { generateTempPassword } from "@/lib/password";
 export {
   applyDiscountsToAmount,
   applyManualDiscountPercent,
+  applyWinningDiscountPercent,
   clampMaxDiscountPercent,
   DEFAULT_MAX_DISCOUNT_PERCENT,
   DISCOUNT_KEYS,

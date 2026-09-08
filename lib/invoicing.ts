@@ -7,7 +7,7 @@ import {
   formatContractAmount,
 } from "@/lib/contract-html";
 import { renderHtmlToPdf } from "@/lib/contract-pdf";
-import { queryDb, runPgTransaction, withPgAdvisoryLock } from "@/lib/db";
+import { queryDb, runPgTransaction, withPgAdvisoryLock, getActiveSchoolYear } from "@/lib/db";
 import { sendInvoiceNotificationEmail } from "@/lib/email";
 import {
   amountInWordsPln,
@@ -480,6 +480,24 @@ export type InvoiceLineInput = {
   discount?: string;
 };
 
+async function resolveSchoolYearFolderName(
+  schoolId: string,
+  schoolYearId: string | null | undefined
+): Promise<string> {
+  if (schoolYearId) {
+    const res = await queryDb<{ name: string }>(
+      `SELECT name FROM school_years WHERE id = $1 AND school_id = $2 LIMIT 1`,
+      [schoolYearId, schoolId]
+    );
+    const name = res.rows[0]?.name?.trim();
+    if (name) return name;
+  }
+  const active = await getActiveSchoolYear(schoolId);
+  const activeName = active?.name ? String(active.name).trim() : "";
+  if (activeName) return activeName;
+  throw new Error("Brak nazwy roku szkolnego — nie można zapisać faktury w R2");
+}
+
 async function insertPaymentWithInvoice(params: {
   schoolId: string;
   parentId: string;
@@ -697,11 +715,16 @@ async function insertPaymentWithInvoice(params: {
   try {
     const pdf = await renderHtmlToPdf(contentHtml);
     const filename = `Faktura-${safePdfSlug(invoiceNumber.replace(/\//g, "-"))}.pdf`;
+    const schoolYearName = await resolveSchoolYearFolderName(
+      params.schoolId,
+      params.schoolYearId
+    );
     let uploadedKey: string | null = null;
     try {
       uploadedKey = await storeInvoicePdfInR2({
         parentUserId: params.parentId,
         schoolId: params.schoolId,
+        schoolYearName,
         issuedAt: issueDate,
         filename,
         content: pdf,
@@ -2106,14 +2129,22 @@ export async function createCorrectiveInvoice(
     try {
       const pdf = await renderHtmlToPdf(contentHtml);
       const filename = `Faktura-korygujaca-${safePdfSlug(invoiceNumber.replace(/\//g, "-"))}.pdf`;
+      const buyer = await fetchBuyerInvoiceData(original.parent_id);
+      const schoolYearName = await resolveSchoolYearFolderName(
+        original.school_id,
+        original.school_year_id
+      );
       let uploadedKey: string | null = null;
       try {
         uploadedKey = await storeInvoicePdfInR2({
           parentUserId: original.parent_id,
           schoolId: original.school_id,
+          schoolYearName,
           issuedAt: issueDate,
           filename,
           content: pdf,
+          parentFirstName: buyer.parentFirstName,
+          parentLastName: buyer.parentLastName,
           source: "invoice.corrective",
         });
         await queryDb(`UPDATE invoices SET pdf_key = $2 WHERE id = $1`, [invoiceId, uploadedKey]);

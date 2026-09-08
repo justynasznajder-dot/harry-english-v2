@@ -412,7 +412,7 @@ export default function ParentDocumentsTab({
       ) : contracts.length === 0 && pdfFiles.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-10 text-center text-sm text-zinc-600">
           {complimentaryAccess
-            ? 'Tryb bez umowy — wcześniejsze umowy i dokumenty płatne nie są dostępne. Ewentualna zgoda na odbiór przez lektora pojawi się poniżej, jeśli jest wymagana.'
+            ? 'Tryb bez umowy — wcześniejsze umowy i dokumenty płatne nie są dostępne. Zgodę na odbiór przez lektora wygenerujesz w kroku Podsumowanie (dotyczy wyłącznie dzieci odbieranych przez lektora z placówki).'
             : 'Brak podpisanych dokumentów. Po podpisaniu umowy pojawią się tu pliki PDF dla każdego dziecka.'}
         </div>
       ) : emptyForYear ? (

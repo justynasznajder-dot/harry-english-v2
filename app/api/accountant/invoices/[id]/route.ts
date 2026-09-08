@@ -5,7 +5,7 @@ import {
   invoicesSupportCorrectiveDocuments,
   invoicesSupportInvoiceItems,
 } from "@/lib/invoice-schema";
-import { getR2ObjectBuffer } from "@/lib/r2-storage";
+import { getR2ObjectBuffer, isParentDokumentyKeyAllowed } from "@/lib/r2-storage";
 
 export async function GET(
   request: NextRequest,
@@ -173,9 +173,12 @@ export async function GET(
         return NextResponse.json({ message: "Brak pliku faktury" }, { status: 404 });
       }
       if (
-        !invoice.pdf_key.startsWith(`${invoice.parent_id}/`) ||
-        !invoice.pdf_key.includes("/faktury/") ||
-        !invoice.pdf_key.endsWith(".pdf")
+        !isParentDokumentyKeyAllowed({
+          key: invoice.pdf_key,
+          parentUserId: invoice.parent_id,
+          schoolId: ctx.schoolId,
+          kind: "faktury",
+        })
       ) {
         return NextResponse.json({ message: "Brak dostępu do pliku" }, { status: 403 });
       }

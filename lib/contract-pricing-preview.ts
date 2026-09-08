@@ -17,11 +17,12 @@ export type ContractPricingContext = {
 };
 
 /**
- * Reguły zniżek na umowie:
+ * Reguły zniżek rodzinnych na umowie (bez managera):
  * - tryb bez opłat → brak zniżek
  * - KDR → tylko KDR (wyłącza rodzeństwo), hard 10% gdy brak ustawienia szkoły
  * - inaczej → ewentualnie rodzeństwo (hard 5%)
- * - rabat managera nie wchodzi
+ *
+ * Rabat managera vs rodzinny: max w resolveEffectiveDiscountPercent (mode: contract).
  */
 export function resolveContractDiscountKeys(
   siblingEligible: boolean,

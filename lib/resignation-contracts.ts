@@ -9,6 +9,7 @@ import {
   DISCOUNT_KEYS,
   getSchoolDiscountSettings,
   type SchoolDiscountSettings,
+  resolveEffectiveDiscountPercent,
 } from "@/lib/school-discounts";
 import { getParentLargeFamilyCard } from "@/lib/parent-profile-discount";
 import { formatPersonName } from "@/lib/format-person-name";
@@ -178,11 +179,13 @@ export async function recalculateSiblingPricingForParent(params: {
       lesson_unit_price: string | null;
       monthly_unit_price: string | null;
       yearly_unit_price: string | null;
+      discount_percent: string | null;
     }>(
       `SELECT cc.child_id, ch.first_name, ch.last_name,
               cc.lesson_unit_price::text AS lesson_unit_price,
               cc.monthly_unit_price::text AS monthly_unit_price,
-              cc.yearly_unit_price::text AS yearly_unit_price
+              cc.yearly_unit_price::text AS yearly_unit_price,
+              ch.discount_percent::text AS discount_percent
        FROM contract_children cc
        JOIN children ch ON ch.id = cc.child_id
        WHERE cc.contract_id = $1
@@ -200,10 +203,26 @@ export async function recalculateSiblingPricingForParent(params: {
       discountSettings,
     });
 
+    const managerPercent = childrenRes.rows.find(
+      (row) => row.discount_percent != null && String(row.discount_percent).trim() !== ""
+    )?.discount_percent ?? null;
+
+    const effective = resolveEffectiveDiscountPercent({
+      mode: "contract",
+      managerPercent: contract.billing_exempt ? null : managerPercent,
+      hasLargeFamilyCard: Boolean(
+        contract.discount_large_family || hasLargeFamily
+      ),
+      hasSiblingDeclared:
+        siblingEligible &&
+        !(contract.discount_large_family || hasLargeFamily),
+      settings: discountSettings as SchoolDiscountSettings,
+    });
+
     const breakdown = buildContractAmountBreakdown({
       paymentType,
       billingExempt: contract.billing_exempt,
-      discountKeys,
+      discountKeys: [],
       discountSettings: discountSettings as SchoolDiscountSettings,
       children: childrenRes.rows.map((row) => ({
         child_id: row.child_id,
@@ -213,6 +232,8 @@ export async function recalculateSiblingPricingForParent(params: {
         yearly_unit_price: parseMoney(row.yearly_unit_price),
       })),
       frozenAt: contract.status === "SIGNED" ? at : null,
+      winningPercent: contract.billing_exempt ? 0 : effective.percent,
+      winningSource: contract.billing_exempt ? "none" : effective.source,
     });
 
     const amount = contract.billing_exempt ? 0 : breakdown.final_total;

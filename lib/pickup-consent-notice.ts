@@ -14,6 +14,8 @@ export const PICKUP_CONSENT_PDF_TITLE_LEGACY =
 export const PICKUP_CONSENT_PRINT_INSTRUCTIONS = {
   title: "Zgoda na odebranie przez lektora — do wydruku",
   required: "W tej grupie wymagana jest zgoda na odebranie dziecka przez lektora.",
+  scopeNote:
+    "Dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia.",
   noESign:
     "Tej zgody nie podpisuje się elektronicznie. Wszyscy rodzice muszą przynieść wydrukowany dokument z podpisem ręcznym na pierwsze zajęcia.",
   downloadInDocuments:

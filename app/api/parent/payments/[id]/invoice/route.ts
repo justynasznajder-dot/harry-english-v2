@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { getUserById, queryDb } from "@/lib/db";
 import { requireParentContext } from "@/lib/parent-portal-auth";
-import { getR2ObjectBuffer } from "@/lib/r2-storage";
+import { getR2ObjectBuffer, isParentDokumentyKeyAllowed } from "@/lib/r2-storage";
 import { isComplimentaryForParent } from "@/lib/school-discounts";
 
 export async function GET(
@@ -54,11 +54,15 @@ export async function GET(
     if (!invoice.pdf_key) {
       return NextResponse.json({ message: "Brak pliku faktury" }, { status: 404 });
     }
-    if (!invoice.pdf_key.startsWith(`${parentId}/`)) {
+    if (
+      !isParentDokumentyKeyAllowed({
+        key: invoice.pdf_key,
+        parentUserId: parentId,
+        schoolId,
+        kind: "faktury",
+      })
+    ) {
       return NextResponse.json({ message: "Brak dostępu do pliku" }, { status: 403 });
-    }
-    if (!invoice.pdf_key.includes("/faktury/") || !invoice.pdf_key.endsWith(".pdf")) {
-      return NextResponse.json({ message: "Nieprawidłowy plik faktury" }, { status: 403 });
     }
 
     const { buffer, contentType } = await getR2ObjectBuffer(invoice.pdf_key, {

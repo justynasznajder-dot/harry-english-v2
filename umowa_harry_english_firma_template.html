@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    font-size: 12pt;
+    line-height: 1.5;
+    color: #1a1a1a;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 40px 48px;
+  }
+  h1 {
+    text-align: center;
+    font-size: 15pt;
+    font-weight: bold;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .contract-number {
+    text-align: center;
+    margin-bottom: 24px;
+    font-size: 11pt;
+  }
+  .section-header {
+    text-align: center;
+    font-weight: bold;
+    font-size: 12pt;
+    margin-top: 28px;
+    margin-bottom: 10px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #cccccc;
+  }
+  .parties {
+    margin-bottom: 8px;
+  }
+  .party-block {
+    margin: 12px 0;
+  }
+  .field-label {
+    font-size: 10pt;
+    color: #555;
+    margin-bottom: 2px;
+  }
+  .field-value {
+    font-size: 12pt;
+    font-weight: bold;
+    margin-bottom: 8px;
+  }
+  .role-label {
+    margin: 8px 0 16px 0;
+  }
+  ol.contract-list {
+    margin: 0;
+    padding-left: 0;
+    list-style: none;
+    counter-reset: item;
+  }
+  ol.contract-list > li {
+    counter-increment: item;
+    position: relative;
+    padding-left: 28px;
+    margin-bottom: 10px;
+    font-size: 11.5pt;
+    text-align: justify;
+  }
+  ol.contract-list > li::before {
+    content: counter(item) ".";
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 24px;
+    font-weight: normal;
+  }
+  .note {
+    font-style: italic;
+    margin: 4px 0 8px 28px;
+    font-size: 11pt;
+  }
+  .signatures {
+    margin-top: 40px;
+  }
+  .signature-confirm {
+    font-style: italic;
+    margin-bottom: 16px;
+  }
+  .signature-date {
+    margin-bottom: 24px;
+  }
+  .signature-row {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 8px;
+  }
+  .signature-col {
+    width: 45%;
+  }
+  .signature-line {
+    border-bottom: 1px solid #333;
+    margin-bottom: 4px;
+    min-height: 32px;
+    display: flex;
+    align-items: flex-end;
+    padding-bottom: 2px;
+  }
+  .signature-text {
+    font-weight: bold;
+    font-size: 11pt;
+  }
+  .signature-name {
+    font-weight: bold;
+    font-size: 11pt;
+  }
+  .attachments {
+    margin-top: 32px;
+    padding-top: 12px;
+    border-top: 1px solid #eee;
+  }
+  .attachments p {
+    margin: 2px 0;
+    font-size: 11pt;
+  }
+  p {
+    margin: 0 0 10px;
+    text-align: justify;
+  }
+  .ph {
+    color: #1a1a1a;
+    font-weight: bold;
+    font-style: normal;
+  }
+  a {
+    color: #1a56db;
+    text-decoration: none;
+  }
+  .divider {
+    margin: 16px 0;
+    border: none;
+    border-top: 1px solid #eee;
+  }
+  ul.schedule-details {
+    margin: 6px 0 0;
+    padding-left: 18px;
+    list-style: disc;
+  }
+  ul.schedule-details li {
+    margin-bottom: 4px;
+    text-align: left;
+  }
+</style>
+</head>
+<body>
+
+<h1>Umowa</h1>
+<div class="contract-number">Nr umowy: <span class="ph">{{contract_number}}</span></div>
+
+<p>Umowa zawarta dnia <span class="ph">{{contract_date}}</span> roku w Paniówkach pomiędzy:</p>
+<p>Firma Handlowo Usługowa Michał Sznajder, 44-177 Paniówki, ul. Powstańców Śląskich 146, NIP: 6412394661
+(zwaną dalej: <strong>Harry English</strong>) reprezentowaną przez Annę i Michała Sznajder,</p>
+
+<p style="text-align:center"><strong>a</strong></p>
+
+<div class="party-block">
+  <div class="field-label">Nazwa firmy:</div>
+  <div class="field-value"><span class="ph">{{company_name}}</span></div>
+
+  <div class="field-label">NIP:</div>
+  <div class="field-value"><span class="ph">{{company_nip}}</span></div>
+
+  <div class="field-label">Adres siedziby:</div>
+  <div class="field-value"><span class="ph">{{parent_address}}</span></div>
+
+  <div class="field-label">Numer telefonu:</div>
+  <div class="field-value"><span class="ph">{{parent_phone}}</span></div>
+
+  <div class="field-label">Adres e-mail:</div>
+  <div class="field-value"><span class="ph">{{parent_email}}</span></div>
+</div>
+
+<p>(zwaną dalej <strong>Klientem</strong>) reprezentowaną przez <span class="ph">{{parent_full_name}}</span>,</p>
+
+<p>reprezentującym uczestnika kursu:</p>
+
+<div class="party-block">
+  <div class="field-label">Imię i nazwisko dziecka / data urodzenia:</div>
+  <div class="field-value"><span class="ph">{{child_1_full_name}}</span> / <span class="ph">{{child_1_birth_date}}</span></div>
+</div>
+
+<p>(zwanego/zwaną dalej <strong>Słuchaczem</strong>)</p>
+
+<hr class="divider">
+
+<div class="section-header">§1 Przedmiot umowy</div>
+<ol class="contract-list">
+  <li>Umowa określa zasady organizacji i prowadzenia przez Harry English kursu językowego, w którym uczestniczy Słuchacz.</li>
+  <li>Umowa zostaje zawarta na okres roku szkolnego <span class="ph">{{school_year}}</span>, z możliwością jej rozwiązania na zasadach określonych w niniejszej umowie.</li>
+  <li>Kurs odbywa się zgodnie z ustalonym kalendarzem. Zajęcia nie odbywają się w święta oraz dni ustawowo wolne od pracy. Planowana liczba zajęć w roku szkolnym wynosi <span class="ph">{{planned_lessons_label}}</span>.</li>
+  <li>Czas trwania pojedynczych zajęć Słuchacza wynosi <span class="ph">{{lesson_duration}}</span>.</li>
+  <li>Zajęcia odbywają się:
+    <ul class="schedule-details">
+      <li>w terminie: <span class="ph">{{group_schedule}}</span></li>
+      <li>w miejscu: <span class="ph">{{schedule_place}}</span></li>
+    </ul>
+  </li>
+  <li>Harry English zastrzega możliwość wprowadzenia zmian organizacyjnych, w szczególności, ale nie tylko dotyczących osoby prowadzącej zajęcia lub sali w ramach wskazanego miejsca zajęć. O zmianach Klient zostanie poinformowany z wyprzedzeniem.</li>
+</ol>
+
+<div class="section-header">§2 Koszt oraz forma płatności</div>
+{{payment_section}}
+
+<div class="section-header">§3 Warunki przeprowadzenia kursu</div>
+<ol class="contract-list">
+  <li>Zajęcia odbywają się w kilkuosobowych grupach.</li>
+  <li>Zajęcia odwołane przez Harry English nie podlegają opłacie. Jeżeli zostały wcześniej opłacone, odpowiednia kwota zostanie zaliczona na poczet kolejnych należności. Ewentualne nadpłaty pozostające do rozliczenia w dniu zakończenia kursu zostaną zwrócone do 14 dni po zakończeniu kursu.</li>
+  <li>Każda ze Stron ma prawo wypowiedzieć umowę pisemnie z zachowaniem 30-dniowego okresu wypowiedzenia od momentu zgłoszenia. Po zakończeniu umowy Harry English dokona rozliczenia należności, a ewentualna nadpłata zostanie zwrócona Klientowi.</li>
+  <li>Harry English zastrzega sobie prawo do zakończenia prowadzenia zajęć danej grupy, jeżeli liczba Słuchaczy spadnie poniżej 4. Klient zostanie o tym poinformowany niezwłocznie, a opłaty dotyczące niezrealizowanych zajęć zostaną zwrócone lub rozliczone w ramach przyszłych zajęć.</li>
+  <li>Rodzic lub opiekun prawny ponosi odpowiedzialność za zapewnienie Słuchaczowi opieki przed rozpoczęciem oraz po zakończeniu zajęć.</li>
+  <li>Jeżeli zajęcia Harry English odbywają się bezpośrednio po zajęciach szkolnych lub przedszkolnych Słuchacza, lektor może towarzyszyć dziecku podczas przejścia ze szkoły lub przedszkola na zajęcia Harry English na podstawie odrębnego upoważnienia udzielonego przez rodzica lub opiekuna prawnego.</li>
+</ol>
+
+<div class="section-header">§4 Ochrona danych osobowych (RODO)</div>
+<ol class="contract-list">
+  <li>Administratorem danych osobowych Klienta oraz Słuchacza jest Firma Handlowo Usługowa Michał Sznajder z siedzibą w Paniówkach (44-177) przy ul. Powstańców Śląskich 146.</li>
+  <li>Dane osobowe Klienta oraz Słuchacza są przetwarzane w celu zawarcia i realizacji niniejszej umowy, organizacji kursu, kontaktu z Klientem, prowadzenia rozliczeń oraz realizacji obowiązków prawnych ciążących na Administratorze.</li>
+  <li>Dane osobowe będą przechowywane przez okres obowiązywania umowy, a po jej zakończeniu przez okres wymagany przepisami prawa lub niezbędny do ustalenia, dochodzenia albo obrony roszczeń.</li>
+  <li>Dane osobowe mogą być udostępniane podmiotom wspierającym Administratora w realizacji umowy, w szczególności podmiotom świadczącym usługi księgowe, informatyczne oraz hostingowe, wyłącznie w zakresie niezbędnym do realizacji tych usług.</li>
+  <li>Klientowi przysługują, w przypadkach przewidzianych przepisami prawa, prawa do dostępu do danych, ich sprostowania, usunięcia, ograniczenia przetwarzania oraz wniesienia skargi do Prezesa Urzędu Ochrony Danych Osobowych.</li>
+  <li>Podanie danych osobowych wymaganych do zawarcia i realizacji umowy jest dobrowolne, jednak ich niepodanie uniemożliwia zawarcie lub realizację umowy.</li>
+  <li>W sprawach dotyczących przetwarzania danych osobowych Klient może skontaktować się z Administratorem pod adresem e-mail: <a href="mailto:kontakt@harry-english.pl">kontakt@harry-english.pl</a>.</li>
+</ol>
+
+<div class="section-header">§5 Postanowienia ogólne</div>
+<ol class="contract-list">
+  <li>Klient potwierdza, że zapoznał się z treścią niniejszej umowy i akceptuje jej warunki.</li>
+  <li>Umowa zostaje zawarta w formie elektronicznej. Po jej zawarciu kopia umowy jest automatycznie przesyłana na adres e-mail Klienta wskazany w umowie oraz na adres e-mail Harry English, co umożliwia obu Stronom zapisanie i przechowywanie jej treści.</li>
+  <li>Faktury oraz informacje organizacyjne związane z realizacją kursu będą przesyłane Klientowi drogą elektroniczną na adres e-mail oraz/lub numer telefonu wskazany w umowie.</li>
+  <li>W sprawach nieuregulowanych niniejszą umową zastosowanie mają przepisy prawa polskiego, w szczególności Kodeksu Cywilnego.</li>
+  <li>Integralną część umowy stanowią załączniki: Załącznik nr 1 – Oświadczenie dotyczące wykorzystania wizerunku dziecka (jeżeli Klient wyraził zgodę) oraz Załącznik nr 2 – Upoważnienie lektora do odbioru dziecka (jeżeli dotyczy).</li>
+</ol>
+
+<div class="signatures">
+  {{signed_at_line}}
+  <div class="signature-row">
+    <div class="signature-col">
+      <div class="signature-line"><span class="ph signature-text">{{parent_signature_line}}</span></div>
+      <div class="signature-name">Klient</div>
+    </div>
+    <div class="signature-col">
+      <div class="signature-line"><span class="ph signature-text">{{school_signature_line}}</span></div>
+      <div class="signature-name">Harry English – FHU Michał Sznajder</div>
+    </div>
+  </div>
+</div>
+
+<div class="attachments">
+  <p><strong>Załączniki do umowy:</strong></p>
+  <p>Załącznik nr 1 – Oświadczenie dotyczące wykorzystania wizerunku dziecka (jeśli wyrażono zgodę)</p>
+  <p>Załącznik nr 2 – Upoważnienie lektora do odbioru dziecka (jeśli dotyczy)</p>
+</div>
+
+</body>
+</html>

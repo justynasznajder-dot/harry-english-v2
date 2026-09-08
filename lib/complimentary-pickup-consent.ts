@@ -106,22 +106,34 @@ async function loadEnrollmentChildForPickupConsent(
 
 /**
  * W trybie bez opłat: bez umowy i bez zgody na wizerunek.
- * Jeśli grupa ma teacher_pickup_consent — generuje PDF Załącznika 2 do wydruku
- * (bez podpisu elektronicznego — rodzic podpisuje ręcznie na pierwszych zajęciach).
+ * Generuje PDF Załącznika 2 do wydruku (bez podpisu elektronicznego —
+ * rodzic podpisuje ręcznie na pierwszych zajęciach).
+ *
+ * `requireTeacherPickupFlag` (domyślnie true) — tylko gdy grupa ma teacher_pickup_consent
+ * (auto przy domknięciu zapisu). Przycisk w Podsumowaniu wywołuje z `false`.
  */
-export async function generateComplimentaryPickupConsentIfNeeded(params: {
+export async function generateComplimentaryPickupConsent(params: {
   enrollmentRequestId: string;
   parentId: string;
   schoolId: string;
+  requireTeacherPickupFlag?: boolean;
 }): Promise<{ generated: boolean; previewHtml?: string; childName?: string; downloadKey?: string | null }> {
-  const { enrollmentRequestId, parentId, schoolId } = params;
+  const {
+    enrollmentRequestId,
+    parentId,
+    schoolId,
+    requireTeacherPickupFlag = true,
+  } = params;
 
   const child = await loadEnrollmentChildForPickupConsent(
     enrollmentRequestId,
     parentId,
     schoolId
   );
-  if (!child || !child.teacher_pickup_consent) {
+  if (!child) {
+    return { generated: false };
+  }
+  if (requireTeacherPickupFlag && !child.teacher_pickup_consent) {
     return { generated: false };
   }
 
@@ -297,4 +309,16 @@ export async function generateComplimentaryPickupConsentIfNeeded(params: {
     childName,
     downloadKey: uploadedKeys[0] ?? null,
   };
+}
+
+/** Auto przy domknięciu zapisu — tylko gdy grupa wymaga zgody. */
+export async function generateComplimentaryPickupConsentIfNeeded(params: {
+  enrollmentRequestId: string;
+  parentId: string;
+  schoolId: string;
+}): Promise<{ generated: boolean; previewHtml?: string; childName?: string; downloadKey?: string | null }> {
+  return generateComplimentaryPickupConsent({
+    ...params,
+    requireTeacherPickupFlag: true,
+  });
 }

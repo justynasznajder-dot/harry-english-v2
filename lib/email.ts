@@ -908,7 +908,13 @@ export async function sendProposalEmail(
       : "Twojego dziecka";
 
   const pickupConsentHtml = options?.complimentaryCompleted
-    ? ""
+    ? `
+      <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;color:${p.text};">
+        W portalu, w kroku <strong>Podsumowanie</strong>, możesz wygenerować zgodę na odebranie dziecka przez lektora.
+        Dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia.
+        Wydrukuj dokument i podpisz ręcznie — nie podpisuje się go elektronicznie.
+      </p>
+    `
     : `
       <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;color:${p.text};">
         Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować w dwóch egzemplarzach i podpisać własnoręcznie.
@@ -923,7 +929,7 @@ export async function sendProposalEmail(
       <p style="margin:16px 0 8px 0;font-size:15px;line-height:1.6;color:${p.text};">
         ${
           options?.complimentaryCompleted
-            ? "Zaloguj się do portalu danymi, których używasz na co dzień — zapis jest już zakończony."
+            ? "Zaloguj się do portalu danymi, których używasz na co dzień."
             : "Poniżej znajdziesz dane do logowania w systemie. Zaloguj się danymi, których używasz na co dzień."
         }
       </p>
@@ -943,18 +949,22 @@ Nie pamiętasz hasła? Skorzystaj z opcji "Zapomniałem hasła" na stronie logow
 `;
 
   const introHtml = options?.complimentaryCompleted
-    ? `Przygotowaliśmy grupę dla ${safeChildName}. Zapis został zakończony (tryb bez umowy) — zaloguj się do portalu, aby zobaczyć szczegóły.`
+    ? `Przygotowaliśmy grupę dla ${safeChildName} — zaloguj się do portalu, aby zobaczyć szczegóły.`
     : ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
       ? `Przygotowaliśmy nową propozycję grupy dla ${safeChildName}. Zaakceptuj ją w portalu, uzupełnij dane i wygeneruj umowę oraz załączniki.`
       : `Przygotowaliśmy grupę dla ${safeChildName}. Zaloguj się do portalu, uzupełnij dane i wygeneruj umowę oraz załączniki.`;
   const introText = options?.complimentaryCompleted
-    ? `Przygotowaliśmy grupę dla ${childNameText}. Zapis został zakończony (tryb bez umowy) — zaloguj się do portalu, aby zobaczyć szczegóły:`
+    ? `Przygotowaliśmy grupę dla ${childNameText} — zaloguj się do portalu, aby zobaczyć szczegóły:`
     : ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
       ? `Przygotowaliśmy nową propozycję grupy dla ${childNameText}. Zaakceptuj ją w portalu, uzupełnij dane i wygeneruj umowę oraz załączniki.`
       : `Przygotowaliśmy grupę dla ${childNameText}. Zaloguj się do portalu, uzupełnij dane i wygeneruj umowę oraz załączniki.`;
 
   const pickupConsentText = options?.complimentaryCompleted
-    ? ""
+    ? `
+W portalu, w kroku Podsumowanie, możesz wygenerować zgodę na odebranie dziecka przez lektora.
+Dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia.
+Wydrukuj dokument i podpisz ręcznie — nie podpisuje się go elektronicznie.
+`
     : `
 Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować w dwóch egzemplarzach i podpisać własnoręcznie.
 - Jeden egzemplarz należy przekazać do placówki, z której dziecko będzie odbierane. (świetlica, wychowawca grupy)
@@ -1108,18 +1118,30 @@ ${
 `;
 
   const childCount = proposals.length;
-  const introPlural =
-    childCount === 1
+  const introPlural = options?.complimentaryCompleted
+    ? childCount === 1
+      ? "Przygotowaliśmy propozycję grupy dla Twojego dziecka"
+      : `Przygotowaliśmy propozycje grup dla ${childCount} dzieci`
+    : childCount === 1
       ? "Przygotowaliśmy propozycję grupy dla Twojego dziecka."
       : `Przygotowaliśmy propozycje grup dla ${childCount} dzieci.`;
   const introAction = options?.complimentaryCompleted
-    ? "Zapis został zakończony (tryb bez umowy) — zaloguj się do portalu, aby zobaczyć szczegóły."
+    ? "zaloguj się do portalu, aby zobaczyć szczegóły."
     : ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
       ? "Zaakceptuj je w portalu, uzupełnij dane i wygeneruj umowę oraz załączniki."
       : "Zaloguj się do portalu, uzupełnij dane i wygeneruj umowę oraz załączniki.";
+  const introFull = options?.complimentaryCompleted
+    ? `${introPlural} — ${introAction}`
+    : `${introPlural} ${introAction}`;
 
   const pickupConsentHtml = options?.complimentaryCompleted
-    ? ""
+    ? `
+      <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;color:${p.text};">
+        W portalu, w kroku <strong>Podsumowanie</strong>, możesz wygenerować zgodę na odebranie dziecka przez lektora.
+        Dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia.
+        Wydrukuj dokument i podpisz ręcznie — nie podpisuje się go elektronicznie.
+      </p>
+    `
     : `
       <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;color:${p.text};">
         Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować w dwóch egzemplarzach i podpisać własnoręcznie.
@@ -1131,7 +1153,11 @@ ${
     `;
 
   const pickupConsentText = options?.complimentaryCompleted
-    ? ""
+    ? `
+W portalu, w kroku Podsumowanie, możesz wygenerować zgodę na odebranie dziecka przez lektora.
+Dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia.
+Wydrukuj dokument i podpisz ręcznie — nie podpisuje się go elektronicznie.
+`
     : `
 Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować w dwóch egzemplarzach i podpisać własnoręcznie.
 - Jeden egzemplarz należy przekazać do placówki, z której dziecko będzie odbierane. (świetlica, wychowawca grupy)
@@ -1150,7 +1176,7 @@ Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, k
         : `Propozycje grup (${childCount} dzieci) - Harry English`,
     html: buildEmailShell({
       title: `Dzień dobry ${escapeHtmlForEmail(parentName)},`,
-      intro: `${introPlural} ${introAction}`,
+      intro: introFull,
       contentHtml: `
         ${pickupConsentHtml}
         ${proposalsHtml}
@@ -1163,7 +1189,7 @@ Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, k
     }),
     text: `Dzień dobry ${parentName},
 
-${introPlural} ${introAction}
+${introFull}
 ${pickupConsentText}
 ${proposalsText}
 ${credentialsText}

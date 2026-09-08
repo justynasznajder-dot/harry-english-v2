@@ -7,6 +7,7 @@ import {
 } from "@aws-sdk/client-s3";
 
 import type { ContractPdfFile } from "@/lib/contract-pdf";
+import { formatPersonName } from "@/lib/format-person-name";
 import { getR2Source, recordR2Usage, type R2Op, type R2Source } from "@/lib/r2-usage";
 
 export type { R2Source } from "@/lib/r2-usage";
@@ -124,9 +125,86 @@ export function sanitizeSchoolYearFolderName(name: string): string {
   return sanitized;
 }
 
+function sanitizeParentNamePart(raw: string): string {
+  return formatPersonName(String(raw ?? ""))
+    .replace(/[\\/]+/g, "-")
+    .replace(/\s+/g, " ")
+    .replace(/[^a-zA-Z0-9 ._\-ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+/g, "")
+    .trim();
+}
+
 /**
- * Legacy faktury: `{parentUserId}/{year}/faktury`
- * — folder klienta = `users.id` rodzica.
+ * Segment folderu rodzica: `Nazwisko Imię - {parentUserId}`.
+ */
+export function buildParentDocumentFolderSegment(params: {
+  parentUserId: string;
+  parentFirstName?: string | null;
+  parentLastName?: string | null;
+}): string {
+  const parentUserId = params.parentUserId.trim();
+  if (!parentUserId) throw new Error("Brak parentUserId do ścieżki R2");
+  if (parentUserId.includes("/") || parentUserId.includes("..")) {
+    throw new Error(`Nieprawidłowy parentUserId do ścieżki R2: ${parentUserId}`);
+  }
+
+  const last = sanitizeParentNamePart(params.parentLastName ?? "");
+  const first = sanitizeParentNamePart(params.parentFirstName ?? "");
+  const displayName = [last || "Rodzic", first].filter(Boolean).join(" ");
+  return `${displayName} - ${parentUserId}`;
+}
+
+/**
+ * `{schoolId}/{schoolYear}/{Nazwisko Imię - parentId}/{umowy|faktury}`
+ */
+export function buildSchoolDocumentR2Prefix(params: {
+  schoolId: string;
+  schoolYearName: string;
+  parentUserId: string;
+  kind: DocumentKind;
+  parentFirstName?: string | null;
+  parentLastName?: string | null;
+}): string {
+  const schoolId = params.schoolId.trim();
+  if (!schoolId) throw new Error("Brak schoolId do ścieżki R2");
+  if (schoolId.includes("/") || schoolId.includes("..")) {
+    throw new Error(`Nieprawidłowy schoolId do ścieżki R2: ${schoolId}`);
+  }
+  const yearFolder = sanitizeSchoolYearFolderName(params.schoolYearName);
+  const parentFolder = buildParentDocumentFolderSegment(params);
+  return `${schoolId}/${yearFolder}/${parentFolder}/${params.kind}`;
+}
+
+/** `{schoolId}/{schoolYear}/{Nazwisko Imię - parentId}/umowy` */
+export function buildSignedContractR2Prefix(params: {
+  schoolId: string;
+  parentUserId: string;
+  schoolYearName: string;
+  parentFirstName?: string | null;
+  parentLastName?: string | null;
+}): string {
+  return buildSchoolDocumentR2Prefix({
+    ...params,
+    kind: "umowy",
+  });
+}
+
+/** `{schoolId}/{schoolYear}/{Nazwisko Imię - parentId}/faktury` */
+export function buildInvoiceR2Prefix(params: {
+  schoolId: string;
+  schoolYearName: string;
+  parentUserId: string;
+  parentFirstName?: string | null;
+  parentLastName?: string | null;
+}): string {
+  return buildSchoolDocumentR2Prefix({
+    ...params,
+    kind: "faktury",
+  });
+}
+
+/**
+ * @deprecated Użyj `buildSchoolDocumentR2Prefix` — zostawione dla kompatybilności testów / starych call site'ów.
+ * Legacy: `{parentUserId}/{year}/faktury|umowy`
  */
 export function buildClientDocumentR2Prefix(params: {
   parentUserId: string;
@@ -141,30 +219,8 @@ export function buildClientDocumentR2Prefix(params: {
   return `${parentUserId}/${params.year}/${params.kind}`;
 }
 
-/** `{schoolId}/{parentUserId}/{schoolYearName}/umowy` */
-export function buildSignedContractR2Prefix(params: {
-  schoolId: string;
-  parentUserId: string;
-  schoolYearName: string;
-}): string {
-  const schoolId = params.schoolId.trim();
-  const parentUserId = params.parentUserId.trim();
-  if (!schoolId) throw new Error("Brak schoolId do ścieżki R2");
-  if (!parentUserId) throw new Error("Brak parentUserId do ścieżki R2");
-  const yearFolder = sanitizeSchoolYearFolderName(params.schoolYearName);
-  return `${schoolId}/${parentUserId}/${yearFolder}/umowy`;
-}
-
-/** `{parentUserId}/{year}/faktury` — bez zmian (na razie tylko umowy mają schoolId). */
-export function buildInvoiceR2Prefix(params: {
-  parentUserId: string;
-  issuedAt: Date;
-}): string {
-  return buildClientDocumentR2Prefix({
-    parentUserId: params.parentUserId,
-    year: params.issuedAt.getFullYear(),
-    kind: "faktury",
-  });
+function isDocumentKind(value: string): value is DocumentKind {
+  return value === "umowy" || value === "faktury";
 }
 
 /** Czy klucz R2 należy do folderu danego rodzica (umowy lub faktury). */
@@ -179,39 +235,63 @@ export function isParentDokumentyKeyAllowed(params: {
   if (params.key.includes("..")) return false;
 
   const schoolId = params.schoolId?.trim() || "";
+  const parts = params.key.split("/");
 
-  // Nowe umowy: {schoolId}/{parentId}/{schoolYear}/umowy/{file}.pdf
-  if (schoolId && (!params.kind || params.kind === "umowy")) {
-    const newPrefix = `${schoolId}/${parentUserId}/`;
-    if (params.key.startsWith(newPrefix)) {
-      const rest = params.key.slice(newPrefix.length);
-      const m = rest.match(/^[^/]+\/umowy\/[^/]+\.pdf$/i);
-      if (m) return true;
+  // Aktualna ścieżka: {schoolId}/{schoolYear}/{Nazwisko Imię - parentId}/{umowy|faktury}/{file}.pdf
+  if (schoolId && parts.length === 5 && parts[0] === schoolId) {
+    const parentFolder = parts[2] ?? "";
+    const kind = (parts[3] ?? "").toLowerCase();
+    if (
+      parentFolder.endsWith(` - ${parentUserId}`) &&
+      isDocumentKind(kind) &&
+      (!params.kind || params.kind === kind)
+    ) {
+      return true;
+    }
+  }
+
+  // Poprzedni format umów: {schoolId}/{parentId}/{schoolYear}/umowy/{file}.pdf
+  if (schoolId && (!params.kind || params.kind === "umowy") && parts.length === 5) {
+    if (
+      parts[0] === schoolId &&
+      parts[1] === parentUserId &&
+      parts[3]?.toLowerCase() === "umowy"
+    ) {
+      return true;
     }
   }
 
   // Legacy: {parentId}/{yyyy}/umowy|faktury/{file}.pdf
-  const legacyPrefix = `${parentUserId}/`;
-  if (!params.key.startsWith(legacyPrefix)) return false;
-  const rest = params.key.slice(legacyPrefix.length);
-  const m = rest.match(/^(\d{4})\/(umowy|faktury)\/[^/]+\.pdf$/i);
-  if (!m) return false;
-  if (params.kind && m[2].toLowerCase() !== params.kind) return false;
-  return true;
+  if (parts.length === 4 && parts[0] === parentUserId) {
+    const kind = (parts[2] ?? "").toLowerCase();
+    if (/^\d{4}$/.test(parts[1] ?? "") && isDocumentKind(kind)) {
+      if (params.kind && params.kind !== kind) return false;
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export async function storeInvoicePdfInR2(params: {
   parentUserId: string;
-  issuedAt: Date;
+  schoolId: string;
+  schoolYearName: string;
   filename: string;
   content: Buffer;
   source?: R2Source;
-  /** Ignorowane — ścieżka R2 jest po parentUserId, nie po szkole / nazwisku. */
-  schoolId?: string | null;
   parentFirstName?: string | null;
   parentLastName?: string | null;
+  /** @deprecated Nieużywane w ścieżce — zostawione dla kompatybilności call site'ów. */
+  issuedAt?: Date;
 }): Promise<string> {
-  const prefix = buildInvoiceR2Prefix(params);
+  const prefix = buildInvoiceR2Prefix({
+    schoolId: params.schoolId,
+    schoolYearName: params.schoolYearName,
+    parentUserId: params.parentUserId,
+    parentFirstName: params.parentFirstName,
+    parentLastName: params.parentLastName,
+  });
   const key = `${prefix}/${params.filename}`;
 
   await sendR2Command({
@@ -250,6 +330,8 @@ export async function storeSignedContractPdfsInR2(params: {
     schoolId: params.schoolId,
     parentUserId: params.parentUserId,
     schoolYearName: params.schoolYearName,
+    parentFirstName: params.parentFirstName,
+    parentLastName: params.parentLastName,
   });
   const uploadedKeys: string[] = [];
 
@@ -372,8 +454,9 @@ export async function listSignedContractPdfsForParent(params: {
   const schoolId = params.schoolId.trim();
   if (!parentUserId || !schoolId) return [];
 
-  const [newFiles, legacyFiles] = await Promise.all([
-    listR2ObjectsUnderPrefix(`${schoolId}/${parentUserId}/`, {
+  const [schoolFiles, legacyFiles] = await Promise.all([
+    // Aktualna ścieżka i poprzedni format ze schoolId.
+    listR2ObjectsUnderPrefix(`${schoolId}/`, {
       source: params.source,
     }),
     // Legacy `{parentId}/{yyyy}/umowy` — aż stare pliki znikną z bucketa.
@@ -383,7 +466,7 @@ export async function listSignedContractPdfsForParent(params: {
   ]);
 
   const byKey = new Map<string, R2StoredFile>();
-  for (const file of [...newFiles, ...legacyFiles]) {
+  for (const file of [...schoolFiles, ...legacyFiles]) {
     if (
       isParentDokumentyKeyAllowed({
         key: file.key,

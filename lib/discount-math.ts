@@ -70,6 +70,20 @@ export function applyDiscountsToAmount(
   return Math.round(result * 100) / 100;
 }
 
+/**
+ * Jeden wygrywający % na umowie (manager lub KDR/rodzeństwo) — bez sufitu szkoły
+ * (manager może mieć np. 50%). Zaokrąglenie jak applyDiscountsToAmount.
+ */
+export function applyWinningDiscountPercent(
+  baseAmount: number,
+  percent: number
+): number {
+  if (!Number.isFinite(baseAmount) || baseAmount <= 0) return 0;
+  const pct = clampDiscountPercent0to100(percent);
+  if (pct <= 0) return Math.round(baseAmount * 100) / 100;
+  return Math.round(baseAmount * (1 - pct / 100) * 100) / 100;
+}
+
 /** Ręczny % zniżki z profilu dziecka (0–100). null = brak / nieprawidłowy. */
 export function parseManualDiscountPercent(raw: unknown): number | null {
   if (raw == null || String(raw).trim() === "") return null;
@@ -159,7 +173,7 @@ function resolveSiblingPercent(
 /**
  * Wylicza efektywny % rabatu.
  *
- * - Rodzic z umową: KDR (10%) albo rodzeństwo (5%) — nie sumują się; rabat managera pomijany.
+ * - Rodzic z umową: rabaty się nie sumują — bierzemy najwyższy z: manager, KDR, rodzeństwo.
  * - Tryb bez umowy: manager + KDR + rodzeństwo (wszystkie zaznaczone się sumują).
  */
 export function resolveEffectiveDiscountPercent(
@@ -203,8 +217,7 @@ export function resolveEffectiveDiscountPercent(
   }
 
   // Umowa: KDR i rodzeństwo nie sumują się — bierzemy wyższy.
-  // Rabat managera na razie nie wchodzi do umowy (tylko KDR / rodzeństwo).
-  void managerPercent;
+  // Manager vs rodzinny: też max (bez sumowania); przy remisie wygrywa manager.
   const familyOrSiblingPercent = Math.max(kdrPercent, siblingPercent);
   const familyOrSiblingKey: DiscountKey | null =
     familyOrSiblingPercent <= 0
@@ -213,21 +226,26 @@ export function resolveEffectiveDiscountPercent(
         ? DISCOUNT_KEYS.LARGE_FAMILY_CARD
         : DISCOUNT_KEYS.SIBLING;
 
-  if (familyOrSiblingPercent <= 0) {
+  const percent = Math.max(managerPercent, familyOrSiblingPercent);
+  if (percent <= 0) {
     return {
       percent: 0,
-      managerPercent: 0,
+      managerPercent,
       familyOrSiblingPercent: 0,
       familyOrSiblingKey: null,
       source: "none",
     };
   }
+
+  const managerWins = managerPercent > 0 && managerPercent >= familyOrSiblingPercent;
   return {
-    percent: clampDiscountPercent0to100(familyOrSiblingPercent),
-    managerPercent: 0,
+    percent: clampDiscountPercent0to100(percent),
+    managerPercent,
     familyOrSiblingPercent,
     familyOrSiblingKey,
-    source: familyOrSiblingKey ?? "none",
+    source: managerWins
+      ? "manager"
+      : (familyOrSiblingKey ?? "none"),
   };
 }
 

@@ -1,5 +1,7 @@
 import {
   applyDiscountsToAmount,
+  applyWinningDiscountPercent,
+  DISCOUNT_KEYS,
   DISCOUNT_LABELS,
   type DiscountKey,
   type SchoolDiscountSettings,
@@ -17,7 +19,7 @@ export type ContractAmountChildBreakdown = {
 };
 
 export type ContractAmountDiscountBreakdown = {
-  key: DiscountKey;
+  key: DiscountKey | "MANAGER";
   label: string;
   percent: number;
 };
@@ -55,6 +57,35 @@ function baseAmountForPaymentType(
   return null;
 }
 
+function discountsFromWinningSource(
+  winningPercent: number,
+  winningSource: "manager" | DiscountKey | "none" | "stack" | null | undefined
+): ContractAmountDiscountBreakdown[] {
+  if (winningPercent <= 0) return [];
+  if (winningSource === "manager") {
+    return [
+      {
+        key: "MANAGER",
+        label: "Rabat przyznany przez szkołę",
+        percent: winningPercent,
+      },
+    ];
+  }
+  if (
+    winningSource === DISCOUNT_KEYS.LARGE_FAMILY_CARD ||
+    winningSource === DISCOUNT_KEYS.SIBLING
+  ) {
+    return [
+      {
+        key: winningSource,
+        label: DISCOUNT_LABELS[winningSource],
+        percent: winningPercent,
+      },
+    ];
+  }
+  return [{ key: "MANAGER", label: "Rabat", percent: winningPercent }];
+}
+
 export function buildContractAmountBreakdown(input: {
   paymentType: PaymentType;
   billingExempt: boolean;
@@ -62,12 +93,23 @@ export function buildContractAmountBreakdown(input: {
   discountSettings: SchoolDiscountSettings;
   children: ContractChildRateSnapshot[];
   frozenAt?: Date | string | null;
+  /**
+   * Wygrywający % na umowie (max manager vs KDR/rodzeństwo).
+   * Gdy podane — stosowane zamiast discountKeys (bez sufitu szkoły).
+   */
+  winningPercent?: number | null;
+  winningSource?: "manager" | DiscountKey | "none" | "stack" | null;
 }): ContractAmountBreakdown {
-  const discounts: ContractAmountDiscountBreakdown[] = input.discountKeys.map((key) => ({
-    key,
-    label: DISCOUNT_LABELS[key],
-    percent: input.discountSettings[key] ?? 0,
-  }));
+  const useWinning =
+    input.winningPercent != null && Number.isFinite(input.winningPercent);
+
+  const discounts: ContractAmountDiscountBreakdown[] = useWinning
+    ? discountsFromWinningSource(Number(input.winningPercent), input.winningSource)
+    : input.discountKeys.map((key) => ({
+        key,
+        label: DISCOUNT_LABELS[key],
+        percent: input.discountSettings[key] ?? 0,
+      }));
 
   const children: ContractAmountChildBreakdown[] = input.children.map((child) => ({
     child_id: child.child_id,
@@ -102,7 +144,9 @@ export function buildContractAmountBreakdown(input: {
   const final_total =
     base_total == null
       ? null
-      : applyDiscountsToAmount(base_total, input.discountKeys, input.discountSettings);
+      : useWinning
+        ? applyWinningDiscountPercent(base_total, Number(input.winningPercent))
+        : applyDiscountsToAmount(base_total, input.discountKeys, input.discountSettings);
 
   return {
     payment_type: input.paymentType,
@@ -149,12 +193,21 @@ export function recomputeFinalTotalFromBreakdown(
   }
   if (!hasAny) return null;
 
+  const rounded = roundMoney(baseTotal);
+  // Umowa: jeden wygrywający % (manager lub rodzinny) — bez cap szkoły.
+  if (breakdown.discounts.length === 1) {
+    return applyWinningDiscountPercent(rounded, breakdown.discounts[0].percent);
+  }
+  if (breakdown.discounts.length === 0) return rounded;
+
   const settings = {
     LARGE_FAMILY_CARD: 0,
     SIBLING: 0,
     maxPercent: 100,
     ...Object.fromEntries(breakdown.discounts.map((d) => [d.key, d.percent])),
   } as SchoolDiscountSettings;
-  const keys = breakdown.discounts.map((d) => d.key);
-  return applyDiscountsToAmount(roundMoney(baseTotal), keys, settings);
+  const keys = breakdown.discounts
+    .map((d) => d.key)
+    .filter((k): k is DiscountKey => k !== "MANAGER");
+  return applyDiscountsToAmount(rounded, keys, settings);
 }

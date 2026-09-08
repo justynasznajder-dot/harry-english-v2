@@ -4,6 +4,7 @@ import { formatIdCardNumber } from "@/lib/format-id-card-number";
 import {
   applyDiscountsToAmount,
   applyManualDiscountPercent,
+  applyWinningDiscountPercent,
   DISCOUNT_KEYS,
   getSchoolDiscountSettings,
   isComplimentaryForParent,
@@ -606,10 +607,16 @@ export function buildSingleChildAttachmentPlaceholders(
   };
 }
 
+type ContractTemplateKind =
+  | "CONTRACT"
+  | "CONTRACT_COMPANY"
+  | "ATTACHMENT_1"
+  | "ATTACHMENT_2";
+
 async function findContractTemplate(
   schoolId: string,
   schoolYearName: string,
-  kind: "CONTRACT" | "ATTACHMENT_1" | "ATTACHMENT_2" = "CONTRACT"
+  kind: ContractTemplateKind = "CONTRACT"
 ): Promise<{ id: string; content_html: string } | null> {
   const exact = await queryDb<{ id: string; content_html: string }>(
     `SELECT id, content_html
@@ -624,7 +631,7 @@ async function findContractTemplate(
   );
   if (exact.rows[0]) return exact.rows[0];
 
-  if (kind !== "CONTRACT") {
+  if (kind !== "CONTRACT" && kind !== "CONTRACT_COMPANY") {
     return (
       await queryDb<{ id: string; content_html: string }>(
         `SELECT id, content_html
@@ -637,6 +644,21 @@ async function findContractTemplate(
         [schoolId, kind]
       )
     ).rows[0] ?? null;
+  }
+
+  // Firma: najpierw CONTRACT_COMPANY, potem zwykła umowa (fallback).
+  if (kind === "CONTRACT_COMPANY") {
+    const companyAnyYear = await queryDb<{ id: string; content_html: string }>(
+      `SELECT id, content_html
+       FROM contract_templates
+       WHERE school_id = $1
+         AND active = TRUE
+         AND COALESCE(template_kind, 'CONTRACT') = 'CONTRACT_COMPANY'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [schoolId]
+    );
+    if (companyAnyYear.rows[0]) return companyAnyYear.rows[0];
   }
 
   return (
@@ -758,12 +780,12 @@ export async function generateParentContract(
   const effectiveHasSibling = hasLargeFamilyCard ? false : hasSiblingDeclared;
   const effectiveDiscount = resolveEffectiveDiscountPercent({
     mode: billingExempt ? "complimentary" : "contract",
-    managerPercent: null,
+    managerPercent: billingExempt ? null : child.discount_percent,
     hasLargeFamilyCard,
     hasSiblingDeclared: effectiveHasSibling,
     settings: discountSettings,
   });
-  // Flagi na umowie: które zniżki rodzinne weszły w kwotę.
+  // Flagi na umowie: które zniżki rodzinne rodzic zadeklarował (niezależnie od wygrywającego %).
   const discountLargeFamily = billingExempt
     ? hasLargeFamilyCard
     : effectiveDiscount.familyOrSiblingKey === DISCOUNT_KEYS.LARGE_FAMILY_CARD;
@@ -787,14 +809,12 @@ export async function generateParentContract(
   const amountBreakdown = buildContractAmountBreakdown({
     paymentType,
     billingExempt,
-    discountKeys: billingExempt
-      ? []
-      : effectiveDiscount.familyOrSiblingKey
-        ? [effectiveDiscount.familyOrSiblingKey]
-        : [],
+    discountKeys: [],
     discountSettings,
     children: childRates,
     frozenAt: null,
+    winningPercent: billingExempt ? 0 : effectiveDiscount.percent,
+    winningSource: billingExempt ? "none" : effectiveDiscount.source,
   });
   const amount = amountBreakdown.final_total;
 
@@ -823,7 +843,9 @@ export async function generateParentContract(
   const schoolYearName = activeSchoolYear?.name ?? "2025/2026";
   const schoolYearId = activeSchoolYear?.id ?? null;
 
-  const template = await findContractTemplate(schoolId, schoolYearName, "CONTRACT");
+  const contractKind: ContractTemplateKind =
+    billingType === "company" ? "CONTRACT_COMPANY" : "CONTRACT";
+  const template = await findContractTemplate(schoolId, schoolYearName, contractKind);
   if (!template) {
     throw new Error("Brak aktywnego szablonu umowy — skontaktuj się ze szkołą");
   }
@@ -1060,6 +1082,8 @@ export async function generateParentContract(
     school_year: contractSchoolYear,
     parent_full_name: parentFullName,
     parent_pesel_or_id: parentPeselOrId,
+    company_name: String(profile.company_name ?? "").trim(),
+    company_nip: String(profile.nip ?? "").trim(),
     parent_address: parentAddress,
     parent_phone: user.phone?.trim() ?? "",
     parent_email: user.email?.trim() ?? "",
@@ -1295,11 +1319,13 @@ export async function finalizeContractPricingAtSign(
     lesson_unit_price: string | null;
     monthly_unit_price: string | null;
     yearly_unit_price: string | null;
+    discount_percent: string | null;
   }>(
     `SELECT cc.child_id, ch.first_name, ch.last_name,
             cc.lesson_unit_price::text AS lesson_unit_price,
             cc.monthly_unit_price::text AS monthly_unit_price,
-            cc.yearly_unit_price::text AS yearly_unit_price
+            cc.yearly_unit_price::text AS yearly_unit_price,
+            ch.discount_percent::text AS discount_percent
      FROM contract_children cc
      JOIN children ch ON ch.id = cc.child_id
      WHERE cc.contract_id = $1
@@ -1320,22 +1346,32 @@ export async function finalizeContractPricingAtSign(
     await getSchoolDiscountSettings(contract.school_id)
   ) as SchoolDiscountSettings;
 
-  const discountKeys: DiscountKey[] = [];
-  if (!contract.billing_exempt) {
-    if (contract.discount_large_family) {
-      discountKeys.push(DISCOUNT_KEYS.LARGE_FAMILY_CARD);
-    } else if (contract.discount_sibling) {
-      discountKeys.push(DISCOUNT_KEYS.SIBLING);
+  // Max % managera spośród dzieci na umowie (umowy 1:1 → jedno dziecko).
+  let managerPercent: string | number | null = null;
+  for (const row of childrenRes.rows) {
+    if (row.discount_percent != null && String(row.discount_percent).trim() !== "") {
+      managerPercent = row.discount_percent;
+      break;
     }
   }
+
+  const effectiveDiscount = resolveEffectiveDiscountPercent({
+    mode: "contract",
+    managerPercent: contract.billing_exempt ? null : managerPercent,
+    hasLargeFamilyCard: contract.discount_large_family,
+    hasSiblingDeclared: contract.discount_sibling && !contract.discount_large_family,
+    settings: discountSettings,
+  });
 
   const breakdown = buildContractAmountBreakdown({
     paymentType,
     billingExempt: contract.billing_exempt,
-    discountKeys,
+    discountKeys: [],
     discountSettings,
     children,
     frozenAt,
+    winningPercent: contract.billing_exempt ? 0 : effectiveDiscount.percent,
+    winningSource: contract.billing_exempt ? "none" : effectiveDiscount.source,
   });
 
   const amount = contract.billing_exempt ? 0 : breakdown.final_total;
@@ -1353,12 +1389,12 @@ export async function finalizeContractPricingAtSign(
 }
 
 /**
- * Zapisuje stawki netto (po rabacie KDR/rodzeństwa z umowy) na `children.*_unit_price`.
+ * Zapisuje stawki netto (po wygrywającym rabacie umowy) na `children.*_unit_price`.
  * Wywoływać po enrollChildInGroup przy podpisie — enroll nadpisuje children stawkami brutto z contract_children.
  * Nie rusza discount_percent (zostaje % managera).
  *
  * Kolumna odpowiadająca payment_type = contracts.amount (1 dziecko na umowę).
- * Pozostałe dwie stawki: ten sam % rabatu na bazie z contract_children.
+ * Pozostałe dwie stawki: ten sam wygrywający % na bazie z contract_children.
  */
 export async function freezeSignedContractNetRatesOnChildren(
   contractId: string
@@ -1388,12 +1424,15 @@ export async function freezeSignedContractNetRatesOnChildren(
     lesson_unit_price: string | null;
     monthly_unit_price: string | null;
     yearly_unit_price: string | null;
+    discount_percent: string | null;
   }>(
     `SELECT cc.child_id,
             cc.lesson_unit_price::text AS lesson_unit_price,
             cc.monthly_unit_price::text AS monthly_unit_price,
-            cc.yearly_unit_price::text AS yearly_unit_price
+            cc.yearly_unit_price::text AS yearly_unit_price,
+            ch.discount_percent::text AS discount_percent
      FROM contract_children cc
+     JOIN children ch ON ch.id = cc.child_id
      WHERE cc.contract_id = $1
      ORDER BY cc.sort_order ASC`,
     [contractId]
@@ -1403,31 +1442,32 @@ export async function freezeSignedContractNetRatesOnChildren(
     await getSchoolDiscountSettings(contract.school_id)
   ) as SchoolDiscountSettings;
 
-  const discountKeys: DiscountKey[] = [];
-  if (!contract.billing_exempt) {
-    if (contract.discount_large_family) {
-      discountKeys.push(DISCOUNT_KEYS.LARGE_FAMILY_CARD);
-    } else if (contract.discount_sibling) {
-      discountKeys.push(DISCOUNT_KEYS.SIBLING);
-    }
-  }
-
   const paymentType = parsePaymentType(contract.payment_type);
   const contractAmount = contract.billing_exempt
     ? 0
     : parseNullableMoney(contract.amount);
   const singleChild = childrenRes.rows.length === 1;
 
-  const toNet = (raw: string | null): number | null => {
-    if (contract.billing_exempt) return 0;
-    const base = parseNullableMoney(raw);
-    if (base == null) return null;
-    if (discountKeys.length === 0) return base;
-    return applyDiscountsToAmount(base, discountKeys, discountSettings);
-  };
-
   let updated = 0;
   for (const row of childrenRes.rows) {
+    const effective = resolveEffectiveDiscountPercent({
+      mode: "contract",
+      managerPercent: contract.billing_exempt ? null : row.discount_percent,
+      hasLargeFamilyCard: contract.discount_large_family,
+      hasSiblingDeclared:
+        contract.discount_sibling && !contract.discount_large_family,
+      settings: discountSettings,
+    });
+    const winningPercent = contract.billing_exempt ? 0 : effective.percent;
+
+    const toNet = (raw: string | null): number | null => {
+      if (contract.billing_exempt) return 0;
+      const base = parseNullableMoney(raw);
+      if (base == null) return null;
+      if (winningPercent <= 0) return base;
+      return applyWinningDiscountPercent(base, winningPercent);
+    };
+
     let lesson = toNet(row.lesson_unit_price);
     let monthly = toNet(row.monthly_unit_price);
     let yearly = toNet(row.yearly_unit_price);

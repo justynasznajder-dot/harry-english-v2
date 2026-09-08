@@ -94,6 +94,8 @@ async function main(): Promise<void> {
         schoolYearName,
         signedAt: row.signed_at,
         pdfFiles,
+        parentFirstName: row.first_name,
+        parentLastName: row.last_name,
         source: "script.backfill-contracts",
       });
 
