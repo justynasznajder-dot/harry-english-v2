@@ -8,6 +8,7 @@ import {
   setEnrollmentSiblingDiscount,
   setParentLargeFamilyCard,
 } from "@/lib/parent-profile-discount";
+import { isComplimentaryForParent } from "@/lib/school-discounts";
 
 function parseOptionalBool(raw: unknown): boolean | undefined {
   if (raw === undefined) return undefined;
@@ -18,7 +19,8 @@ function parseOptionalBool(raw: unknown): boolean | undefined {
  * Manager ustawia te same flagi co rodzic w panelu zapisów:
  * - KDR → parent_profiles.discount_large_family (+ staging na enrollment_requests)
  * - rodzeństwo → enrollment_requests.enrolling_multiple_children
- * Rabaty się nie sumują — przy włączeniu jednego czyścimy drugie.
+ * Tryb z umową: rabaty się nie sumują — przy włączeniu jednego czyścimy drugie.
+ * Tryb bez umowy: KDR + rodzeństwo mogą być równocześnie (sumują się z % managera).
  */
 export async function PATCH(request: NextRequest) {
   try {
@@ -62,11 +64,18 @@ export async function PATCH(request: NextRequest) {
         ).rows[0]?.school_id ?? schoolScope
       : schoolScope;
 
-    // Mutual exclusion jak u rodzica: KDR wygrywa nad rodzeństwem.
+    const complimentary = await isComplimentaryForParent(parentSchoolId, {
+      parentId: resolvedParentId,
+      parentEmail: parentEmail || null,
+    });
+
     let nextKdr = discountLargeFamily;
     let nextSibling = enrollingMultipleChildren;
-    if (nextKdr === true) nextSibling = false;
-    if (nextSibling === true) nextKdr = false;
+    // Tryb z umową: wzajemne wykluczanie jak u rodzica.
+    if (!complimentary) {
+      if (nextKdr === true) nextSibling = false;
+      if (nextSibling === true) nextKdr = false;
+    }
 
     if (resolvedParentId) {
       if (nextKdr !== undefined) {
@@ -82,7 +91,7 @@ export async function PATCH(request: NextRequest) {
             discountLargeFamily: nextKdr,
           });
         }
-        if (nextKdr === true) {
+        if (!complimentary && nextKdr === true) {
           await clearEnrollmentSiblingDiscount({
             schoolId: parentSchoolId,
             parentUserId: resolvedParentId,
@@ -92,7 +101,7 @@ export async function PATCH(request: NextRequest) {
       }
 
       if (nextSibling !== undefined) {
-        if (nextSibling === true) {
+        if (!complimentary && nextSibling === true) {
           await setParentLargeFamilyCard({
             schoolId: parentSchoolId,
             parentUserId: resolvedParentId,
@@ -119,6 +128,7 @@ export async function PATCH(request: NextRequest) {
         parentUserId: resolvedParentId,
         discountLargeFamily: nextKdr,
         enrollingMultipleChildren: nextSibling,
+        complimentary,
       });
     }
 
@@ -140,7 +150,7 @@ export async function PATCH(request: NextRequest) {
         parentEmail,
         discountLargeFamily: nextKdr,
       });
-      if (nextKdr === true) {
+      if (!complimentary && nextKdr === true) {
         await clearEnrollmentSiblingDiscount({
           schoolId: schoolScope,
           parentEmail,
@@ -149,7 +159,7 @@ export async function PATCH(request: NextRequest) {
     }
 
     if (nextSibling !== undefined) {
-      if (nextSibling === true) {
+      if (!complimentary && nextSibling === true) {
         await setEnrollmentPendingLargeFamilyCard({
           schoolId: schoolScope,
           parentEmail,
@@ -176,6 +186,7 @@ export async function PATCH(request: NextRequest) {
       parentUserId: null,
       discountLargeFamily: nextKdr,
       enrollingMultipleChildren: nextSibling,
+      complimentary,
     });
   } catch (error) {
     console.error("Admin enrollment parent-discount PATCH error:", error);

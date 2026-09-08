@@ -180,6 +180,58 @@ function childHasMissingEnrollmentPrices(
   );
 }
 
+type ReportedChildRow = {
+  child: EnrollmentParentRow['children'][number];
+  parent: EnrollmentParentRow;
+};
+
+/** Klucz lokalizacji z preferencji zgłoszenia (id albo nazwa). */
+function reportedChildLocationKey(
+  child: Pick<EnrollmentParentRow['children'][number], 'preferredLocationId' | 'preferredLocation'>,
+): string {
+  const id = (child.preferredLocationId ?? '').trim();
+  if (id) return `id:${id}`;
+  const name = (child.preferredLocation ?? '').trim();
+  if (name) return `name:${name.toLowerCase()}`;
+  return '__none__';
+}
+
+function reportedChildLocationLabel(
+  child: Pick<EnrollmentParentRow['children'][number], 'preferredLocationId' | 'preferredLocation'>,
+): string {
+  const name = (child.preferredLocation ?? '').trim();
+  if (name) return name;
+  const id = (child.preferredLocationId ?? '').trim();
+  if (id) return `Lokalizacja (${id.slice(0, 8)}…)`;
+  return 'Bez lokalizacji';
+}
+
+/** Normalizacja daty urodzenia do YYYY-MM-DD (sortowanie / grupowanie). */
+function normalizeBirthDateKey(raw: string | null | undefined): string {
+  const text = String(raw ?? '').trim();
+  if (!text) return '';
+  const iso = text.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (iso) return iso[1];
+  const d = new Date(text);
+  if (Number.isNaN(d.getTime())) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** Rok urodzenia do grupowania (YYYY). */
+function normalizeBirthYearKey(raw: string | null | undefined): string {
+  const iso = normalizeBirthDateKey(raw);
+  if (!iso) return '';
+  return iso.slice(0, 4);
+}
+
+function formatBirthYearLabel(yearKey: string): string {
+  if (!yearKey) return 'Brak daty urodzenia';
+  return `Rok ${yearKey}`;
+}
+
 export type EnrollmentAdminPanelProps = {
   pushToast: (kind: 'success' | 'error', message: string) => void;
   parents: EnrollmentParentRow[];
@@ -205,6 +257,12 @@ export default function EnrollmentAdminPanel({
     () => new Set(),
   );
   const [unassignedMissingPricesOnly, setUnassignedMissingPricesOnly] = useState(false);
+  /** Filtr lokalizacji w widoku „Zgłoszone dzieci”. */
+  const [reportedChildrenLocationKey, setReportedChildrenLocationKey] = useState('');
+  /** '' = wszystkie, assigned / unassigned — po proposedGroupId. */
+  const [reportedChildrenGroupFilter, setReportedChildrenGroupFilter] = useState<
+    '' | 'assigned' | 'unassigned'
+  >('');
   const [proposalModalParentId, setProposalModalParentId] = useState<string | null>(null);
   const [submittingProposalRequestId, setSubmittingProposalRequestId] = useState<string | null>(null);
   const [rejectingParentResignationId, setRejectingParentResignationId] = useState<string | null>(
@@ -615,9 +673,105 @@ export default function EnrollmentAdminPanel({
     return { sections, assignedCount, totalCount: assignedCount + unassigned.length };
   }, [parents, groups]);
 
+  /** Widok „Zgłoszone dzieci”: lokalizacje + grupy po dacie urodzenia. */
+  const reportedChildrenView = useMemo(() => {
+    const allRows: ReportedChildRow[] = [];
+    for (const parent of parents) {
+      for (const child of parent.children) {
+        allRows.push({ child, parent });
+      }
+    }
+
+    const locationMap = new Map<string, { key: string; label: string; count: number }>();
+    for (const row of allRows) {
+      const key = reportedChildLocationKey(row.child);
+      const existing = locationMap.get(key);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        locationMap.set(key, {
+          key,
+          label: reportedChildLocationLabel(row.child),
+          count: 1,
+        });
+      }
+    }
+
+    const locations = [...locationMap.values()].sort((a, b) => {
+      if (a.key === '__none__') return 1;
+      if (b.key === '__none__') return -1;
+      return a.label.localeCompare(b.label, 'pl');
+    });
+
+    const selectedKey = reportedChildrenLocationKey;
+    let rowsForLocation = selectedKey
+      ? allRows.filter((row) => reportedChildLocationKey(row.child) === selectedKey)
+      : [];
+
+    const assignedInLocation = rowsForLocation.filter((row) =>
+      Boolean((row.child.proposedGroupId ?? '').trim()),
+    ).length;
+    const unassignedInLocation = rowsForLocation.length - assignedInLocation;
+
+    if (reportedChildrenGroupFilter === 'assigned') {
+      rowsForLocation = rowsForLocation.filter((row) =>
+        Boolean((row.child.proposedGroupId ?? '').trim()),
+      );
+    } else if (reportedChildrenGroupFilter === 'unassigned') {
+      rowsForLocation = rowsForLocation.filter(
+        (row) => !Boolean((row.child.proposedGroupId ?? '').trim()),
+      );
+    }
+
+    const groupNameById = new Map(groups.map((g) => [g.id, g.name]));
+
+    const byBirthYear = new Map<string, ReportedChildRow[]>();
+    for (const row of rowsForLocation) {
+      const yearKey = normalizeBirthYearKey(row.child.birthDate) || '__none__';
+      const list = byBirthYear.get(yearKey) ?? [];
+      list.push(row);
+      byBirthYear.set(yearKey, list);
+    }
+
+    const yearKeys = [...byBirthYear.keys()].sort((a, b) => {
+      if (a === '__none__') return 1;
+      if (b === '__none__') return -1;
+      return a.localeCompare(b); // starsze roczniki najpierw
+    });
+
+    const sections = yearKeys.map((yearKey) => {
+      const rows = byBirthYear.get(yearKey) ?? [];
+      rows.sort((a, b) => {
+        const birthA = normalizeBirthDateKey(a.child.birthDate);
+        const birthB = normalizeBirthDateKey(b.child.birthDate);
+        if (birthA && birthB && birthA !== birthB) return birthA.localeCompare(birthB);
+        const last = (a.child.lastName ?? '').localeCompare(b.child.lastName ?? '', 'pl');
+        if (last !== 0) return last;
+        return (a.child.firstName ?? '').localeCompare(b.child.firstName ?? '', 'pl');
+      });
+      return {
+        key: yearKey,
+        title: formatBirthYearLabel(yearKey === '__none__' ? '' : yearKey),
+        rows,
+      };
+    });
+
+    return {
+      totalCount: allRows.length,
+      locations,
+      selectedKey,
+      sections,
+      selectedCount: rowsForLocation.length,
+      assignedInLocation,
+      unassignedInLocation,
+      groupNameById,
+    };
+  }, [parents, groups, reportedChildrenLocationKey, reportedChildrenGroupFilter]);
+
   const renderList = () => {
     const isPipeline = enrollmentStatusFilter === 'pipeline';
     const isByGroupPrices = enrollmentStatusFilter === 'by-group-prices';
+    const isReportedChildren = enrollmentStatusFilter === 'by-reported-children';
     const studentQuery = studentNameSearch.trim().toLowerCase();
     const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
     const filteredEnrollmentRows = enrollmentRows
@@ -645,6 +799,26 @@ export default function EnrollmentAdminPanel({
 
     const filteredByGroupSections = isByGroupPrices
       ? childrenByProposedGroup.sections
+          .map((section) => {
+            if (!studentQuery) return section;
+            const rows = section.rows.filter(({ child, parent }) => {
+              const first = (child.firstName ?? '').toLowerCase();
+              const last = (child.lastName ?? '').toLowerCase();
+              const parentName = `${parent.firstName ?? ''} ${parent.lastName ?? ''}`.toLowerCase();
+              return (
+                first.includes(studentQuery) ||
+                last.includes(studentQuery) ||
+                `${first} ${last}`.includes(studentQuery) ||
+                parentName.includes(studentQuery)
+              );
+            });
+            return { ...section, rows };
+          })
+          .filter((section) => section.rows.length > 0)
+      : [];
+
+    const filteredReportedSections = isReportedChildren
+      ? reportedChildrenView.sections
           .map((section) => {
             if (!studentQuery) return section;
             const rows = section.rows.filter(({ child, parent }) => {
@@ -715,7 +889,18 @@ export default function EnrollmentAdminPanel({
           >
             Grupy i ceny ({childrenByProposedGroup.assignedCount})
           </button>
-          {!isPipeline && !isByGroupPrices && (
+          <button
+            type="button"
+            onClick={() => setEnrollmentStatusFilter('by-reported-children')}
+            className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+              isReportedChildren
+                ? 'border-[#0f6e56] bg-[#0f6e56] text-white'
+                : 'border-emerald-200 bg-white text-zinc-700'
+            }`}
+          >
+            Zgłoszone dzieci ({reportedChildrenView.totalCount})
+          </button>
+          {!isPipeline && !isByGroupPrices && !isReportedChildren && (
             <button
               type="button"
               disabled={exportingList || filteredEnrollmentRows.length === 0}
@@ -943,6 +1128,134 @@ export default function EnrollmentAdminPanel({
               </div>
             )}
           </div>
+        ) : isReportedChildren ? (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="flex min-w-[220px] flex-col gap-1 text-xs font-medium text-zinc-600">
+                Lokalizacja
+                <select
+                  className="rounded-xl border border-emerald-200 px-3 py-2 text-sm text-zinc-900"
+                  value={reportedChildrenLocationKey}
+                  onChange={(e) => setReportedChildrenLocationKey(e.target.value)}
+                >
+                  <option value="">Wybierz lokalizację…</option>
+                  {reportedChildrenView.locations.map((loc) => (
+                    <option key={loc.key} value={loc.key}>
+                      {loc.label} ({loc.count})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {reportedChildrenLocationKey ? (
+                <div className="flex flex-wrap items-center gap-2 pb-0.5">
+                  {(
+                    [
+                      { value: '' as const, label: 'Wszystkie', count: reportedChildrenView.assignedInLocation + reportedChildrenView.unassignedInLocation },
+                      { value: 'unassigned' as const, label: 'Nieprzypisani do grupy', count: reportedChildrenView.unassignedInLocation },
+                      { value: 'assigned' as const, label: 'Przypisani do grupy', count: reportedChildrenView.assignedInLocation },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.value || 'all-groups'}
+                      type="button"
+                      onClick={() => setReportedChildrenGroupFilter(opt.value)}
+                      className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                        reportedChildrenGroupFilter === opt.value
+                          ? 'border-[#0f6e56] bg-[#0f6e56] text-white'
+                          : 'border-emerald-200 bg-white text-zinc-700'
+                      }`}
+                    >
+                      {opt.label} ({opt.count})
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            {reportedChildrenLocationKey ? (
+              <p className="text-sm text-zinc-600">
+                {filteredReportedSections.reduce((s, sec) => s + sec.rows.length, 0)} dzieci ·
+                pogrupowane po roku urodzenia
+              </p>
+            ) : (
+              <p className="text-sm text-zinc-500">
+                Wybierz lokalizację, żeby zobaczyć listę dzieci.
+              </p>
+            )}
+            {!reportedChildrenLocationKey ? (
+              <p className="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-8 text-center text-sm text-zinc-600">
+                Wybierz lokalizację powyżej
+              </p>
+            ) : filteredReportedSections.length === 0 ? (
+              <p className="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-8 text-center text-sm text-zinc-600">
+                {studentQuery
+                  ? 'Brak dzieci dla podanego wyszukiwania'
+                  : reportedChildrenGroupFilter === 'assigned'
+                    ? 'Brak dzieci przypisanych do grupy w tej lokalizacji'
+                    : reportedChildrenGroupFilter === 'unassigned'
+                      ? 'Brak dzieci bez grupy w tej lokalizacji'
+                      : 'Brak dzieci w tej lokalizacji'}
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {filteredReportedSections.map((section) => (
+                  <div
+                    key={section.key}
+                    className="overflow-hidden rounded-xl border border-emerald-100 bg-white"
+                  >
+                    <div className="flex items-center justify-between gap-3 border-b border-emerald-100 bg-emerald-50/40 px-4 py-3">
+                      <p className="font-semibold text-zinc-900">{section.title}</p>
+                      <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-zinc-600 ring-1 ring-emerald-100">
+                        {section.rows.length}
+                      </span>
+                    </div>
+                    <ul className="divide-y divide-emerald-100 px-4">
+                      {section.rows.map(({ child, parent }) => {
+                        const badge = resolveEnrollmentListBadge(child);
+                        const groupId = (child.proposedGroupId ?? '').trim();
+                        const groupName = groupId
+                          ? reportedChildrenView.groupNameById.get(groupId) ??
+                            `Nieznana grupa (${groupId.slice(0, 8)}…)`
+                          : null;
+                        return (
+                          <li
+                            key={child.requestId}
+                            className="grid grid-cols-1 items-center gap-x-4 gap-y-2 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
+                          >
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-zinc-900">
+                                {child.firstName} {child.lastName}
+                              </p>
+                              <p className="mt-0.5 text-xs text-zinc-500">
+                                Rodzic:{' '}
+                                <button
+                                  type="button"
+                                  className="font-medium text-[#0f6e56] underline-offset-2 hover:underline"
+                                  onClick={() => openProposalModal(parent)}
+                                >
+                                  {parent.firstName} {parent.lastName}
+                                </button>
+                                {parent.email ? ` · ${parent.email}` : ''}
+                              </p>
+                            </div>
+                            <p className="min-w-0 text-left text-sm text-zinc-700">
+                              <span className="font-medium text-zinc-900">
+                                {groupName ?? 'nieprzypisana'}
+                              </span>
+                            </p>
+                            <span
+                              className={`${ENROLLMENT_STATUS_BADGE_BASE} ${badge.colorClass} justify-self-start sm:justify-self-end`}
+                            >
+                              {badge.label}
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         ) : enrollmentRows.length === 0 ? (
           <EmptyDataPanel title="Zgłoszenia" />
         ) : filteredEnrollmentRows.length === 0 ? (
@@ -1081,85 +1394,113 @@ export default function EnrollmentAdminPanel({
                       jednorazową i ratalną — widoczne w panelu rodzica; za zajęcia i % zniżki
                       opcjonalne. Grupę możesz przypisać później.
                     </p>
-                    {!proposalParentIsComplimentary && (
-                      <div className="mt-3 space-y-2">
-                        <p className="text-xs text-zinc-500">
-                          Rabaty jak u rodzica — nie sumują się (najwyższy: szkoła / KDR{' '}
-                          {discountSettings.LARGE_FAMILY_CARD}% / rodzeństwo{' '}
-                          {discountSettings.SIBLING}%). Po pierwszym logowaniu rodzic widzi
-                          zaznaczone opcje i naliczone rabaty.
-                        </p>
-                        <label
-                          className={`inline-flex items-center gap-2 text-sm ${
-                            Boolean(proposalParent.enrollingMultipleChildren)
-                              ? 'text-zinc-400'
-                              : 'text-zinc-800'
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={
-                              Boolean(proposalParent.discountLargeFamily) &&
-                              !Boolean(proposalParent.enrollingMultipleChildren)
-                            }
-                            disabled={
-                              savingParentDiscountId ===
-                                (proposalParent.parentUserId ?? proposalParent.id) ||
-                              Boolean(proposalParent.enrollingMultipleChildren) ||
-                              (!(proposalParent.email ?? '').trim() &&
-                                !(proposalParent.parentUserId ?? '').trim())
-                            }
-                            onChange={(e) => {
+                    <div className="mt-3 space-y-2">
+                      <p className="text-xs text-zinc-500">
+                        {proposalParentIsComplimentary ? (
+                          <>
+                            Tryb bez umowy — rabaty się sumują: % managera + KDR{' '}
+                            {discountSettings.LARGE_FAMILY_CARD}% + rodzeństwo{' '}
+                            {discountSettings.SIBLING}%.
+                          </>
+                        ) : (
+                          <>
+                            Rabaty jak u rodzica — nie sumują się (najwyższy: szkoła / KDR{' '}
+                            {discountSettings.LARGE_FAMILY_CARD}% / rodzeństwo{' '}
+                            {discountSettings.SIBLING}%). Po pierwszym logowaniu rodzic widzi
+                            zaznaczone opcje i naliczone rabaty.
+                          </>
+                        )}
+                      </p>
+                      <label
+                        className={`inline-flex items-center gap-2 text-sm ${
+                          !proposalParentIsComplimentary &&
+                          Boolean(proposalParent.enrollingMultipleChildren)
+                            ? 'text-zinc-400'
+                            : 'text-zinc-800'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={
+                            proposalParentIsComplimentary
+                              ? Boolean(proposalParent.discountLargeFamily)
+                              : Boolean(proposalParent.discountLargeFamily) &&
+                                !Boolean(proposalParent.enrollingMultipleChildren)
+                          }
+                          disabled={
+                            savingParentDiscountId ===
+                              (proposalParent.parentUserId ?? proposalParent.id) ||
+                            (!proposalParentIsComplimentary &&
+                              Boolean(proposalParent.enrollingMultipleChildren)) ||
+                            (!(proposalParent.email ?? '').trim() &&
+                              !(proposalParent.parentUserId ?? '').trim())
+                          }
+                          onChange={(e) => {
+                            if (proposalParentIsComplimentary) {
                               void saveParentDiscounts(proposalParent, {
                                 discountLargeFamily: e.target.checked,
-                                enrollingMultipleChildren: e.target.checked
-                                  ? false
-                                  : Boolean(proposalParent.enrollingMultipleChildren),
                               });
-                            }}
-                          />
-                          Karta Dużej Rodziny ({discountSettings.LARGE_FAMILY_CARD}%)
-                        </label>
-                        <label
-                          className={`flex items-center gap-2 text-sm ${
-                            Boolean(proposalParent.discountLargeFamily)
-                              ? 'text-zinc-400'
-                              : 'text-zinc-800'
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={
-                              Boolean(proposalParent.enrollingMultipleChildren) &&
-                              !Boolean(proposalParent.discountLargeFamily)
+                              return;
                             }
-                            disabled={
-                              savingParentDiscountId ===
-                                (proposalParent.parentUserId ?? proposalParent.id) ||
-                              Boolean(proposalParent.discountLargeFamily) ||
-                              (!(proposalParent.email ?? '').trim() &&
-                                !(proposalParent.parentUserId ?? '').trim())
-                            }
-                            onChange={(e) => {
+                            void saveParentDiscounts(proposalParent, {
+                              discountLargeFamily: e.target.checked,
+                              enrollingMultipleChildren: e.target.checked
+                                ? false
+                                : Boolean(proposalParent.enrollingMultipleChildren),
+                            });
+                          }}
+                        />
+                        Karta Dużej Rodziny ({discountSettings.LARGE_FAMILY_CARD}%)
+                      </label>
+                      <label
+                        className={`flex items-center gap-2 text-sm ${
+                          !proposalParentIsComplimentary &&
+                          Boolean(proposalParent.discountLargeFamily)
+                            ? 'text-zinc-400'
+                            : 'text-zinc-800'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={
+                            proposalParentIsComplimentary
+                              ? Boolean(proposalParent.enrollingMultipleChildren)
+                              : Boolean(proposalParent.enrollingMultipleChildren) &&
+                                !Boolean(proposalParent.discountLargeFamily)
+                          }
+                          disabled={
+                            savingParentDiscountId ===
+                              (proposalParent.parentUserId ?? proposalParent.id) ||
+                            (!proposalParentIsComplimentary &&
+                              Boolean(proposalParent.discountLargeFamily)) ||
+                            (!(proposalParent.email ?? '').trim() &&
+                              !(proposalParent.parentUserId ?? '').trim())
+                          }
+                          onChange={(e) => {
+                            if (proposalParentIsComplimentary) {
                               void saveParentDiscounts(proposalParent, {
                                 enrollingMultipleChildren: e.target.checked,
-                                discountLargeFamily: e.target.checked
-                                  ? false
-                                  : Boolean(proposalParent.discountLargeFamily),
                               });
-                            }}
-                          />
-                          Więcej niż jedno dziecko ({discountSettings.SIBLING}%)
-                        </label>
-                        {!(proposalParent.parentUserId ?? '').trim() &&
-                          Boolean((proposalParent.email ?? '').trim()) && (
-                            <p className="text-xs text-zinc-500">
-                              Zapis na zgłoszeniu; po utworzeniu konta rodzic zobaczy to przy
-                              pierwszym logowaniu.
-                            </p>
-                          )}
-                      </div>
-                    )}
+                              return;
+                            }
+                            void saveParentDiscounts(proposalParent, {
+                              enrollingMultipleChildren: e.target.checked,
+                              discountLargeFamily: e.target.checked
+                                ? false
+                                : Boolean(proposalParent.discountLargeFamily),
+                            });
+                          }}
+                        />
+                        Więcej niż jedno dziecko ({discountSettings.SIBLING}%)
+                      </label>
+                      {!(proposalParent.parentUserId ?? '').trim() &&
+                        Boolean((proposalParent.email ?? '').trim()) && (
+                          <p className="text-xs text-zinc-500">
+                            Zapis na zgłoszeniu; po utworzeniu konta rodzic zobaczy to przy
+                            pierwszym logowaniu.
+                          </p>
+                        )}
+                    </div>
                   </div>
                   {proposalParentIsComplimentary && (
                     <p className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
