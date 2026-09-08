@@ -57,7 +57,8 @@ export const transporter = nodemailer.createTransport({
 });
 
 const BRAND_YELLOW = "#ffc94a";
-const BRAND_FONT = "Geist, Arial, Helvetica, sans-serif";
+/** Tylko web-safe — Geist nie jest dostępny w klientach poczty i powoduje niespójne fallbacki. */
+const BRAND_FONT = "Arial, Helvetica, sans-serif";
 const EMAIL_DIVIDER_HEIGHT = 5;
 const EMAIL_CARD_BORDER_WIDTH = 1;
 const FACEBOOK_URL = "https://www.facebook.com/Zyrafa.Harry/";
@@ -221,11 +222,11 @@ function emailInsetCellOpen(palette: EmailPalette = getEmailPalette()): string {
 }
 
 function buildEmailTitleBlock(title: string, palette: EmailPalette): string {
-  return `<h1 style="margin:0 0 12px 0;font-size:24px;line-height:1.3;font-weight:700;color:${palette.title};">${title}</h1>`;
+  return `<h1 style="margin:0 0 12px 0;font-family:${BRAND_FONT};font-size:24px;line-height:1.3;font-weight:700;color:${palette.title};">${title}</h1>`;
 }
 
 function buildEmailIntroBlock(intro: string, palette: EmailPalette): string {
-  return `<p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;color:${palette.text};">${intro}</p>`;
+  return `<p style="margin:0 0 16px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${palette.text};">${intro}</p>`;
 }
 
 function emailCtaButton(href: string, label: string): string {
@@ -252,7 +253,17 @@ function buildEmailHeadBlock(palette: EmailPalette): string {
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="x-apple-disable-message-reformatting" />
     <style type="text/css">
-      body, table, td, div, p, h1, h2, h3, span, a, li { -webkit-text-size-adjust: 100%; }
+      body, table, td, div, p, h1, h2, h3, span, a, li, ul, strong {
+        -webkit-text-size-adjust: 100%;
+        font-family: ${BRAND_FONT};
+      }
+      body, p, li, td, div, span, a {
+        font-weight: 400;
+      }
+      h1, h2, h3, strong {
+        font-family: ${BRAND_FONT};
+        font-weight: 700;
+      }
       ${buildEmailBodyLinkStylesCss(palette.link)}
     </style>
   </head>`;
@@ -304,7 +315,7 @@ export function buildEmailShell(params: {
   return `<!DOCTYPE html>
 <html lang="pl">
 ${buildEmailHeadBlock(p)}
-  <body class="body" bgcolor="${p.canvas}" style="margin:0;padding:0;${emailSolidCellStyle(p.canvas, p.text)}">
+  <body class="body" bgcolor="${p.canvas}" style="margin:0;padding:0;font-family:${BRAND_FONT};font-weight:400;${emailSolidCellStyle(p.canvas, p.text)}">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${p.canvas}" style="border-collapse:collapse;${emailSolidCellStyle(p.canvas)}">
       <tr>
         <td align="center" bgcolor="${p.canvas}" style="padding:24px 12px;${emailSolidCellStyle(p.canvas)}">
@@ -325,7 +336,7 @@ ${buildEmailHeadBlock(p)}
             </tr>
             ${emailDividerRow(p)}
             <tr>
-              <td bgcolor="${p.content}" style="${emailSolidCellStyle(p.content, p.text)}padding:24px 22px 18px 22px;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;">
+              <td bgcolor="${p.content}" style="${emailSolidCellStyle(p.content, p.text)}padding:24px 22px 18px 22px;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;">
                 ${buildEmailTitleBlock(params.title, p)}
                 ${params.intro ? buildEmailIntroBlock(params.intro, p) : ""}
                 ${params.contentHtml}
@@ -333,7 +344,7 @@ ${buildEmailHeadBlock(p)}
             </tr>
             ${emailDividerRow(p)}
             <tr>
-              <td bgcolor="${p.outer}" style="${emailSolidCellStyle(p.outer)}padding:22px 22px 24px 22px;font-family:${BRAND_FONT};font-size:13px;line-height:1.6;color:${p.text};">
+              <td bgcolor="${p.outer}" style="${emailSolidCellStyle(p.outer)}padding:22px 22px 24px 22px;font-family:${BRAND_FONT};font-size:13px;line-height:1.6;font-weight:400;color:${p.text};">
                 ${footer}
               </td>
             </tr>
@@ -970,31 +981,30 @@ export async function sendProposalEmail(
 
   const pickupConsentHtml = options?.complimentaryCompleted
     ? `
-      <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;color:${p.text};">
+      <p style="margin:0 0 12px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
         W portalu, w kroku <strong>Podsumowanie</strong>, możesz wygenerować zgodę na odebranie dziecka przez lektora.
         Dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia.
         Wydrukuj dokument i podpisz ręcznie — nie podpisuje się go elektronicznie.
       </p>
     `
     : `
-      <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;color:${p.text};">
-        Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować w dwóch egzemplarzach i podpisać własnoręcznie.
+      <p style="margin:0 0 12px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
+        Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować, podpisać własnoręcznie i oddać w placówce przed pierwszymi zajęciami (świetlica / wychowawca grupy przedszkolnej).
       </p>
-      <ul style="margin:0 0 16px 18px;padding:0;font-size:15px;line-height:1.6;color:${p.text};">
-        <li>Jeden egzemplarz należy przekazać do placówki, z której dziecko będzie odbierane. (świetlica, wychowawca grupy)</li>
-        <li>Drugi egzemplarz należy przekazać lektorowi</li>
-      </ul>
+      <p style="margin:0 0 16px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
+        Zajęcia rozpoczynamy od 14 września 2026 zgodnie z harmonogramem ustalonym dla poszczególnych grup.
+      </p>
     `;
 
   const loginHtml = `
-      <p style="margin:16px 0 8px 0;font-size:15px;line-height:1.6;color:${p.text};">
+      <p style="margin:16px 0 8px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
         ${
           options?.complimentaryCompleted
             ? "Zaloguj się do portalu danymi, których używasz na co dzień."
             : "Poniżej znajdziesz dane do logowania w systemie. Zaloguj się danymi, których używasz na co dzień."
         }
       </p>
-      <p style="margin:0 0 12px 0;font-size:14px;line-height:1.6;color:${p.text};opacity:0.85;">
+      <p style="margin:0 0 12px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
         Nie pamiętasz hasła? Skorzystaj z opcji „Zapomniałem hasła" na stronie logowania.
       </p>
     `;
@@ -1027,9 +1037,9 @@ Dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i 
 Wydrukuj dokument i podpisz ręcznie — nie podpisuje się go elektronicznie.
 `
     : `
-Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować w dwóch egzemplarzach i podpisać własnoręcznie.
-- Jeden egzemplarz należy przekazać do placówki, z której dziecko będzie odbierane. (świetlica, wychowawca grupy)
-- Drugi egzemplarz należy przekazać lektorowi
+Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować, podpisać własnoręcznie i oddać w placówce przed pierwszymi zajęciami (świetlica / wychowawca grupy przedszkolnej).
+
+Zajęcia rozpoczynamy od 14 września 2026 zgodnie z harmonogramem ustalonym dla poszczególnych grup.
 `;
 
   await sendHarryMail({
@@ -1044,7 +1054,7 @@ Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, k
       intro: introHtml,
       contentHtml: `
         ${pickupConsentHtml}
-        <ul style="margin:0 0 12px 18px;padding:0;font-size:15px;line-height:1.6;color:${p.text};">
+        <ul style="margin:0 0 12px 18px;padding:0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
           <li><strong>Grupa:</strong> ${escapeHtmlForEmail(proposal.groupName)}</li>
           <li><strong>Lokalizacja:</strong> ${escapeHtmlForEmail(proposal.locationName)}</li>
           <li><strong>Termin:</strong> ${escapeHtmlForEmail(proposal.schedule)}</li>
@@ -1052,8 +1062,8 @@ Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, k
         </ul>
         ${loginHtml}
         ${emailCtaButton(portalUrl, "Przejdź do portalu")}
-        <p style="margin:14px 0 0 0;font-size:13px;line-height:1.6;color:${p.text};">
-          Lub skopiuj link do przeglądarki: <a href="${portalUrl}" class="he-email-body-link" style="color:${p.link} !important;">${portalUrl}</a>
+        <p style="margin:14px 0 0 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
+          Lub skopiuj link do przeglądarki: <a href="${portalUrl}" class="he-email-body-link" style="font-family:${BRAND_FONT};color:${p.link} !important;">${portalUrl}</a>
         </p>
       `,
     }),
@@ -1098,8 +1108,8 @@ export async function sendCombinedProposalEmail(
       const teacherName = (proposal.teacherName ?? "").trim() || "Do ustalenia";
       return `
         <div style="margin:0 0 16px 0;padding:14px 16px;border:2px solid ${p.insetBorder};border-radius:10px;background:${p.insetBg};">
-          <p style="margin:0 0 8px 0;font-size:15px;font-weight:700;color:${p.text};">${safeChildName}</p>
-          <ul style="margin:0 0 0 18px;padding:0;font-size:15px;line-height:1.6;color:${p.text};">
+          <p style="margin:0 0 8px 0;font-family:${BRAND_FONT};font-size:15px;font-weight:700;color:${p.text};">${safeChildName}</p>
+          <ul style="margin:0 0 0 18px;padding:0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
             <li><strong>Grupa:</strong> ${escapeHtmlForEmail(proposal.groupName)}</li>
             <li><strong>Lokalizacja:</strong> ${escapeHtmlForEmail(proposal.locationName)}</li>
             <li><strong>Termin:</strong> ${escapeHtmlForEmail(proposal.schedule)}</li>
@@ -1131,7 +1141,7 @@ export async function sendCombinedProposalEmail(
     : "użyj obecnego hasła";
 
   const credentialsHtml = `
-      <p style="margin:16px 0 8px 0;font-size:15px;line-height:1.6;color:${p.text};">
+      <p style="margin:16px 0 8px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
         Poniżej znajdziesz dane do logowania w systemie.
         ${
           isNewAccount
@@ -1142,18 +1152,18 @@ export async function sendCombinedProposalEmail(
       <div style="margin:0 0 16px 0;padding:14px 16px;border:2px solid ${p.insetBorder};border-radius:10px;background:${p.insetBg};">
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;">
           <tr>
-            <td style="padding:4px 12px 4px 0;font-size:15px;color:${p.text};"><strong>Login (email):</strong></td>
+            <td style="padding:4px 12px 4px 0;font-family:${BRAND_FONT};font-size:15px;font-weight:400;color:${p.text};"><strong>Login (email):</strong></td>
             <td style="padding:4px 0;font-size:15px;color:${p.text};font-family:Consolas,Menlo,monospace;">
               ${buildEmailMailtoLink(login.loginEmail, p.text)}
             </td>
           </tr>
           <tr>
-            <td style="padding:4px 12px 4px 0;font-size:15px;color:${p.text};"><strong>${isNewAccount ? "Hasło tymczasowe:" : "Hasło:"}</strong></td>
+            <td style="padding:4px 12px 4px 0;font-family:${BRAND_FONT};font-size:15px;font-weight:400;color:${p.text};"><strong>${isNewAccount ? "Hasło tymczasowe:" : "Hasło:"}</strong></td>
             <td style="padding:4px 0;font-size:16px;color:${p.text};font-family:Consolas,Menlo,monospace;letter-spacing:1px;">${passwordHtml}</td>
           </tr>
         </table>
       </div>
-      <p style="margin:12px 0;font-size:14px;line-height:1.6;color:${p.text};opacity:0.85;">
+      <p style="margin:12px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
         ${
           isNewAccount
             ? "W czasie pierwszego logowania system poprosi Cię o zmianę hasła."
@@ -1197,20 +1207,19 @@ ${
 
   const pickupConsentHtml = options?.complimentaryCompleted
     ? `
-      <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;color:${p.text};">
+      <p style="margin:0 0 12px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
         W portalu, w kroku <strong>Podsumowanie</strong>, możesz wygenerować zgodę na odebranie dziecka przez lektora.
         Dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia.
         Wydrukuj dokument i podpisz ręcznie — nie podpisuje się go elektronicznie.
       </p>
     `
     : `
-      <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;color:${p.text};">
-        Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować w dwóch egzemplarzach i podpisać własnoręcznie.
+      <p style="margin:0 0 12px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
+        Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować, podpisać własnoręcznie i oddać w placówce przed pierwszymi zajęciami (świetlica / wychowawca grupy przedszkolnej).
       </p>
-      <ul style="margin:0 0 16px 18px;padding:0;font-size:15px;line-height:1.6;color:${p.text};">
-        <li>Jeden egzemplarz należy przekazać do placówki, z której dziecko będzie odbierane. (świetlica, wychowawca grupy)</li>
-        <li>Drugi egzemplarz należy przekazać lektorowi</li>
-      </ul>
+      <p style="margin:0 0 16px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
+        Zajęcia rozpoczynamy od 14 września 2026 zgodnie z harmonogramem ustalonym dla poszczególnych grup.
+      </p>
     `;
 
   const pickupConsentText = options?.complimentaryCompleted
@@ -1220,9 +1229,9 @@ Dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i 
 Wydrukuj dokument i podpisz ręcznie — nie podpisuje się go elektronicznie.
 `
     : `
-Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować w dwóch egzemplarzach i podpisać własnoręcznie.
-- Jeden egzemplarz należy przekazać do placówki, z której dziecko będzie odbierane. (świetlica, wychowawca grupy)
-- Drugi egzemplarz należy przekazać lektorowi
+Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować, podpisać własnoręcznie i oddać w placówce przed pierwszymi zajęciami (świetlica / wychowawca grupy przedszkolnej).
+
+Zajęcia rozpoczynamy od 14 września 2026 zgodnie z harmonogramem ustalonym dla poszczególnych grup.
 `;
 
   await sendHarryMail({
@@ -1243,8 +1252,8 @@ Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, k
         ${proposalsHtml}
         ${credentialsHtml}
         ${emailCtaButton(portalUrl, "Przejdź do portalu")}
-        <p style="margin:14px 0 0 0;font-size:13px;line-height:1.6;color:${p.text};">
-          Lub skopiuj link do przeglądarki: <a href="${portalUrl}" class="he-email-body-link" style="color:${p.link} !important;">${portalUrl}</a>
+        <p style="margin:14px 0 0 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
+          Lub skopiuj link do przeglądarki: <a href="${portalUrl}" class="he-email-body-link" style="font-family:${BRAND_FONT};color:${p.link} !important;">${portalUrl}</a>
         </p>
       `,
     }),

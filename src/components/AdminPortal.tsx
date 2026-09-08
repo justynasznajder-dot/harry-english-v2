@@ -2484,9 +2484,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
 
   const availableChildren = useMemo(() => {
     if (!groupDetail) return [];
-    const activeInGroup = new Set(groupDetail.students.filter((s) => !s.left_at).map((s) => s.child_id));
     return children
-      .filter((c) => c.active && !activeInGroup.has(c.child_id))
+      .filter((c) => c.active && !c.group_name)
       .filter((c) => {
         const q = studentSearch.trim().toLowerCase();
         if (!q) return true;
@@ -9385,8 +9384,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               ) : null}
               {availableChildren.length === 0 ? (
                 <p className="text-sm text-zinc-600">
-                  Brak dostępnych dzieci do przypisania (aktywne, spoza tej grupy). Odśwież stronę lub
-                  sprawdź, czy dziecko jest aktywne w bazie.
+                  Brak dzieci bez grupy. Widać tylko aktywne dzieci, które nie są przypisane do
+                  żadnej grupy. Odśwież stronę albo sprawdź, czy dziecko nie jest już w innej grupie.
                 </p>
               ) : null}
               <div className="flex justify-end gap-2">

@@ -1084,6 +1084,7 @@ export default function EnrollmentAdminPanel({
             />
           </div>
         ) : isByGroupPrices ? (
+
           <div className="space-y-3">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <p className="text-sm text-zinc-600">
