@@ -514,6 +514,16 @@ export default function EnrollmentAdminPanel({
         c.status === 'NEW' ||
         (proposalParentIsComplimentary && c.status === 'PROPOSED'),
     ) ?? [];
+  /** Po wysłaniu maila — stawki nadal edytowalne do momentu podpisania. */
+  const proposalPostSendPriceChildren =
+    proposalParent?.children.filter((c) => {
+      if (c.status === 'ACCEPTED' || c.status === 'AWAITING_CONTRACT' || c.status === 'CONTRACT_READY') {
+        return true;
+      }
+      // PROPOSED w zwykłym flow (nie complimentary — ten jest w proposalNewChildren)
+      if (c.status === 'PROPOSED' && !proposalParentIsComplimentary) return true;
+      return false;
+    }) ?? [];
   const hasAcceptedSibling = (requestId: string) =>
     proposalParent?.children.some(
       (c) => c.requestId !== requestId && c.status === 'ACCEPTED',
@@ -543,7 +553,34 @@ export default function EnrollmentAdminPanel({
         proposalNewChildren.some((c) => draftIsComplimentarySaveable(proposalDrafts[c.requestId]))
       : proposalNewChildren.every((c) => !draftHasPartialPrices(proposalDrafts[c.requestId])) &&
         proposalNewChildren.some((c) => draftIsSaveable(proposalDrafts[c.requestId])));
+  const proposalPostSendPriceSaveReady =
+    proposalPostSendPriceChildren.length >= 1 &&
+    proposalPostSendPriceChildren.every((c) => {
+      const draft = proposalDrafts[c.requestId];
+      return proposalParentIsComplimentary
+        ? draftHasComplimentaryRequiredPrices(draft)
+        : draftHasRequiredPrices(draft);
+    }) &&
+    !proposalPostSendPriceChildren.some((c) =>
+      proposalParentIsComplimentary
+        ? draftHasComplimentaryPartialPrices(proposalDrafts[c.requestId])
+        : draftHasPartialPrices(proposalDrafts[c.requestId]),
+    );
+  /** Zapisz: nowe dzieci (jak wcześniej) i/lub korekta stawek po wysłaniu maila. */
+  const proposalSaveReady =
+    proposalNewChildren.length === 0
+      ? proposalPostSendPriceSaveReady
+      : proposalBatchSaveReady &&
+        (proposalPostSendPriceChildren.length === 0 || proposalPostSendPriceSaveReady);
   const proposalBatchSaveTitle = (() => {
+    if (proposalNewChildren.length === 0 && proposalPostSendPriceChildren.length > 0) {
+      if (proposalPostSendPriceSaveReady) {
+        return 'Zapisz zmienione stawki (bez ponownej wysyłki e-maila)';
+      }
+      return proposalParentIsComplimentary
+        ? 'Uzupełnij stawkę jednorazową i ratalną dla każdego dziecka'
+        : 'Uzupełnij wszystkie 3 stawki dla każdego dziecka';
+    }
     if (proposalParentIsComplimentary) {
       if (proposalBatchSaveReady) {
         const anyGroup = proposalNewChildren.some((c) =>
@@ -596,6 +633,19 @@ export default function EnrollmentAdminPanel({
           discountPercent: draft?.discountPercent?.trim() || null,
         };
       });
+
+  const buildPostSendPricePayload = () =>
+    proposalPostSendPriceChildren.map((child) => {
+      const draft = proposalDrafts[child.requestId];
+      return {
+        requestId: child.requestId,
+        groupId: '',
+        lessonUnitPrice: draft?.lessonUnitPrice?.trim() || null,
+        monthlyUnitPrice: draft?.monthlyUnitPrice?.trim() || null,
+        yearlyUnitPrice: draft?.yearlyUnitPrice?.trim() || null,
+        discountPercent: draft?.discountPercent?.trim() || null,
+      };
+    });
 
   /** Potwierdzenie przy zmianie wcześniej zapisanej grupy. */
   const confirmGroupChangesIfNeeded = (): boolean => {
@@ -1760,6 +1810,12 @@ export default function EnrollmentAdminPanel({
                   {proposalParent.children.map((child) => {
                     const proposalAllowed =
                       child.status === 'NEW' || child.status === 'NEGOTIATING';
+                    const pricesEditable =
+                      proposalAllowed ||
+                      child.status === 'PROPOSED' ||
+                      child.status === 'ACCEPTED' ||
+                      child.status === 'AWAITING_CONTRACT' ||
+                      child.status === 'CONTRACT_READY';
                     const listBadge = resolveEnrollmentListBadge(child);
                     const proposedGroup =
                       child.proposedGroupId
@@ -1778,42 +1834,43 @@ export default function EnrollmentAdminPanel({
                       : null;
                     return (
                     <div key={child.requestId} className="rounded-xl border border-emerald-100 p-4">
-                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                        <div>
+                      <div className="space-y-3">
+                        <div className="min-w-0">
                           <p className="font-semibold">
                             {child.firstName} {child.lastName}
                           </p>
-                          <p className="mt-1 flex flex-wrap gap-2">
+                          <div className="mt-1 flex flex-wrap gap-2">
                             <span
-                              className={`${ENROLLMENT_STATUS_BADGE_BASE} ${listBadge.colorClass}`}
+                              className={`${ENROLLMENT_STATUS_BADGE_BASE} ${listBadge.colorClass} h-auto max-w-full whitespace-normal text-left leading-snug`}
                             >
                               Zgłoszenie: {listBadge.label}
                             </span>
                             {child.childAccessLevel && child.childAccessLevel !== child.status && (
                               <span
-                                className={`${ENROLLMENT_STATUS_BADGE_BASE} ${ENROLLMENT_STATUS_COLORS[child.childAccessLevel] ?? 'bg-zinc-100 text-zinc-700'}`}
+                                className={`${ENROLLMENT_STATUS_BADGE_BASE} ${ENROLLMENT_STATUS_COLORS[child.childAccessLevel] ?? 'bg-zinc-100 text-zinc-700'} h-auto max-w-full whitespace-normal text-left leading-snug`}
                               >
                                 Dziecko:{' '}
                                 {ENROLLMENT_STATUS_LABELS[child.childAccessLevel] ?? child.childAccessLevel}
                               </span>
                             )}
-                          </p>
-                          <p className="mt-2 text-sm text-zinc-600">Data urodzenia: {child.birthDate ?? 'brak'}</p>
-                          <p className="text-sm text-zinc-600">
-                            Preferowana lokalizacja: {child.preferredLocation ?? 'brak'}
-                          </p>
-                          {child.lessonsPerWeek === 1 || child.lessonsPerWeek === 2 ? (
-                            <p className="text-sm text-zinc-600">
-                              Częstotliwość: {child.lessonsPerWeek === 1 ? '1× w tygodniu' : '2× w tygodniu'}
-                            </p>
-                          ) : null}
-                        </div>
-                        <div className="min-w-0 space-y-2">
+                          </div>
+                          <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div className="min-w-0 space-y-0.5 text-sm text-zinc-600">
+                              <p>Data urodzenia: {child.birthDate ?? 'brak'}</p>
+                              <p>Preferowana lokalizacja: {child.preferredLocation ?? 'brak'}</p>
+                              {child.lessonsPerWeek === 1 || child.lessonsPerWeek === 2 ? (
+                                <p>
+                                  Częstotliwość:{' '}
+                                  {child.lessonsPerWeek === 1 ? '1× w tygodniu' : '2× w tygodniu'}
+                                </p>
+                              ) : null}
+                            </div>
+                            <div className="min-w-0 space-y-2">
                           {child.status === 'PROPOSED' && (
                             <div className="rounded-xl border border-sky-200 bg-sky-50 p-3 text-sm">
                               <p className="font-semibold text-sky-900">Propozycja wysłana</p>
                               {proposedGroup ? (
-                                <p className="mt-1 text-sky-900">
+                                <p className="mt-1 break-words text-sky-900">
                                   {proposedGroup.name} · {proposedGroup.location_name} ·{' '}
                                   {proposedGroup.schedule}
                                 </p>
@@ -1838,7 +1895,7 @@ export default function EnrollmentAdminPanel({
                                 Rodzic nie zaakceptował terminu zajęć
                               </p>
                               {proposedGroup ? (
-                                <p className="mt-1 text-amber-950">
+                                <p className="mt-1 break-words text-amber-950">
                                   Poprzednia propozycja: {proposedGroup.name} ·{' '}
                                   {proposedGroup.location_name} · {proposedGroup.schedule}
                                 </p>
@@ -1859,7 +1916,7 @@ export default function EnrollmentAdminPanel({
                                 Grupa przypisana
                               </p>
                               {proposedGroup ? (
-                                <p className="mt-1 text-emerald-900">
+                                <p className="mt-1 break-words text-emerald-900">
                                   {proposedGroup.name} · {proposedGroup.location_name} ·{' '}
                                   {proposedGroup.schedule}
                                 </p>
@@ -1879,7 +1936,7 @@ export default function EnrollmentAdminPanel({
                                 Dane uzupełnione — generowanie / podpis umowy
                               </p>
                               {proposedGroup ? (
-                                <p className="mt-1 text-violet-950">
+                                <p className="mt-1 break-words text-violet-950">
                                   {proposedGroup.name} · {proposedGroup.location_name} ·{' '}
                                   {proposedGroup.schedule}
                                 </p>
@@ -1895,7 +1952,7 @@ export default function EnrollmentAdminPanel({
                                 Umowa gotowa — oczekuje na podpis rodzica
                               </p>
                               {proposedGroup ? (
-                                <p className="mt-1 text-indigo-950">
+                                <p className="mt-1 break-words text-indigo-950">
                                   {proposedGroup.name} · {proposedGroup.location_name} ·{' '}
                                   {proposedGroup.schedule}
                                 </p>
@@ -1910,7 +1967,7 @@ export default function EnrollmentAdminPanel({
                                   : 'Zapis zakończony — uczeń w grupie'}
                               </p>
                               {proposedGroup ? (
-                                <p className="mt-1 text-emerald-900">
+                                <p className="mt-1 break-words text-emerald-900">
                                   {proposedGroup.name} · {proposedGroup.location_name} ·{' '}
                                   {proposedGroup.schedule}
                                 </p>
@@ -1926,10 +1983,14 @@ export default function EnrollmentAdminPanel({
                               Zgłoszenie odrzucone (rezygnacja rodzica lub decyzja szkoły).
                             </p>
                           )}
-                          {proposalAllowed && (
+                            </div>
+                          </div>
+                        </div>
+                        {pricesEditable && (
                             <>
                               <div className="space-y-2">
-                                {(() => {
+                                {proposalAllowed &&
+                                  (() => {
                                   const { matching, other } = splitGroupsByPreferredLocation(
                                     groups,
                                     child.preferredLocationId,
@@ -2036,6 +2097,11 @@ export default function EnrollmentAdminPanel({
                                     </>
                                   );
                                 })()}
+                                {!proposalAllowed && pricesEditable ? (
+                                  <p className="text-xs text-zinc-500">
+                                    Możesz skorygować stawki i zapisać bez ponownej wysyłki e-maila.
+                                  </p>
+                                ) : null}
                                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4 sm:items-end">
                                   <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
                                     <span className="leading-snug">
@@ -2047,7 +2113,7 @@ export default function EnrollmentAdminPanel({
                                       inputMode="decimal"
                                       required
                                       className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
-                                      disabled={!proposalAllowed}
+                                      disabled={!pricesEditable}
                                       placeholder="np. 1200"
                                       value={
                                         proposalDrafts[child.requestId]?.yearlyUnitPrice ?? ''
@@ -2074,7 +2140,7 @@ export default function EnrollmentAdminPanel({
                                       inputMode="decimal"
                                       required
                                       className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
-                                      disabled={!proposalAllowed}
+                                      disabled={!pricesEditable}
                                       placeholder="np. 150"
                                       value={
                                         proposalDrafts[child.requestId]?.monthlyUnitPrice ?? ''
@@ -2101,7 +2167,7 @@ export default function EnrollmentAdminPanel({
                                       inputMode="decimal"
                                       required={!proposalParentIsComplimentary}
                                       className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
-                                      disabled={!proposalAllowed}
+                                      disabled={!pricesEditable}
                                       placeholder={
                                         proposalParentIsComplimentary ? 'opcjonalnie' : 'np. 50'
                                       }
@@ -2126,7 +2192,7 @@ export default function EnrollmentAdminPanel({
                                       type="text"
                                       inputMode="numeric"
                                       className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
-                                      disabled={!proposalAllowed}
+                                      disabled={!pricesEditable}
                                       placeholder="0–100"
                                       value={
                                         proposalDrafts[child.requestId]?.discountPercent ?? ''
@@ -2163,7 +2229,8 @@ export default function EnrollmentAdminPanel({
                                     />
                                   </label>
                                 </div>
-                                {(() => {
+                                {proposalAllowed &&
+                                  (() => {
                                   const selectedGroupId =
                                     proposalDrafts[child.requestId]?.groupId ?? '';
                                   const selectedGroup = selectedGroupId
@@ -2348,7 +2415,6 @@ export default function EnrollmentAdminPanel({
                               </div>
                             </>
                           )}
-                        </div>
                       </div>
                     </div>
                     );
@@ -2360,12 +2426,12 @@ export default function EnrollmentAdminPanel({
             )}
             </div>
             <div className="shrink-0 flex flex-wrap items-center justify-between gap-2 border-t border-emerald-100 px-5 py-3">
-              {proposalNewChildren.length >= 1 ? (
+              {proposalNewChildren.length >= 1 || proposalPostSendPriceChildren.length >= 1 ? (
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     disabled={
-                      !proposalBatchSaveReady ||
+                      !proposalSaveReady ||
                       savingBatchProposals ||
                       submittingBatchProposals ||
                       submittingProposalRequestId != null ||
@@ -2374,10 +2440,13 @@ export default function EnrollmentAdminPanel({
                     title={proposalBatchSaveTitle}
                     className="rounded-xl border border-[#0f6e56] bg-white px-3 py-2 text-sm font-semibold text-[#0f6e56] shadow-sm transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
                     onClick={async () => {
-                      if (!confirmGroupChangesIfNeeded()) return;
+                      if (proposalNewChildren.length > 0 && !confirmGroupChangesIfNeeded()) return;
                       setSavingBatchProposals(true);
                       try {
-                        const proposals = buildBatchProposalsPayload({ saveOnly: true });
+                        const proposals = [
+                          ...buildBatchProposalsPayload({ saveOnly: true }),
+                          ...buildPostSendPricePayload(),
+                        ];
                         if (proposals.length === 0) {
                           pushToast(
                             'error',
@@ -2408,12 +2477,17 @@ export default function EnrollmentAdminPanel({
                           );
                           return;
                         }
+                        const onlyPostSend =
+                          proposalNewChildren.length === 0 &&
+                          proposalPostSendPriceChildren.length > 0;
                         pushToast(
                           'success',
                           data.message ??
-                            (proposalParentIsComplimentary
-                              ? `Zapisano (${data.count ?? proposals.length}) — bez umowy`
-                              : `Zapisano dane propozycji (${data.count ?? proposals.length}) — dziecko w grupie jako niepotwierdzone`),
+                            (onlyPostSend
+                              ? `Zapisano stawki (${data.count ?? proposals.length})`
+                              : proposalParentIsComplimentary
+                                ? `Zapisano (${data.count ?? proposals.length}) — bez umowy`
+                                : `Zapisano dane propozycji (${data.count ?? proposals.length}) — dziecko w grupie jako niepotwierdzone`),
                         );
                         setProposalModalParentId(null);
                         await onRefresh();
@@ -2430,6 +2504,7 @@ export default function EnrollmentAdminPanel({
                     {savingBatchProposals ? 'Zapisywanie…' : 'Zapisz'}
                   </button>
                   {/* Wysyłka maila (zajęcia + login/hasło) — tylko szkoły z allowlisty. */}
+                  {proposalNewChildren.length >= 1 ? (
                   <button
                     type="button"
                     disabled={
@@ -2507,6 +2582,7 @@ export default function EnrollmentAdminPanel({
                         ? 'Wyślij maila z danymi do logowania'
                         : `Wyślij zbiorczy mail (${proposalNewChildren.length} dzieci)`}
                   </button>
+                  ) : null}
                 </div>
               ) : (
                 <span />

@@ -6,6 +6,7 @@ export const ADMIN_DELETION_ACTIONS = [
   "HOLIDAY_DELETE",
   "LESSON_DELETE",
   "LESSONS_FUTURE_DELETE",
+  "LESSONS_GENERATED_CLEAR",
 ] as const;
 
 export type AdminDeletionAction = (typeof ADMIN_DELETION_ACTIONS)[number];

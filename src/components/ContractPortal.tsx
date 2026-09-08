@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import { parseContentDispositionFilename } from '@/lib/content-disposition';
+import { PICKUP_CONSENT_PRINT_INSTRUCTIONS } from '@/lib/pickup-consent-notice';
 
 export interface ContractChildAttachment {
   child_id: string;
@@ -93,6 +94,14 @@ async function downloadPreviewPdf(params: {
   URL.revokeObjectURL(url);
 }
 
+function PickupConsentDocumentNote() {
+  return (
+    <p className="mt-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-semibold leading-snug text-amber-950">
+      {PICKUP_CONSENT_PRINT_INSTRUCTIONS.previewHeaderNote}
+    </p>
+  );
+}
+
 function DocumentPreview({
   title,
   subtitle,
@@ -103,7 +112,7 @@ function DocumentPreview({
   downloadOnly = false,
 }: {
   title: string;
-  subtitle?: string;
+  subtitle?: ReactNode;
   html: string;
   pdfDoc: 'contract' | 'attachment1' | 'attachment2';
   childId?: string;
@@ -128,13 +137,20 @@ function DocumentPreview({
     }
   };
 
+  const subtitleNode =
+    subtitle == null ? null : typeof subtitle === 'string' ? (
+      <p className="mt-0.5 text-xs text-zinc-500">{subtitle}</p>
+    ) : (
+      <div className="mt-0.5">{subtitle}</div>
+    );
+
   if (downloadOnly) {
     return (
       <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
           <div className="min-w-0">
             <p className="text-sm font-semibold text-zinc-800">{title}</p>
-            {subtitle ? <p className="text-xs text-zinc-500">{subtitle}</p> : null}
+            {subtitleNode}
           </div>
           <button
             type="button"
@@ -155,7 +171,7 @@ function DocumentPreview({
       <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
         <div className="border-b border-zinc-200 bg-zinc-50 px-4 py-2.5">
           <p className="text-sm font-semibold text-zinc-800">{title}</p>
-          {subtitle ? <p className="text-xs text-zinc-500">{subtitle}</p> : null}
+          {subtitleNode}
         </div>
         <div className="space-y-3 px-4 py-4">
           <p className="text-sm text-zinc-700">
@@ -184,9 +200,9 @@ function DocumentPreview({
   return (
     <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-2 border-b border-zinc-200 bg-zinc-50 px-4 py-2.5">
-        <div>
+        <div className="min-w-0">
           <p className="text-sm font-semibold text-zinc-800">{title}</p>
-          {subtitle ? <p className="text-xs text-zinc-500">{subtitle}</p> : null}
+          {subtitleNode}
         </div>
         <button
           type="button"
@@ -246,7 +262,14 @@ function ChildAttachmentDocuments({
             {child.attachment_2_html ? (
               <DocumentPreview
                 title={`Załącznik nr 2 — Odbiór dziecka przez lektora (${name})`}
-                subtitle={readOnlySubtitle}
+                subtitle={
+                  <>
+                    {readOnlySubtitle ? (
+                      <p className="text-xs text-zinc-500">{readOnlySubtitle}</p>
+                    ) : null}
+                    <PickupConsentDocumentNote />
+                  </>
+                }
                 html={child.attachment_2_html}
                 pdfDoc="attachment2"
                 childId={child.child_id}
@@ -484,7 +507,7 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
             <div key={item.key} className="space-y-3">
               <DocumentPreview
                 title={`Załącznik nr 2 — Odbiór dziecka przez lektora (${item.childName})`}
-                subtitle="Dokument do wydruku — bez podpisu elektronicznego."
+                subtitle={<PickupConsentDocumentNote />}
                 html={item.html}
                 pdfDoc="attachment2"
                 childId={item.childId}
@@ -505,9 +528,11 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
                       }
                     />
                     <span className="text-sm text-zinc-800">
-                      Zapoznałem/am się z treścią zgody na odebranie ({item.childName}).
-                      Zobowiązuję się przekazać wydrukowane upoważnienie po jednym egzemplarzu w
-                      szkole/przedszkolu oraz u lektora przed pierwszymi zajęciami.
+                      Zapoznałem/am się z treścią zgody na odebranie ({item.childName}).{' '}
+                      <span className="font-semibold text-rose-700">
+                        Zobowiązuję się przekazać wydrukowane upoważnienie po jednym egzemplarzu w
+                        szkole/przedszkolu oraz u lektora przed pierwszymi zajęciami.
+                      </span>
                     </span>
                   </label>
                 </div>

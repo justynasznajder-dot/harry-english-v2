@@ -933,6 +933,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     label: string;
     futureLessonsCount: number;
   } | null>(null);
+  const [clearGeneratedLessonsModal, setClearGeneratedLessonsModal] = useState<{
+    groupId: string;
+    yearLabel: string | null;
+    lessonCount: number;
+    completedCount: number;
+    futureCount: number;
+  } | null>(null);
   const [addStudentModalOpen, setAddStudentModalOpen] = useState(false);
   const [studentSearch, setStudentSearch] = useState('');
   const [selectedChildId, setSelectedChildId] = useState('');
@@ -5708,7 +5715,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       className="rounded-lg bg-emerald-600 px-3 py-1 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
                       title={
                         hasGeneratedLessons
-                          ? 'Edycja niedostępna — są już wygenerowane zajęcia. Możesz tylko usunąć termin.'
+                          ? 'Edycja niedostępna — są już wygenerowane zajęcia. Usuń je poniżej, żeby zmienić harmonogram.'
                           : !hasActiveSchoolYear
                             ? 'Harmonogram można edytować tylko przy aktywnym roku szkolnym'
                             : undefined
@@ -5834,21 +5841,51 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 </div>
               )}
               {!disabled && schoolYearLessonCount > 0 && (
-                <p className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
-                  W roku szkolnym{lessonsYearLabel ? ` ${lessonsYearLabel}` : ''} łącznie w
-                  kalendarzu grupy:{' '}
-                  <strong>{schoolYearLessonCount}</strong>{' '}
-                  {schoolYearLessonCount === 1 ? 'zajęcie' : schoolYearLessonCount < 5 ? 'zajęcia' : 'zajęć'}
-                  {futureLessonsCount > 0 || completedLessonsCount > 0
-                    ? ` (${[
-                        futureLessonsCount > 0 ? `${futureLessonsCount} nadchodzących` : null,
-                        completedLessonsCount > 0 ? `${completedLessonsCount} zakończonych` : null,
-                      ]
-                        .filter(Boolean)
-                        .join(', ')})`
-                    : ''}
-                  .
-                </p>
+                <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+                  <p className="font-medium text-emerald-800">
+                    W roku szkolnym{lessonsYearLabel ? ` ${lessonsYearLabel}` : ''} łącznie w
+                    kalendarzu grupy:{' '}
+                    <strong>{schoolYearLessonCount}</strong>{' '}
+                    {schoolYearLessonCount === 1
+                      ? 'zajęcie'
+                      : schoolYearLessonCount < 5
+                        ? 'zajęcia'
+                        : 'zajęć'}
+                    {futureLessonsCount > 0 || completedLessonsCount > 0
+                      ? ` (${[
+                          futureLessonsCount > 0
+                            ? `${futureLessonsCount} nadchodzących`
+                            : null,
+                          completedLessonsCount > 0
+                            ? `${completedLessonsCount} zakończonych`
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(', ')})`
+                      : ''}
+                    .
+                  </p>
+                  <p className="mt-1 text-xs text-emerald-800/90">
+                    Żeby zmienić dni lub godziny w harmonogramie, najpierw usuń wygenerowane
+                    zajęcia — potem ustaw termin i wygeneruj je od nowa.
+                  </p>
+                  <button
+                    type="button"
+                    className="mt-2 rounded-lg border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-800 hover:bg-red-50"
+                    onClick={() => {
+                      if (!groupId) return;
+                      setClearGeneratedLessonsModal({
+                        groupId,
+                        yearLabel: lessonsYearLabel,
+                        lessonCount: schoolYearLessonCount,
+                        completedCount: completedLessonsCount,
+                        futureCount: futureLessonsCount,
+                      });
+                    }}
+                  >
+                    Usuń wszystkie wygenerowane zajęcia
+                  </button>
+                </div>
               )}
             </div>
             {!disabled &&
@@ -8472,6 +8509,101 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 }}
               >
                 {busy ? 'Usuwanie…' : 'Usuń termin'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {clearGeneratedLessonsModal && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-red-100 bg-white p-5 shadow-xl">
+            <h3 className="text-lg font-semibold text-zinc-900">
+              Usuń wygenerowane zajęcia
+            </h3>
+            <p className="mt-3 text-sm text-zinc-600">
+              Usunąć wszystkie wygenerowane zajęcia tej grupy
+              {clearGeneratedLessonsModal.yearLabel
+                ? ` w roku ${clearGeneratedLessonsModal.yearLabel}`
+                : ''}
+              ?
+            </p>
+            <div className="mt-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2.5 text-sm text-red-950">
+              <p className="font-semibold">
+                Zostanie usuniętych: {clearGeneratedLessonsModal.lessonCount}{' '}
+                {clearGeneratedLessonsModal.lessonCount === 1
+                  ? 'zajęcie'
+                  : clearGeneratedLessonsModal.lessonCount < 5
+                    ? 'zajęcia'
+                    : 'zajęć'}
+              </p>
+              {(clearGeneratedLessonsModal.futureCount > 0 ||
+                clearGeneratedLessonsModal.completedCount > 0) && (
+                <p className="mt-1 text-xs text-red-900/90">
+                  {[
+                    clearGeneratedLessonsModal.futureCount > 0
+                      ? `${clearGeneratedLessonsModal.futureCount} nadchodzących`
+                      : null,
+                    clearGeneratedLessonsModal.completedCount > 0
+                      ? `${clearGeneratedLessonsModal.completedCount} zakończonych (wraz z obecnościami)`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </p>
+              )}
+            </div>
+            <p className="mt-3 text-xs text-zinc-500">
+              Harmonogram (dni i godziny) zostanie — potem możesz go edytować i wygenerować
+              zajęcia od nowa.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-xl bg-zinc-200 px-4 py-2 text-sm font-semibold text-zinc-800"
+                disabled={busy}
+                onClick={() => setClearGeneratedLessonsModal(null)}
+              >
+                Anuluj
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                onClick={async () => {
+                  const groupIdForReload = clearGeneratedLessonsModal.groupId;
+                  setBusy(true);
+                  try {
+                    const res = await fetch(
+                      `/api/admin/groups/${groupIdForReload}/clear-generated-lessons`,
+                      { method: 'POST' },
+                    );
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) {
+                      pushToast(
+                        'error',
+                        data.message ?? 'Nie udało się usunąć wygenerowanych zajęć',
+                      );
+                      return;
+                    }
+                    pushToast('success', data.message ?? 'Usunięto wygenerowane zajęcia');
+                    setClearGeneratedLessonsModal(null);
+                    setClassesCalRefreshSignal((s) => s + 1);
+                    await loadGroupDetail(
+                      groupIdForReload,
+                      getGroupDetailReloadOptions(groupIdForReload),
+                    );
+                    const gRes = await fetch('/api/admin/groups');
+                    if (gRes.ok) {
+                      const gJson = await gRes.json();
+                      setGroups((gJson.groups ?? []) as GroupRow[]);
+                    }
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                {busy ? 'Usuwanie…' : 'Usuń zajęcia'}
               </button>
             </div>
           </div>

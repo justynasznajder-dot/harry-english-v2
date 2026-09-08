@@ -1662,8 +1662,7 @@ export default function EnrollmentParentFlow({
 
                     {Boolean(p.teacher_pickup_consent) ? (
                       <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950">
-                        <p className="font-semibold">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.required}</p>
-                        <p className="mt-1 text-amber-900">
+                        <p className="text-amber-900">
                           {PICKUP_CONSENT_PRINT_INSTRUCTIONS.scopeNote}
                         </p>
                         <p className="mt-1 text-amber-900">
@@ -2229,17 +2228,6 @@ export default function EnrollmentParentFlow({
                       });
                       const settlementRadiosLocked =
                         (profileFieldsLocked && !allowContractRegenerate) || isReadOnlyPreview;
-                      const sharedDiscountInfo = formatEffectiveDiscountInfo(
-                        resolveEffectiveDiscountPercent({
-                          mode: billingExempt ? 'complimentary' : 'contract',
-                          managerPercent: proposals.find((p) => p.discount_percent != null)
-                            ?.discount_percent ?? null,
-                          hasLargeFamilyCard: discountLargeFamily,
-                          hasSiblingDeclared:
-                            enrollingMultipleChildren && !discountLargeFamily,
-                          settings: settlementDiscountSettings,
-                        }),
-                      );
                       return (
                         <>
                           {hasPipelineChild && !billingExempt ? (
@@ -2248,8 +2236,8 @@ export default function EnrollmentParentFlow({
                                 Zniżki
                               </p>
                               <p className="text-xs text-zinc-500">
-                                Rabaty się nie sumują — wchodzi najwyższy (rabat szkoły, KDR
-                                10% lub rodzeństwo 5%).
+                                Możesz wybrać tylko jedną zniżkę naraz (KDR albo rodzeństwo). Żeby
+                                zaznaczyć drugą, najpierw odznacz tę aktualną.
                               </p>
                               <div className="flex flex-col gap-2">
                                 <label
@@ -2303,11 +2291,6 @@ export default function EnrollmentParentFlow({
                                   <span>zapisuję więcej niż jedno dziecko</span>
                                 </label>
                               </div>
-                              {sharedDiscountInfo ? (
-                                <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-900">
-                                  {sharedDiscountInfo}
-                                </p>
-                              ) : null}
                               <div className="space-y-2 border-t border-zinc-100 pt-3">
                                 <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
                                   Bon zniżkowy
@@ -2509,6 +2492,11 @@ export default function EnrollmentParentFlow({
                                     <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
                                       Sposób rozliczeń
                                     </p>
+                                    {discountInfo ? (
+                                      <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-900">
+                                        {discountInfo}
+                                      </p>
+                                    ) : null}
                                     <div className="flex flex-col gap-2">
                                       {(['MONTHLY', 'YEARLY', 'PER_LESSON'] as const).map((type) => {
                                         const amount = amountFor(type);
@@ -2801,7 +2789,6 @@ export default function EnrollmentParentFlow({
             <p className="font-semibold text-amber-950">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.title}</p>
             <p className="mt-2">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.scopeNote}</p>
             <p className="mt-2">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.noESign}</p>
-            <p className="mt-2">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.teacherBlankForms}</p>
             <ul className="mt-4 space-y-3">
               {enrolledChildren.map((p) => {
                 const downloadUrl = pickupConsentDownloadByRequestId[p.request_id];
@@ -2866,10 +2853,8 @@ export default function EnrollmentParentFlow({
           <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-4 text-sm text-amber-950">
             <p className="font-semibold text-amber-950">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.title}</p>
             <p className="mt-2">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.scopeNote}</p>
-            <p className="mt-2">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.required}</p>
             <p className="mt-2">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.noESign}</p>
             <p className="mt-2">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.downloadInDocuments}</p>
-            <p className="mt-2">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.teacherBlankForms}</p>
             {onNavigateToDocuments ? (
               <button
                 type="button"
@@ -3165,11 +3150,12 @@ export default function EnrollmentParentFlow({
               <p className="font-medium text-zinc-900">{PICKUP_CONSENT_PRINT_INSTRUCTIONS.scopeNote}</p>
               <p>{PICKUP_CONSENT_PRINT_INSTRUCTIONS.noESign}</p>
               <p>{PICKUP_CONSENT_PRINT_INSTRUCTIONS.downloadInDocuments}</p>
-              <p>{PICKUP_CONSENT_PRINT_INSTRUCTIONS.teacherBlankForms}</p>
               <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
                 <div className="border-b border-zinc-200 bg-zinc-50 px-4 py-2.5">
                   <p className="text-sm font-semibold text-zinc-800">Podgląd zgody</p>
-                  <p className="text-xs text-zinc-500">Dokument do wydruku — bez podpisu elektronicznego.</p>
+                  <p className="mt-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-semibold leading-snug text-amber-950">
+                    {PICKUP_CONSENT_PRINT_INSTRUCTIONS.previewHeaderNote}
+                  </p>
                 </div>
                 <iframe
                   srcDoc={pickupConsentModal.previewHtml}

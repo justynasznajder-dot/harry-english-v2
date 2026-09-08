@@ -1436,13 +1436,17 @@ export async function sendSignedContractConfirmationEmails(params: {
     .map((file) => `<li>${escapeHtmlForEmail(file.filename)}</li>`)
     .join("");
 
+  const portalUrl = `${getAppBaseUrl()}/portal/login`;
   const sharedContentHtml = `
     <p>Umowa${escapeHtmlForEmail(contractLabel)} została podpisana elektronicznie przez: <strong>${escapeHtmlForEmail(params.parentFullName)}</strong>.${escapeHtmlForEmail(childPart)}</p>
-    <p>W załączeniu przesyłamy podpisane dokumenty w formacie PDF:</p>
+    <p>W załączeniu: podpisane PDF-y.</p>
     <ul style="margin:8px 0;padding-left:20px;">${filesListHtml}</ul>
+    <p>Wszystko masz też w <strong>panelu rodzica</strong>: dokumenty, terminy zajęć, a wkrótce faktury. Pytania? Napisz w module <strong>Wiadomości</strong>.</p>
+    <p>Portal będziemy rozwijać — warto zajrzeć.</p>
+    ${emailCtaButton(portalUrl, "Przejdź do panelu rodzica")}
   `;
 
-  const sharedText = `Umowa${contractLabel} została podpisana przez ${params.parentFullName}.${childPart} W załączeniu: ${params.pdfFiles.map((f) => f.filename).join(", ")}.`;
+  const sharedText = `Umowa${contractLabel} została podpisana przez ${params.parentFullName}.${childPart} W załączeniu: podpisane PDF-y (${params.pdfFiles.map((f) => f.filename).join(", ")}). Wszystko masz też w panelu rodzica: dokumenty, terminy zajęć, a wkrótce faktury. Pytania? Napisz w module Wiadomości. Portal będziemy rozwijać — warto zajrzeć: ${portalUrl}`;
 
   await sendHarryMail({
     from,

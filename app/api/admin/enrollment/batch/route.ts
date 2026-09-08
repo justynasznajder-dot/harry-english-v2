@@ -122,7 +122,7 @@ export async function POST(request: NextRequest) {
             : "Zapisano stawki (tryb bez umowy) — grupę możesz przypisać później"
           : anyWithGroup
             ? "Zapisano dane i dodano dziecko do grupy (niepotwierdzone — bez wysyłki e-mail)"
-            : "Zapisano stawki (bez grupy — możesz uzupełnić później)",
+            : "Zapisano stawki",
         saved: true,
         count: proposals.length,
       });

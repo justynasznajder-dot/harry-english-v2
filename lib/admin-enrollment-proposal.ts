@@ -816,10 +816,21 @@ function parseOptionalUnitPrice(
   return { ok: true, value: n };
 }
 
+/** Statusy, w których manager może jeszcze zmienić stawki (przed podpisaniem umowy). */
+const PRICE_EDITABLE_ENROLLMENT_STATUSES = [
+  "NEW",
+  "NEGOTIATING",
+  "PROPOSED",
+  "ACCEPTED",
+  "AWAITING_CONTRACT",
+  "CONTRACT_READY",
+] as const;
+
 /**
- * Zapis samych stawek na zgłoszeniu NEW — bez grupy i członkostwa.
- * Tworzy/powiązuje konto rodzica i kartę dziecka, żeby % zniżki (na `children`)
- * dało się utrwalić także bez wybranej grupy.
+ * Zapis samych stawek na zgłoszeniu — bez zmiany statusu / grupy / maila.
+ * Działa też po wysłaniu maila (ACCEPTED itd.), aż do podpisania umowy.
+ * Tworzy/powiązuje konto rodzica i kartę dziecka (gdy jeszcze brak), żeby % zniżki
+ * (na `children`) dało się utrwalić także bez wybranej grupy.
  */
 export async function saveEnrollmentRequestPrices(
   input: {
@@ -856,16 +867,21 @@ export async function saveEnrollmentRequestPrices(
      FROM enrollment_requests er
      WHERE er.id = $1
        AND ($2::text IS NULL OR er.school_id = $2::text)
-       AND UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'NEW'
+       AND UPPER(BTRIM(COALESCE(er.status::text, ''))) = ANY($3::text[])
      LIMIT 1`,
-    [input.requestId, options?.restrictToSchoolId ?? null]
+    [
+      input.requestId,
+      options?.restrictToSchoolId ?? null,
+      [...PRICE_EDITABLE_ENROLLMENT_STATUSES],
+    ]
   );
   const enrollment = enrollmentRes.rows[0];
   if (!enrollment) {
     return {
       ok: false,
       status: 409,
-      message: "Stawki można zapisać tylko dla zgłoszenia „Nowe”.",
+      message:
+        "Stawki można zmienić tylko przed podpisaniem umowy (nie dla podpisanych / zakończonych / odrzuconych).",
     };
   }
 
@@ -982,6 +998,17 @@ export async function saveEnrollmentRequestPrices(
           parsedYearly,
           discountParsed.value,
         ]
+      );
+      // Lustro stawek na aktywnych członkostwach (źródło prawdy: children / enrollment).
+      await client.query(
+        `UPDATE group_students
+         SET lesson_unit_price = $2,
+             monthly_unit_price = $3,
+             yearly_unit_price = $4
+         WHERE child_id = $1
+           AND school_id = $5
+           AND left_at IS NULL`,
+        [childId, parsedLesson, parsedMonthly, parsedYearly, parentSchoolId]
       );
     });
   } else {

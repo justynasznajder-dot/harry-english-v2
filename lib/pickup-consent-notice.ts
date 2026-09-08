@@ -17,11 +17,12 @@ export const PICKUP_CONSENT_PRINT_INSTRUCTIONS = {
   scopeNote:
     "Dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia.",
   noESign:
-    "Tej zgody nie podpisuje się elektronicznie. Wszyscy rodzice muszą przynieść wydrukowany dokument z podpisem ręcznym na pierwsze zajęcia.",
+    "Tej zgody nie podpisuje się elektronicznie. Wszyscy rodzice muszą przynieść wydrukowany dokument z podpisem ręcznym przed pierwszymi zajęciami — jeżeli dziecko ma być odebrane.",
   downloadInDocuments:
     "Dokument jest do pobrania w zakładce Dokumenty — pobierz, wydrukuj i podpisz ręcznie.",
-  teacherBlankForms:
-    "Jeśli nie masz możliwości wydrukowania, nauczyciel na pierwszych zajęciach będzie miał druki do wypełnienia na miejscu.",
+  /** Nagłówek podglądu Załącznika nr 2 — wyróżniony w UI. */
+  previewHeaderNote:
+    "Ma zastosowanie tylko wtedy, gdy lektor odbiera dziecko ze szkoły na zajęcia. Trzeba wydrukować i podpisać własnoręcznie — bez podpisu elektronicznego.",
 } as const;
 
 /** `Załącznik nr 2 – Upoważnienie lektora do odbioru dziecka _ Imię Nazwisko _ 00031-2-2026.pdf` */
