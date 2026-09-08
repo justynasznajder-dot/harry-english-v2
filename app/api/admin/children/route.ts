@@ -58,14 +58,32 @@ export async function GET(request: NextRequest) {
          u.last_name AS parent_last_name,
          u.email AS parent_email,
          u.client_number AS parent_client_number,
-         g.name AS group_name,
+         (
+           SELECT g.name
+           FROM group_students gs
+           INNER JOIN groups g
+             ON g.id = gs.group_id
+            AND g.school_id = c.school_id
+           WHERE gs.child_id = c.id
+             AND gs.left_at IS NULL
+             AND (
+               gs.school_year_id IS NULL
+               OR EXISTS (
+                 SELECT 1
+                 FROM school_years sy
+                 WHERE sy.id = gs.school_year_id
+                   AND sy.school_id = c.school_id
+                   AND sy.active = TRUE
+               )
+             )
+           ORDER BY gs.enrolled_at DESC NULLS LAST
+           LIMIT 1
+         ) AS group_name,
          c.created_at
        FROM children c
        JOIN users u ON u.id = c.parent_id
-       LEFT JOIN group_students gs ON gs.child_id = c.id AND gs.left_at IS NULL
-       LEFT JOIN groups g ON g.id = gs.group_id
        WHERE ${where.join(" AND ")}
-       ORDER BY c.created_at DESC`,
+       ORDER BY c.last_name ASC, c.first_name ASC, c.created_at DESC`,
       values
     );
 

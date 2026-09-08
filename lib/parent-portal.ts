@@ -305,13 +305,17 @@ export async function fetchParentProposedGroups(
 
 export async function fetchUpcomingLessonsForGroups(
   groupIds: string[],
-  limit = 5,
+  limit: number | null = 5,
   opts?: { parentId?: string; schoolId?: string }
 ): Promise<ParentUpcomingLesson[]> {
   if (groupIds.length === 0) return [];
 
   const parentId = opts?.parentId;
   const schoolId = opts?.schoolId;
+  const sqlLimit =
+    limit == null || !Number.isFinite(limit) || limit <= 0
+      ? null
+      : Math.max(1, Math.floor(limit));
 
   if (parentId && schoolId) {
     const res = await queryDb<{
@@ -343,8 +347,10 @@ export async function fetchUpcomingLessonsForGroups(
          AND c.active = TRUE
          AND ${sqlStudentAttendsLesson("gs", "g", "l")}
        ORDER BY l.scheduled_at ASC
-       LIMIT $4`,
-      [groupIds, parentId, schoolId, Math.max(limit * 10, 50)]
+       ${sqlLimit == null ? "" : "LIMIT $4"}`,
+      sqlLimit == null
+        ? [groupIds, parentId, schoolId]
+        : [groupIds, parentId, schoolId, sqlLimit]
     );
 
     return res.rows.map((row) => ({
@@ -378,8 +384,8 @@ export async function fetchUpcomingLessonsForGroups(
        AND l.status IN ('SCHEDULED', 'COMPLETED')
        AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} >= NOW()
      ORDER BY l.scheduled_at ASC
-     LIMIT $2`,
-    [groupIds, limit]
+     ${sqlLimit == null ? "" : "LIMIT $2"}`,
+    sqlLimit == null ? [groupIds] : [groupIds, sqlLimit]
   );
 
   return res.rows.map((row) => ({
@@ -1169,7 +1175,8 @@ export async function fetchParentPaymentOverview(
 
 /**
  * Harmonogram kwot dla rodzica w trybie bez umowy (bez kontraktu, faktur i statusów).
- * Preferuje raty miesięczne; gdy brak — jednorazową; gdy brak — rozliczenie za zajęcia.
+ * Pokazuje dostępne warianty równolegle: jednorazową i/lub raty (rodzic nie wybiera formy płatności).
+ * Gdy brak obu — rozliczenie za zajęcia.
  */
 export async function fetchComplimentaryParentPaymentOverview(
   parentId: string,
@@ -1300,6 +1307,7 @@ export async function fetchComplimentaryParentPaymentOverview(
 
     // Stawka 0 (np. rabat 100%) to nadal ustalona stawka — pokaż harmonogram z 0 zł.
     // Pomijaj tylko gdy żadna stawka nie została ustawiona (null).
+    // W trybie bez umowy rodzic nie wybiera formy — wypełnij wszystkie dostępne warianty.
     let paymentType: PaymentType = "MONTHLY";
     if (monthlyBase != null) {
       paymentType = "MONTHLY";
@@ -1326,7 +1334,7 @@ export async function fetchComplimentaryParentPaymentOverview(
       lessonUnitPrice: lessonBase != null ? moneyText(resolveAmount(lessonBase)) : null,
     };
 
-    if (paymentType === "MONTHLY" && dateFrom && dateTo) {
+    if (monthlyBase != null && dateFrom && dateTo) {
       const months = listMonthsInclusive(dateFrom, dateTo);
       const amount = moneyText(resolveAmount(monthlyBase));
       base.installments = months.map((periodMonth) => ({
@@ -1334,14 +1342,18 @@ export async function fetchComplimentaryParentPaymentOverview(
         amount,
         ...emptyInvoiceRef,
       }));
-    } else if (paymentType === "YEARLY") {
+    }
+
+    if (yearlyBase != null) {
       base.yearly = {
         periodMonth: periodMonthKey(dateFrom ?? new Date()),
         label: "Płatność jednorazowa — rok szkolny",
         amount: moneyText(resolveAmount(yearlyBase)),
         ...emptyInvoiceRef,
       };
-    } else {
+    }
+
+    if (paymentType === "PER_LESSON") {
       const unit = resolveAmount(lessonBase);
       const lessons = lessonsByChild.get(row.child_id) ?? [];
       const monthMap = new Map<string, ParentPaymentLessonChargeRow[]>();

@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
 
     const groups = await fetchParentGroups(parentId, schoolId);
     const groupIds = [...new Set(groups.map((g) => g.groupId))];
-    const upcomingLessons = await fetchUpcomingLessonsForGroups(groupIds, 5, {
+    const upcomingLessons = await fetchUpcomingLessonsForGroups(groupIds, null, {
       parentId,
       schoolId,
     });
@@ -37,10 +37,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       groups: groups.map((g) => ({
         ...g,
-        upcomingLessons: (lessonsByChildGroup.get(`${g.childId}:${g.groupId}`) ?? []).slice(
-          0,
-          5
-        ),
+        upcomingLessons: lessonsByChildGroup.get(`${g.childId}:${g.groupId}`) ?? [],
       })),
       proposedGroups,
     });

@@ -182,6 +182,19 @@ function ChildMonthlySection({
           tego czasu status to „Oczekiwanie na fakturę”.
         </InfoBanner>
       ) : null}
+      {hideInvoiceAndStatus && child.yearly ? (
+        <article className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 shadow-sm">
+          <p className="text-sm font-semibold text-zinc-900">
+            {child.yearly.label ?? 'Płatność jednorazowa — rok szkolny'}
+          </p>
+          <p className="mt-2 text-xl font-semibold text-zinc-900">
+            {formatAmountPln(child.yearly.amount)}
+          </p>
+        </article>
+      ) : null}
+      {hideInvoiceAndStatus && rows.length > 0 ? (
+        <p className="text-sm font-semibold text-zinc-800">Płatność ratalna</p>
+      ) : null}
       {rows.length === 0 ? (
         <p className="text-sm text-zinc-600">Brak harmonogramu rat dla tego roku szkolnego.</p>
       ) : (
@@ -454,28 +467,52 @@ export default function ParentPaymentsTab({ complimentaryAccess }: { complimenta
         </div>
       ) : (
         <div className="space-y-8">
-          {children.map((child) => (
+          {children.map((child) => {
+            const hasYearly = Boolean(child.yearly);
+            const hasInstallments = Boolean(child.installments?.length);
+            const paymentLabel =
+              hideInvoiceAndStatus && hasYearly && hasInstallments
+                ? 'Jednorazowy / Ratalny'
+                : paymentTypeShortLabel(child.paymentType);
+
+            return (
             <article key={`${child.childId}-${child.contractId}`} className="space-y-4">
               <div className="flex flex-wrap items-end justify-between gap-2 border-b border-emerald-100 pb-3">
                 <div>
                   <h3 className="text-lg font-bold text-zinc-900">{child.childName}</h3>
                   <p className="text-sm text-zinc-600">
-                    {paymentTypeShortLabel(child.paymentType)}
+                    {paymentLabel}
                     {child.schoolYearName ? ` · ${child.schoolYearName}` : null}
                   </p>
                 </div>
               </div>
-              {child.paymentType === 'MONTHLY' ? (
-                <ChildMonthlySection child={child} hideInvoiceAndStatus={hideInvoiceAndStatus} />
-              ) : null}
-              {child.paymentType === 'YEARLY' ? (
-                <ChildYearlySection child={child} hideInvoiceAndStatus={hideInvoiceAndStatus} />
-              ) : null}
-              {child.paymentType === 'PER_LESSON' ? (
-                <ChildLessonSection child={child} hideInvoiceAndStatus={hideInvoiceAndStatus} />
-              ) : null}
+              {hideInvoiceAndStatus ? (
+                <>
+                  {hasInstallments ? (
+                    <ChildMonthlySection child={child} hideInvoiceAndStatus />
+                  ) : hasYearly ? (
+                    <ChildYearlySection child={child} hideInvoiceAndStatus />
+                  ) : null}
+                  {child.paymentType === 'PER_LESSON' || child.lessonMonths ? (
+                    <ChildLessonSection child={child} hideInvoiceAndStatus />
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  {child.paymentType === 'MONTHLY' ? (
+                    <ChildMonthlySection child={child} hideInvoiceAndStatus={hideInvoiceAndStatus} />
+                  ) : null}
+                  {child.paymentType === 'YEARLY' ? (
+                    <ChildYearlySection child={child} hideInvoiceAndStatus={hideInvoiceAndStatus} />
+                  ) : null}
+                  {child.paymentType === 'PER_LESSON' ? (
+                    <ChildLessonSection child={child} hideInvoiceAndStatus={hideInvoiceAndStatus} />
+                  ) : null}
+                </>
+              )}
             </article>
-          ))}
+            );
+          })}
         </div>
       )}
     </section>

@@ -49,6 +49,17 @@ export async function POST(request: NextRequest) {
        INNER JOIN groups g ON g.id = gs.group_id AND g.school_id = $2
        WHERE gs.child_id = $1
          AND gs.left_at IS NULL
+         AND (
+           gs.school_year_id IS NULL
+           OR EXISTS (
+             SELECT 1
+             FROM school_years sy
+             WHERE sy.id = gs.school_year_id
+               AND sy.school_id = $2
+               AND sy.active = TRUE
+           )
+         )
+       ORDER BY gs.enrolled_at DESC NULLS LAST
        LIMIT 1`,
       [childId, ctx.schoolId]
     );

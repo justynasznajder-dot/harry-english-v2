@@ -54,6 +54,30 @@ function emptyProposalDraft(groupId = ''): ProposalDraft {
   };
 }
 
+/** Czy wyszukiwanie pasuje do rodzica lub któregokolwiek dziecka (imię/nazwisko/e-mail). */
+function enrollmentSearchMatchesFamily(
+  parent: Pick<
+    EnrollmentParentRow,
+    'firstName' | 'lastName' | 'email' | 'children'
+  >,
+  queryRaw: string,
+): boolean {
+  const query = queryRaw.trim().toLocaleLowerCase('pl');
+  if (!query) return true;
+  const parentName = `${parent.firstName ?? ''} ${parent.lastName ?? ''}`.toLocaleLowerCase('pl');
+  const parentEmail = (parent.email ?? '').toLocaleLowerCase('pl');
+  if (parentName.includes(query) || parentEmail.includes(query)) return true;
+  return parent.children.some((child) => {
+    const first = (child.firstName ?? '').toLocaleLowerCase('pl');
+    const last = (child.lastName ?? '').toLocaleLowerCase('pl');
+    return (
+      first.includes(query) ||
+      last.includes(query) ||
+      `${first} ${last}`.includes(query)
+    );
+  });
+}
+
 /** Etykieta harmonogramu — „brak harmonogramu” gdy brak poprawnego dnia/godziny. */
 function groupScheduleLabel(schedule: string | null | undefined): string {
   const text = (schedule ?? '').trim();
@@ -480,11 +504,28 @@ export default function EnrollmentAdminPanel({
 
   const openProposalModal = useCallback(
     (parent: EnrollmentParentRow) => {
-      const parentIsComplimentary = isParentInComplimentaryList(parent, complimentaryParents);
-      setProposalModalParentId(parent.id);
+      // Zawsze pełna lista dzieci rodzica (nie ta z filtra wyszukiwania — tam bywają tylko dopasowane nazwiska).
+      const fullParent =
+        parents.find((p) => {
+          if (p.id === parent.id) return true;
+          if (
+            (parent.parentUserId ?? '').trim() &&
+            (p.parentUserId ?? '').trim() === (parent.parentUserId ?? '').trim()
+          ) {
+            return true;
+          }
+          const email = (parent.email ?? '').trim().toLowerCase();
+          const pEmail = (p.email ?? '').trim().toLowerCase();
+          return email.length > 0 && email === pEmail;
+        }) ?? parent;
+      const parentIsComplimentary = isParentInComplimentaryList(
+        fullParent,
+        complimentaryParents,
+      );
+      setProposalModalParentId(fullParent.id);
       setProposalDrafts(() => {
         const next: Record<string, ProposalDraft> = {};
-        for (const child of parent.children) {
+        for (const child of fullParent.children) {
           const draft = emptyProposalDraft(child.proposedGroupId ?? '');
           if (child.lessonUnitPrice != null && child.lessonUnitPrice !== '') {
             draft.lessonUnitPrice = String(child.lessonUnitPrice);
@@ -505,7 +546,7 @@ export default function EnrollmentAdminPanel({
         return next;
       });
     },
-    [complimentaryParents],
+    [complimentaryParents, parents],
   );
   /** NEW + PROPOSED (retry trybu bez umowy po częściowym zapisie przed COMPLETED). */
   const proposalNewChildren =
@@ -884,7 +925,7 @@ export default function EnrollmentAdminPanel({
     const isPipeline = enrollmentStatusFilter === 'pipeline';
     const isByGroupPrices = enrollmentStatusFilter === 'by-group-prices';
     const isReportedChildren = enrollmentStatusFilter === 'by-reported-children';
-    const studentQuery = studentNameSearch.trim().toLowerCase();
+    const studentQuery = studentNameSearch.trim().toLocaleLowerCase('pl');
     const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
     const filteredEnrollmentRows = enrollmentRows
       .map((parent) => {
@@ -894,16 +935,9 @@ export default function EnrollmentAdminPanel({
           enrollmentStatusFilter,
           { parentIsComplimentary },
         );
-        if (studentQuery) {
-          children = children.filter((child) => {
-            const first = (child.firstName ?? '').toLowerCase();
-            const last = (child.lastName ?? '').toLowerCase();
-            return (
-              first.includes(studentQuery) ||
-              last.includes(studentQuery) ||
-              `${first} ${last}`.includes(studentQuery)
-            );
-          });
+        // Dopasowanie po rodzicu lub dowolnym dziecku → zostaw całe rodzeństwo (nie tnij po nazwisku).
+        if (studentQuery && !enrollmentSearchMatchesFamily(parent, studentQuery)) {
+          children = [];
         }
         return {
           ...parent,
@@ -924,21 +958,21 @@ export default function EnrollmentAdminPanel({
         return bT - aT; // najnowsze zgłoszenia na górze
       });
 
+    const matchingParentIdsForSearch = studentQuery
+      ? new Set(
+          parents
+            .filter((parent) => enrollmentSearchMatchesFamily(parent, studentQuery))
+            .map((parent) => parent.id),
+        )
+      : null;
+
     const filteredByGroupSections = isByGroupPrices
       ? childrenByProposedGroup.sections
           .map((section) => {
-            if (!studentQuery) return section;
-            const rows = section.rows.filter(({ child, parent }) => {
-              const first = (child.firstName ?? '').toLowerCase();
-              const last = (child.lastName ?? '').toLowerCase();
-              const parentName = `${parent.firstName ?? ''} ${parent.lastName ?? ''}`.toLowerCase();
-              return (
-                first.includes(studentQuery) ||
-                last.includes(studentQuery) ||
-                `${first} ${last}`.includes(studentQuery) ||
-                parentName.includes(studentQuery)
-              );
-            });
+            if (!matchingParentIdsForSearch) return section;
+            const rows = section.rows.filter(({ parent }) =>
+              matchingParentIdsForSearch.has(parent.id),
+            );
             return { ...section, rows };
           })
           .filter((section) => section.rows.length > 0)
@@ -947,18 +981,10 @@ export default function EnrollmentAdminPanel({
     const filteredReportedSections = isReportedChildren
       ? reportedChildrenView.sections
           .map((section) => {
-            if (!studentQuery) return section;
-            const rows = section.rows.filter(({ child, parent }) => {
-              const first = (child.firstName ?? '').toLowerCase();
-              const last = (child.lastName ?? '').toLowerCase();
-              const parentName = `${parent.firstName ?? ''} ${parent.lastName ?? ''}`.toLowerCase();
-              return (
-                first.includes(studentQuery) ||
-                last.includes(studentQuery) ||
-                `${first} ${last}`.includes(studentQuery) ||
-                parentName.includes(studentQuery)
-              );
-            });
+            if (!matchingParentIdsForSearch) return section;
+            const rows = section.rows.filter(({ parent }) =>
+              matchingParentIdsForSearch.has(parent.id),
+            );
             return { ...section, rows };
           })
           .filter((section) => section.rows.length > 0)
@@ -974,7 +1000,7 @@ export default function EnrollmentAdminPanel({
             autoComplete="off"
             value={studentNameSearch}
             onChange={(e) => setStudentNameSearch(e.target.value)}
-            placeholder="Szukaj po imieniu lub nazwisku ucznia…"
+            placeholder="Szukaj: dziecko, rodzic lub e-mail (pokazuje całe rodzeństwo)…"
             className="w-full max-w-md rounded-xl border border-emerald-200 px-3 py-2 text-sm"
           />
         )}

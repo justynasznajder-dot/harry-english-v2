@@ -184,7 +184,7 @@ export default function ParentGroupTab() {
     <section className="space-y-4 rounded-3xl border border-emerald-100 bg-white p-5 md:p-6">
       <header>
         <h2 className="text-xl font-bold text-zinc-900 md:text-2xl">Moja grupa</h2>
-        <p className="mt-1 text-sm text-zinc-600">Aktualna grupa, harmonogram i nadchodzące zajęcia.</p>
+        <p className="mt-1 text-sm text-zinc-600">Aktualna grupa, harmonogram i zajęcia.</p>
       </header>
 
       <div className="space-y-4">
@@ -222,11 +222,13 @@ export default function ParentGroupTab() {
             </div>
 
             <div className="mt-5">
-              <h3 className="text-sm font-semibold text-zinc-900">Następne zajęcia</h3>
+              <h3 className="text-sm font-semibold text-zinc-900">
+                Zajęcia ({g.upcomingLessons.length})
+              </h3>
               {g.upcomingLessons.length === 0 ? (
                 <p className="mt-2 text-sm text-zinc-600">Brak zaplanowanych terminów.</p>
               ) : (
-                <ul className="mt-2 space-y-2">
+                <ul className="mt-2 max-h-[28rem] space-y-2 overflow-y-auto pr-1">
                   {g.upcomingLessons.map((lesson) => (
                     <li
                       key={lesson.id}

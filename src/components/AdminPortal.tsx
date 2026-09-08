@@ -2484,15 +2484,27 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
 
   const availableChildren = useMemo(() => {
     if (!groupDetail) return [];
+    const q = studentSearch.trim().toLocaleLowerCase('pl');
     return children
       .filter((c) => c.active && !c.group_name)
       .filter((c) => {
-        const q = studentSearch.trim().toLowerCase();
         if (!q) return true;
+        const childName = `${c.first_name} ${c.last_name}`.toLocaleLowerCase('pl');
+        const parentName = `${c.parent_first_name} ${c.parent_last_name}`.toLocaleLowerCase('pl');
+        const parentEmail = String(c.parent_email ?? '').toLocaleLowerCase('pl');
+        const clientNo = String(c.client_number ?? c.parent_client_number ?? '').toLocaleLowerCase('pl');
         return (
-          `${c.first_name} ${c.last_name}`.toLowerCase().includes(q) ||
-          `${c.parent_first_name} ${c.parent_last_name}`.toLowerCase().includes(q)
+          childName.includes(q) ||
+          parentName.includes(q) ||
+          parentEmail.includes(q) ||
+          (clientNo.length > 0 && clientNo.includes(q))
         );
+      })
+      .slice()
+      .sort((a, b) => {
+        const byLast = a.last_name.localeCompare(b.last_name, 'pl');
+        if (byLast !== 0) return byLast;
+        return a.first_name.localeCompare(b.first_name, 'pl');
       });
   }, [children, groupDetail, studentSearch]);
 
@@ -9356,12 +9368,21 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           <div className="w-full max-w-lg rounded-2xl bg-white p-5">
             <h3 className="text-lg font-semibold">Dodaj ucznia do grupy</h3>
             <div className="mt-4 space-y-3">
-              <input className="w-full rounded-xl border border-emerald-200 px-3 py-2" placeholder="Szukaj po dziecku lub rodzicu" value={studentSearch} onChange={(e) => setStudentSearch(e.target.value)} />
+              <input
+                className="w-full rounded-xl border border-emerald-200 px-3 py-2"
+                placeholder="Szukaj: dziecko, rodzic, e-mail, nr klienta"
+                value={studentSearch}
+                onChange={(e) => setStudentSearch(e.target.value)}
+              />
               <select className="w-full rounded-xl border border-emerald-200 px-3 py-2" value={selectedChildId} onChange={(e) => setSelectedChildId(e.target.value)}>
-                <option value="">Wybierz dziecko</option>
+                <option value="">
+                  {availableChildren.length === 0
+                    ? 'Brak dostępnych dzieci'
+                    : `Wybierz dziecko (${availableChildren.length})`}
+                </option>
                 {availableChildren.map((c) => (
                   <option key={c.child_id} value={c.child_id}>
-                    {c.first_name} {c.last_name} — rodzic: {c.parent_first_name} {c.parent_last_name}
+                    {c.last_name} {c.first_name} — rodzic: {c.parent_first_name} {c.parent_last_name}
                   </option>
                 ))}
               </select>
@@ -9384,8 +9405,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               ) : null}
               {availableChildren.length === 0 ? (
                 <p className="text-sm text-zinc-600">
-                  Brak dzieci bez grupy. Widać tylko aktywne dzieci, które nie są przypisane do
-                  żadnej grupy. Odśwież stronę albo sprawdź, czy dziecko nie jest już w innej grupie.
+                  Brak aktywnych dzieci bez grupy w bieżącym roku szkolnym. Odśwież stronę albo sprawdź,
+                  czy dziecko nie jest już w innej grupie (albo czy nie jest nieaktywne).
                 </p>
               ) : null}
               <div className="flex justify-end gap-2">
