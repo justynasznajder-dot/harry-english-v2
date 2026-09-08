@@ -3352,67 +3352,110 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         {active && (
                           <div className="rounded-xl border border-emerald-100 bg-white p-4">
                             <h4 className="text-sm font-semibold text-zinc-800">Dni wolne (aktywny rok)</h4>
+                            <p className="mt-1 flex flex-wrap gap-3 text-[11px] text-zinc-500">
+                              <span className="inline-flex items-center gap-1.5">
+                                <span className="h-2.5 w-2.5 rounded-full bg-amber-400" aria-hidden />
+                                Z kalendarza (święta PL)
+                              </span>
+                              <span className="inline-flex items-center gap-1.5">
+                                <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" aria-hidden />
+                                Dodane ręcznie
+                              </span>
+                            </p>
                             {schoolHolidays.length === 0 ? (
                               <p className="mt-2 text-sm text-zinc-500">Brak wpisów.</p>
                             ) : (
-                              <ul className="mt-3 divide-y divide-emerald-100">
-                                {schoolHolidays.map((h) => (
-                                  <li key={h.id} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
-                                    <div>
-                                      <p className="font-medium text-zinc-900">{h.name}</p>
-                                      <p className="text-xs text-zinc-600">
-                                        {h.date_from} — {h.date_to} · {h.type}
-                                      </p>
-                                      <p className="mt-0.5 text-xs text-zinc-500">
-                                        {h.applies_to_all_groups || !(h.group_ids?.length)
-                                          ? 'Wszystkie grupy'
-                                          : `${h.group_ids.length} grup: ${h.group_ids
-                                              .map(
-                                                (gid) =>
-                                                  groups.find((g) => g.id === gid)?.name ?? '…',
-                                              )
-                                              .join(', ')}`}
-                                      </p>
-                                    </div>
-                                    <button
-                                      type="button"
-                                      disabled={busy}
-                                      onClick={async () => {
-                                        if (!confirm('Usunąć ten dzień wolny?')) return;
-                                        const restoreLessons = confirm(
-                                          'Ustawić zajęcia w tych dniach zgodnie z harmonogramem?\n\n' +
-                                            'OK — dodamy brakujące terminy z harmonogramu i usuniemy tyle samo ostatnich zajęć z końca kalendarza (liczba zajęć grupy bez zmian).\n' +
-                                            'Anuluj — tylko usuniemy dzień wolny, bez zmian w zajęciach.',
-                                        );
-                                        setBusy(true);
-                                        try {
-                                          const res = await fetch(`/api/admin/school-holidays/${h.id}`, {
-                                            method: 'DELETE',
-                                            headers: { 'Content-Type': 'application/json' },
-                                            body: JSON.stringify({ restoreLessons }),
-                                          });
-                                          const data = await res.json().catch(() => ({}));
-                                          if (!res.ok) throw new Error(data.message ?? 'Błąd');
-                                          pushToast(
-                                            'success',
-                                            typeof data.message === 'string'
-                                              ? data.message
-                                              : 'Usunięto dzień wolny',
-                                          );
-                                          setClassesCalRefreshSignal((s) => s + 1);
-                                          await loadSchoolYearData();
-                                        } catch (e) {
-                                          pushToast('error', e instanceof Error ? e.message : 'Błąd usuwania');
-                                        } finally {
-                                          setBusy(false);
-                                        }
-                                      }}
-                                      className="self-start rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 sm:self-center"
+                              <ul className="mt-3 space-y-2">
+                                {schoolHolidays.map((h) => {
+                                  const typeKey = String(h.type ?? '').toUpperCase();
+                                  const fromCalendar = typeKey === 'PUBLIC';
+                                  return (
+                                    <li
+                                      key={h.id}
+                                      className={`flex flex-col gap-2 rounded-lg px-3 py-3 sm:flex-row sm:items-center sm:justify-between ${
+                                        fromCalendar
+                                          ? 'bg-amber-50/90 ring-1 ring-inset ring-amber-100'
+                                          : 'bg-emerald-50/70 ring-1 ring-inset ring-emerald-100'
+                                      }`}
                                     >
-                                      Usuń
-                                    </button>
-                                  </li>
-                                ))}
+                                      <div>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <p className="font-medium text-zinc-900">{h.name}</p>
+                                          <span
+                                            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${
+                                              fromCalendar
+                                                ? 'bg-amber-100 text-amber-950 ring-amber-200'
+                                                : 'bg-emerald-100 text-emerald-950 ring-emerald-200'
+                                            }`}
+                                          >
+                                            {fromCalendar ? 'Z kalendarza' : 'Dodany'}
+                                            {typeKey &&
+                                            typeKey !== 'PUBLIC' &&
+                                            typeKey !== 'HOLIDAY'
+                                              ? ` · ${typeKey}`
+                                              : ''}
+                                          </span>
+                                        </div>
+                                        <p className="mt-0.5 text-xs text-zinc-600">
+                                          {h.date_from} — {h.date_to}
+                                        </p>
+                                        <p className="mt-0.5 text-xs text-zinc-500">
+                                          {h.applies_to_all_groups || !(h.group_ids?.length)
+                                            ? 'Wszystkie grupy'
+                                            : `${h.group_ids.length} grup: ${h.group_ids
+                                                .map(
+                                                  (gid) =>
+                                                    groups.find((g) => g.id === gid)?.name ?? '…',
+                                                )
+                                                .join(', ')}`}
+                                        </p>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        disabled={busy}
+                                        onClick={async () => {
+                                          if (!confirm('Usunąć ten dzień wolny?')) return;
+                                          const restoreLessons = confirm(
+                                            'Ustawić zajęcia w tych dniach zgodnie z harmonogramem?\n\n' +
+                                              'OK — dodamy brakujące terminy z harmonogramu i usuniemy tyle samo ostatnich zajęć z końca kalendarza (liczba zajęć grupy bez zmian).\n' +
+                                              'Anuluj — tylko usuniemy dzień wolny, bez zmian w zajęciach.',
+                                          );
+                                          setBusy(true);
+                                          try {
+                                            const res = await fetch(
+                                              `/api/admin/school-holidays/${h.id}`,
+                                              {
+                                                method: 'DELETE',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({ restoreLessons }),
+                                              },
+                                            );
+                                            const data = await res.json().catch(() => ({}));
+                                            if (!res.ok) throw new Error(data.message ?? 'Błąd');
+                                            pushToast(
+                                              'success',
+                                              typeof data.message === 'string'
+                                                ? data.message
+                                                : 'Usunięto dzień wolny',
+                                            );
+                                            setClassesCalRefreshSignal((s) => s + 1);
+                                            await loadSchoolYearData();
+                                          } catch (e) {
+                                            pushToast(
+                                              'error',
+                                              e instanceof Error ? e.message : 'Błąd usuwania',
+                                            );
+                                          } finally {
+                                            setBusy(false);
+                                          }
+                                        }}
+                                        className="self-start rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 sm:self-center"
+                                      >
+                                        Usuń
+                                      </button>
+                                    </li>
+                                  );
+                                })}
                               </ul>
                             )}
                           </div>

@@ -261,8 +261,10 @@ export default function EnrollmentAdminPanel({
     () => new Set(),
   );
   const [unassignedMissingPricesOnly, setUnassignedMissingPricesOnly] = useState(false);
-  /** Filtr lokalizacji w widoku „Zgłoszone dzieci”. */
-  const [reportedChildrenLocationKey, setReportedChildrenLocationKey] = useState('');
+  /** Filtr lokalizacji w widoku „Zgłoszone dzieci” — domyślnie wszystkie. */
+  const [reportedChildrenLocationKey, setReportedChildrenLocationKey] = useState(
+    REPORTED_CHILDREN_ALL_LOCATIONS,
+  );
   /** '' = wszystkie, assigned / unassigned — po proposedGroupId. */
   const [reportedChildrenGroupFilter, setReportedChildrenGroupFilter] = useState<
     '' | 'assigned' | 'unassigned'
@@ -1364,6 +1366,15 @@ export default function EnrollmentAdminPanel({
                         const groupAssignedCount = groupId
                           ? (reportedChildrenView.assignedCountByGroupId.get(groupId) ?? 0)
                           : 0;
+                        const managerPct = parseManualDiscountPercent(child.discountPercent);
+                        const hasKdr = Boolean(parent.discountLargeFamily);
+                        const hasSibling = Boolean(parent.enrollingMultipleChildren);
+                        const isComplimentary = isParentInComplimentaryList(
+                          parent,
+                          complimentaryParents,
+                        );
+                        const hasAnyDiscount =
+                          isComplimentary || hasKdr || hasSibling || managerPct != null;
                         return (
                           <li
                             key={child.requestId}
@@ -1384,6 +1395,30 @@ export default function EnrollmentAdminPanel({
                                 </button>
                                 {parent.email ? ` · ${parent.email}` : ''}
                               </p>
+                              {hasAnyDiscount ? (
+                                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                  {isComplimentary ? (
+                                    <span className="inline-flex items-center rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-900 ring-1 ring-inset ring-sky-200">
+                                      Tryb bez umowy
+                                    </span>
+                                  ) : null}
+                                  {hasKdr ? (
+                                    <span className="inline-flex items-center rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-800 ring-1 ring-inset ring-violet-200">
+                                      KDR {discountSettings.LARGE_FAMILY_CARD}%
+                                    </span>
+                                  ) : null}
+                                  {hasSibling ? (
+                                    <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-900 ring-1 ring-inset ring-emerald-200">
+                                      Rodzeństwo {discountSettings.SIBLING}%
+                                    </span>
+                                  ) : null}
+                                  {managerPct != null ? (
+                                    <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-900 ring-1 ring-inset ring-amber-200">
+                                      Manager {managerPct}%
+                                    </span>
+                                  ) : null}
+                                </div>
+                              ) : null}
                             </div>
                             <p className="min-w-0 text-left text-sm text-zinc-700">
                               <span className="font-medium text-zinc-900">

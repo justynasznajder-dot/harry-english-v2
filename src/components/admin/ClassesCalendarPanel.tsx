@@ -93,13 +93,16 @@ function holidayTitle(h: CalendarHolidayRow): string {
 
 function buildEventInputs(lessons: CalendarLessonRow[], holidays: CalendarHolidayRow[]): EventInput[] {
   const holidayEv: EventInput[] = [];
+  const seenLabelKeys = new Set<string>();
+
   for (const h of holidays) {
     const full = holidayIsFullDay(h);
-    const title = holidayTitle(h);
+    const label = holidayTitle(h);
     const end = addDaysYmd(h.date_to, 1);
     holidayEv.push({
       id: `holiday-bg-${h.id}`,
-      title,
+      // Pusty title — inaczej FC czasem dubluje napis obok eventContent.
+      title: '',
       start: h.date_from,
       end,
       allDay: true,
@@ -111,9 +114,14 @@ function buildEventInputs(lessons: CalendarLessonRow[], holidays: CalendarHolida
         audienceLabel: h.audience_label ?? null,
       },
     });
+
+    const labelKey = `${h.date_from}|${h.date_to}|${label}`;
+    if (seenLabelKeys.has(labelKey)) continue;
+    seenLabelKeys.add(labelKey);
+
     holidayEv.push({
       id: `holiday-label-${h.id}`,
-      title,
+      title: '',
       start: h.date_from,
       end,
       allDay: true,
@@ -121,13 +129,14 @@ function buildEventInputs(lessons: CalendarLessonRow[], holidays: CalendarHolida
       classNames: ['classes-fc-holiday-label'],
       backgroundColor: 'transparent',
       borderColor: 'transparent',
-      textColor: full ? '#52525b' : '#854d0e',
+      textColor: full ? '#3f3f46' : '#854d0e',
       editable: false,
       extendedProps: {
         isHolidayLabel: true,
         holidayScope: full ? 'all' : h.scope ?? 'mixed',
         audienceLabel: h.audience_label ?? null,
-        tooltip: title,
+        labelText: label,
+        tooltip: label,
       },
     });
   }

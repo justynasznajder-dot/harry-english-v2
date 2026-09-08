@@ -144,19 +144,29 @@ input[type="reset"]:disabled {
   padding: 0 !important;
   margin: 0 !important;
   cursor: default;
+  z-index: 2;
+}
+/* Ukryj domyślny tytuł FC — zostaje tylko nasz label-body (bez dublowania). */
+.classes-fc .classes-fc-holiday-label .fc-event-title {
+  display: none !important;
+}
+.classes-fc .classes-fc-holiday-label .fc-event-main {
+  padding: 0 !important;
 }
 .classes-fc .classes-fc-holiday-label-body {
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   font-style: italic;
-  font-weight: 500;
-  line-height: 1.25;
+  font-weight: 600;
+  line-height: 1.2;
   color: inherit;
   white-space: normal;
   overflow: hidden;
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  padding: 1px 4px;
+  -webkit-line-clamp: 3;
+  padding: 2px 4px;
+  text-shadow: none;
+  opacity: 1;
 }
 .classes-fc .classes-fc-event-body {
   padding: 1px 3px;

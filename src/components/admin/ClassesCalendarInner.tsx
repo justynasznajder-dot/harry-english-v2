@@ -21,11 +21,13 @@ function renderEventContent(arg: EventContentArg) {
     return true;
   }
   if (arg.event.extendedProps?.isHolidayLabel) {
-    return (
-      <div className="classes-fc-holiday-label-body" title={arg.event.title}>
-        {arg.event.title}
-      </div>
-    );
+    const text =
+      String(arg.event.extendedProps?.labelText ?? '').trim() ||
+      arg.event.title ||
+      'Dzień wolny';
+    return {
+      html: `<div class="classes-fc-holiday-label-body">${escapeHtml(text)}</div>`,
+    };
   }
   const groupName =
     (arg.event.extendedProps?.groupName as string | undefined)?.trim() ||
@@ -40,6 +42,14 @@ function renderEventContent(arg: EventContentArg) {
       </div>
     </div>
   );
+}
+
+function escapeHtml(raw: string): string {
+  return raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 export default function ClassesCalendarInner({
