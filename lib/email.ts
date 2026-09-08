@@ -1445,17 +1445,24 @@ export async function sendSignedContractConfirmationEmails(params: {
     .map((file) => `<li>${escapeHtmlForEmail(file.filename)}</li>`)
     .join("");
 
-  const portalUrl = `${getAppBaseUrl()}/portal/login`;
+  const portalUrl = PUBLIC_SITE_URL;
+  const p = getEmailPalette();
   const sharedContentHtml = `
     <p>Umowa${escapeHtmlForEmail(contractLabel)} została podpisana elektronicznie przez: <strong>${escapeHtmlForEmail(params.parentFullName)}</strong>.${escapeHtmlForEmail(childPart)}</p>
     <p>W załączeniu: podpisane PDF-y.</p>
     <ul style="margin:8px 0;padding-left:20px;">${filesListHtml}</ul>
     <p>Wszystko masz też w <strong>panelu rodzica</strong>: dokumenty, terminy zajęć, a wkrótce faktury. Pytania? Napisz w module <strong>Wiadomości</strong>.</p>
-    <p>Portal będziemy rozwijać — warto zajrzeć.</p>
+    <p>Portal będziemy rozwijać — warto zaglądać.</p>
     ${emailCtaButton(portalUrl, "Przejdź do panelu rodzica")}
+    <p style="margin:14px 0 0 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
+      Lub skopiuj link do przeglądarki: <a href="${portalUrl}" class="he-email-body-link" style="font-family:${BRAND_FONT};color:${p.link} !important;">${portalUrl}</a>
+    </p>
   `;
 
-  const sharedText = `Umowa${contractLabel} została podpisana przez ${params.parentFullName}.${childPart} W załączeniu: podpisane PDF-y (${params.pdfFiles.map((f) => f.filename).join(", ")}). Wszystko masz też w panelu rodzica: dokumenty, terminy zajęć, a wkrótce faktury. Pytania? Napisz w module Wiadomości. Portal będziemy rozwijać — warto zajrzeć: ${portalUrl}`;
+  const sharedText = `Umowa${contractLabel} została podpisana przez ${params.parentFullName}.${childPart} W załączeniu: podpisane PDF-y (${params.pdfFiles.map((f) => f.filename).join(", ")}). Wszystko masz też w panelu rodzica: dokumenty, terminy zajęć, a wkrótce faktury. Pytania? Napisz w module Wiadomości. Portal będziemy rozwijać — warto zaglądać.
+
+Przejdź do panelu rodzica: ${portalUrl}
+Lub skopiuj link do przeglądarki: ${portalUrl}`;
 
   await sendHarryMail({
     from,

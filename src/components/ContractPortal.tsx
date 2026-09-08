@@ -530,8 +530,8 @@ export default function ContractPortal({ contract, onSigned, readOnly = false }:
                     <span className="text-sm text-zinc-800">
                       Zapoznałem/am się z treścią zgody na odebranie ({item.childName}).{' '}
                       <span className="font-semibold text-rose-700">
-                        Zobowiązuję się przekazać wydrukowane upoważnienie po jednym egzemplarzu w
-                        szkole/przedszkolu oraz u lektora przed pierwszymi zajęciami.
+                        Zobowiązuję się przekazać wydrukowane upoważnienie w szkole/przedszkolu przed
+                        pierwszymi zajęciami.
                       </span>
                     </span>
                   </label>
