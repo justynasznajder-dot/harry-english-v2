@@ -11,7 +11,7 @@ import {
   filterEnrollmentChildrenByStatus,
   resolveEnrollmentListBadge,
 } from '@/lib/enrollment-status';
-import { downloadEnrollmentListXlsx } from '@/lib/enrollment-list-xlsx';
+import { downloadEnrollmentListXlsx, downloadReportedChildrenXlsx } from '@/lib/enrollment-list-xlsx';
 import { parsePriceDecimal } from '@/lib/lesson-pricing';
 import { parseManualDiscountPercent } from '@/lib/discount-math';
 import { isParentInComplimentaryList } from '@/lib/complimentary-parent-list';
@@ -185,6 +185,9 @@ type ReportedChildRow = {
   child: EnrollmentParentRow['children'][number];
   parent: EnrollmentParentRow;
 };
+
+/** Wartość selecta: wszystkie lokalizacje w widoku „Zgłoszone dzieci”. */
+const REPORTED_CHILDREN_ALL_LOCATIONS = '__all__';
 
 /** Klucz lokalizacji z preferencji zgłoszenia (id albo nazwa). */
 function reportedChildLocationKey(
@@ -705,9 +708,19 @@ export default function EnrollmentAdminPanel({
     });
 
     const selectedKey = reportedChildrenLocationKey;
-    let rowsForLocation = selectedKey
-      ? allRows.filter((row) => reportedChildLocationKey(row.child) === selectedKey)
-      : [];
+    let rowsForLocation =
+      selectedKey === REPORTED_CHILDREN_ALL_LOCATIONS
+        ? allRows
+        : selectedKey
+          ? allRows.filter((row) => reportedChildLocationKey(row.child) === selectedKey)
+          : [];
+
+    const locationLabel =
+      selectedKey === REPORTED_CHILDREN_ALL_LOCATIONS
+        ? 'Wszystkie lokalizacje'
+        : selectedKey
+          ? (locationMap.get(selectedKey)?.label ?? 'Lokalizacja')
+          : '';
 
     const assignedInLocation = rowsForLocation.filter((row) =>
       Boolean((row.child.proposedGroupId ?? '').trim()),
@@ -767,6 +780,7 @@ export default function EnrollmentAdminPanel({
       totalCount: allRows.length,
       locations,
       selectedKey,
+      locationLabel,
       sections,
       selectedCount: rowsForLocation.length,
       assignedInLocation,
@@ -1182,6 +1196,9 @@ export default function EnrollmentAdminPanel({
                   onChange={(e) => setReportedChildrenLocationKey(e.target.value)}
                 >
                   <option value="">Wybierz lokalizację…</option>
+                  <option value={REPORTED_CHILDREN_ALL_LOCATIONS}>
+                    Wszystkie lokalizacje ({reportedChildrenView.totalCount})
+                  </option>
                   {reportedChildrenView.locations.map((loc) => (
                     <option key={loc.key} value={loc.key}>
                       {loc.label} ({loc.count})
@@ -1213,6 +1230,89 @@ export default function EnrollmentAdminPanel({
                   ))}
                 </div>
               ) : null}
+              {reportedChildrenLocationKey ? (
+                <button
+                  type="button"
+                  disabled={
+                    exportingList ||
+                    filteredReportedSections.reduce((s, sec) => s + sec.rows.length, 0) === 0
+                  }
+                  onClick={() => {
+                    void (async () => {
+                      const exportRows = filteredReportedSections.flatMap((section) =>
+                        section.rows.map(({ child, parent }) => {
+                          const groupId = (child.proposedGroupId ?? '').trim();
+                          const groupName = groupId
+                            ? reportedChildrenView.groupNameById.get(groupId) ?? groupId
+                            : 'nieprzypisana';
+                          const badge = resolveEnrollmentListBadge(child);
+                          return {
+                            childFirstName: child.firstName,
+                            childLastName: child.lastName,
+                            birthDate: child.birthDate,
+                            birthYear:
+                              section.key === '__none__'
+                                ? ''
+                                : section.key,
+                            preferredLocation: child.preferredLocation,
+                            parentFirstName: parent.firstName,
+                            parentLastName: parent.lastName,
+                            parentEmail: parent.email,
+                            complimentary: isParentInComplimentaryList(
+                              parent,
+                              complimentaryParents,
+                            ),
+                            hasKdr: Boolean(parent.discountLargeFamily),
+                            hasSibling: Boolean(parent.enrollingMultipleChildren),
+                            managerDiscountPercent: parseManualDiscountPercent(
+                              child.discountPercent,
+                            ),
+                            statusLabel: badge.label,
+                            groupName,
+                            groupAssignedCount: groupId
+                              ? (reportedChildrenView.assignedCountByGroupId.get(groupId) ?? 0)
+                              : null,
+                          };
+                        }),
+                      );
+                      if (exportingList || exportRows.length === 0) return;
+                      setExportingList(true);
+                      try {
+                        const groupFilterLabel =
+                          reportedChildrenGroupFilter === 'assigned'
+                            ? 'przypisani do grupy'
+                            : reportedChildrenGroupFilter === 'unassigned'
+                              ? 'nieprzypisani do grupy'
+                              : 'wszystkie';
+                        const filterLabel = [
+                          'Zgłoszone dzieci',
+                          reportedChildrenView.locationLabel,
+                          groupFilterLabel,
+                          studentQuery ? `szukaj: ${studentQuery}` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ');
+                        await downloadReportedChildrenXlsx({
+                          filterLabel,
+                          rows: exportRows,
+                        });
+                      } catch (e) {
+                        pushToast(
+                          'error',
+                          e instanceof Error
+                            ? e.message
+                            : 'Nie udało się wygenerować pliku Excel',
+                        );
+                      } finally {
+                        setExportingList(false);
+                      }
+                    })();
+                  }}
+                  className="ml-auto rounded-xl border border-[#0f6e56] bg-white px-3 py-2 text-sm font-semibold text-[#0f6e56] transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {exportingList ? 'Generowanie…' : 'Pobierz Excel'}
+                </button>
+              ) : null}
             </div>
             {reportedChildrenLocationKey ? (
               <p className="text-sm text-zinc-600">
@@ -1236,7 +1336,9 @@ export default function EnrollmentAdminPanel({
                     ? 'Brak dzieci przypisanych do grupy w tej lokalizacji'
                     : reportedChildrenGroupFilter === 'unassigned'
                       ? 'Brak dzieci bez grupy w tej lokalizacji'
-                      : 'Brak dzieci w tej lokalizacji'}
+                      : reportedChildrenLocationKey === REPORTED_CHILDREN_ALL_LOCATIONS
+                        ? 'Brak dzieci'
+                        : 'Brak dzieci w tej lokalizacji'}
               </p>
             ) : (
               <div className="space-y-2">
