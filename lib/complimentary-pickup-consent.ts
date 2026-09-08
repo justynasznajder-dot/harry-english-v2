@@ -15,18 +15,40 @@ import {
 import { renderHtmlToPdf } from "@/lib/contract-pdf";
 import {
   buildPickupConsentPdfFilename,
+  pickupConsentPdfMatchesChildName,
   stripPickupConsentContractReferenceLine,
 } from "@/lib/pickup-consent-notice";
 import { getActiveSchoolYear, queryDb } from "@/lib/db";
 import { filterScheduleForStudentAttendance } from "@/lib/lessons-per-week";
 import { buildSingleChildAttachmentPlaceholders, type ParentContractChildRow } from "@/lib/parent-contract";
-import { storeSignedContractPdfsInR2 } from "@/lib/r2-storage";
+import { listSignedContractPdfsForParent, storeSignedContractPdfsInR2 } from "@/lib/r2-storage";
 
 export {
   buildPickupConsentPdfFilename,
   isPickupConsentPdfFilename as isComplimentaryPickupConsentPdf,
+  pickupConsentPdfMatchesChildName,
 } from "@/lib/pickup-consent-notice";
 
+async function findExistingPickupConsentKey(params: {
+  parentId: string;
+  schoolId: string;
+  firstName: string;
+  lastName: string;
+}): Promise<string | null> {
+  try {
+    const files = await listSignedContractPdfsForParent({
+      parentUserId: params.parentId,
+      schoolId: params.schoolId,
+    });
+    const match = files.find((f) =>
+      pickupConsentPdfMatchesChildName(f.filename, params.firstName, params.lastName)
+    );
+    return match?.key ?? null;
+  } catch (err) {
+    console.warn("list existing pickup consent PDFs failed:", err);
+    return null;
+  }
+}
 async function findAttachment2Template(
   schoolId: string,
   schoolYearName: string
@@ -109,15 +131,21 @@ async function loadEnrollmentChildForPickupConsent(
  * Generuje PDF Załącznika 2 do wydruku (bez podpisu elektronicznego —
  * rodzic podpisuje ręcznie na pierwszych zajęciach).
  *
- * `requireTeacherPickupFlag` (domyślnie true) — tylko gdy grupa ma teacher_pickup_consent
- * (auto przy domknięciu zapisu). Przycisk w Podsumowaniu wywołuje z `false`.
+ * Wywołanie z Podsumowania: `requireTeacherPickupFlag: false`.
+ * Jeśli PDF dla tego dziecka już istnieje — zwraca istniejący klucz (bez ponownego generowania).
  */
 export async function generateComplimentaryPickupConsent(params: {
   enrollmentRequestId: string;
   parentId: string;
   schoolId: string;
   requireTeacherPickupFlag?: boolean;
-}): Promise<{ generated: boolean; previewHtml?: string; childName?: string; downloadKey?: string | null }> {
+}): Promise<{
+  generated: boolean;
+  alreadyExisted?: boolean;
+  previewHtml?: string;
+  childName?: string;
+  downloadKey?: string | null;
+}> {
   const {
     enrollmentRequestId,
     parentId,
@@ -135,6 +163,24 @@ export async function generateComplimentaryPickupConsent(params: {
   }
   if (requireTeacherPickupFlag && !child.teacher_pickup_consent) {
     return { generated: false };
+  }
+
+  const childName =
+    `${formatPersonName(child.first_name)} ${formatPersonName(child.last_name)}`.trim();
+
+  const existingKey = await findExistingPickupConsentKey({
+    parentId,
+    schoolId,
+    firstName: child.first_name,
+    lastName: child.last_name,
+  });
+  if (existingKey) {
+    return {
+      generated: true,
+      alreadyExisted: true,
+      childName,
+      downloadKey: existingKey,
+    };
   }
 
   if (!child.group_id) {
@@ -287,8 +333,6 @@ export async function generateComplimentaryPickupConsent(params: {
     ),
   );
 
-  const childName =
-    `${formatPersonName(child.first_name)} ${formatPersonName(child.last_name)}`.trim();
   const pdfContent = await renderHtmlToPdf(unsignedHtml);
   const filename = buildPickupConsentPdfFilename(childName);
 
@@ -305,18 +349,25 @@ export async function generateComplimentaryPickupConsent(params: {
 
   return {
     generated: true,
+    alreadyExisted: false,
     previewHtml: unsignedHtml,
     childName,
     downloadKey: uploadedKeys[0] ?? null,
   };
 }
 
-/** Auto przy domknięciu zapisu — tylko gdy grupa wymaga zgody. */
+/** @deprecated Auto przy domknięciu zapisu — nieużywane; zgoda tylko z Podsumowania. */
 export async function generateComplimentaryPickupConsentIfNeeded(params: {
   enrollmentRequestId: string;
   parentId: string;
   schoolId: string;
-}): Promise<{ generated: boolean; previewHtml?: string; childName?: string; downloadKey?: string | null }> {
+}): Promise<{
+  generated: boolean;
+  alreadyExisted?: boolean;
+  previewHtml?: string;
+  childName?: string;
+  downloadKey?: string | null;
+}> {
   return generateComplimentaryPickupConsent({
     ...params,
     requireTeacherPickupFlag: true,

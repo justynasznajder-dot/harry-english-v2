@@ -33,12 +33,16 @@
     margin-bottom: 10px;
     padding-bottom: 4px;
     border-bottom: 1px solid #cccccc;
+    break-after: avoid;
+    page-break-after: avoid;
   }
   .parties {
     margin-bottom: 8px;
   }
   .party-block {
     margin: 12px 0;
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
   .field-label {
     font-size: 10pt;
@@ -66,6 +70,8 @@
     margin-bottom: 10px;
     font-size: 11.5pt;
     text-align: justify;
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
   ol.contract-list > li::before {
     content: counter(item) ".";
@@ -80,8 +86,14 @@
     margin: 4px 0 8px 28px;
     font-size: 11pt;
   }
+  .closing-block {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
   .signatures {
     margin-top: 40px;
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
   .signature-confirm {
     font-style: italic;
@@ -118,6 +130,8 @@
     margin-top: 32px;
     padding-top: 12px;
     border-top: 1px solid #eee;
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
   .attachments p {
     margin: 2px 0;
@@ -241,6 +255,7 @@
   <li>Integralną część umowy stanowią załączniki: Załącznik nr 1 – Oświadczenie dotyczące wykorzystania wizerunku dziecka (jeżeli Klient wyraził zgodę) oraz Załącznik nr 2 – Upoważnienie lektora do odbioru dziecka (jeżeli dotyczy).</li>
 </ol>
 
+<div class="closing-block">
 <div class="signatures">
   {{signed_at_line}}
   <div class="signature-row">
@@ -259,6 +274,7 @@
   <p><strong>Załączniki do umowy:</strong></p>
   <p>Załącznik nr 1 – Oświadczenie dotyczące wykorzystania wizerunku dziecka (jeśli wyrażono zgodę)</p>
   <p>Załącznik nr 2 – Upoważnienie lektora do odbioru dziecka (jeśli dotyczy)</p>
+</div>
 </div>
 
 </body>

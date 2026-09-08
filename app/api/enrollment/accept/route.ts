@@ -120,16 +120,8 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    let pickupConsentGenerated = false;
-    let pickupConsentPreviewHtml: string | undefined;
-    let pickupConsentChildName: string | undefined;
-    let pickupConsentDownloadKey: string | null | undefined;
     if (complimentary) {
-      const result = await completeComplimentaryEnrollment(enrollment.id, parentId, SCHOOL_ID);
-      pickupConsentGenerated = result.pickupConsentGenerated;
-      pickupConsentPreviewHtml = result.pickupConsentPreviewHtml;
-      pickupConsentChildName = result.pickupConsentChildName;
-      pickupConsentDownloadKey = result.pickupConsentDownloadKey;
+      await completeComplimentaryEnrollment(enrollment.id, parentId, SCHOOL_ID);
     } else {
       await queryDb(
         `UPDATE enrollment_requests
@@ -163,12 +155,6 @@ export async function PUT(request: NextRequest) {
       remainingProposed: remaining,
       complimentaryEnrollment: complimentary,
       enrollmentCompleted: complimentary,
-      pickupConsentGenerated,
-      pickupConsentPreviewHtml: pickupConsentPreviewHtml ?? null,
-      pickupConsentChildName: pickupConsentChildName ?? null,
-      pickupConsentDownloadUrl: pickupConsentDownloadKey
-        ? `/api/parent/documents/download?key=${encodeURIComponent(pickupConsentDownloadKey)}`
-        : null,
     });
   } catch (error) {
     console.error("Enrollment accept error:", error);

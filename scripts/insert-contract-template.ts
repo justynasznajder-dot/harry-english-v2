@@ -1,5 +1,6 @@
 /**
  * INSERT/UPDATE szablonów umowy i załączników Harry English.
+ * Domyślnie aktualizuje wszystkie szkoły; TEMPLATES_ONLY_SCHOOL_ID=1 + SCHOOL_ID = tylko jedna.
  * Uruchom: npx tsx scripts/insert-contract-template.ts
  */
 import { readFileSync } from "fs";
@@ -20,6 +21,82 @@ const TEMPLATE_FILES: Array<{ kind: TemplateKind; file: string; namePrefix: stri
   { kind: "ATTACHMENT_2", file: "zalacznik_2_odbior_template.html", namePrefix: "Załącznik 2 — odbiór" },
 ];
 
+async function upsertTemplatesForSchool(
+  pool: Pool,
+  school: { id: string; name: string }
+): Promise<void> {
+  const activeYearRes = await pool.query<{ name: string }>(
+    `SELECT name
+     FROM school_years
+     WHERE school_id = $1 AND active = TRUE
+     ORDER BY date_from DESC
+     LIMIT 1`,
+    [school.id]
+  );
+  const schoolYear = activeYearRes.rows[0]?.name?.trim() || "2026/2027";
+
+  for (const tpl of TEMPLATE_FILES) {
+    const templatePath = join(process.cwd(), tpl.file);
+    const contentHtml = readFileSync(templatePath, "utf8");
+    const templateName = `${tpl.namePrefix} ${schoolYear}`;
+
+    const existing = await pool.query<{ id: string }>(
+      `SELECT id
+       FROM contract_templates
+       WHERE school_id = $1
+         AND active = TRUE
+         AND school_year = $2
+         AND COALESCE(template_kind, 'CONTRACT') = $3
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT 1`,
+      [school.id, schoolYear, tpl.kind]
+    );
+
+    let templateId: string;
+    if (existing.rows[0]) {
+      templateId = existing.rows[0].id;
+      await pool.query(
+        `UPDATE contract_templates
+         SET name = $2,
+             content_html = $3,
+             template_kind = $4,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [templateId, templateName, contentHtml, tpl.kind]
+      );
+      console.log(`Zaktualizowano ${school.name} / ${tpl.kind}: ${templateId} (${schoolYear})`);
+    } else {
+      const insert = await pool.query<{ id: string }>(
+        `INSERT INTO contract_templates (
+           id, school_id, name, content_html, template_kind, active, school_year, created_at
+         ) VALUES (
+           gen_random_uuid()::text, $1, $2, $3, $4, TRUE, $5, NOW()
+         ) RETURNING id`,
+        [school.id, templateName, contentHtml, tpl.kind, schoolYear]
+      );
+      templateId = insert.rows[0].id;
+      console.log(`Wstawiono ${school.name} / ${tpl.kind}: ${templateId} (${schoolYear})`);
+    }
+
+    const deactivated = await pool.query<{ id: string }>(
+      `UPDATE contract_templates
+       SET active = FALSE, updated_at = NOW()
+       WHERE school_id = $1
+         AND school_year = $2
+         AND COALESCE(template_kind, 'CONTRACT') = $3
+         AND active = TRUE
+         AND id <> $4
+       RETURNING id`,
+      [school.id, schoolYear, tpl.kind, templateId]
+    );
+    if (deactivated.rowCount && deactivated.rowCount > 0) {
+      console.log(
+        `Dezaktywowano ${deactivated.rowCount} duplikat(ów) ${tpl.kind}: ${deactivated.rows.map((r) => r.id).join(", ")}`
+      );
+    }
+  }
+}
+
 async function main() {
   loadEnvFiles();
 
@@ -32,103 +109,33 @@ async function main() {
   const pool = new Pool({ connectionString: databaseUrl });
   try {
     const envSchoolId = process.env.SCHOOL_ID?.trim() || "";
-    let school: { id: string; name: string } | undefined;
+    const onlyEnvSchool = process.env.TEMPLATES_ONLY_SCHOOL_ID === "1";
 
-    if (envSchoolId) {
+    let schools: Array<{ id: string; name: string }> = [];
+    if (onlyEnvSchool && envSchoolId) {
       const envSchoolRes = await pool.query<{ id: string; name: string }>(
         `SELECT id, name FROM schools WHERE id = $1 LIMIT 1`,
         [envSchoolId]
       );
-      school = envSchoolRes.rows[0];
-    }
-
-    if (!school) {
+      if (envSchoolRes.rows[0]) schools = [envSchoolRes.rows[0]];
+    } else {
       const schoolRes = await pool.query<{ id: string; name: string }>(
         `SELECT id, name
          FROM schools
          WHERE LOWER(name) LIKE '%harry%english%'
-         ORDER BY active DESC NULLS LAST, created_at ASC
-         LIMIT 1`
+         ORDER BY active DESC NULLS LAST, created_at ASC`
       );
-      school = schoolRes.rows[0];
+      schools = schoolRes.rows;
     }
-    if (!school) {
+
+    if (schools.length === 0) {
       console.error("Nie znaleziono szkoły Harry English w tabeli schools.");
       process.exit(1);
     }
 
-    const activeYearRes = await pool.query<{ name: string }>(
-      `SELECT name
-       FROM school_years
-       WHERE school_id = $1 AND active = TRUE
-       ORDER BY date_from DESC
-       LIMIT 1`,
-      [school.id]
-    );
-    const schoolYear = activeYearRes.rows[0]?.name?.trim() || "2025/2026";
-
-    for (const tpl of TEMPLATE_FILES) {
-      const templatePath = join(process.cwd(), tpl.file);
-      const contentHtml = readFileSync(templatePath, "utf8");
-      const templateName = `${tpl.namePrefix} ${schoolYear}`;
-
-      const existing = await pool.query<{ id: string }>(
-        `SELECT id
-         FROM contract_templates
-         WHERE school_id = $1
-           AND active = TRUE
-           AND school_year = $2
-           AND COALESCE(template_kind, 'CONTRACT') = $3
-         ORDER BY updated_at DESC, created_at DESC
-         LIMIT 1`,
-        [school.id, schoolYear, tpl.kind]
-      );
-
-      let templateId: string;
-      if (existing.rows[0]) {
-        templateId = existing.rows[0].id;
-        await pool.query(
-          `UPDATE contract_templates
-           SET name = $2,
-               content_html = $3,
-               template_kind = $4,
-               updated_at = NOW()
-           WHERE id = $1`,
-          [templateId, templateName, contentHtml, tpl.kind]
-        );
-        console.log(`Zaktualizowano ${tpl.kind}: ${templateId} (${schoolYear})`);
-      } else {
-        const insert = await pool.query<{ id: string }>(
-          `INSERT INTO contract_templates (
-             id, school_id, name, content_html, template_kind, active, school_year, created_at
-           ) VALUES (
-             gen_random_uuid()::text, $1, $2, $3, $4, TRUE, $5, NOW()
-           ) RETURNING id`,
-          [school.id, templateName, contentHtml, tpl.kind, schoolYear]
-        );
-        templateId = insert.rows[0].id;
-        console.log(`Wstawiono ${tpl.kind}: ${templateId} (${schoolYear})`);
-      }
-
-      const deactivated = await pool.query<{ id: string }>(
-        `UPDATE contract_templates
-         SET active = FALSE, updated_at = NOW()
-         WHERE school_id = $1
-           AND school_year = $2
-           AND COALESCE(template_kind, 'CONTRACT') = $3
-           AND active = TRUE
-           AND id <> $4
-         RETURNING id`,
-        [school.id, schoolYear, tpl.kind, templateId]
-      );
-      if (deactivated.rowCount && deactivated.rowCount > 0) {
-        console.log(
-          `Dezaktywowano ${deactivated.rowCount} duplikat(ów) ${tpl.kind}: ${deactivated.rows.map((r) => r.id).join(", ")}`
-        );
-      }
+    for (const school of schools) {
+      await upsertTemplatesForSchool(pool, school);
     }
-
-    console.log(`Szkoła: ${school.name} (${school.id}), rok: ${schoolYear}`);
   } finally {
     await pool.end();
   }

@@ -1298,12 +1298,14 @@ export async function fetchComplimentaryParentPaymentOverview(
     );
     const lessonBase = parsePriceDecimal(row.lesson_unit_price);
 
+    // Stawka 0 (np. rabat 100%) to nadal ustalona stawka — pokaż harmonogram z 0 zł.
+    // Pomijaj tylko gdy żadna stawka nie została ustawiona (null).
     let paymentType: PaymentType = "MONTHLY";
-    if (monthlyBase != null && monthlyBase > 0) {
+    if (monthlyBase != null) {
       paymentType = "MONTHLY";
-    } else if (yearlyBase != null && yearlyBase > 0) {
+    } else if (yearlyBase != null) {
       paymentType = "YEARLY";
-    } else if (lessonBase != null && lessonBase > 0) {
+    } else if (lessonBase != null) {
       paymentType = "PER_LESSON";
     } else {
       continue;

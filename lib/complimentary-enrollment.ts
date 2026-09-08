@@ -1,4 +1,3 @@
-import { generateComplimentaryPickupConsentIfNeeded } from "@/lib/complimentary-pickup-consent";
 import { queryDb } from "@/lib/db";
 import {
   applyManualDiscountPercent,
@@ -167,42 +166,14 @@ export async function reapplyComplimentaryNetRatesForParent(
 
 /**
  * Kończy zapis po akceptacji grupy — bez umowy i bez zgody na wizerunek (tryb bez umowy).
- * Jeśli grupa wymaga zgody na odbiór przez lektora — generuje PDF zgody (nie załącznik).
- * Błąd PDF nie blokuje COMPLETED ani maila z logowaniem (dokument można wygenerować później).
+ * Zgody na odbiór przez lektora rodzic generuje ręcznie w kroku Podsumowanie
+ * (jednorazowo, potem dokument jest w zakładce Dokumenty).
  */
 export async function completeComplimentaryEnrollment(
   enrollmentRequestId: string,
   parentId: string,
   schoolId: string
-): Promise<{
-  pickupConsentGenerated: boolean;
-  pickupConsentPreviewHtml?: string;
-  pickupConsentChildName?: string;
-  pickupConsentDownloadKey?: string | null;
-  pickupConsentError?: string;
-}> {
-  let pickup: {
-    generated: boolean;
-    previewHtml?: string;
-    childName?: string;
-    downloadKey?: string | null;
-  } = { generated: false };
-  let pickupConsentError: string | undefined;
-
-  try {
-    pickup = await generateComplimentaryPickupConsentIfNeeded({
-      enrollmentRequestId,
-      parentId,
-      schoolId,
-    });
-  } catch (err) {
-    pickupConsentError = err instanceof Error ? err.message : "nieznany błąd PDF zgody na odbiór";
-    console.error(
-      "complimentary pickup consent PDF failed (enrollment will still complete):",
-      err
-    );
-  }
-
+): Promise<void> {
   await queryDb(
     `UPDATE enrollment_requests
      SET status = 'COMPLETED',
@@ -231,14 +202,6 @@ export async function completeComplimentaryEnrollment(
     schoolId,
   });
   await syncParentUserAccessLevel(parentId);
-
-  return {
-    pickupConsentGenerated: pickup.generated,
-    pickupConsentPreviewHtml: pickup.previewHtml,
-    pickupConsentChildName: pickup.childName,
-    pickupConsentDownloadKey: pickup.downloadKey ?? null,
-    pickupConsentError,
-  };
 }
 
 async function resolveComplimentaryParentIds(

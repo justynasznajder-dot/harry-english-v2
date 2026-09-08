@@ -176,17 +176,12 @@ function ChildMonthlySection({
   const rows = child.installments ?? [];
   return (
     <div className="space-y-3">
-      {hideInvoiceAndStatus ? (
-        <InfoBanner>
-          Tryb bez umowy — poniżej lista kwot miesięcznych. Nie wystawiamy faktur i nie śledzimy
-          statusu płatności.
-        </InfoBanner>
-      ) : (
+      {!hideInvoiceAndStatus ? (
         <InfoBanner>
           Faktury ratalne wystawiane są w okolicach <strong>10. dnia każdego miesiąca</strong>. Do
           tego czasu status to „Oczekiwanie na fakturę”.
         </InfoBanner>
-      )}
+      ) : null}
       {rows.length === 0 ? (
         <p className="text-sm text-zinc-600">Brak harmonogramu rat dla tego roku szkolnego.</p>
       ) : (

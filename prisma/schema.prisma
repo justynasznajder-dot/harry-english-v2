@@ -85,6 +85,8 @@ model children {
   yearly_unit_price     Decimal?             @db.Decimal(10, 2)
   /// Ręczna zniżka % wpisana przez managera (null = brak)
   discount_percent      Decimal?             @db.Decimal(5, 2)
+  /// Deklaracja rodzica: dziecko ma bon zniżkowy (1. faktura − wartość jednych zajęć)
+  has_discount_voucher  Boolean              @default(false)
   attendance            attendance[]
   child_auth            child_auth?
   child_rewards         child_rewards[]

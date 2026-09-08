@@ -21,7 +21,7 @@ import {
   scaleAmountByLessonsPerWeek,
   type LessonsPerWeek,
 } from '@/lib/lessons-per-week';
-import { PICKUP_CONSENT_PRINT_INSTRUCTIONS } from '@/lib/pickup-consent-notice';
+import { PICKUP_CONSENT_PRINT_INSTRUCTIONS, pickupConsentPdfMatchesChildName } from '@/lib/pickup-consent-notice';
 
 type ChildEnrollmentLevel =
   | 'NEW'
@@ -72,6 +72,7 @@ interface EnrollmentProposal {
   lessons_per_week?: number | null;
   discount_percent?: string | number | null;
   teacher_pickup_consent?: boolean;
+  has_discount_voucher?: boolean;
 }
 
 interface ParentContractDocument {
@@ -591,6 +592,10 @@ export default function EnrollmentParentFlow({
   /** Deklaracja rodzica — zapisuję więcej niż jedno dziecko (`enrollment_requests.enrolling_multiple_children`). */
   const [enrollingMultipleChildren, setEnrollingMultipleChildren] = useState(false);
   const [savedEnrollingMultipleChildren, setSavedEnrollingMultipleChildren] = useState(false);
+  /** Deklaracja bonu zniżkowego per dziecko (tylko zapis z umową). */
+  const [discountVoucherByChildId, setDiscountVoucherByChildId] = useState<Record<string, boolean>>(
+    {},
+  );
   const [savingSummaryDiscounts, setSavingSummaryDiscounts] = useState(false);
   /** Po „Zapisz” zniżki w Podsumowaniu są tylko do odczytu. */
   const [summaryDiscountsLocked, setSummaryDiscountsLocked] = useState(false);
@@ -713,6 +718,14 @@ export default function EnrollmentParentFlow({
         for (const p of incoming) {
           if (!isProposalInContractPricing(p)) continue;
           next[p.request_id] = resolveProposalLessonsPerWeek(p);
+        }
+        return next;
+      });
+      setDiscountVoucherByChildId((prev) => {
+        const next = { ...prev };
+        for (const p of incoming) {
+          if (!p.child_id) continue;
+          next[p.child_id] = Boolean(p.has_discount_voucher);
         }
         return next;
       });
@@ -990,6 +1003,7 @@ export default function EnrollmentParentFlow({
           includedRequestIds: priced.map((p) => p.request_id),
           enrollingMultipleChildren,
           discountLargeFamily,
+          discountVoucherByChildId,
         }),
       });
       const data = (await r.json().catch(() => ({}))) as {
@@ -1037,6 +1051,7 @@ export default function EnrollmentParentFlow({
     contractReadiness.hasPendingDecisions,
     dataConfirmed,
     discountLargeFamily,
+    discountVoucherByChildId,
     enrollingMultipleChildren,
     handleSaveContractProfile,
     isEditingContractProfile,
@@ -1053,6 +1068,58 @@ export default function EnrollmentParentFlow({
     const id = setTimeout(() => setFlash(null), 6000);
     return () => clearTimeout(id);
   }, [flash]);
+
+  /** Podsumowanie: przyciski zgód odzwierciedlają już istniejące PDF-y w Dokumentach. */
+  useEffect(() => {
+    if (!userInfo.complimentaryAccess) return;
+    const completed = proposals.filter((p) => {
+      const level = childAccessLevel(p);
+      return level === 'COMPLETED' || level === 'SIGNED';
+    });
+    if (completed.length === 0) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await fetch('/api/parent/documents', {
+          cache: 'no-store',
+          credentials: 'include',
+        });
+        if (!r.ok || cancelled) return;
+        const data = (await r.json().catch(() => ({}))) as {
+          pdfFiles?: Array<{ filename: string; downloadUrl: string }>;
+        };
+        const pdfFiles = data.pdfFiles ?? [];
+        if (pdfFiles.length === 0 || cancelled) return;
+
+        setPickupConsentDownloadByRequestId((prev) => {
+          const next = { ...prev };
+          let changed = false;
+          for (const p of completed) {
+            if (next[p.request_id]) continue;
+            const match = pdfFiles.find((f) =>
+              pickupConsentPdfMatchesChildName(
+                f.filename,
+                p.child_first_name,
+                p.child_last_name
+              )
+            );
+            if (match?.downloadUrl) {
+              next[p.request_id] = match.downloadUrl;
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+      } catch {
+        // Lista dokumentów niedostępna — rodzic nadal może wygenerować ręcznie.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userInfo.complimentaryAccess, proposals]);
 
   const loadSchoolRecipients = useCallback(async (): Promise<string[]> => {
     if (schoolRecipientsLoadedRef.current && schoolRecipientIds.length > 0) {
@@ -1099,27 +1166,10 @@ export default function EnrollmentParentFlow({
           message?: string;
           remainingProposed?: number;
           complimentaryEnrollment?: boolean;
-          pickupConsentGenerated?: boolean;
-          pickupConsentPreviewHtml?: string | null;
-          pickupConsentChildName?: string | null;
-          pickupConsentDownloadUrl?: string | null;
         };
         if (!r.ok) {
           setFlash({ kind: 'error', message: data?.message ?? 'Nie udało się zaakceptować propozycji.' });
           return;
-        }
-        if (data.pickupConsentGenerated && data.pickupConsentPreviewHtml) {
-          setPickupConsentModal({
-            previewHtml: data.pickupConsentPreviewHtml,
-            childName: data.pickupConsentChildName?.trim() || 'dziecko',
-            downloadUrl: data.pickupConsentDownloadUrl?.trim() || null,
-          });
-          if (data.pickupConsentDownloadUrl?.trim()) {
-            setPickupConsentDownloadByRequestId((prev) => ({
-              ...prev,
-              [requestId]: data.pickupConsentDownloadUrl!.trim(),
-            }));
-          }
         }
         setFlash({
           kind: 'success',
@@ -1143,6 +1193,7 @@ export default function EnrollmentParentFlow({
 
   const handleGeneratePickupConsent = useCallback(async (requestId: string) => {
     if (generatingPickupConsentId) return;
+    if (pickupConsentDownloadByRequestId[requestId]) return;
     setGeneratingPickupConsentId(requestId);
     try {
       const res = await fetch('/api/parent/pickup-consent/generate', {
@@ -1156,6 +1207,7 @@ export default function EnrollmentParentFlow({
         previewHtml?: string | null;
         childName?: string | null;
         downloadUrl?: string | null;
+        alreadyExisted?: boolean;
       };
       if (!res.ok) {
         setFlash({
@@ -1171,7 +1223,7 @@ export default function EnrollmentParentFlow({
           [requestId]: downloadUrl,
         }));
       }
-      if (data.previewHtml) {
+      if (data.previewHtml && !data.alreadyExisted) {
         setPickupConsentModal({
           previewHtml: data.previewHtml,
           childName: data.childName?.trim() || 'dziecko',
@@ -1180,9 +1232,11 @@ export default function EnrollmentParentFlow({
       }
       setFlash({
         kind: 'success',
-        message: downloadUrl
-          ? 'Zgoda wygenerowana — możesz ją pobrać.'
-          : 'Zgoda wygenerowana.',
+        message: data.alreadyExisted
+          ? 'Zgoda jest już w Dokumentach — możesz ją pobrać.'
+          : downloadUrl
+            ? 'Zgoda wygenerowana — możesz ją pobrać w Dokumentach.'
+            : 'Zgoda wygenerowana.',
       });
     } catch {
       setFlash({
@@ -1192,7 +1246,7 @@ export default function EnrollmentParentFlow({
     } finally {
       setGeneratingPickupConsentId(null);
     }
-  }, [generatingPickupConsentId]);
+  }, [generatingPickupConsentId, pickupConsentDownloadByRequestId]);
 
   const handleContactSchool = useCallback(
     async (p: EnrollmentProposal) => {
@@ -2254,6 +2308,73 @@ export default function EnrollmentParentFlow({
                                   {sharedDiscountInfo}
                                 </p>
                               ) : null}
+                              <div className="space-y-2 border-t border-zinc-100 pt-3">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                                  Bon zniżkowy
+                                </p>
+                                <p className="text-xs text-zinc-500">
+                                  Niezależnie od zniżek procentowych — jeden bon na jedno dziecko.
+                                </p>
+                                {proposals
+                                  .filter(
+                                    (
+                                      p,
+                                    ): p is EnrollmentProposal & { child_id: string } => {
+                                      if (!p.child_id) return false;
+                                      const level = childAccessLevel(p);
+                                      const isPipeline =
+                                        level === 'ACCEPTED' ||
+                                        level === 'AWAITING_CONTRACT' ||
+                                        level === 'CONTRACT_READY' ||
+                                        (!ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE &&
+                                          level === 'PROPOSED');
+                                      const isSignedDone =
+                                        level === 'SIGNED' || level === 'COMPLETED';
+                                      return isPipeline && !isSignedDone;
+                                    },
+                                  )
+                                  .map((p) => {
+                                    const checked = Boolean(
+                                      discountVoucherByChildId[p.child_id],
+                                    );
+                                    return (
+                                      <div key={`voucher-${p.child_id}`} className="space-y-1.5">
+                                        <label
+                                          className={`inline-flex items-start gap-2 text-sm ${
+                                            settlementRadiosLocked
+                                              ? 'text-zinc-400'
+                                              : 'text-zinc-700'
+                                          }`}
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            className="mt-0.5 accent-[#0f6e56]"
+                                            disabled={settlementRadiosLocked}
+                                            checked={checked}
+                                            onChange={(e) => {
+                                              const nextChecked = e.target.checked;
+                                              setDiscountVoucherByChildId((prev) => ({
+                                                ...prev,
+                                                [p.child_id]: nextChecked,
+                                              }));
+                                              setAllowContractRegenerate(true);
+                                            }}
+                                          />
+                                          <span>
+                                            mam bon zniżkowy — {p.child_first_name}{' '}
+                                            {p.child_last_name}
+                                          </span>
+                                        </label>
+                                        {checked ? (
+                                          <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+                                            Bon należy oddać lektorowi. Pierwsza faktura będzie
+                                            pomniejszona o wartość jednych zajęć.
+                                          </p>
+                                        ) : null}
+                                      </div>
+                                    );
+                                  })}
+                              </div>
                             </div>
                           ) : null}
                           <div className="space-y-3">
@@ -2592,6 +2713,7 @@ export default function EnrollmentParentFlow({
                                       : undefined,
                                     enrollingMultipleChildren,
                                     discountLargeFamily,
+                                    discountVoucherByChildId,
                                   }),
                                 });
                                 const data = (await r.json().catch(() => ({}))) as {
@@ -2683,6 +2805,7 @@ export default function EnrollmentParentFlow({
             <ul className="mt-4 space-y-3">
               {enrolledChildren.map((p) => {
                 const downloadUrl = pickupConsentDownloadByRequestId[p.request_id];
+                const alreadyGenerated = Boolean(downloadUrl);
                 const busy = generatingPickupConsentId === p.request_id;
                 return (
                   <li
@@ -2693,31 +2816,37 @@ export default function EnrollmentParentFlow({
                       {p.child_first_name} {p.child_last_name}
                     </span>
                     <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        disabled={isReadOnlyPreview || Boolean(generatingPickupConsentId)}
-                        onClick={() => {
-                          void handleGeneratePickupConsent(p.request_id);
-                        }}
-                        className="rounded-full bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {busy
-                          ? 'Generowanie…'
-                          : downloadUrl
-                            ? 'Wygeneruj ponownie'
-                            : 'Wygeneruj zgodę'}
-                      </button>
-                      {downloadUrl ? (
-                        <a
-                          href={downloadUrl}
-                          download
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="rounded-full border border-[#0f6e56] bg-white px-4 py-2 text-sm font-semibold text-[#0f6e56] hover:bg-emerald-50"
+                      {alreadyGenerated ? (
+                        <>
+                          <button
+                            type="button"
+                            disabled
+                            className="rounded-full bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white opacity-60 cursor-not-allowed"
+                          >
+                            Wygenerowano
+                          </button>
+                          <a
+                            href={downloadUrl}
+                            download
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="rounded-full border border-[#0f6e56] bg-white px-4 py-2 text-sm font-semibold text-[#0f6e56] hover:bg-emerald-50"
+                          >
+                            Pobierz
+                          </a>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={isReadOnlyPreview || Boolean(generatingPickupConsentId)}
+                          onClick={() => {
+                            void handleGeneratePickupConsent(p.request_id);
+                          }}
+                          className="rounded-full bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white hover:bg-[#0b5a46] disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          Pobierz
-                        </a>
-                      ) : null}
+                          {busy ? 'Generowanie…' : 'Wygeneruj zgodę'}
+                        </button>
+                      )}
                     </div>
                   </li>
                 );

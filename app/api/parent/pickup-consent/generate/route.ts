@@ -76,6 +76,7 @@ export async function POST(request: NextRequest) {
       ok: true,
       childName: result.childName ?? null,
       previewHtml: result.previewHtml ?? null,
+      alreadyExisted: Boolean(result.alreadyExisted),
       downloadUrl,
       downloadKey: result.downloadKey ?? null,
     });

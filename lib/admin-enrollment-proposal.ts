@@ -2,7 +2,6 @@ import { randomUUID } from "crypto";
 import bcrypt from "bcryptjs";
 import {
   createUser,
-  findUserBySchoolAndEmail,
   POLISH_DAY_FROM_ST_SQL,
   queryDb,
   runPgTransaction,
@@ -114,6 +113,200 @@ function parseOptionalDiscountPercent(
     return { ok: false, message: "% zniżki musi być w zakresie 0–100" };
   }
   return { ok: true, value: Math.round(n * 100) / 100 };
+}
+
+function roleLabelPl(role: string): string {
+  switch (String(role).toUpperCase()) {
+    case "TEACHER":
+      return "lektora";
+    case "MANAGER":
+      return "managera";
+    case "ADMIN":
+      return "administratora";
+    case "CHILD":
+      return "dziecka";
+    default:
+      return "użytkownika (nie rodzica)";
+  }
+}
+
+/**
+ * Konto rodzica do propozycji / zapisu stawek.
+ * Nie wolno powiązać zgłoszenia z TEACHER/MANAGER itd. — (school_id, email) jest unikalne,
+ * więc lektor z tym samym mailem blokuje utworzenie PARENT (stąd wcześniejsze „Nie znaleziono rodzica”).
+ */
+async function resolveParentAccountForEnrollment(enrollment: {
+  id: string;
+  user_id: string | null;
+  parent_first_name: string;
+  parent_last_name: string;
+  parent_email: string;
+  parent_phone: string | null;
+  school_id: string;
+}): Promise<
+  | {
+      ok: true;
+      parentUserId: string;
+      parentFirstName: string;
+      parentLastName: string;
+      tempPassword: string | null;
+      parentCreated: boolean;
+    }
+  | { ok: false; status: number; message: string }
+> {
+  const parentSchoolId = enrollment.school_id;
+  const parentEmail = String(enrollment.parent_email || "")
+    .trim()
+    .toLowerCase();
+  if (!parentEmail) {
+    return { ok: false, status: 400, message: "Brak adresu email rodzica w zgłoszeniu" };
+  }
+
+  const conflictMessage = (role: string, firstName: string, lastName: string) => {
+    const who = `${firstName} ${lastName}`.trim() || parentEmail;
+    const local = parentEmail.split("@")[0] || "rodzic";
+    const domain = parentEmail.includes("@") ? parentEmail.split("@")[1] : "example.com";
+    return (
+      `Adres ${parentEmail} należy do konta ${roleLabelPl(role)} (${who}). ` +
+      `Nie można utworzyć konta rodzica na ten sam e-mail. ` +
+      `Zmień e-mail rodzica w zgłoszeniu (np. alias Gmail: ${local}+rodzic@${domain}) i spróbuj ponownie.`
+    );
+  };
+
+  let linkedUserId = enrollment.user_id?.trim() || null;
+  if (linkedUserId) {
+    const linkedRes = await queryDb<{
+      id: string;
+      role: string;
+      first_name: string;
+      last_name: string;
+      phone: string | null;
+    }>(
+      `SELECT id, role, first_name, last_name, phone FROM users WHERE id = $1 LIMIT 1`,
+      [linkedUserId]
+    );
+    const linked = linkedRes.rows[0];
+    if (!linked) {
+      await queryDb(
+        `UPDATE enrollment_requests SET user_id = NULL WHERE id = $1 AND user_id = $2`,
+        [enrollment.id, linkedUserId]
+      );
+      linkedUserId = null;
+    } else if (String(linked.role).toUpperCase() !== "PARENT") {
+      // Odłącz błędne powiązanie (np. lektor z tym samym mailem) — dalej sprawdzimy e-mail.
+      await queryDb(
+        `UPDATE enrollment_requests SET user_id = NULL WHERE id = $1 AND user_id = $2`,
+        [enrollment.id, linkedUserId]
+      );
+      linkedUserId = null;
+    } else {
+      const parentFirstName = formatPersonName(
+        enrollment.parent_first_name?.trim() || linked.first_name
+      );
+      const parentLastName = formatPersonName(
+        enrollment.parent_last_name?.trim() || linked.last_name
+      );
+      await updateUser(linked.id, {
+        first_name: parentFirstName,
+        last_name: parentLastName,
+        phone: linked.phone?.trim() || enrollment.parent_phone?.trim() || null,
+      });
+      return {
+        ok: true,
+        parentUserId: linked.id,
+        parentFirstName,
+        parentLastName,
+        tempPassword: null,
+        parentCreated: false,
+      };
+    }
+  }
+
+  const existingRes = await queryDb<{
+    id: string;
+    role: string;
+    first_name: string;
+    last_name: string;
+    phone: string | null;
+  }>(
+    `SELECT id, role, first_name, last_name, phone
+     FROM users
+     WHERE school_id = $1 AND LOWER(email::text) = LOWER($2::text)
+     LIMIT 1`,
+    [parentSchoolId, parentEmail]
+  );
+  const existing = existingRes.rows[0];
+  if (existing) {
+    if (String(existing.role).toUpperCase() !== "PARENT") {
+      return {
+        ok: false,
+        status: 409,
+        message: conflictMessage(existing.role, existing.first_name, existing.last_name),
+      };
+    }
+    const parentFirstName = formatPersonName(
+      enrollment.parent_first_name?.trim() || existing.first_name
+    );
+    const parentLastName = formatPersonName(
+      enrollment.parent_last_name?.trim() || existing.last_name
+    );
+    await updateUser(existing.id, {
+      first_name: parentFirstName,
+      last_name: parentLastName,
+      phone: existing.phone?.trim() || enrollment.parent_phone?.trim() || null,
+    });
+    return {
+      ok: true,
+      parentUserId: existing.id,
+      parentFirstName,
+      parentLastName,
+      tempPassword: null,
+      parentCreated: false,
+    };
+  }
+
+  const tempPassword = generateTempPassword();
+  const passwordHash = await bcrypt.hash(tempPassword, 10);
+  try {
+    const newUser = await createUser({
+      email: parentEmail,
+      passwordHash,
+      firstName: formatPersonName(enrollment.parent_first_name?.trim() || "Rodzic"),
+      lastName: formatPersonName(enrollment.parent_last_name?.trim() || ""),
+      role: "PARENT",
+      schoolId: parentSchoolId,
+      phone: enrollment.parent_phone ?? null,
+      confirmed: false,
+      accessLevel: "PENDING",
+      mustChangePassword: true,
+    });
+    return {
+      ok: true,
+      parentUserId: newUser.id,
+      parentFirstName: newUser.first_name,
+      parentLastName: newUser.last_name,
+      tempPassword,
+      parentCreated: true,
+    };
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : "";
+    if (/unique|duplicate/i.test(detail)) {
+      const again = await queryDb<{ role: string; first_name: string; last_name: string }>(
+        `SELECT role, first_name, last_name FROM users
+         WHERE school_id = $1 AND LOWER(email::text) = LOWER($2::text) LIMIT 1`,
+        [parentSchoolId, parentEmail]
+      );
+      const row = again.rows[0];
+      if (row && String(row.role).toUpperCase() !== "PARENT") {
+        return {
+          ok: false,
+          status: 409,
+          message: conflictMessage(row.role, row.first_name, row.last_name),
+        };
+      }
+    }
+    throw err;
+  }
 }
 
 export async function submitEnrollmentProposal(
@@ -272,70 +465,16 @@ export async function submitEnrollmentProposal(
     parentLastName = sharedParent.parentLastName;
     parentCreated = sharedParent.parentCreated;
     tempPassword = sharedParent.tempPassword;
-  } else if (enrollment.user_id && String(enrollment.user_id).trim().length > 0) {
-    const existingRes = await queryDb<{
-      id: string;
-      first_name: string;
-      last_name: string;
-      phone: string | null;
-    }>(`SELECT id, first_name, last_name, phone FROM users WHERE id = $1 LIMIT 1`, [
-      enrollment.user_id,
-    ]);
-    const existing = existingRes.rows[0];
-    if (!existing) {
-      return {
-        ok: false,
-        status: 409,
-        message: "Zgłoszenie wskazuje na nieistniejące konto rodzica",
-      };
-    }
-    parentUserId = existing.id;
-    parentFirstName = formatPersonName(
-      enrollment.parent_first_name?.trim() || existing.first_name
-    );
-    parentLastName = formatPersonName(
-      enrollment.parent_last_name?.trim() || existing.last_name
-    );
-    await updateUser(parentUserId, {
-      first_name: parentFirstName,
-      last_name: parentLastName,
-      phone: existing.phone?.trim() || enrollment.parent_phone?.trim() || null,
-    });
   } else {
-    const existing = await findUserBySchoolAndEmail(parentSchoolId, parentEmail);
-    if (existing) {
-      parentUserId = existing.id;
-      parentFirstName = formatPersonName(
-        enrollment.parent_first_name?.trim() || existing.first_name
-      );
-      parentLastName = formatPersonName(
-        enrollment.parent_last_name?.trim() || existing.last_name
-      );
-      await updateUser(parentUserId, {
-        first_name: parentFirstName,
-        last_name: parentLastName,
-        phone: existing.phone?.trim() || enrollment.parent_phone?.trim() || null,
-      });
-    } else {
-      tempPassword = generateTempPassword();
-      const passwordHash = await bcrypt.hash(tempPassword, 10);
-      const newUser = await createUser({
-        email: parentEmail,
-        passwordHash,
-        firstName: formatPersonName(enrollment.parent_first_name?.trim() || "Rodzic"),
-        lastName: formatPersonName(enrollment.parent_last_name?.trim() || ""),
-        role: "PARENT",
-        schoolId: parentSchoolId,
-        phone: enrollment.parent_phone ?? null,
-        confirmed: false,
-        accessLevel: "PENDING",
-        mustChangePassword: true,
-      });
-      parentUserId = newUser.id;
-      parentFirstName = newUser.first_name;
-      parentLastName = newUser.last_name;
-      parentCreated = true;
+    const resolved = await resolveParentAccountForEnrollment(enrollment);
+    if (!resolved.ok) {
+      return { ok: false, status: resolved.status, message: resolved.message };
     }
+    parentUserId = resolved.parentUserId;
+    parentFirstName = resolved.parentFirstName;
+    parentLastName = resolved.parentLastName;
+    parentCreated = resolved.parentCreated;
+    tempPassword = resolved.tempPassword;
   }
 
   // Konto powstało wcześniej przy „Zapisz” (bez maila) — przy wysyłce daj nowe hasło tymczasowe.
@@ -784,31 +923,11 @@ export async function saveEnrollmentRequestPrices(
     return { ok: false, status: 400, message: "Brak adresu email rodzica w zgłoszeniu" };
   }
 
-  let parentUserId: string;
-  if (enrollment.user_id && String(enrollment.user_id).trim().length > 0) {
-    parentUserId = enrollment.user_id;
-  } else {
-    const existing = await findUserBySchoolAndEmail(parentSchoolId, parentEmail);
-    if (existing) {
-      parentUserId = existing.id;
-    } else {
-      const tempPassword = generateTempPassword();
-      const passwordHash = await bcrypt.hash(tempPassword, 10);
-      const newUser = await createUser({
-        email: parentEmail,
-        passwordHash,
-        firstName: formatPersonName(enrollment.parent_first_name?.trim() || "Rodzic"),
-        lastName: formatPersonName(enrollment.parent_last_name?.trim() || ""),
-        role: "PARENT",
-        schoolId: parentSchoolId,
-        phone: enrollment.parent_phone ?? null,
-        confirmed: false,
-        accessLevel: "PENDING",
-        mustChangePassword: true,
-      });
-      parentUserId = newUser.id;
-    }
+  const resolved = await resolveParentAccountForEnrollment(enrollment);
+  if (!resolved.ok) {
+    return { ok: false, status: resolved.status, message: resolved.message };
   }
+  const parentUserId = resolved.parentUserId;
 
   await queryDb(
     `UPDATE enrollment_requests

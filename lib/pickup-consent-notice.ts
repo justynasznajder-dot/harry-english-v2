@@ -51,6 +51,53 @@ export function isPickupConsentPdfFilename(filename: string): boolean {
   );
 }
 
+function normalizeChildNameForMatch(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/** Imię i nazwisko dziecka z nazwy PDF zgody na odbiór. */
+export function childNameFromPickupConsentFilename(filename: string): string | null {
+  const base = (filename.split(/[/\\]/).pop() ?? filename).trim();
+  const lower = base.toLowerCase();
+
+  for (const title of [PICKUP_CONSENT_PDF_TITLE, PICKUP_CONSENT_PDF_TITLE_LEGACY]) {
+    if (lower.startsWith(title.toLowerCase())) {
+      const after = base.slice(title.length).replace(/\.pdf$/i, "").trim();
+      const parts = after
+        .replace(/^_+\s*/, "")
+        .split(/\s+_\s+/)
+        .map((p) => p.trim())
+        .filter(Boolean);
+      return parts[0] || null;
+    }
+  }
+
+  const legacyPrefix = `${PICKUP_CONSENT_DOCUMENT_TITLE}_`;
+  if (lower.startsWith(legacyPrefix.toLowerCase())) {
+    const name = base.slice(legacyPrefix.length).replace(/\.pdf$/i, "").trim();
+    return name || null;
+  }
+  return null;
+}
+
+export function pickupConsentPdfMatchesChildName(
+  filename: string,
+  firstName: string,
+  lastName: string
+): boolean {
+  if (!isPickupConsentPdfFilename(filename)) return false;
+  const expected = normalizeChildNameForMatch(`${firstName} ${lastName}`);
+  if (!expected) return false;
+  const fromFile = childNameFromPickupConsentFilename(filename);
+  if (fromFile && normalizeChildNameForMatch(fromFile) === expected) return true;
+  return normalizeChildNameForMatch(filename).includes(expected);
+}
+
 /**
  * Ujednolica HTML Załącznika 2:
  * - nagłówek: „Załącznik nr 2 do umowy nr {numer}”

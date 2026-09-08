@@ -71,6 +71,8 @@ export async function POST(request: NextRequest) {
       enrolling_multiple_children?: unknown;
       discountLargeFamily?: unknown;
       discount_large_family?: unknown;
+      discountVoucherByChildId?: unknown;
+      discount_voucher_by_child_id?: unknown;
     };
 
     const paymentTypeByRequestIdRaw =
@@ -155,6 +157,31 @@ export async function POST(request: NextRequest) {
         parentUserId: parentId,
         discountLargeFamily,
       });
+    }
+
+    const voucherByChildRaw =
+      body.discountVoucherByChildId && typeof body.discountVoucherByChildId === "object"
+        ? (body.discountVoucherByChildId as Record<string, unknown>)
+        : body.discount_voucher_by_child_id &&
+            typeof body.discount_voucher_by_child_id === "object"
+          ? (body.discount_voucher_by_child_id as Record<string, unknown>)
+          : null;
+    if (voucherByChildRaw) {
+      for (const [childIdRaw, value] of Object.entries(voucherByChildRaw)) {
+        const childId = String(childIdRaw).trim();
+        if (!childId) continue;
+        const hasVoucher =
+          value === true || value === "true" || value === 1 || value === "1";
+        await queryDb(
+          `UPDATE children
+           SET has_discount_voucher = $4
+           WHERE id = $1
+             AND parent_id = $2
+             AND school_id = $3
+             AND active = TRUE`,
+          [childId, parentId, SCHOOL_ID, hasVoucher]
+        );
+      }
     }
 
     for (const row of updated.rows) {

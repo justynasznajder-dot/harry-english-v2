@@ -110,6 +110,7 @@ export function formatLessonUnitPriceLabel(amount: number | string | null | unde
 /**
  * §2 tylko dla wybranej formy płatności — bez punktów o pozostałych trybach.
  * `amountLabel` już sformatowane, np. „20,00 zł brutto”.
+ * Dla płatności ratalnej dopisywane jest „miesięcznie”.
  */
 export function buildPaymentSectionHtml(params: {
   paymentType: string | null | undefined;
@@ -117,9 +118,14 @@ export function buildPaymentSectionHtml(params: {
   contractNumber?: string | null;
 }): string {
   const paymentLabel = escapeHtmlText(formatPaymentTypeLabel(params.paymentType));
-  const amountLabel = escapeHtmlText(params.amountLabel.trim() || "—");
-  const contractNumber = escapeHtmlText(params.contractNumber?.trim() || "—");
   const t = String(params.paymentType ?? "").trim().toUpperCase();
+  const rawAmount = params.amountLabel.trim() || "—";
+  const amountWithPeriod =
+    t === "MONTHLY" && rawAmount !== "—" && !/\bmiesięcznie\b/i.test(rawAmount)
+      ? `${rawAmount} miesięcznie`
+      : rawAmount;
+  const amountLabel = escapeHtmlText(amountWithPeriod);
+  const contractNumber = escapeHtmlText(params.contractNumber?.trim() || "—");
 
   let specificLi = "";
   if (t === "PER_LESSON") {
@@ -128,7 +134,7 @@ export function buildPaymentSectionHtml(params: {
   }
 
   const paymentTermsLi =
-    `<li>Każda faktura objęta jest dwutygodniowym terminem płatności. Wpłaty prosimy dokonywać na numer rachunku: <strong>91 1050 1298 1000 0092 5894 4835</strong>, w tytule przelewu podając <span class="ph">${contractNumber}</span>.</li>`;
+    `<li>Każda faktura objęta jest dwutygodniowym terminem płatności. Wpłaty prosimy dokonywać na numer rachunku: <strong>91 1050 1298 1000 0092 5894 4835</strong>, tytuł przelewu musi zawierać numer umowy: <span class="ph">${contractNumber}</span>.</li>`;
 
   return `<ol class="contract-list">
   <li>Klient wybiera następującą formę płatności: <span class="ph">${paymentLabel}</span>, kwota: <span class="ph">${amountLabel}</span>.</li>
@@ -202,7 +208,7 @@ export function buildAmountClause(
   if (normalized === "per_lesson") return "";
   const formatted = formatContractAmount(amount);
   if (normalized === "monthly") {
-    return `<p class="note"><span class="ph">Wysokość opłaty ratalnej wynosi: ${formatted} zł brutto.</span></p>`;
+    return `<p class="note"><span class="ph">Wysokość opłaty ratalnej wynosi: ${formatted} zł brutto miesięcznie.</span></p>`;
   }
   if (normalized === "yearly") {
     return `<p class="note"><span class="ph">Łączna opłata jednorazowa wynosi: ${formatted} zł brutto.</span></p>`;
