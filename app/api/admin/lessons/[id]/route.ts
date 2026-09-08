@@ -5,6 +5,7 @@ import {
   requireAdminSchoolContext,
   tenantNotFoundResponse,
 } from "@/lib/admin-school-context";
+import { writeAdminDeletionLog } from "@/lib/admin-deletion-log";
 
 type RouteCtx = { params: Promise<{ id: string }> };
 
@@ -25,8 +26,19 @@ export async function DELETE(request: NextRequest, context: RouteCtx) {
       status: string;
       group_id: string;
       school_id: string;
+      group_name: string;
+      scheduled_at: Date | string;
+      duration_min: number;
+      location_id: string;
+      teacher_id: string;
+      schedule_template_id: string | null;
+      school_year_id: string | null;
+      notes: string | null;
+      cancellation_reason: string | null;
     }>(
-      `SELECT l.id, l.status::text AS status, l.group_id, g.school_id
+      `SELECT l.id, l.status::text AS status, l.group_id, g.school_id, g.name AS group_name,
+              l.scheduled_at, l.duration_min, l.location_id, l.teacher_id,
+              l.schedule_template_id, l.school_year_id, l.notes, l.cancellation_reason
        FROM lessons l
        JOIN groups g ON g.id = l.group_id
        WHERE l.id = $1
@@ -59,6 +71,9 @@ export async function DELETE(request: NextRequest, context: RouteCtx) {
       );
     }
 
+    await queryDb(`DELETE FROM attendance WHERE lesson_id = $1`, [lessonId]);
+    await queryDb(`DELETE FROM progress_notes WHERE lesson_id = $1`, [lessonId]);
+
     const deleted = await queryDb<{ id: string }>(
       `DELETE FROM lessons
        WHERE id = $1 AND status = 'SCHEDULED'
@@ -72,6 +87,35 @@ export async function DELETE(request: NextRequest, context: RouteCtx) {
         { status: 409 },
       );
     }
+
+    const whenIso =
+      lesson.scheduled_at instanceof Date
+        ? lesson.scheduled_at.toISOString()
+        : String(lesson.scheduled_at);
+
+    await writeAdminDeletionLog({
+      schoolId: lesson.school_id,
+      actorUserId: ctx.userId,
+      action: "LESSON_DELETE",
+      summary: `Usunięto zajęcia „${lesson.group_name}” (${whenIso})`,
+      payload: {
+        lesson: {
+          id: lesson.id,
+          group_id: lesson.group_id,
+          group_name: lesson.group_name,
+          scheduled_at: whenIso,
+          duration_min: lesson.duration_min,
+          status: lesson.status,
+          location_id: lesson.location_id,
+          teacher_id: lesson.teacher_id,
+          schedule_template_id: lesson.schedule_template_id,
+          school_year_id: lesson.school_year_id,
+          notes: lesson.notes,
+          cancellation_reason: lesson.cancellation_reason,
+        },
+        source: "DELETE /api/admin/lessons/[id]",
+      },
+    });
 
     return NextResponse.json({
       message: "Zajęcia usunięte z kalendarza",

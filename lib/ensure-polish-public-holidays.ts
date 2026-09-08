@@ -87,7 +87,21 @@ export async function ensurePolishPublicHolidays(opts: {
   const deletedMap = new Map<string, number>();
   let lessonsDeleted = 0;
   for (const date of datesToClear) {
-    const result = await deleteScheduledLessonsInHolidayRange(schoolId, date, date);
+    const holidayName =
+      toInsert.find((h) => h.date === date)?.name ??
+      candidates.find((h) => h.date === date)?.name ??
+      null;
+    const result = await deleteScheduledLessonsInHolidayRange(
+      schoolId,
+      date,
+      date,
+      null,
+      {
+        actorUserId: null,
+        holidayName,
+        source: "ensurePolishPublicHolidays",
+      },
+    );
     lessonsDeleted += result.deleted;
     mergeDeletedByGroup(deletedMap, result.byGroup);
   }

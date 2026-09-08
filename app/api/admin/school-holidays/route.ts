@@ -363,6 +363,12 @@ export async function POST(request: NextRequest) {
       df,
       dt,
       scopedGroupIds,
+      {
+        actorUserId: ctx.userId,
+        holidayId: id,
+        holidayName: name.trim(),
+        source: "POST /api/admin/school-holidays",
+      },
     );
     const topUp = await topUpLessonsAfterHolidayDeletion(insertSchoolId, deletion.byGroup);
 

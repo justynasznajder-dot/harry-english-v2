@@ -665,6 +665,22 @@ model school_year_close_logs {
   @@index([school_id], map: "idx_school_year_close_logs_school")
 }
 
+/// Audit hard-delete (zajęcia / dni wolne) — snapshot JSON do odtworzenia przypadkowych akcji.
+model admin_deletion_logs {
+  id             String   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id      String
+  actor_user_id  String?
+  action         String   @db.VarChar(64)
+  summary        String
+  payload        Json
+  created_at     DateTime @default(now()) @db.Timestamptz(6)
+  schools        schools  @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users          users?   @relation(fields: [actor_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([school_id, created_at], map: "idx_admin_deletion_logs_school_created")
+  @@index([action, created_at], map: "idx_admin_deletion_logs_action_created")
+}
+
 /// Log operacji Cloudflare R2 (Class A/B) — monitoring limitu free tier / atrybucja procesów.
 model r2_usage_logs {
   id            BigInt   @id @default(autoincrement())
@@ -788,6 +804,7 @@ model schools {
   users                        users[]
   bank_statement_imports       bank_statement_imports[]
   bank_transfers               bank_transfers[]
+  admin_deletion_logs          admin_deletion_logs[]
 }
 
 /// Przetworzony plik wyciągu z Google Drive — zapobiega ponownemu skanowaniu.
@@ -1023,6 +1040,7 @@ model users {
   school_year_teacher_stats             school_year_teacher_stats[]
   school_years_closed                   school_years[]                 @relation("school_years_closed_by")
   subscriptions                         subscriptions[]
+  admin_deletion_logs                   admin_deletion_logs[]
   schools                               schools?                       @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([school_id, email])

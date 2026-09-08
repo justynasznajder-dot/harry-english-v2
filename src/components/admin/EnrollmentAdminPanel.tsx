@@ -53,6 +53,16 @@ function emptyProposalDraft(groupId = ''): ProposalDraft {
   };
 }
 
+/** Etykieta harmonogramu — „brak harmonogramu” gdy brak poprawnego dnia/godziny. */
+function groupScheduleLabel(schedule: string | null | undefined): string {
+  const text = (schedule ?? '').trim();
+  if (!text || text === '-') return 'brak harmonogramu';
+  if (text.split(/,\s*/).every((line) => /^Dzień(\s|\d|$)/i.test(line.trim()))) {
+    return 'brak harmonogramu';
+  }
+  return text;
+}
+
 function groupServesPreferredLocation(
   group: { location_ids?: string[] } | null | undefined,
   preferredLocationId: string | null | undefined,
@@ -156,6 +166,20 @@ function formatEnrollmentPrice(value: string | number | null | undefined): strin
   })} PLN`;
 }
 
+/** Brak pełnego zestawu cen (jednorazowa / ratalna / za zajęcia). */
+function childHasMissingEnrollmentPrices(
+  child: Pick<
+    EnrollmentParentRow['children'][number],
+    'yearlyUnitPrice' | 'monthlyUnitPrice' | 'lessonUnitPrice'
+  >,
+): boolean {
+  return (
+    parsePriceDecimal(child.yearlyUnitPrice) == null ||
+    parsePriceDecimal(child.monthlyUnitPrice) == null ||
+    parsePriceDecimal(child.lessonUnitPrice) == null
+  );
+}
+
 export type EnrollmentAdminPanelProps = {
   pushToast: (kind: 'success' | 'error', message: string) => void;
   parents: EnrollmentParentRow[];
@@ -180,6 +204,7 @@ export default function EnrollmentAdminPanel({
   const [expandedGroupPriceKeys, setExpandedGroupPriceKeys] = useState<Set<string>>(
     () => new Set(),
   );
+  const [unassignedMissingPricesOnly, setUnassignedMissingPricesOnly] = useState(false);
   const [proposalModalParentId, setProposalModalParentId] = useState<string | null>(null);
   const [submittingProposalRequestId, setSubmittingProposalRequestId] = useState<string | null>(null);
   const [rejectingParentResignationId, setRejectingParentResignationId] = useState<string | null>(
@@ -346,6 +371,36 @@ export default function EnrollmentAdminPanel({
         ? isParentInComplimentaryList(proposalParent, complimentaryParents)
         : false,
     [proposalParent, complimentaryParents],
+  );
+
+  const openProposalModal = useCallback(
+    (parent: EnrollmentParentRow) => {
+      const parentIsComplimentary = isParentInComplimentaryList(parent, complimentaryParents);
+      setProposalModalParentId(parent.id);
+      setProposalDrafts(() => {
+        const next: Record<string, ProposalDraft> = {};
+        for (const child of parent.children) {
+          const draft = emptyProposalDraft(child.proposedGroupId ?? '');
+          if (child.lessonUnitPrice != null && child.lessonUnitPrice !== '') {
+            draft.lessonUnitPrice = String(child.lessonUnitPrice);
+          }
+          if (child.monthlyUnitPrice != null && child.monthlyUnitPrice !== '') {
+            draft.monthlyUnitPrice = String(child.monthlyUnitPrice);
+          }
+          if (child.yearlyUnitPrice != null && child.yearlyUnitPrice !== '') {
+            draft.yearlyUnitPrice = String(child.yearlyUnitPrice);
+          }
+          if (child.discountPercent != null && child.discountPercent !== '') {
+            draft.discountPercent = formatDiscountPercentForInput(child.discountPercent);
+          } else if (parentIsComplimentary) {
+            draft.discountPercent = COMPLIMENTARY_DEFAULT_DISCOUNT_PERCENT;
+          }
+          next[child.requestId] = draft;
+        }
+        return next;
+      });
+    },
+    [complimentaryParents],
   );
   /** NEW + PROPOSED (retry trybu bez umowy po częściowym zapisie przed COMPLETED). */
   const proposalNewChildren =
@@ -514,7 +569,10 @@ export default function EnrollmentAdminPanel({
       sections.push({
         key: group.id,
         title: group.name,
-        subtitle: [group.location_name, group.schedule].filter(Boolean).join(' · ') || undefined,
+        subtitle:
+          [group.location_name, groupScheduleLabel(group.schedule)]
+            .filter(Boolean)
+            .join(' · ') || undefined,
         rows,
       });
       byGroupId.delete(group.id);
@@ -750,6 +808,13 @@ export default function EnrollmentAdminPanel({
             ) : (
               <div className="space-y-2">
                 {filteredByGroupSections.map((section) => {
+                  const isUnassigned = section.key === '__unassigned__';
+                  const displayRows =
+                    isUnassigned && unassignedMissingPricesOnly
+                      ? section.rows.filter(({ child }) =>
+                          childHasMissingEnrollmentPrices(child),
+                        )
+                      : section.rows;
                   const open =
                     studentQuery.length > 0 || expandedGroupPriceKeys.has(section.key);
                   return (
@@ -757,73 +822,117 @@ export default function EnrollmentAdminPanel({
                       key={section.key}
                       className="overflow-hidden rounded-xl border border-emerald-100 bg-white"
                     >
-                      <button
-                        type="button"
-                        aria-expanded={open}
-                        className="flex w-full items-start gap-3 px-4 py-3 text-left transition hover:bg-emerald-50/50"
-                        onClick={() => {
-                          if (studentQuery) return;
-                          setExpandedGroupPriceKeys((prev) => {
-                            const next = new Set(prev);
-                            if (next.has(section.key)) next.delete(section.key);
-                            else next.add(section.key);
-                            return next;
-                          });
-                        }}
-                      >
-                        <span
-                          className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center text-zinc-500 transition ${
-                            open ? 'rotate-90' : ''
-                          }`}
-                          aria-hidden
+                      <div className="flex items-start gap-2 pr-3">
+                        <button
+                          type="button"
+                          aria-expanded={open}
+                          className="flex min-w-0 flex-1 items-start gap-3 px-4 py-3 text-left transition hover:bg-emerald-50/50"
+                          onClick={() => {
+                            if (studentQuery) return;
+                            setExpandedGroupPriceKeys((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(section.key)) next.delete(section.key);
+                              else next.add(section.key);
+                              return next;
+                            });
+                          }}
                         >
-                          ▸
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <p className="font-semibold text-zinc-900">{section.title}</p>
-                          {section.subtitle ? (
-                            <p className="mt-0.5 text-xs text-zinc-500">{section.subtitle}</p>
-                          ) : null}
-                        </div>
-                        <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-zinc-600 ring-1 ring-emerald-100">
-                          {section.rows.length}
-                        </span>
-                      </button>
+                          <span
+                            className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center text-zinc-500 transition ${
+                              open ? 'rotate-90' : ''
+                            }`}
+                            aria-hidden
+                          >
+                            ▸
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <p className="font-semibold text-zinc-900">{section.title}</p>
+                            {section.subtitle ? (
+                              <p className="mt-0.5 text-xs text-zinc-500">{section.subtitle}</p>
+                            ) : null}
+                          </div>
+                          <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-zinc-600 ring-1 ring-emerald-100">
+                            {displayRows.length}
+                            {isUnassigned &&
+                            unassignedMissingPricesOnly &&
+                            displayRows.length !== section.rows.length
+                              ? ` / ${section.rows.length}`
+                              : ''}
+                          </span>
+                        </button>
+                        {isUnassigned ? (
+                          <button
+                            type="button"
+                            className={`mt-2.5 shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${
+                              unassignedMissingPricesOnly
+                                ? 'border-[#0f6e56] bg-[#0f6e56] text-white'
+                                : 'border-emerald-200 bg-white text-zinc-700 hover:bg-emerald-50'
+                            }`}
+                            onClick={() => {
+                              setUnassignedMissingPricesOnly((prev) => {
+                                const next = !prev;
+                                if (next) {
+                                  setExpandedGroupPriceKeys((keys) => {
+                                    const copy = new Set(keys);
+                                    copy.add('__unassigned__');
+                                    return copy;
+                                  });
+                                }
+                                return next;
+                              });
+                            }}
+                          >
+                            Bez wpisanych cen
+                          </button>
+                        ) : null}
+                      </div>
                       {open ? (
-                        <ul className="divide-y divide-emerald-100 border-t border-emerald-100 bg-emerald-50/20 px-4">
-                          {section.rows.map(({ child, parent }) => (
-                            <li key={child.requestId} className="py-3">
-                              <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
-                                <p className="text-sm font-medium text-zinc-900">
-                                  {child.firstName} {child.lastName}
-                                </p>
-                                <p className="text-xs text-zinc-500">
-                                  {parent.firstName} {parent.lastName}
-                                </p>
-                              </div>
-                              <dl className="mt-1.5 grid grid-cols-3 gap-1 text-xs">
-                                <div>
-                                  <dt className="text-zinc-500">Jednorazowa</dt>
-                                  <dd className="font-semibold tabular-nums text-zinc-800">
-                                    {formatEnrollmentPrice(child.yearlyUnitPrice)}
-                                  </dd>
+                        displayRows.length === 0 ? (
+                          <p className="border-t border-emerald-100 bg-emerald-50/20 px-4 py-4 text-sm text-zinc-600">
+                            {unassignedMissingPricesOnly
+                              ? 'Brak dzieci bez pełnych cen w tej sekcji'
+                              : 'Brak dzieci'}
+                          </p>
+                        ) : (
+                          <ul className="divide-y divide-emerald-100 border-t border-emerald-100 bg-emerald-50/20 px-4">
+                            {displayRows.map(({ child, parent }) => (
+                              <li key={child.requestId} className="py-3">
+                                <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
+                                  <p className="text-sm font-medium text-zinc-900">
+                                    {child.firstName} {child.lastName}
+                                  </p>
+                                  <button
+                                    type="button"
+                                    className="text-xs font-medium text-[#0f6e56] underline-offset-2 hover:underline"
+                                    onClick={() => openProposalModal(parent)}
+                                  >
+                                    {parent.firstName} {parent.lastName}
+                                  </button>
                                 </div>
-                                <div>
-                                  <dt className="text-zinc-500">Ratalna</dt>
-                                  <dd className="font-semibold tabular-nums text-zinc-800">
-                                    {formatEnrollmentPrice(child.monthlyUnitPrice)}
-                                  </dd>
-                                </div>
-                                <div>
-                                  <dt className="text-zinc-500">Za zajęcia</dt>
-                                  <dd className="font-semibold tabular-nums text-zinc-800">
-                                    {formatEnrollmentPrice(child.lessonUnitPrice)}
-                                  </dd>
-                                </div>
-                              </dl>
-                            </li>
-                          ))}
-                        </ul>
+                                <dl className="mt-1.5 grid grid-cols-3 gap-1 text-xs">
+                                  <div>
+                                    <dt className="text-zinc-500">Jednorazowa</dt>
+                                    <dd className="font-semibold tabular-nums text-zinc-800">
+                                      {formatEnrollmentPrice(child.yearlyUnitPrice)}
+                                    </dd>
+                                  </div>
+                                  <div>
+                                    <dt className="text-zinc-500">Ratalna</dt>
+                                    <dd className="font-semibold tabular-nums text-zinc-800">
+                                      {formatEnrollmentPrice(child.monthlyUnitPrice)}
+                                    </dd>
+                                  </div>
+                                  <div>
+                                    <dt className="text-zinc-500">Za zajęcia</dt>
+                                    <dd className="font-semibold tabular-nums text-zinc-800">
+                                      {formatEnrollmentPrice(child.lessonUnitPrice)}
+                                    </dd>
+                                  </div>
+                                </dl>
+                              </li>
+                            ))}
+                          </ul>
+                        )
                       ) : null}
                     </div>
                   );
@@ -868,33 +977,7 @@ export default function EnrollmentAdminPanel({
                 </div>
                 <button
                   className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm text-white"
-                  onClick={() => {
-                    setProposalModalParentId(parent.id);
-                    setProposalDrafts(() => {
-                      const next: Record<string, ProposalDraft> = {};
-                      for (const child of parent.children) {
-                        const draft = emptyProposalDraft(child.proposedGroupId ?? '');
-                        if (child.lessonUnitPrice != null && child.lessonUnitPrice !== '') {
-                          draft.lessonUnitPrice = String(child.lessonUnitPrice);
-                        }
-                        if (child.monthlyUnitPrice != null && child.monthlyUnitPrice !== '') {
-                          draft.monthlyUnitPrice = String(child.monthlyUnitPrice);
-                        }
-                        if (child.yearlyUnitPrice != null && child.yearlyUnitPrice !== '') {
-                          draft.yearlyUnitPrice = String(child.yearlyUnitPrice);
-                        }
-                        if (child.discountPercent != null && child.discountPercent !== '') {
-                          draft.discountPercent = formatDiscountPercentForInput(
-                            child.discountPercent,
-                          );
-                        } else if (parentIsComplimentary) {
-                          draft.discountPercent = COMPLIMENTARY_DEFAULT_DISCOUNT_PERCENT;
-                        }
-                        next[child.requestId] = draft;
-                      }
-                      return next;
-                    });
-                  }}
+                  onClick={() => openProposalModal(parent)}
                 >
                   Zobacz szczegóły
                 </button>

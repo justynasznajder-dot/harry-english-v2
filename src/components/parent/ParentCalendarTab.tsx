@@ -257,7 +257,7 @@ export default function ParentCalendarTab({ userInfo }: { userInfo: UserInfo }) 
                   ) : null}
                   {dayLessons.slice(0, 2).map((l) => (
                     <div
-                      key={l.id}
+                      key={`${l.id}-${l.childId}`}
                       className={`mt-0.5 truncate text-[10px] leading-tight ${
                         l.status === 'CANCELLED' ? 'text-rose-700 line-through' : 'text-emerald-800'
                       }`}
