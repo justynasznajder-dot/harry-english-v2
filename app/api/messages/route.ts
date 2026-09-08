@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getTokenFromRequest } from "@/lib/auth";
-import { sendMessageNotificationEmail, sendResignationEmail } from "@/lib/email";
+import { sendMessageNotificationEmail, sendParentPortalMessageToSchoolEmail, sendResignationEmail } from "@/lib/email";
 import {
   getChildById,
   getUserById,
@@ -484,6 +484,26 @@ export async function POST(request: NextRequest) {
           emailsSent += 1;
         } catch (emailErr) {
           console.error("External message notification email failed:", emailErr);
+          emailsFailed += 1;
+        }
+      }
+    } else if (actor.user.role === "PARENT" && templateKey !== "resignation") {
+      // Rezygnacja ma osobny mail na kontakt@; pozostałe wiadomości rodzica też kopiujemy na skrzynkę.
+      const parentUser = await getUserById(actor.user.id);
+      const parentEmail = parentUser?.email?.trim();
+      if (parentEmail) {
+        try {
+          await sendParentPortalMessageToSchoolEmail({
+            parentFirstName: parentUser?.first_name ?? actor.user.firstName,
+            parentLastName: parentUser?.last_name ?? actor.user.lastName,
+            parentEmail,
+            subject,
+            content,
+            portalUrl: process.env.NEXT_PUBLIC_APP_URL ?? "https://www.harry-english.pl",
+          });
+          emailsSent += 1;
+        } catch (emailErr) {
+          console.error("Parent portal message → school email failed:", emailErr);
           emailsFailed += 1;
         }
       }

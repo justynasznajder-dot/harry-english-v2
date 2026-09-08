@@ -871,6 +871,67 @@ Harry English`,
   });
 }
 
+/**
+ * Kopia wiadomości rodzica z portalu na skrzynkę szkoły (kontakt@harry-english.pl).
+ * Reply-To = e-mail rodzica, żeby dało się odpisać bezpośrednio.
+ */
+export async function sendParentPortalMessageToSchoolEmail(params: {
+  parentFirstName: string;
+  parentLastName: string;
+  parentEmail: string;
+  subject: string;
+  content: string;
+  portalUrl: string;
+}): Promise<void> {
+  const fromAddr = process.env.EMAIL_USER || "kontakt@harry-english.pl";
+  const adminTo = process.env.EMAIL_USER || "kontakt@harry-english.pl";
+  const portalLink = params.portalUrl.replace(/\/$/, "");
+  const parentName =
+    `${params.parentFirstName} ${params.parentLastName}`.trim() || "Rodzic";
+  const p = getEmailPalette();
+
+  await sendHarryMail({
+    from: {
+      name: "Harry English",
+      address: fromAddr,
+    },
+    to: adminTo,
+    replyTo: {
+      name: parentName,
+      address: params.parentEmail,
+    },
+    subject: `Wiadomość od rodzica: ${params.subject}`,
+    html: buildEmailShell({
+      title: "Nowa wiadomość od rodzica w portalu",
+      intro: `${escapeHtmlForEmail(parentName)} napisał/a wiadomość w panelu rodzica.`,
+      contentHtml: `
+        ${emailInsetCellOpen(p)}
+          <p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;color:${p.insetText};"><strong>Rodzic:</strong> ${escapeHtmlForEmail(parentName)}</p>
+          <p style="margin:0;font-size:14px;line-height:1.6;color:${p.insetText};"><strong>Email:</strong> ${buildEmailMailtoLink(params.parentEmail, p.insetLink)}</p>
+        ${emailInsetCellClose()}
+        <p style="margin:14px 0 8px 0;font-size:15px;line-height:1.6;color:${p.text};"><strong style="color:${p.accentWarm};">Temat:</strong> ${escapeHtmlForEmail(params.subject)}</p>
+        ${emailInsetCellOpen(p)}
+          <p style="margin:0;font-size:14px;line-height:1.6;white-space:pre-wrap;color:${p.insetText};">${linkifyEscapedEmailText(escapeHtmlForEmail(params.content), p.insetLink)}</p>
+        ${emailInsetCellClose()}
+        ${emailCtaButton(`${portalLink}/portal`, "Przejdź do panelu")}
+      `,
+      footerHtml: `${buildEmailFooterBrandLine({ marginTop: "0", brandColor: p.accentWarm })}<p style="margin:0;font-size:12px;color:${p.text};">Możesz odpisać bezpośrednio na ten e-mail (Reply-To: rodzic).</p>`,
+      palette: p,
+    }),
+    text: `Nowa wiadomość od rodzica w portalu
+
+Rodzic: ${parentName}
+Email: ${params.parentEmail}
+
+Temat: ${params.subject}
+
+${params.content}
+
+Panel: ${portalLink}/portal
+`,
+  });
+}
+
 export async function verifyEmailConfig() {
   try {
     await transporter.verify();

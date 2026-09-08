@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   formatSchoolDateShort,
   formatSchoolTime,
@@ -52,7 +52,7 @@ type GroupRosterRow = {
   level: string | null;
   locationName: string;
   teacherName: string;
-  children: Array<{ childId: string; childName: string }>;
+  children: Array<{ childId: string; childName: string; birthYear: string | null }>;
 };
 
 function formatDt(value: string): string {
@@ -149,6 +149,9 @@ export default function ManagerDashboardPanel({
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
 
   const [groupRoster, setGroupRoster] = useState<GroupRosterRow[]>([]);
+  const [rosterLocation, setRosterLocation] = useState('');
+  const [rosterTeacher, setRosterTeacher] = useState('');
+  const [rosterBirthYear, setRosterBirthYear] = useState('');
 
   const loadDashboard = useCallback(async () => {
     setLoading(true);
@@ -180,6 +183,45 @@ export default function ManagerDashboardPanel({
   useEffect(() => {
     void loadGroupRoster();
   }, [loadGroupRoster]);
+
+  const rosterFilterOptions = useMemo(() => {
+    const locations = new Set<string>();
+    const teachers = new Set<string>();
+    const years = new Set<string>();
+    for (const g of groupRoster) {
+      if (g.locationName && g.locationName !== '—') locations.add(g.locationName);
+      if (g.teacherName && g.teacherName !== '—') teachers.add(g.teacherName);
+      for (const c of g.children) {
+        if (c.birthYear) years.add(c.birthYear);
+      }
+    }
+    return {
+      locations: [...locations].sort((a, b) => a.localeCompare(b, 'pl')),
+      teachers: [...teachers].sort((a, b) => a.localeCompare(b, 'pl')),
+      years: [...years].sort((a, b) => a.localeCompare(b)),
+    };
+  }, [groupRoster]);
+
+  const filteredGroupRoster = useMemo(() => {
+    return groupRoster
+      .filter((g) => {
+        if (rosterLocation && g.locationName !== rosterLocation) return false;
+        if (rosterTeacher && g.teacherName !== rosterTeacher) return false;
+        if (rosterBirthYear) {
+          return g.children.some((c) => c.birthYear === rosterBirthYear);
+        }
+        return true;
+      })
+      .map((g) => {
+        if (!rosterBirthYear) return g;
+        return {
+          ...g,
+          children: g.children.filter((c) => c.birthYear === rosterBirthYear),
+        };
+      });
+  }, [groupRoster, rosterLocation, rosterTeacher, rosterBirthYear]);
+
+  const hasRosterFilters = Boolean(rosterLocation || rosterTeacher || rosterBirthYear);
 
   if (loading && !dashboard) {
     return (
@@ -363,11 +405,75 @@ export default function ManagerDashboardPanel({
         title="Grupy i dzieci"
         description="Aktywne grupy w bieżącym roku szkolnym"
       >
-        {groupRoster.length === 0 ? (
-          <p className="text-sm text-zinc-500">Brak aktywnych grup.</p>
+        <div className="mb-3 flex flex-wrap items-end gap-3">
+          <label className="flex min-w-[160px] flex-col gap-1 text-xs font-medium text-zinc-600">
+            Lokalizacja
+            <select
+              className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-zinc-900"
+              value={rosterLocation}
+              onChange={(e) => setRosterLocation(e.target.value)}
+            >
+              <option value="">Wszystkie</option>
+              {rosterFilterOptions.locations.map((loc) => (
+                <option key={loc} value={loc}>
+                  {loc}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex min-w-[160px] flex-col gap-1 text-xs font-medium text-zinc-600">
+            Lektor
+            <select
+              className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-zinc-900"
+              value={rosterTeacher}
+              onChange={(e) => setRosterTeacher(e.target.value)}
+            >
+              <option value="">Wszyscy</option>
+              {rosterFilterOptions.teachers.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex min-w-[120px] flex-col gap-1 text-xs font-medium text-zinc-600">
+            Rocznik
+            <select
+              className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-zinc-900"
+              value={rosterBirthYear}
+              onChange={(e) => setRosterBirthYear(e.target.value)}
+            >
+              <option value="">Wszystkie</option>
+              {rosterFilterOptions.years.map((y) => (
+                <option key={y} value={y}>
+                  {y}
+                </option>
+              ))}
+            </select>
+          </label>
+          {hasRosterFilters ? (
+            <button
+              type="button"
+              className="rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-zinc-600 hover:bg-zinc-50"
+              onClick={() => {
+                setRosterLocation('');
+                setRosterTeacher('');
+                setRosterBirthYear('');
+              }}
+            >
+              Wyczyść filtry
+            </button>
+          ) : null}
+        </div>
+        {filteredGroupRoster.length === 0 ? (
+          <p className="text-sm text-zinc-500">
+            {groupRoster.length === 0
+              ? 'Brak aktywnych grup.'
+              : 'Brak grup dla wybranych filtrów.'}
+          </p>
         ) : (
           <div className="space-y-3">
-            {groupRoster.map((group) => (
+            {filteredGroupRoster.map((group) => (
               <div
                 key={group.groupId}
                 className="rounded-xl border border-emerald-100 bg-emerald-50/30 px-3 py-3 sm:px-4"
@@ -398,6 +504,9 @@ export default function ManagerDashboardPanel({
                         className="rounded-lg border border-emerald-100 bg-white px-2.5 py-1 text-sm text-zinc-800"
                       >
                         {child.childName}
+                        {child.birthYear ? (
+                          <span className="ml-1 text-xs text-zinc-500">({child.birthYear})</span>
+                        ) : null}
                       </li>
                     ))}
                   </ul>

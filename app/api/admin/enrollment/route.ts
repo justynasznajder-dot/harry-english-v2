@@ -45,6 +45,7 @@ export async function GET(request: NextRequest) {
       access_level: EnrollmentStatus;
       discount_large_family: boolean;
       enrolling_multiple_children: boolean;
+      latest_created_at: Date | string | null;
       children_json: string;
     }>(
       `SELECT
@@ -85,6 +86,7 @@ export async function GET(request: NextRequest) {
            OR COALESCE(er.discount_large_family, FALSE)
          ) AS discount_large_family,
          BOOL_OR(COALESCE(er.enrolling_multiple_children, FALSE)) AS enrolling_multiple_children,
+         MAX(er.created_at) AS latest_created_at,
          COALESCE(
            JSON_AGG(
              DISTINCT JSONB_BUILD_OBJECT(
@@ -101,6 +103,7 @@ export async function GET(request: NextRequest) {
                'notes', er.notes,
                'proposedGroupId', er.proposed_group_id,
                'proposedAt', er.proposed_at,
+               'createdAt', er.created_at,
                'lessonUnitPrice', er.lesson_unit_price::text,
                'monthlyUnitPrice', er.monthly_unit_price::text,
                'yearlyUnitPrice', er.yearly_unit_price::text,
@@ -139,7 +142,7 @@ export async function GET(request: NextRequest) {
          )
          ${parentsSchoolClause}
        GROUP BY ${parentGroupKeySql}
-       ORDER BY MAX(er.created_at) DESC`,
+       ORDER BY MAX(er.created_at) DESC NULLS LAST`,
       parentsParams
     );
 
@@ -210,6 +213,9 @@ export async function GET(request: NextRequest) {
         accessLevel: row.access_level,
         discountLargeFamily: row.discount_large_family === true,
         enrollingMultipleChildren: row.enrolling_multiple_children === true,
+        latestCreatedAt: row.latest_created_at
+          ? new Date(row.latest_created_at).toISOString()
+          : null,
         children: JSON.parse(row.children_json),
       })),
       groups: groupsRes.rows,

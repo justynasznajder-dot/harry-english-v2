@@ -127,11 +127,14 @@ function exportDiscountedPriceCell(
 ): number | "" {
   const base = parsePriceDecimal(raw);
   if (base == null) return "";
-  if (percent <= 0) return base;
-  if (mode === "complimentary") {
-    return applyManualDiscountPercent(base, percent) ?? base;
-  }
-  return applyWinningDiscountPercent(base, percent);
+  if (percent <= 0) return Math.floor(base);
+  // Excel: zawsze w dół do pełnych zł (tryb bez umowy i z umową).
+  const after =
+    mode === "complimentary"
+      ? applyManualDiscountPercent(base, percent)
+      : applyWinningDiscountPercent(base, percent);
+  if (after == null || !Number.isFinite(after)) return "";
+  return Math.floor(after);
 }
 
 const REPORTED_CHILDREN_EMPTY_ROW = {

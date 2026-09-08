@@ -236,6 +236,44 @@ function formatBirthYearLabel(yearKey: string): string {
   return `Rok ${yearKey}`;
 }
 
+/** Timestamp zgłoszenia (ms) albo null gdy brak / nieparsowalne. */
+function enrollmentCreatedAtMs(raw: string | null | undefined): number | null {
+  if (!raw) return null;
+  const t = new Date(raw).getTime();
+  return Number.isFinite(t) ? t : null;
+}
+
+/** Najnowsza data zgłoszenia rodzica (parent.latestCreatedAt lub max z dzieci). */
+function parentLatestEnrollmentCreatedAtMs(
+  parent: Pick<EnrollmentParentRow, 'latestCreatedAt' | 'children'>,
+): number | null {
+  const fromParent = enrollmentCreatedAtMs(parent.latestCreatedAt);
+  let max = fromParent;
+  for (const child of parent.children) {
+    const t = enrollmentCreatedAtMs(child.createdAt);
+    if (t == null) continue;
+    if (max == null || t > max) max = t;
+  }
+  return max;
+}
+
+function sortEnrollmentChildrenByCreatedAtDesc<
+  T extends { createdAt?: string | null; lastName?: string | null; firstName?: string | null },
+>(children: T[]): T[] {
+  return [...children].sort((a, b) => {
+    const aT = enrollmentCreatedAtMs(a.createdAt);
+    const bT = enrollmentCreatedAtMs(b.createdAt);
+    if (aT != null || bT != null) {
+      if (aT == null) return 1;
+      if (bT == null) return -1;
+      if (aT !== bT) return bT - aT;
+    }
+    const last = (a.lastName ?? '').localeCompare(b.lastName ?? '', 'pl');
+    if (last !== 0) return last;
+    return (a.firstName ?? '').localeCompare(b.firstName ?? '', 'pl');
+  });
+}
+
 export type EnrollmentAdminPanelProps = {
   pushToast: (kind: 'success' | 'error', message: string) => void;
   parents: EnrollmentParentRow[];
@@ -817,9 +855,24 @@ export default function EnrollmentAdminPanel({
             );
           });
         }
-        return { ...parent, children };
+        return {
+          ...parent,
+          children: sortEnrollmentChildrenByCreatedAtDesc(children),
+        };
       })
-      .filter((parent) => parent.children.length > 0);
+      .filter((parent) => parent.children.length > 0)
+      .sort((a, b) => {
+        const aT = parentLatestEnrollmentCreatedAtMs(a);
+        const bT = parentLatestEnrollmentCreatedAtMs(b);
+        if (aT == null && bT == null) {
+          const byLast = (a.lastName ?? '').localeCompare(b.lastName ?? '', 'pl');
+          if (byLast !== 0) return byLast;
+          return (a.firstName ?? '').localeCompare(b.firstName ?? '', 'pl');
+        }
+        if (aT == null) return 1;
+        if (bT == null) return -1;
+        return bT - aT; // najnowsze zgłoszenia na górze
+      });
 
     const filteredByGroupSections = isByGroupPrices
       ? childrenByProposedGroup.sections
@@ -1382,7 +1435,7 @@ export default function EnrollmentAdminPanel({
                         return (
                           <li
                             key={child.requestId}
-                            className="grid grid-cols-1 items-start gap-x-4 gap-y-2 py-3 sm:grid-cols-[minmax(0,42%)_minmax(0,1fr)_minmax(7rem,auto)]"
+                            className="grid grid-cols-1 items-start gap-x-4 gap-y-2 py-3 sm:grid-cols-[minmax(0,36%)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(7rem,auto)]"
                           >
                             <div className="min-w-0 overflow-hidden">
                               <p className="text-sm font-medium text-zinc-900">
@@ -1424,6 +1477,11 @@ export default function EnrollmentAdminPanel({
                                 </div>
                               ) : null}
                             </div>
+                            <p className="min-w-0 self-center text-left text-sm text-zinc-700">
+                              <span className="font-medium text-zinc-900">
+                                {reportedChildLocationLabel(child)}
+                              </span>
+                            </p>
                             <p className="min-w-0 self-center text-left text-sm text-zinc-700">
                               <span className="font-medium text-zinc-900">
                                 {groupName

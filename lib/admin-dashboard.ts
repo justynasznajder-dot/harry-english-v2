@@ -81,7 +81,25 @@ export async function fetchDashboardCounters(schoolId: string): Promise<Dashboar
     `SELECT
        (SELECT COUNT(*)::text FROM enrollment_requests er
         WHERE er.school_id = $1
-          AND UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'NEW') AS pending_enrollments,
+          AND UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'NEW'
+          AND (er.proposed_group_id IS NULL OR BTRIM(er.proposed_group_id) = '')
+          AND NOT EXISTS (
+            SELECT 1
+            FROM school_complimentary_parents scp
+            WHERE scp.school_id = er.school_id
+              AND (
+                (scp.parent_id IS NOT NULL AND scp.parent_id = er.user_id)
+                OR (
+                  scp.parent_email IS NOT NULL
+                  AND LOWER(BTRIM(scp.parent_email)) = LOWER(BTRIM(er.parent_email))
+                )
+                OR EXISTS (
+                  SELECT 1 FROM users u
+                  WHERE u.id = scp.parent_id
+                    AND LOWER(BTRIM(u.email::text)) = LOWER(BTRIM(er.parent_email))
+                )
+              )
+          )) AS pending_enrollments,
        (SELECT COUNT(*)::text FROM renewals r
         WHERE r.school_id = $1
           AND UPPER(BTRIM(COALESCE(r.status::text, ''))) IN ('PROPOSED', 'PENDING_CONFIRMATION')) AS renewals_no_response,
@@ -364,20 +382,43 @@ export async function countOpenResignations(schoolId: string): Promise<number> {
   return Number(res.rows[0]?.n ?? 0);
 }
 
-/** Oczekujące zgłoszenia (status NEW). `schoolId` null = wszystkie szkoły (ADMIN). */
+/** Oczekujące zgłoszenia = filtr „Nowe”: status NEW, bez grupy, bez trybu bez umowy. */
 export async function countPendingEnrollments(schoolId: string | null): Promise<number> {
+  const complimentaryExclude = `
+    AND NOT EXISTS (
+      SELECT 1
+      FROM school_complimentary_parents scp
+      WHERE scp.school_id = er.school_id
+        AND (
+          (scp.parent_id IS NOT NULL AND scp.parent_id = er.user_id)
+          OR (
+            scp.parent_email IS NOT NULL
+            AND LOWER(BTRIM(scp.parent_email)) = LOWER(BTRIM(er.parent_email))
+          )
+          OR EXISTS (
+            SELECT 1 FROM users u
+            WHERE u.id = scp.parent_id
+              AND LOWER(BTRIM(u.email::text)) = LOWER(BTRIM(er.parent_email))
+          )
+        )
+    )`;
+
   const res = schoolId
     ? await queryDb<{ n: string }>(
         `SELECT COUNT(*)::text AS n
          FROM enrollment_requests er
          WHERE er.school_id = $1
-           AND UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'NEW'`,
+           AND UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'NEW'
+           AND (er.proposed_group_id IS NULL OR BTRIM(er.proposed_group_id) = '')
+           ${complimentaryExclude}`,
         [schoolId]
       )
     : await queryDb<{ n: string }>(
         `SELECT COUNT(*)::text AS n
          FROM enrollment_requests er
-         WHERE UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'NEW'`
+         WHERE UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'NEW'
+           AND (er.proposed_group_id IS NULL OR BTRIM(er.proposed_group_id) = '')
+           ${complimentaryExclude}`
       );
   return Number(res.rows[0]?.n ?? 0);
 }
@@ -663,6 +704,8 @@ export async function fetchRenewalPipeline(
 export type GroupRosterChild = {
   childId: string;
   childName: string;
+  /** Rok urodzenia (YYYY) albo null. */
+  birthYear: string | null;
 };
 
 export type GroupRosterRow = {
@@ -684,6 +727,7 @@ export async function fetchGroupsRoster(schoolId: string): Promise<GroupRosterRo
     child_id: string | null;
     child_first_name: string | null;
     child_last_name: string | null;
+    child_birth_year: string | null;
   }>(
     `SELECT
        g.id AS group_id,
@@ -696,7 +740,11 @@ export async function fetchGroupsRoster(schoolId: string): Promise<GroupRosterRo
        END AS teacher_name,
        c.id AS child_id,
        c.first_name AS child_first_name,
-       c.last_name AS child_last_name
+       c.last_name AS child_last_name,
+       CASE
+         WHEN c.birth_date IS NULL THEN NULL
+         ELSE TO_CHAR(c.birth_date, 'YYYY')
+       END AS child_birth_year
      FROM groups g
      LEFT JOIN locations loc ON loc.id = g.location_id
      LEFT JOIN users t ON t.id = g.teacher_id
@@ -731,7 +779,11 @@ export async function fetchGroupsRoster(schoolId: string): Promise<GroupRosterRo
       const childName =
         `${String(row.child_first_name ?? "").trim()} ${String(row.child_last_name ?? "").trim()}`.trim() ||
         "dziecko";
-      group.children.push({ childId: row.child_id, childName });
+      group.children.push({
+        childId: row.child_id,
+        childName,
+        birthYear: row.child_birth_year ? String(row.child_birth_year) : null,
+      });
     }
   }
 

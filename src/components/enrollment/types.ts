@@ -14,6 +14,8 @@ export type EnrollmentChildRow = {
   notes: string | null;
   proposedGroupId: string | null;
   proposedAt: string | null;
+  /** Data utworzenia zgłoszenia (enrollment_requests.created_at). */
+  createdAt?: string | null;
   lessonUnitPrice?: string | number | null;
   monthlyUnitPrice?: string | number | null;
   yearlyUnitPrice?: string | number | null;
@@ -32,6 +34,8 @@ export type EnrollmentParentRow = {
   discountLargeFamily?: boolean;
   /** To samo pole co checkbox rodzica: enrollment_requests.enrolling_multiple_children */
   enrollingMultipleChildren?: boolean;
+  /** Najnowsza data zgłoszenia wśród dzieci rodzica. */
+  latestCreatedAt?: string | null;
   children: EnrollmentChildRow[];
 };
 
