@@ -1490,8 +1490,18 @@ export default function EnrollmentAdminPanel({
                             className="grid grid-cols-1 items-start gap-x-4 gap-y-2 py-3 sm:grid-cols-[minmax(0,36%)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(7rem,auto)]"
                           >
                             <div className="min-w-0 overflow-hidden">
-                              <p className="text-sm font-medium text-zinc-900">
-                                {child.firstName} {child.lastName}
+                              <p className="inline-flex flex-wrap items-center gap-1.5 text-sm font-medium text-zinc-900">
+                                <span>
+                                  {child.firstName} {child.lastName}
+                                </span>
+                                {childHasMissingEnrollmentPrices(child) ? (
+                                  <span
+                                    className="inline-flex rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800"
+                                    title="Brak uzupełnionych cen"
+                                  >
+                                    NEW
+                                  </span>
+                                ) : null}
                               </p>
                               <p className="mt-0.5 truncate text-xs text-zinc-500">
                                 Rodzic:{' '}
