@@ -1081,6 +1081,86 @@ Przejdź do portalu: ${portalUrl}
   });
 }
 
+/** Mail o zmianie grupy/terminu — bez danych logowania (rodzic już je dostał). */
+export async function sendGroupChangeNotificationEmail(
+  to: string,
+  parentName: string,
+  change: {
+    childFirstName: string;
+    childLastName: string;
+    groupName: string;
+    locationName: string;
+    schedule: string;
+    teacherName?: string;
+    previousGroupName?: string | null;
+  },
+) {
+  const portalUrl = PUBLIC_SITE_URL;
+  const p = getEmailPalette();
+  const teacherName = (change.teacherName ?? "").trim() || "Do ustalenia";
+  const safeChildName = `${escapeHtmlForEmail(change.childFirstName)} ${escapeHtmlForEmail(change.childLastName)}`;
+  const childNameText = `${change.childFirstName} ${change.childLastName}`;
+  const prevName = (change.previousGroupName ?? "").trim();
+
+  const previousHtml = prevName
+    ? `<p style="margin:0 0 12px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
+         Poprzednia grupa: <strong>${escapeHtmlForEmail(prevName)}</strong>
+       </p>`
+    : "";
+  const previousText = prevName ? `Poprzednia grupa: ${prevName}\n` : "";
+
+  await sendHarryMail({
+    from: {
+      name: "Harry English",
+      address: process.env.EMAIL_USER || "kontakt@harry-english.pl",
+    },
+    to,
+    subject: "Zmiana grupy / terminu zajęć - Harry English",
+    html: buildEmailShell({
+      title: `Dzień dobry ${escapeHtmlForEmail(parentName)},`,
+      intro: `Informujemy o zmianie grupy dla ${safeChildName}. Poniżej znajdziesz aktualne dane.`,
+      contentHtml: `
+        ${previousHtml}
+        <div style="margin:0 0 16px 0;padding:14px 16px;border:2px solid ${p.insetBorder};border-radius:10px;background:${p.insetBg};">
+          <p style="margin:0 0 8px 0;font-family:${BRAND_FONT};font-size:15px;font-weight:700;color:${p.text};">Nowa grupa</p>
+          <ul style="margin:0 0 0 18px;padding:0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
+            <li><strong>Grupa:</strong> ${escapeHtmlForEmail(change.groupName)}</li>
+            <li><strong>Lokalizacja:</strong> ${escapeHtmlForEmail(change.locationName)}</li>
+            <li><strong>Termin:</strong> ${escapeHtmlForEmail(change.schedule)}</li>
+            <li><strong>Lektor:</strong> ${escapeHtmlForEmail(teacherName)}</li>
+          </ul>
+        </div>
+        <p style="margin:0 0 12px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
+          Dane do logowania pozostają bez zmian — skorzystaj z tych, które już posiadasz. Po zalogowaniu możesz wygenerować umowę wraz z wymaganymi załącznikami.
+        </p>
+        <p style="margin:0 0 16px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
+          Jeśli pojawią się jakiekolwiek pytania lub będziesz potrzebować pomocy, jesteśmy do dyspozycji.
+        </p>
+        ${emailCtaButton(portalUrl, "Przejdź do portalu")}
+        <p style="margin:14px 0 0 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
+          Lub skopiuj link do przeglądarki: <a href="${portalUrl}" class="he-email-body-link" style="font-family:${BRAND_FONT};color:${p.link} !important;">${portalUrl}</a>
+        </p>
+      `,
+    }),
+    text: `Dzień dobry ${parentName},
+
+Informujemy o zmianie grupy dla ${childNameText}. Poniżej znajdziesz aktualne dane.
+
+${previousText}Nowa grupa:
+- Grupa: ${change.groupName}
+- Lokalizacja: ${change.locationName}
+- Termin: ${change.schedule}
+- Lektor: ${teacherName}
+
+Dane do logowania pozostają bez zmian — skorzystaj z tych, które już posiadasz. Po zalogowaniu możesz wygenerować umowę wraz z wymaganymi załącznikami.
+
+Jeśli pojawią się jakiekolwiek pytania lub będziesz potrzebować pomocy, jesteśmy do dyspozycji.
+
+Przejdź do portalu: ${portalUrl}
+`,
+  });
+}
+
 export async function sendCombinedProposalEmail(
   to: string,
   parentName: string,
@@ -1142,11 +1222,10 @@ export async function sendCombinedProposalEmail(
 
   const credentialsHtml = `
       <p style="margin:16px 0 8px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
-        Poniżej znajdziesz dane do logowania w systemie.
         ${
           isNewAccount
-            ? " Założyliśmy dla Ciebie konto w portalu."
-            : " Konto już masz w systemie."
+            ? "Założyliśmy dla Ciebie konto w portalu. Poniżej znajdziesz dane do logowania."
+            : "Konto już masz w systemie. Poniżej znajdziesz dane do logowania."
         }
       </p>
       <div style="margin:0 0 16px 0;padding:14px 16px;border:2px solid ${p.insetBorder};border-radius:10px;background:${p.insetBg};">
@@ -1173,11 +1252,10 @@ export async function sendCombinedProposalEmail(
     `;
 
   const credentialsText = `
-Poniżej znajdziesz dane do logowania w systemie.
 ${
   isNewAccount
-    ? "Założyliśmy dla Ciebie konto w portalu."
-    : "Konto już masz w systemie."
+    ? "Założyliśmy dla Ciebie konto w portalu. Poniżej znajdziesz dane do logowania."
+    : "Konto już masz w systemie. Poniżej znajdziesz dane do logowania."
 }
 - Login (email): ${login.loginEmail}
 - ${isNewAccount ? "Hasło tymczasowe" : "Hasło"}: ${passwordText}

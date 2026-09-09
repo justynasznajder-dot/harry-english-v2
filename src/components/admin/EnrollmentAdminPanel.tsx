@@ -358,6 +358,9 @@ export default function EnrollmentAdminPanel({
   );
   const [submittingBatchProposals, setSubmittingBatchProposals] = useState(false);
   const [savingBatchProposals, setSavingBatchProposals] = useState(false);
+  const [notifyingGroupChangeRequestId, setNotifyingGroupChangeRequestId] = useState<
+    string | null
+  >(null);
   const [proposalDrafts, setProposalDrafts] = useState<Record<string, ProposalDraft>>({});
   const [showOtherLocationGroups, setShowOtherLocationGroups] = useState<
     Record<string, boolean>
@@ -365,6 +368,15 @@ export default function EnrollmentAdminPanel({
   const [savingParentDiscountId, setSavingParentDiscountId] = useState<string | null>(null);
   const [savingComplimentaryKey, setSavingComplimentaryKey] = useState<string | null>(null);
   const [exportingList, setExportingList] = useState(false);
+  const [groupChangeConfirm, setGroupChangeConfirm] = useState<{
+    rows: Array<{
+      childName: string;
+      fromGroup: string;
+      toGroup: string;
+      mailSent: boolean;
+    }>;
+    resolve: (ok: boolean) => void;
+  } | null>(null);
   const discountSettings = _discountSettings;
 
   /** KDR / rodzeństwo — te same pola co checkboxy rodzica. */
@@ -569,6 +581,13 @@ export default function EnrollmentAdminPanel({
     [complimentaryParents, parents],
   );
 
+  const closeProposalModal = useCallback(() => {
+    setProposalModalParentId(null);
+    setProposalDrafts({});
+    setShowOtherLocationGroups({});
+    setNotifyingGroupChangeRequestId(null);
+  }, []);
+
   useEffect(() => {
     const key = (focusParentKey ?? '').trim();
     if (!key) return;
@@ -608,6 +627,18 @@ export default function EnrollmentAdminPanel({
       if (c.status === 'PROPOSED' && !proposalParentIsComplimentary) return true;
       return false;
     }) ?? [];
+  /** Po zmianie grupy (mail z terminem już był) — przycisk obok Zapisz. */
+  const proposalGroupChangeNotifyChildren = proposalPostSendPriceChildren.filter((c) => {
+    const draftGroupId = (proposalDrafts[c.requestId]?.groupId ?? '').trim();
+    const prevGroupId = (c.proposedGroupId ?? '').trim();
+    if (!draftGroupId || !prevGroupId || draftGroupId === prevGroupId) return false;
+    return (
+      c.status === 'ACCEPTED' ||
+      c.status === 'AWAITING_CONTRACT' ||
+      c.status === 'CONTRACT_READY' ||
+      (c.status === 'PROPOSED' && Boolean(c.proposedAt))
+    );
+  });
   const hasAcceptedSibling = (requestId: string) =>
     proposalParent?.children.some(
       (c) => c.requestId !== requestId && c.status === 'ACCEPTED',
@@ -641,16 +672,18 @@ export default function EnrollmentAdminPanel({
     proposalPostSendPriceChildren.length >= 1 &&
     proposalPostSendPriceChildren.every((c) => {
       const draft = proposalDrafts[c.requestId];
-      return proposalParentIsComplimentary
-        ? draftHasComplimentaryRequiredPrices(draft)
-        : draftHasRequiredPrices(draft);
-    }) &&
-    !proposalPostSendPriceChildren.some((c) =>
-      proposalParentIsComplimentary
-        ? draftHasComplimentaryPartialPrices(proposalDrafts[c.requestId])
-        : draftHasPartialPrices(proposalDrafts[c.requestId]),
-    );
-  /** Zapisz: nowe dzieci (jak wcześniej) i/lub korekta stawek po wysłaniu maila. */
+      // Grupa wymagana — zmiana grupy przed podpisem nie może zależeć od uzupełnionych stawek.
+      if (!(draft?.groupId ?? '').trim()) return false;
+      if (proposalParentIsComplimentary) {
+        return (
+          draftHasComplimentaryRequiredPrices(draft) &&
+          !draftHasComplimentaryPartialPrices(draft)
+        );
+      }
+      // Zwykły flow: stawki puste albo wszystkie 3 (częściowe blokują).
+      return !draftHasPartialPrices(draft);
+    });
+  /** Zapisz: nowe dzieci (jak wcześniej) i/lub korekta grupy/stawek po wysłaniu maila. */
   const proposalSaveReady =
     proposalNewChildren.length === 0
       ? proposalPostSendPriceSaveReady
@@ -658,12 +691,30 @@ export default function EnrollmentAdminPanel({
         (proposalPostSendPriceChildren.length === 0 || proposalPostSendPriceSaveReady);
   const proposalBatchSaveTitle = (() => {
     if (proposalNewChildren.length === 0 && proposalPostSendPriceChildren.length > 0) {
-                    if (proposalPostSendPriceSaveReady) {
+      if (proposalPostSendPriceSaveReady) {
         return 'Zapisz grupę i stawki (bez ponownej wysyłki e-maila)';
+      }
+      if (
+        proposalPostSendPriceChildren.some((c) =>
+          proposalParentIsComplimentary
+            ? draftHasComplimentaryPartialPrices(proposalDrafts[c.requestId])
+            : draftHasPartialPrices(proposalDrafts[c.requestId]),
+        )
+      ) {
+        return proposalParentIsComplimentary
+          ? 'Uzupełnij stawkę jednorazową i ratalną (albo wyczyść częściowe)'
+          : 'Uzupełnij wszystkie 3 stawki albo wyczyść częściowo wpisane';
+      }
+      if (
+        proposalPostSendPriceChildren.some(
+          (c) => !(proposalDrafts[c.requestId]?.groupId ?? '').trim(),
+        )
+      ) {
+        return 'Wybierz grupę dla każdego dziecka';
       }
       return proposalParentIsComplimentary
         ? 'Uzupełnij stawkę jednorazową i ratalną dla każdego dziecka'
-        : 'Uzupełnij wszystkie 3 stawki dla każdego dziecka';
+        : 'Wybierz grupę — stawki możesz uzupełnić później';
     }
     if (proposalParentIsComplimentary) {
       if (proposalBatchSaveReady) {
@@ -731,23 +782,65 @@ export default function EnrollmentAdminPanel({
       };
     });
 
-  /** Potwierdzenie przy zmianie wcześniej zapisanej grupy. */
-  const confirmGroupChangesIfNeeded = (): boolean => {
-    const editableChildren = [...proposalNewChildren, ...proposalPostSendPriceChildren];
-    const changes = editableChildren.flatMap((child) => {
-      const newGroupId = (proposalDrafts[child.requestId]?.groupId ?? '').trim();
-      const prevGroupId = (child.proposedGroupId ?? '').trim();
-      if (!newGroupId || !prevGroupId || newGroupId === prevGroupId) return [];
-      const prevName = groups.find((g) => g.id === prevGroupId)?.name ?? 'poprzedniej';
-      const nextName = groups.find((g) => g.id === newGroupId)?.name ?? 'nowej';
-      return [
-        `${child.firstName} ${child.lastName}: ${prevName} → ${nextName}`,
-      ];
+  /** Potwierdzenie przy zmianie grupy — mocniejszy monit, gdy rodzic dostał już maila z terminem. */
+  const enrollmentScheduleMailAlreadySent = (
+    child: Pick<EnrollmentParentRow['children'][number], 'status' | 'proposedAt'>,
+  ): boolean =>
+    child.status === 'ACCEPTED' ||
+    child.status === 'AWAITING_CONTRACT' ||
+    child.status === 'CONTRACT_READY' ||
+    (child.status === 'PROPOSED' && Boolean(child.proposedAt));
+
+  const askGroupChangeConfirm = useCallback(
+    (
+      rows: Array<{
+        childName: string;
+        fromGroup: string;
+        toGroup: string;
+        mailSent: boolean;
+      }>,
+    ): Promise<boolean> => {
+      if (rows.length === 0) return Promise.resolve(true);
+      return new Promise((resolve) => {
+        setGroupChangeConfirm((prev) => {
+          prev?.resolve(false);
+          return { rows, resolve };
+        });
+      });
+    },
+    [],
+  );
+
+  const closeGroupChangeConfirm = useCallback((ok: boolean) => {
+    setGroupChangeConfirm((prev) => {
+      prev?.resolve(ok);
+      return null;
     });
-    if (changes.length === 0) return true;
-    return window.confirm(
-      `Zmiana grupy dla:\n\n${changes.join('\n')}\n\nNa pewno przenieść dziecko do nowej grupy?`,
-    );
+  }, []);
+
+  /**
+   * Monit zaraz po wyborze innej grupy w selectcie (gdy mail z terminem już poszedł).
+   * Anulowanie zostawia poprzednią wartość w selectcie.
+   */
+  const confirmGroupSelectChange = async (
+    child: EnrollmentParentRow['children'][number],
+    nextGroupId: string,
+  ): Promise<boolean> => {
+    const newGroupId = nextGroupId.trim();
+    const prevGroupId = (child.proposedGroupId ?? '').trim();
+    if (!newGroupId || !prevGroupId || newGroupId === prevGroupId) return true;
+    if (!enrollmentScheduleMailAlreadySent(child)) return true;
+
+    const prevName = groups.find((g) => g.id === prevGroupId)?.name ?? 'poprzedniej grupy';
+    const nextName = groups.find((g) => g.id === newGroupId)?.name ?? 'nowej grupy';
+    return askGroupChangeConfirm([
+      {
+        childName: `${child.firstName} ${child.lastName}`.trim(),
+        fromGroup: prevName,
+        toGroup: nextName,
+        mailSent: true,
+      },
+    ]);
   };
 
   const enrollmentStatusCounts = useMemo(() => {
@@ -2096,16 +2189,24 @@ export default function EnrollmentAdminPanel({
                                         className="w-full max-w-full rounded-xl border border-emerald-200 px-3 py-2 disabled:cursor-not-allowed disabled:opacity-60"
                                         disabled={!showGroupSelect}
                                         value={selectedGroupId}
-                                        onChange={(e) =>
-                                          setProposalDrafts((prev) => ({
-                                            ...prev,
-                                            [child.requestId]: {
-                                              ...emptyProposalDraft(),
-                                              ...prev[child.requestId],
-                                              groupId: e.target.value,
-                                            },
-                                          }))
-                                        }
+                                        onChange={(e) => {
+                                          const nextGroupId = e.target.value;
+                                          void (async () => {
+                                            if (
+                                              !(await confirmGroupSelectChange(child, nextGroupId))
+                                            ) {
+                                              return;
+                                            }
+                                            setProposalDrafts((prev) => ({
+                                              ...prev,
+                                              [child.requestId]: {
+                                                ...emptyProposalDraft(),
+                                                ...prev[child.requestId],
+                                                groupId: nextGroupId,
+                                              },
+                                            }));
+                                          })();
+                                        }}
                                       >
                                         <option value="">Wybierz grupę</option>
                                         {matching.map((group) => {
@@ -2188,8 +2289,8 @@ export default function EnrollmentAdminPanel({
                                   </p>
                                 ) : pricesEditable && scheduleMailAlreadySent ? (
                                   <p className="text-xs text-zinc-500">
-                                    Możesz zmienić grupę, stawki i rabaty, potem zapisz bez ponownej
-                                    wysyłki e-maila.
+                                    Możesz zmienić grupę (i opcjonalnie stawki), potem zapisz bez
+                                    ponownej wysyłki e-maila — także gdy stawki są jeszcze puste.
                                   </p>
                                 ) : pricesEditable && !showGroupSelect ? (
                                   <p className="text-xs text-zinc-500">
@@ -2424,7 +2525,7 @@ export default function EnrollmentAdminPanel({
                                           delete next[child.requestId];
                                           return next;
                                         });
-                                        setProposalModalParentId(null);
+                                        closeProposalModal();
                                         await onRefresh();
                                       } catch (err) {
                                         pushToast(
@@ -2534,7 +2635,6 @@ export default function EnrollmentAdminPanel({
                     title={proposalBatchSaveTitle}
                     className="rounded-xl border border-[#0f6e56] bg-white px-3 py-2 text-sm font-semibold text-[#0f6e56] shadow-sm transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
                     onClick={async () => {
-                      if (!confirmGroupChangesIfNeeded()) return;
                       setSavingBatchProposals(true);
                       try {
                         const proposals = [
@@ -2583,7 +2683,7 @@ export default function EnrollmentAdminPanel({
                                 ? `Zapisano (${data.count ?? proposals.length}) — bez umowy`
                                 : `Zapisano dane propozycji (${data.count ?? proposals.length}) — dziecko w grupie jako niepotwierdzone`),
                         );
-                        setProposalModalParentId(null);
+                        closeProposalModal();
                         await onRefresh();
                       } catch (err) {
                         pushToast(
@@ -2597,6 +2697,113 @@ export default function EnrollmentAdminPanel({
                   >
                     {savingBatchProposals ? 'Zapisywanie…' : 'Zapisz'}
                   </button>
+                  {proposalGroupChangeNotifyChildren.length >= 1 ? (
+                    <button
+                      type="button"
+                      disabled={
+                        notifyingGroupChangeRequestId != null ||
+                        savingBatchProposals ||
+                        submittingBatchProposals ||
+                        submittingProposalRequestId != null ||
+                        rejectingParentResignationId != null
+                      }
+                      title="Zapisz nową grupę i wyślij maila o zmianie (bez danych logowania)"
+                      className="rounded-xl bg-sky-700 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={async () => {
+                        const toNotify = proposalGroupChangeNotifyChildren;
+                        if (toNotify.length === 0) return;
+
+                        for (const child of toNotify) {
+                          const draft = proposalDrafts[child.requestId];
+                          if (
+                            proposalParentIsComplimentary
+                              ? draftHasComplimentaryPartialPrices(draft)
+                              : draftHasPartialPrices(draft)
+                          ) {
+                            pushToast(
+                              'error',
+                              proposalParentIsComplimentary
+                                ? 'Uzupełnij stawkę jednorazową i ratalną albo wyczyść częściowe stawki'
+                                : 'Uzupełnij wszystkie 3 stawki albo wyczyść częściowo wpisane',
+                            );
+                            return;
+                          }
+                          if (
+                            proposalParentIsComplimentary &&
+                            !draftHasComplimentaryRequiredPrices(draft)
+                          ) {
+                            pushToast(
+                              'error',
+                              'W trybie bez umowy podaj stawkę jednorazową i ratalną',
+                            );
+                            return;
+                          }
+                        }
+
+                        setNotifyingGroupChangeRequestId('footer');
+                        try {
+                          for (const child of toNotify) {
+                            const draft = proposalDrafts[child.requestId];
+                            const groupId = (draft?.groupId ?? '').trim();
+                            if (!groupId) {
+                              pushToast(
+                                'error',
+                                `Wybierz grupę dla: ${child.firstName} ${child.lastName}`,
+                              );
+                              return;
+                            }
+                            const res = await fetch(
+                              '/api/admin/enrollment/group-change-notify',
+                              {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                  requestId: child.requestId,
+                                  groupId,
+                                  lessonUnitPrice: draft?.lessonUnitPrice?.trim() || null,
+                                  monthlyUnitPrice: draft?.monthlyUnitPrice?.trim() || null,
+                                  yearlyUnitPrice: draft?.yearlyUnitPrice?.trim() || null,
+                                  discountPercent: draft?.discountPercent?.trim() || null,
+                                }),
+                              },
+                            );
+                            const data = (await res.json().catch(() => ({}))) as {
+                              message?: string;
+                            };
+                            if (!res.ok) {
+                              pushToast(
+                                'error',
+                                data.message ??
+                                  `Nie udało się wysłać maila o zmianie grupy (${child.firstName} ${child.lastName})`,
+                              );
+                              return;
+                            }
+                          }
+                          pushToast(
+                            'success',
+                            toNotify.length === 1
+                              ? `Wysłano maila o zmianie grupy dla: ${toNotify[0].firstName} ${toNotify[0].lastName}`
+                              : `Wysłano maile o zmianie grupy (${toNotify.length})`,
+                          );
+                          closeProposalModal();
+                          await onRefresh();
+                        } catch (err) {
+                          pushToast(
+                            'error',
+                            err instanceof Error
+                              ? err.message
+                              : 'Błąd wysyłania maila o zmianie grupy',
+                          );
+                        } finally {
+                          setNotifyingGroupChangeRequestId(null);
+                        }
+                      }}
+                    >
+                      {notifyingGroupChangeRequestId != null
+                        ? 'Wysyłanie…'
+                        : 'Wyślij maila o zmianie grupy'}
+                    </button>
+                  ) : null}
                   {/* Wysyłka maila (zajęcia + login/hasło) — tylko szkoły z allowlisty. */}
                   {proposalNewChildren.length >= 1 ? (
                   <button
@@ -2616,7 +2823,6 @@ export default function EnrollmentAdminPanel({
                     }
                     className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0c5a47] disabled:cursor-not-allowed disabled:opacity-50"
                     onClick={async () => {
-                      if (!confirmGroupChangesIfNeeded()) return;
                       setSubmittingBatchProposals(true);
                       try {
                         const proposals = buildBatchProposalsPayload();
@@ -2658,7 +2864,7 @@ export default function EnrollmentAdminPanel({
                           }
                           return next;
                         });
-                        setProposalModalParentId(null);
+                        closeProposalModal();
                         await onRefresh();
                       } catch (err) {
                         pushToast(
@@ -2683,7 +2889,7 @@ export default function EnrollmentAdminPanel({
               )}
               <button
                 className="rounded-xl bg-zinc-200 px-3 py-2"
-                onClick={() => setProposalModalParentId(null)}
+                onClick={() => closeProposalModal()}
               >
                 Zamknij
               </button>
@@ -2691,6 +2897,75 @@ export default function EnrollmentAdminPanel({
           </div>
         </div>
       )}
+
+      {groupChangeConfirm ? (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-black/45 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="group-change-confirm-title"
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-emerald-100 bg-white shadow-xl"
+          >
+            <div className="border-b border-amber-100 bg-amber-50 px-5 py-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">
+                Potwierdzenie
+              </p>
+              <h3
+                id="group-change-confirm-title"
+                className="mt-1 text-lg font-semibold text-zinc-900"
+              >
+                Czy na pewno chcesz zmienić grupę?
+              </h3>
+            </div>
+            <div className="space-y-3 px-5 py-4">
+              {groupChangeConfirm.rows.map((row, idx) => (
+                <div
+                  key={`${row.childName}-${row.fromGroup}-${row.toGroup}-${idx}`}
+                  className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-3"
+                >
+                  <p className="text-sm font-semibold text-zinc-900">{row.childName}</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+                    <span className="rounded-lg bg-white px-2 py-1 font-medium text-zinc-700 ring-1 ring-zinc-200">
+                      {row.fromGroup}
+                    </span>
+                    <span className="text-zinc-400" aria-hidden>
+                      →
+                    </span>
+                    <span className="rounded-lg bg-[#0f6e56] px-2 py-1 font-medium text-white">
+                      {row.toGroup}
+                    </span>
+                  </div>
+                  {row.mailSent ? (
+                    <p className="mt-2 text-xs leading-relaxed text-amber-900">
+                      Rodzic dostał maila z terminem zajęć dla grupy „{row.fromGroup}”.
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-xs text-zinc-500">
+                      Mail z terminem zajęć jeszcze nie był wysłany.
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-wrap justify-end gap-2 border-t border-zinc-100 bg-zinc-50 px-5 py-3">
+              <button
+                type="button"
+                className="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-100"
+                onClick={() => closeGroupChangeConfirm(false)}
+              >
+                Anuluj
+              </button>
+              <button
+                type="button"
+                className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0c5a47]"
+                onClick={() => closeGroupChangeConfirm(true)}
+              >
+                Zmień grupę
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }
