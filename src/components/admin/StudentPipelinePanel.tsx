@@ -24,7 +24,7 @@ type PipelineRow = {
   groupName: string | null;
   billingStatus: string | null;
   renewalStatus: string | null;
-  /** Brak pełnego zestawu stawek + brak grupy — pokaż NEW przy nazwisku. */
+  /** Brak jakiejkolwiek stawki — badge NEW przy nazwisku. */
   hasMissingPrices?: boolean;
 };
 
@@ -70,10 +70,12 @@ function stageTone(
 function PipelineTable({
   rows,
   complimentaryMode = false,
+  onOpenParentEnrollment,
 }: {
   rows: PipelineRow[];
   /** Tryb bez umowy — bez kolumn umowy; flow kończy się po mailu z grupą. */
   complimentaryMode?: boolean;
+  onOpenParentEnrollment?: (row: PipelineRow) => void;
 }) {
   if (rows.length === 0) {
     return <p className="py-6 text-center text-sm text-zinc-500">Brak uczniów.</p>;
@@ -101,7 +103,7 @@ function PipelineTable({
         <tbody>
           {rows.map((row) => {
             const groupLabel = row.groupName || row.proposalGroup;
-            const showNewBadge = Boolean(row.hasMissingPrices) && !groupLabel;
+            const showNewBadge = Boolean(row.hasMissingPrices);
             const current = resolveStudentListPipelineStage({
               enrollmentStatus: row.enrollmentStatus,
               hasGroup: Boolean(groupLabel),
@@ -134,14 +136,26 @@ function PipelineTable({
                     {showNewBadge ? (
                       <span
                         className="inline-flex rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800"
-                        title="Brak cen i brak przypisania do grupy"
+                        title="Brak ustawionych stawek w procesie zapisu"
                       >
                         NEW
                       </span>
                     ) : null}
                   </span>
                 </td>
-                <td className="px-2 py-2">{row.parentName}</td>
+                <td className="px-2 py-2">
+                  {onOpenParentEnrollment && (row.parentId || row.parentEmail) ? (
+                    <button
+                      type="button"
+                      onClick={() => onOpenParentEnrollment(row)}
+                      className="text-left font-medium text-[#0f6e56] hover:underline"
+                    >
+                      {row.parentName}
+                    </button>
+                  ) : (
+                    row.parentName
+                  )}
+                </td>
                 <td className="px-2 py-2">
                   <PipelineBadge value="Tak" tone={stageTone('Zgłoszenie', current)} />
                 </td>
@@ -183,9 +197,11 @@ function PipelineTable({
 export default function StudentPipelinePanel({
   embedded = false,
   complimentaryParents = [],
+  onOpenParentEnrollment,
 }: {
   embedded?: boolean;
   complimentaryParents?: ComplimentaryParentRow[];
+  onOpenParentEnrollment?: (row: PipelineRow) => void;
 }) {
   const [pipeline, setPipeline] = useState<PipelineRow[]>([]);
   const [search, setSearch] = useState('');
@@ -289,7 +305,10 @@ export default function StudentPipelinePanel({
               Z umowami{' '}
               <span className="font-normal text-zinc-500">({withContracts.length})</span>
             </h3>
-            <PipelineTable rows={withContracts} />
+            <PipelineTable
+              rows={withContracts}
+              onOpenParentEnrollment={onOpenParentEnrollment}
+            />
           </section>
           <section className="space-y-2">
             <h3 className="text-sm font-semibold text-zinc-800">
@@ -299,7 +318,11 @@ export default function StudentPipelinePanel({
             <p className="text-xs text-zinc-500">
               Tryb bez umowy — zgłoszenie → mail z grupą i loginem → zakończony.
             </p>
-            <PipelineTable rows={withoutContracts} complimentaryMode />
+            <PipelineTable
+              rows={withoutContracts}
+              complimentaryMode
+              onOpenParentEnrollment={onOpenParentEnrollment}
+            />
           </section>
         </div>
       )}

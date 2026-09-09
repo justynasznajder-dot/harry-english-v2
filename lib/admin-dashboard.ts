@@ -1,5 +1,5 @@
 import { queryDb } from "@/lib/db";
-import { parsePriceDecimal } from "@/lib/lesson-pricing";
+import { showsNewEnrollmentPriceBadge } from "@/lib/lesson-pricing";
 import { formatRenewalStatusLabel } from "@/lib/renewal-status";
 import { BASE_TARGET_LESSONS_PER_YEAR } from "@/lib/lessons-per-week";
 import { resolveBillingTypeFromProfile } from "@/lib/parent-contract-profile";
@@ -509,7 +509,7 @@ export type PipelineRow = {
   groupName: string | null;
   billingStatus: string | null;
   renewalStatus: string | null;
-  /** Brak pełnego zestawu stawek (jednorazowa / ratalna / za zajęcia). */
+  /** Brak jakiejkolwiek stawki — badge NEW w Statusie zapisów. */
   hasMissingPrices: boolean;
 };
 
@@ -656,10 +656,11 @@ export async function fetchStudentPipeline(
   );
 
   return res.rows.map((row) => {
-    const hasMissingPrices =
-      parsePriceDecimal(row.yearly_unit_price) == null ||
-      parsePriceDecimal(row.monthly_unit_price) == null ||
-      parsePriceDecimal(row.lesson_unit_price) == null;
+    const hasMissingPrices = showsNewEnrollmentPriceBadge({
+      lessonUnitPrice: row.lesson_unit_price,
+      monthlyUnitPrice: row.monthly_unit_price,
+      yearlyUnitPrice: row.yearly_unit_price,
+    });
     return {
       childId: row.child_id,
       childProfileId: row.child_profile_id,

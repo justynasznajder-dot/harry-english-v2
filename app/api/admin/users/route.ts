@@ -91,6 +91,7 @@ export async function GET(request: NextRequest) {
 
     const parentIds = users.filter((u) => u.role === "PARENT").map((u) => u.id);
     const childrenCountByParent = new Map<string, number>();
+    const siblingDiscountByParent = new Map<string, boolean>();
     if (parentIds.length > 0 && schoolScope) {
       const counts = await queryDb<{ parent_id: string; cnt: number }>(
         `SELECT parent_id, COUNT(*)::int AS cnt
@@ -103,6 +104,40 @@ export async function GET(request: NextRequest) {
       );
       for (const row of counts.rows) {
         childrenCountByParent.set(row.parent_id, row.cnt);
+      }
+
+      const siblingFromEnrollment = await queryDb<{
+        parent_id: string;
+        declared: boolean;
+      }>(
+        `SELECT user_id AS parent_id,
+                COALESCE(BOOL_OR(enrolling_multiple_children), FALSE) AS declared
+         FROM enrollment_requests
+         WHERE school_id = $1
+           AND user_id = ANY($2::text[])
+           AND UPPER(BTRIM(COALESCE(status::text, ''))) <> 'REJECTED'
+         GROUP BY user_id`,
+        [schoolScope, parentIds]
+      );
+      for (const row of siblingFromEnrollment.rows) {
+        if (row.declared) siblingDiscountByParent.set(row.parent_id, true);
+      }
+
+      const siblingFromContracts = await queryDb<{
+        parent_id: string;
+        declared: boolean;
+      }>(
+        `SELECT parent_id,
+                COALESCE(BOOL_OR(discount_sibling), FALSE) AS declared
+         FROM contracts
+         WHERE school_id = $1
+           AND parent_id = ANY($2::text[])
+           AND UPPER(BTRIM(COALESCE(status::text, ''))) IN ('SENT', 'SIGNED')
+         GROUP BY parent_id`,
+        [schoolScope, parentIds]
+      );
+      for (const row of siblingFromContracts.rows) {
+        if (row.declared) siblingDiscountByParent.set(row.parent_id, true);
       }
     }
 
@@ -122,6 +157,10 @@ export async function GET(request: NextRequest) {
       last_login: u.last_login,
       children_count:
         u.role === "PARENT" ? (childrenCountByParent.get(u.id) ?? 0) : null,
+      sibling_discount:
+        u.role === "PARENT"
+          ? (siblingDiscountByParent.get(u.id) ?? false)
+          : null,
     }));
 
     return NextResponse.json({ users: safeUsers });

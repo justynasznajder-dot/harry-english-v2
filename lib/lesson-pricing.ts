@@ -14,6 +14,31 @@ export function parsePriceDecimal(
   return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
+export type EnrollmentUnitPrices = {
+  lessonUnitPrice?: string | number | null;
+  monthlyUnitPrice?: string | number | null;
+  yearlyUnitPrice?: string | number | null;
+};
+
+/** Ile z trzech stawek (za zajęcia / ratalna / jednorazowa) jest ustawionych. */
+export function countEnrollmentUnitPrices(prices: EnrollmentUnitPrices): number {
+  let count = 0;
+  if (parsePriceDecimal(prices.lessonUnitPrice) != null) count++;
+  if (parsePriceDecimal(prices.monthlyUnitPrice) != null) count++;
+  if (parsePriceDecimal(prices.yearlyUnitPrice) != null) count++;
+  return count;
+}
+
+/** Badge NEW — brak jakiejkolwiek ceny w procesie zapisu (znika po uzupełnieniu wszystkich 3). */
+export function showsNewEnrollmentPriceBadge(prices: EnrollmentUnitPrices): boolean {
+  return countEnrollmentUnitPrices(prices) === 0;
+}
+
+/** Brak pełnego zestawu stawek (mniej niż 3). */
+export function hasIncompleteEnrollmentPrices(prices: EnrollmentUnitPrices): boolean {
+  return countEnrollmentUnitPrices(prices) < 3;
+}
+
 /** Efektywna stawka za jedno zajęcie: override enrollment/child (bez cennika grupy w tym sezonie). */
 export function resolveLessonUnitPrice(params: {
   groupPricePerLesson?: string | number | null;

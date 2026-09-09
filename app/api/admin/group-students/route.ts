@@ -79,11 +79,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const eligibility = await queryDb<{ confirmed: boolean }>(
+      `SELECT confirmed
+       FROM children
+       WHERE id = $1 AND school_id = $2
+       LIMIT 1`,
+      [childId, ctx.schoolId]
+    );
     const hasSignedContract = await childHasSignedContract(childId);
-    await queryDb(`UPDATE children SET confirmed = $2 WHERE id = $1`, [
-      childId,
-      hasSignedContract,
-    ]);
+    if (!eligibility.rows[0]?.confirmed || !hasSignedContract) {
+      return NextResponse.json(
+        {
+          message:
+            "Z profilu grupy można dodać tylko potwierdzonych uczniów z podpisaną umową. Nowych uczniów dodaj przez Zapisy → Zgłoszenia.",
+        },
+        { status: 403 }
+      );
+    }
+
+    await queryDb(`UPDATE children SET confirmed = TRUE WHERE id = $1`, [childId]);
 
     const activeYear = await getActiveSchoolYear(ctx.schoolId);
     const schoolYearId = activeYear?.id ?? null;
@@ -113,10 +127,8 @@ export async function POST(request: NextRequest) {
         [inactiveSame.rows[0].id, membershipLpw, ctx.schoolId]
       );
       return NextResponse.json({
-        message: hasSignedContract
-          ? "Uczeń został ponownie dodany do grupy (potwierdzony — podpisana umowa)"
-          : "Uczeń został ponownie dodany do grupy (niepotwierdzony — brak podpisanej umowy)",
-        confirmed: hasSignedContract,
+        message: "Uczeń został ponownie dodany do grupy",
+        confirmed: true,
         lessonsPerWeek: membershipLpw,
         reactivated: true,
       });
@@ -137,10 +149,8 @@ export async function POST(request: NextRequest) {
       ]
     );
     return NextResponse.json({
-      message: hasSignedContract
-        ? "Uczeń został dodany do grupy (potwierdzony — podpisana umowa)"
-        : "Uczeń został dodany do grupy (niepotwierdzony — brak podpisanej umowy)",
-      confirmed: hasSignedContract,
+      message: "Uczeń został dodany do grupy",
+      confirmed: true,
       lessonsPerWeek: membershipLpw,
     });
   } catch (error) {

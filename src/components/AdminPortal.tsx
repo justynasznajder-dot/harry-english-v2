@@ -91,6 +91,8 @@ interface AdminUser {
   phone?: string | null;
   client_number?: string | null;
   children_count?: number | null;
+  /** Rabat rodzeństwa: enrollment_requests.enrolling_multiple_children lub contracts.discount_sibling */
+  sibling_discount?: boolean | null;
 }
 
 interface ChildRow {
@@ -101,6 +103,8 @@ interface ChildRow {
   birth_date: string;
   active: boolean;
   confirmed: boolean;
+  /** Podpisana umowa (SIGNED) — do listy „Dodaj ucznia” z profilu grupy. */
+  has_signed_contract?: boolean;
   client_number?: string | null;
   parent_first_name: string;
   parent_last_name: string;
@@ -659,6 +663,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   );
   const [enrollmentFlowSubTab, setEnrollmentFlowSubTab] =
     useState<EnrollmentFlowSubTab>('enrollment');
+  const [enrollmentFocusParentKey, setEnrollmentFocusParentKey] = useState<string | null>(null);
   const [billingSubTab, setBillingSubTab] = useState<BillingSubTab>('summary');
   const [billingSummaryKind, setBillingSummaryKind] = useState<BillingSummaryKind>('monthly');
   const [teacherOrgSubTab, setTeacherOrgSubTab] = useState<TeacherOrgSubTab>('list');
@@ -2517,7 +2522,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     if (!groupDetail) return [];
     const q = studentSearch.trim().toLocaleLowerCase('pl');
     return children
-      .filter((c) => c.active && !c.group_name)
+      .filter(
+        (c) =>
+          c.active &&
+          !c.group_name &&
+          c.confirmed &&
+          c.has_signed_contract === true,
+      )
       .filter((c) => {
         if (!q) return true;
         const childName = `${c.first_name} ${c.last_name}`.toLocaleLowerCase('pl');
@@ -2735,13 +2746,14 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         {familiesSubTab === 'parents' && (
           <section className="mt-4 overflow-hidden rounded-2xl border border-emerald-100 bg-white">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[760px] text-sm">
+              <table className="w-full min-w-[860px] text-sm">
                 <thead className="bg-emerald-50 text-zinc-700">
                   <tr>
                     <th className="px-4 py-3 text-left">ID</th>
                     <th className="px-4 py-3 text-left">Użytkownik</th>
                     <th className="px-4 py-3 text-left">Email</th>
                     <th className="px-4 py-3 text-left">Dzieci</th>
+                    <th className="px-4 py-3 text-left">Rabat rodzeństwa 5%</th>
                     <th className="px-4 py-3 text-left">Status</th>
                     <th className="px-4 py-3 text-left">Akcje</th>
                   </tr>
@@ -2759,6 +2771,15 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       </td>
                       <td className="px-4 py-3">{user.email}</td>
                       <td className="px-4 py-3 tabular-nums">{user.children_count ?? 0}</td>
+                      <td className="px-4 py-3">
+                        {user.sibling_discount ? (
+                          <span className="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
+                            Tak
+                          </span>
+                        ) : (
+                          <span className="text-zinc-400">Nie</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         <span
                           className={`rounded-full px-2 py-1 text-xs font-semibold ${
@@ -3200,6 +3221,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             discountSettings={discountSettings}
             onRefresh={loadEnrollmentData}
             onComplimentaryParentsChange={setComplimentaryParents}
+            focusParentKey={enrollmentFocusParentKey}
+            onFocusParentConsumed={() => setEnrollmentFocusParentKey(null)}
           />
         ) : null}
         {enrollmentFlowSubTab === 'renewals' ? <RenewalsPanel pushToast={pushToast} /> : null}
@@ -3213,6 +3236,15 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               <StudentPipelinePanel
                 embedded
                 complimentaryParents={complimentaryParents}
+                onOpenParentEnrollment={(row) => {
+                  const key = (row.parentId || row.parentEmail || '').trim();
+                  if (!key) {
+                    pushToast('error', 'Brak identyfikatora rodzica');
+                    return;
+                  }
+                  setEnrollmentFocusParentKey(key);
+                  setEnrollmentFlowSubTab('enrollment');
+                }}
               />
             </div>
           </section>
@@ -5950,18 +5982,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         {renderGroupScheduleAndGenerateSections(detail, groupId, { quietReload })}
 
         <section className="rounded-2xl border border-emerald-100 bg-white p-4 md:p-5">
-          <div className="mb-3 flex items-center justify-between">
-            <div>
-              <h4 className="font-semibold text-zinc-900">Uczniowie grupy</h4>
-              <p className="text-sm text-zinc-500">Zarządzaj przypisaniami uczniów do tej grupy.</p>
-            </div>
-            <button
-              type="button"
-              className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white"
-              onClick={() => openAddStudentModal()}
-            >
-              + Dodaj ucznia
-            </button>
+          <div className="mb-3">
+            <h4 className="font-semibold text-zinc-900">Uczniowie grupy</h4>
+            <p className="text-sm text-zinc-500">Zarządzaj przypisaniami uczniów do tej grupy.</p>
           </div>
           <div className="space-y-2 text-sm">
             {activeStudents.length === 0 ? (
@@ -9469,6 +9492,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white p-5">
             <h3 className="text-lg font-semibold">Dodaj ucznia do grupy</h3>
+            <p className="mt-1 text-sm text-zinc-600">
+              Tylko potwierdzeni uczniowie z podpisaną umową. Nowych zapisuj przez Zapisy → Zgłoszenia.
+            </p>
             <div className="mt-4 space-y-3">
               <input
                 className="w-full rounded-xl border border-emerald-200 px-3 py-2"
@@ -9507,8 +9533,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               ) : null}
               {availableChildren.length === 0 ? (
                 <p className="text-sm text-zinc-600">
-                  Brak aktywnych dzieci bez grupy w bieżącym roku szkolnym. Odśwież stronę albo sprawdź,
-                  czy dziecko nie jest już w innej grupie (albo czy nie jest nieaktywne).
+                  Brak potwierdzonych uczniów z podpisaną umową, którzy nie są jeszcze w grupie.
+                  Nowych uczniów dodawaj przez Zapisy → Zgłoszenia.
                 </p>
               ) : null}
               <div className="flex justify-end gap-2">

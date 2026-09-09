@@ -291,7 +291,7 @@ export default function SignedContractsPanel() {
                 <th className="px-3 py-2.5 font-semibold">Imię i nazwisko dziecka</th>
                 <th className="px-3 py-2.5 font-semibold">Lokalizacja</th>
                 <th className="px-3 py-2.5 font-semibold">Zgoda na wykorzystanie wizerunku</th>
-                <th className="px-3 py-2.5 font-semibold">Kod zniżkowy</th>
+                <th className="px-3 py-2.5 font-semibold">Bon zniżkowy</th>
                 <th className="px-3 py-2.5 font-semibold">Sposób płatności</th>
                 <th className="px-3 py-2.5 font-semibold text-right">Kwota na umowie</th>
               </tr>

@@ -41,6 +41,7 @@ export async function GET(request: NextRequest) {
       parent_email: string;
       parent_client_number: string | null;
       group_name: string | null;
+      has_signed_contract: boolean;
       created_at: Date;
     }>(
       `SELECT
@@ -79,6 +80,13 @@ export async function GET(request: NextRequest) {
            ORDER BY gs.enrolled_at DESC NULLS LAST
            LIMIT 1
          ) AS group_name,
+         EXISTS (
+           SELECT 1
+           FROM contracts ct
+           JOIN contract_children cc ON cc.contract_id = ct.id
+           WHERE cc.child_id = c.id
+             AND UPPER(BTRIM(COALESCE(ct.status::text, ''))) = 'SIGNED'
+         ) AS has_signed_contract,
          c.created_at
        FROM children c
        JOIN users u ON u.id = c.parent_id

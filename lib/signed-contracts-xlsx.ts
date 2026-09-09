@@ -35,7 +35,7 @@ export async function downloadSignedContractsXlsx(input: {
     Lokalizacja: row.locationName?.trim() || "",
     Grupa: row.groupName?.trim() || "",
     "Zgoda na wykorzystanie wizerunku": consentLabel(row.imageConsent),
-    "Kod zniżkowy": row.hasDiscountVoucher ? "Tak" : "Nie",
+    "Bon zniżkowy": row.hasDiscountVoucher ? "Tak" : "Nie",
     "Sposób płatności": row.paymentType
       ? paymentTypeShortLabel(row.paymentType)
       : "",

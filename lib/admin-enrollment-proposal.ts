@@ -20,7 +20,10 @@ import {
   ensureChildClientNumber,
 } from "@/lib/client-numbers";
 import { promotePendingLargeFamilyCardToParent } from "@/lib/parent-profile-discount";
-import { ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE } from "@/lib/enrollment-status";
+import {
+  ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE,
+  type EnrollmentStatus,
+} from "@/lib/enrollment-status";
 import { isComplimentaryForParent } from "@/lib/school-discounts";
 import {
   normalizeLessonsPerWeek,
@@ -73,7 +76,13 @@ export type ProposalInput = {
   discountPercent?: number | string | null;
 };
 
-export type EnrollmentProposalStatus = "NEW" | "NEGOTIATING" | "PROPOSED";
+export type EnrollmentProposalStatus =
+  | "NEW"
+  | "NEGOTIATING"
+  | "PROPOSED"
+  | "ACCEPTED"
+  | "AWAITING_CONTRACT"
+  | "CONTRACT_READY";
 
 /**
  * Dane logowania do maila z propozycją.
@@ -374,16 +383,23 @@ export async function submitEnrollmentProposal(
   if (!enrollment) {
     const onlyNegotiating =
       allowedStatuses.length === 1 && allowedStatuses[0] === "NEGOTIATING";
+    const isGroupChangeRepropose = allowedStatuses.some((s) =>
+      ["ACCEPTED", "AWAITING_CONTRACT", "CONTRACT_READY", "NEGOTIATING"].includes(s)
+    );
     return {
       ok: false,
       status: 409,
       message: onlyNegotiating
         ? "Propozycję dla jednego dziecka można wysłać tylko gdy rodzic negocjuje termin zajęć."
-        : draftOnly
-          ? "Szkic propozycji można zapisać tylko dla zgłoszenia „Nowe”."
-          : "Propozycję można wysłać tylko dla zgłoszenia „Nowe”.",
+        : isGroupChangeRepropose && !draftOnly
+          ? "Nową propozycję grupy można wysłać tylko przed podpisaniem umowy (albo gdy rodzic negocjuje termin)."
+          : draftOnly
+            ? "Grupę i stawki można zapisać tylko przed podpisaniem umowy."
+            : "Propozycję można wysłać tylko dla zgłoszenia „Nowe”.",
     };
   }
+
+  const previousStatus = enrollment.status;
 
   const studentLessonsPerWeek = normalizeLessonsPerWeek(enrollment.lessons_per_week);
 
@@ -568,14 +584,18 @@ export async function submitEnrollmentProposal(
   }
   const parsedDiscount = discountParsed.value;
 
-  // draftOnly: status zostaje NEW — tylko zapis + członkostwo niepotwierdzone.
-  const initialStatus = draftOnly
-    ? "NEW"
+  // draftOnly: bez zmiany statusu mailowego — zachowaj bieżący (NEW / ACCEPTED / …).
+  // Po zmianie grupy przed podpisem przy wysyłce maila: jeśli rodzic miał już dane/umowę do podpisu,
+  // wracamy do AWAITING_CONTRACT (dane w profilu zostają; rodzic generuje umowę na nowo).
+  const initialStatus: EnrollmentStatus = draftOnly
+    ? ((previousStatus || "NEW") as EnrollmentStatus)
     : ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE
       ? "PROPOSED"
       : complimentary
         ? "PROPOSED"
-        : "ACCEPTED";
+        : previousStatus === "AWAITING_CONTRACT" || previousStatus === "CONTRACT_READY"
+          ? "AWAITING_CONTRACT"
+          : "ACCEPTED";
 
   if (draftOnly) {
     await queryDb(
@@ -713,6 +733,27 @@ export async function submitEnrollmentProposal(
     persistToChild: true,
   });
 
+  // Przed podpisem: przy zmianie grupy zaktualizuj group_id na niewysłanych/niepodpisanych umowach.
+  // Treść HTML odświeży rodzic przy ponownym generowaniu (ten sam numer umowy).
+  if (!draftOnly && groupChanged) {
+    await queryDb(
+      `UPDATE contracts c
+       SET group_id = $3
+       WHERE c.parent_id = $1
+         AND c.school_id = $2
+         AND c.status IN ('DRAFT', 'SENT')
+         AND (
+           c.child_id = $4
+           OR c.enrollment_request_id = $5
+           OR EXISTS (
+             SELECT 1 FROM contract_children cc
+             WHERE cc.contract_id = c.id AND cc.child_id = $4
+           )
+         )`,
+      [parentUserId, parentSchoolId, groupId, resolvedChildId, requestId]
+    );
+  }
+
   // Tryb bez umowy: przy wysyłce maila ustawiamy PROPOSED; COMPLETED dopiero po udanej wysyłce (caller).
   // „Zapisz” (draftOnly) nigdy nie domyka — zostaje NEW z grupą/stawkami.
   const complimentaryReadyToComplete =
@@ -750,10 +791,20 @@ export async function submitEnrollmentProposal(
   };
 }
 
+/** Statusy, w których manager może jeszcze zmienić grupę/stawki (przed podpisaniem umowy). */
+const PRICE_EDITABLE_ENROLLMENT_STATUSES = [
+  "NEW",
+  "NEGOTIATING",
+  "PROPOSED",
+  "ACCEPTED",
+  "AWAITING_CONTRACT",
+  "CONTRACT_READY",
+] as const;
+
 /**
  * Zapis grupy i stawek + utworzenie konta/dziecka + członkostwo w grupie (confirmed=false),
- * bez zmiany statusu zgłoszenia i bez maila.
- * Twarda gwarancja: nigdy nie zostawia COMPLETED (nawet przy starym kodzie / race).
+ * bez maila. Działa też po wysłaniu maila (ACCEPTED itd.), aż do podpisania umowy —
+ * wtedy status zgłoszenia zostaje bez zmian (nie wraca do NEW).
  */
 export async function saveEnrollmentProposalDraft(
   input: ProposalInput,
@@ -768,20 +819,20 @@ export async function saveEnrollmentProposalDraft(
 > {
   const result = await submitEnrollmentProposal(input, null, {
     ...options,
-    allowedStatuses: ["NEW"],
+    allowedStatuses: [...PRICE_EDITABLE_ENROLLMENT_STATUSES],
     draftOnly: true,
     allowEmptyPrices: options?.allowEmptyPrices ?? true,
     complimentaryPrices: options?.complimentaryPrices,
   });
   if (!result.ok) return result;
 
-  // „Zapisz” = tylko szkic. COMPLETED wyłącznie po „Wyślij maila”.
+  // Twarda gwarancja: „Zapisz” nigdy nie zostawia COMPLETED (COMPLETED tylko po mailu w trybie bez umowy).
   await queryDb(
     `UPDATE enrollment_requests
      SET status = 'NEW'::enrollment_status,
          accepted_at = NULL
      WHERE id = $1
-       AND UPPER(BTRIM(COALESCE(status::text, ''))) <> 'NEW'`,
+       AND UPPER(BTRIM(COALESCE(status::text, ''))) = 'COMPLETED'`,
     [input.requestId]
   );
   await queryDb(
@@ -789,10 +840,7 @@ export async function saveEnrollmentProposalDraft(
      SET access_level = 'NEW',
          confirmed = FALSE
      WHERE enrollment_request_id = $1
-       AND (
-         UPPER(BTRIM(COALESCE(access_level::text, ''))) <> 'NEW'
-         OR COALESCE(confirmed, FALSE) = TRUE
-       )`,
+       AND UPPER(BTRIM(COALESCE(access_level::text, ''))) = 'COMPLETED'`,
     [input.requestId]
   );
 
@@ -815,16 +863,6 @@ function parseOptionalUnitPrice(
   }
   return { ok: true, value: n };
 }
-
-/** Statusy, w których manager może jeszcze zmienić stawki (przed podpisaniem umowy). */
-const PRICE_EDITABLE_ENROLLMENT_STATUSES = [
-  "NEW",
-  "NEGOTIATING",
-  "PROPOSED",
-  "ACCEPTED",
-  "AWAITING_CONTRACT",
-  "CONTRACT_READY",
-] as const;
 
 /**
  * Zapis samych stawek na zgłoszeniu — bez zmiany statusu / grupy / maila.

@@ -256,7 +256,12 @@ export async function POST(request: NextRequest) {
       null,
       {
         ...(ctx.tenant.role === "MANAGER" ? { restrictToSchoolId: ctx.schoolId } : {}),
-        allowedStatuses: ["NEGOTIATING"],
+        allowedStatuses: [
+          "NEGOTIATING",
+          "ACCEPTED",
+          "AWAITING_CONTRACT",
+          "CONTRACT_READY",
+        ],
       }
     );
     if (!result.ok) {
