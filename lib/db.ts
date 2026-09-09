@@ -449,6 +449,8 @@ export async function createUser(data: {
   /** Dla ADMIN można pominąć lub podać null (tylko ADMIN może mieć school_id NULL w bazie). */
   schoolId?: string | null;
   phone?: string | null;
+  pesel?: string | null;
+  id_card_number?: string | null;
   confirmed?: boolean;
   accessLevel?: AccessLevel;
   mustChangePassword?: boolean;
@@ -461,6 +463,14 @@ export async function createUser(data: {
   const accessLevel =
     data.accessLevel ?? (role === "PARENT" ? "PENDING" : "ACTIVE");
   const mustChangePassword = data.mustChangePassword ?? false;
+  const pesel =
+    data.pesel != null && String(data.pesel).trim() !== ""
+      ? String(data.pesel).replace(/\D/g, "").slice(0, 11)
+      : null;
+  const idCardNumber =
+    data.id_card_number != null && String(data.id_card_number).trim() !== ""
+      ? formatIdCardNumber(String(data.id_card_number)) || null
+      : null;
 
   let insertSchoolId: string | null;
   if (role === "ADMIN") {
@@ -490,9 +500,9 @@ export async function createUser(data: {
     const r = await client.query<UserRow>(
       `INSERT INTO users (
          id, school_id, email, password_hash, role,
-         first_name, last_name, phone, active, confirmed, access_level,
-         client_number
-       ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, TRUE, $9, $10, $11)
+         first_name, last_name, phone, pesel, id_card_number,
+         active, confirmed, access_level, client_number
+       ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, $9, $10, TRUE, $11, $12, $13)
        RETURNING *`,
       [
         id,
@@ -503,6 +513,8 @@ export async function createUser(data: {
         firstName,
         lastName,
         data.phone ?? null,
+        pesel,
+        idCardNumber,
         confirmed,
         accessLevel,
         clientNumber,

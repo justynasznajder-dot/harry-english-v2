@@ -590,6 +590,103 @@ export async function fetchStudentPipeline(
   }));
 }
 
+/** Wiersz listy „Podpisane faktury” — dzieci z podpisaną umową w aktywnym roku. */
+export type SignedContractConsentRow = {
+  contractId: string;
+  childId: string;
+  childName: string;
+  imageConsent: boolean | null;
+  /** true = podpisane upoważnienie; false = grupa wymaga, brak; null = nie dotyczy */
+  pickupConsent: boolean | null;
+  paymentType: string | null;
+  amount: string | null;
+  signedAt: string | null;
+};
+
+/**
+ * Podpisane umowy aktywnego roku — zgoda na wizerunek, upoważnienie do odbioru,
+ * sposób płatności i kwota (do zakładki „Podpisane faktury”).
+ */
+export async function fetchSignedContractConsents(
+  schoolId: string,
+  schoolYearId: string,
+  search?: string
+): Promise<SignedContractConsentRow[]> {
+  const searchTrim = search?.trim();
+  const params: unknown[] = [schoolId, schoolYearId];
+  let searchClause = "";
+  if (searchTrim) {
+    params.push(`%${searchTrim}%`);
+    searchClause = `AND (
+      ch.first_name ILIKE $3
+      OR ch.last_name ILIKE $3
+      OR CONCAT(ch.first_name, ' ', ch.last_name) ILIKE $3
+      OR u.first_name ILIKE $3
+      OR u.last_name ILIKE $3
+      OR u.email ILIKE $3
+    )`;
+  }
+
+  const res = await queryDb<{
+    contract_id: string;
+    child_id: string;
+    child_first: string;
+    child_last: string;
+    image_consent: boolean | null;
+    has_pickup_doc: boolean;
+    teacher_pickup_consent: boolean;
+    payment_type: string | null;
+    amount: string | null;
+    signed_at: string | null;
+  }>(
+    `SELECT
+       ct.id AS contract_id,
+       ch.id AS child_id,
+       COALESCE(ch.first_name, '') AS child_first,
+       COALESCE(ch.last_name, '') AS child_last,
+       cc.image_consent,
+       (
+         cc.attachment_2_html IS NOT NULL
+         AND BTRIM(cc.attachment_2_html) <> ''
+       ) AS has_pickup_doc,
+       COALESCE(g.teacher_pickup_consent, FALSE) AS teacher_pickup_consent,
+       ct.payment_type,
+       ct.amount::text AS amount,
+       ct.signed_at::text AS signed_at
+     FROM contract_children cc
+     JOIN contracts ct ON ct.id = cc.contract_id AND ct.school_id = cc.school_id
+     JOIN children ch ON ch.id = cc.child_id
+     LEFT JOIN users u ON u.id = ct.parent_id
+     LEFT JOIN groups g ON g.id = COALESCE(cc.group_id, ct.group_id)
+     WHERE cc.school_id = $1
+       AND ct.school_year_id = $2
+       AND UPPER(BTRIM(COALESCE(ct.status::text, ''))) = 'SIGNED'
+       ${searchClause}
+     ORDER BY ch.last_name ASC, ch.first_name ASC, ct.signed_at DESC NULLS LAST`,
+    params
+  );
+
+  return res.rows.map((row) => {
+    let pickupConsent: boolean | null = null;
+    if (row.has_pickup_doc) {
+      pickupConsent = true;
+    } else if (row.teacher_pickup_consent) {
+      pickupConsent = false;
+    }
+
+    return {
+      contractId: row.contract_id,
+      childId: row.child_id,
+      childName: `${row.child_first} ${row.child_last}`.trim(),
+      imageConsent: row.image_consent,
+      pickupConsent,
+      paymentType: row.payment_type,
+      amount: row.amount,
+      signedAt: row.signed_at,
+    };
+  });
+}
+
 export type RenewalPipelineRow = {
   renewalId: string;
   childId: string;

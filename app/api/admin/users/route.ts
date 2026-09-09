@@ -19,6 +19,7 @@ import bcrypt from "bcryptjs";
 import { createUser } from "@/lib/db";
 
 import { requireAdminSchoolContext } from "@/lib/admin-school-context";
+import { formatIdCardNumber } from "@/lib/format-id-card-number";
 
 const LOCATION_ID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -179,11 +180,45 @@ export async function POST(request: NextRequest) {
 
       phone: phoneRaw,
 
+      pesel: peselRaw,
+
+      id_card_number: idCardRaw,
+
+      idCardNumber: idCardCamelRaw,
+
     } = body;
 
     const phone =
 
       phoneRaw != null && String(phoneRaw).trim() !== "" ? String(phoneRaw).trim() : null;
+
+    let pesel: string | null = null;
+
+    if (peselRaw != null && String(peselRaw).trim() !== "") {
+
+      const digits = String(peselRaw).replace(/\D/g, "").slice(0, 11);
+
+      if (digits.length !== 11) {
+
+        return NextResponse.json({ message: "PESEL musi mieć 11 cyfr" }, { status: 400 });
+
+      }
+
+      pesel = digits;
+
+    }
+
+    const idCardInput = idCardRaw ?? idCardCamelRaw;
+
+    let idCardNumber: string | null = null;
+
+    if (idCardInput != null && String(idCardInput).trim() !== "") {
+
+      const formatted = formatIdCardNumber(String(idCardInput));
+
+      idCardNumber = formatted === "" ? null : formatted;
+
+    }
 
 
 
@@ -453,6 +488,10 @@ export async function POST(request: NextRequest) {
       schoolId: targetSchoolId,
 
       phone,
+
+      pesel,
+
+      id_card_number: idCardNumber,
 
       confirmed: resolvedConfirmed,
 

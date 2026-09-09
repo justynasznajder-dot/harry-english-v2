@@ -9,6 +9,7 @@ import RenewalsPanel from '@/src/components/admin/RenewalsPanel';
 import EnrollmentAdminPanel from '@/src/components/admin/EnrollmentAdminPanel';
 import ManagerDashboardPanel from '@/src/components/admin/ManagerDashboardPanel';
 import ResignationsPanel from '@/src/components/admin/ResignationsPanel';
+import SignedContractsPanel from '@/src/components/admin/SignedContractsPanel';
 import StudentPipelinePanel from '@/src/components/admin/StudentPipelinePanel';
 import type { ComplimentaryParentRow, EnrollmentGroupRow, EnrollmentParentRow } from '@/src/components/enrollment/types';
 import MessagesPanel from '@/src/components/messages/MessagesPanel';
@@ -53,7 +54,6 @@ type OrganizationSubTab =
   | 'schoolYear'
   | 'teachers'
   | 'locations'
-  | 'discounts'
   | 'groups'
   | 'users'
   | 'history';
@@ -61,6 +61,7 @@ type EnrollmentFlowSubTab =
   | 'enrollment'
   | 'renewals'
   | 'enrollment-status'
+  | 'signed-invoices'
   | 'resignations';
 type BillingSubTab = 'summary' | 'invoices' | 'settings';
 type BillingSummaryKind = 'monthly' | 'yearly' | 'per_lesson';
@@ -492,7 +493,6 @@ const organizationTabs: Array<{ key: OrganizationSubTab; label: string }> = [
   { key: 'schoolYear', label: 'Rok szkolny' },
   { key: 'teachers', label: 'Nauczyciele' },
   { key: 'locations', label: 'Lokalizacje' },
-  { key: 'discounts', label: 'Tryb bez umowy' },
   { key: 'groups', label: 'Grupy' },
   { key: 'users', label: 'Użytkownicy' },
   { key: 'history', label: 'Historia' },
@@ -502,6 +502,7 @@ const enrollmentFlowTabs: Array<{ key: EnrollmentFlowSubTab; label: string }> = 
   { key: 'enrollment', label: 'Zgłoszenia' },
   { key: 'renewals', label: 'Odnowienia' },
   { key: 'enrollment-status', label: 'Status zapisów' },
+  { key: 'signed-invoices', label: 'Podpisane faktury' },
   { key: 'resignations', label: 'Rezygnacje' },
 ];
 
@@ -717,6 +718,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     email: '',
     password: '',
     phone: '',
+    pesel: '',
+    idCardNumber: '',
   });
   const [childModalOpen, setChildModalOpen] = useState(false);
   const [childForm, setChildForm] = useState({
@@ -833,19 +836,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     }>
   >([]);
   const [complimentaryParents, setComplimentaryParents] = useState<ComplimentaryParentRow[]>([]);
-  const [complimentaryCandidates, setComplimentaryCandidates] = useState<
-    Array<{
-      key: string;
-      source: 'USER' | 'ENROLLMENT';
-      parentId: string | null;
-      parentEmail: string | null;
-      firstName: string;
-      lastName: string;
-      email: string;
-    }>
-  >([]);
-  const [selectedComplimentaryCandidateKey, setSelectedComplimentaryCandidateKey] = useState('');
-  const [complimentarySearch, setComplimentarySearch] = useState('');
   const [groups, setGroups] = useState<GroupRow[]>([]);
   const [groupSaving, setGroupSaving] = useState(false);
   const [removeGroupConfirm, setRemoveGroupConfirm] = useState<{ id: string; name: string } | null>(
@@ -1507,7 +1497,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         invoiceAutoGeneration?: boolean;
         schoolId?: string;
         complimentaryParents?: typeof complimentaryParents;
-        complimentaryCandidates?: typeof complimentaryCandidates;
         message?: string;
       };
       if (!res.ok) {
@@ -1541,9 +1530,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       setInvoiceAutoGenerationDraft(autoGen);
       setComplimentaryParents(
         Array.isArray(data.complimentaryParents) ? data.complimentaryParents : [],
-      );
-      setComplimentaryCandidates(
-        Array.isArray(data.complimentaryCandidates) ? data.complimentaryCandidates : [],
       );
     } catch (e) {
       console.error('loadDiscounts', e);
@@ -1674,12 +1660,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     }
     void loadYearLessons(yearLessonsYearId);
   }, [activeTab, classesSubTab, yearLessonsYearId, loadYearLessons]);
-
-  useEffect(() => {
-    if (activeTab === 'organization' && organizationSubTab === 'discounts') {
-      void loadDiscounts();
-    }
-  }, [activeTab, organizationSubTab, loadDiscounts]);
 
   useEffect(() => {
     if (activeTab === 'billing') {
@@ -1977,14 +1957,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     if (needLocations) void loadLocations();
   }, [activeTab, organizationSubTab, usersSubTab, childModalOpen, holidayModalOpen, loadLocations]);
 
-  useEffect(() => {
-    if (mobileTab === 'organization') setActiveTab('organization');
-    if (mobileTab === 'users') {
-      setActiveTab('families');
-      setFamiliesSubTab('children');
-    }
-  }, [mobileTab]);
-
   const filteredUsers = useMemo(() => {
     return users.filter((user) => {
       if (isManagerView && user.role === 'ADMIN') return false;
@@ -2042,54 +2014,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       }),
     [users, childForm.parentSearch]
   );
-
-  const matchesComplimentarySearch = useCallback(
-    (firstName: string, lastName: string, email: string) => {
-      const query = complimentarySearch.trim().toLocaleLowerCase('pl');
-      if (!query) return true;
-      const haystack = [
-        firstName,
-        lastName,
-        `${firstName} ${lastName}`,
-        `${lastName} ${firstName}`,
-        email,
-      ]
-        .join(' ')
-        .toLocaleLowerCase('pl');
-      return query
-        .split(/\s+/)
-        .filter(Boolean)
-        .every((token) => haystack.includes(token));
-    },
-    [complimentarySearch],
-  );
-
-  const filteredComplimentaryCandidates = useMemo(
-    () =>
-      complimentaryCandidates.filter((candidate) =>
-        matchesComplimentarySearch(candidate.firstName, candidate.lastName, candidate.email),
-      ),
-    [complimentaryCandidates, matchesComplimentarySearch],
-  );
-
-  const filteredComplimentaryParents = useMemo(
-    () =>
-      complimentaryParents.filter((parent) =>
-        matchesComplimentarySearch(parent.firstName, parent.lastName, parent.email),
-      ),
-    [complimentaryParents, matchesComplimentarySearch],
-  );
-
-  useEffect(() => {
-    if (
-      selectedComplimentaryCandidateKey &&
-      !filteredComplimentaryCandidates.some(
-        (candidate) => candidate.key === selectedComplimentaryCandidateKey,
-      )
-    ) {
-      setSelectedComplimentaryCandidateKey('');
-    }
-  }, [filteredComplimentaryCandidates, selectedComplimentaryCandidateKey]);
 
   const groupsForOrganizeCascadedFilters = useMemo(() => {
     if (!organizeFilterLocation) return groups;
@@ -3272,6 +3196,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             </div>
           </section>
         ) : null}
+        {enrollmentFlowSubTab === 'signed-invoices' ? <SignedContractsPanel /> : null}
         {enrollmentFlowSubTab === 'resignations' ? (
           <ResignationsPanel
             pushToast={pushToast}
@@ -3781,6 +3706,33 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         autoComplete="tel"
                       />
                     </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-semibold text-zinc-500">PESEL (opcjonalnie)</span>
+                      <input
+                        inputMode="numeric"
+                        className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                        placeholder="11 cyfr"
+                        maxLength={11}
+                        value={newTeacherForm.pesel}
+                        onChange={(e) =>
+                          setNewTeacherForm((p) => ({
+                            ...p,
+                            pesel: e.target.value.replace(/\D/g, '').slice(0, 11),
+                          }))
+                        }
+                        autoComplete="off"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-semibold text-zinc-500">Nr dowodu (opcjonalnie)</span>
+                      <input
+                        className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                        placeholder="np. ABC 123456"
+                        value={newTeacherForm.idCardNumber}
+                        onChange={(e) => setNewTeacherForm((p) => ({ ...p, idCardNumber: e.target.value }))}
+                        autoComplete="off"
+                      />
+                    </label>
                   </div>
                   <div className="mt-4 flex flex-wrap justify-end gap-2">
                     <button
@@ -3788,9 +3740,14 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       disabled={busy}
                       className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0c5a47] disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={async () => {
-                        const { firstName, lastName, email, password, phone } = newTeacherForm;
+                        const { firstName, lastName, email, password, phone, pesel, idCardNumber } =
+                          newTeacherForm;
                         if (!firstName.trim() || !lastName.trim() || !email.trim() || !password) {
                           pushToast('error', 'Uzupełnij imię, nazwisko, email i hasło');
+                          return;
+                        }
+                        if (pesel.trim() && pesel.trim().length !== 11) {
+                          pushToast('error', 'PESEL musi mieć 11 cyfr');
                           return;
                         }
                         setBusy(true);
@@ -3807,6 +3764,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                               confirmed: true,
                               accessLevel: 'ACTIVE',
                               ...(phone.trim() ? { phone: normalizePolishPhone(phone) } : {}),
+                              ...(pesel.trim() ? { pesel: pesel.trim() } : {}),
+                              ...(idCardNumber.trim()
+                                ? { id_card_number: idCardNumber.trim() }
+                                : {}),
                             }),
                           });
                           const data = (await res.json().catch(() => ({}))) as {
@@ -3828,6 +3789,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                             email: '',
                             password: '',
                             phone: '',
+                            pesel: '',
+                            idCardNumber: '',
                           });
                           setTeacherOrgSubTab('list');
                           await loadData();
@@ -4664,257 +4627,6 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     </>
                   )}
                 </div>
-              )}
-            </div>
-          )}
-
-          {organizationSubTab === 'discounts' && (
-            <div className="mt-4 space-y-6">
-              <p className="text-sm text-zinc-600">
-                Rodzice w trybie bez umowy (bez faktur i płatności). Zniżki procentowe (KDR /
-                rodzeństwo) są wyłączone — ceny ustala manager ręcznie przy propozycji grupy.
-              </p>
-
-              {discountsLoading ? (
-                <div className="space-y-3">
-                  <div className="h-24 animate-pulse rounded-2xl bg-emerald-100/80" />
-                  <div className="h-32 animate-pulse rounded-2xl bg-emerald-100/60" />
-                </div>
-              ) : (
-                <>
-                  {/*
-                   * Zniżki procentowe — UI schowane na sezon cen ręcznych.
-                  <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-4">
-                    <h4 className="font-semibold text-[#0f6e56]">Zniżki procentowe</h4>
-                    ... formularz max% / KDR / rodzeństwo ...
-                  </div>
-                  */}
-
-                  <div className="rounded-xl border border-emerald-100 bg-white p-4">
-                    <h4 className="font-semibold text-[#0f6e56]">Tryb bez umowy</h4>
-                    <p className="mt-1 text-sm text-zinc-600">
-                      Rodzice z tej listy kończą zapis po wysłaniu maila z loginem i grupą — bez umowy, faktur i
-                      płatności. Tryb włączasz na profilu rodzica.
-                    </p>
-                    <div className="mt-4 space-y-1">
-                      <label
-                        htmlFor="complimentary-search"
-                        className="block text-xs font-medium text-zinc-600"
-                      >
-                        Szukaj rodzica
-                      </label>
-                      <input
-                        id="complimentary-search"
-                        type="search"
-                        autoComplete="off"
-                        className="w-full rounded-xl border border-emerald-200 px-3 py-2 text-sm"
-                        placeholder="Imię, nazwisko lub e-mail…"
-                        value={complimentarySearch}
-                        onChange={(e) => setComplimentarySearch(e.target.value)}
-                      />
-                    </div>
-                    <p className="mt-2 text-xs text-zinc-500">
-                      {complimentarySearch.trim()
-                        ? `${filteredComplimentaryParents.length} na liście · wyniki: ${filteredComplimentaryCandidates.length} z ${complimentaryCandidates.length} kandydatów`
-                        : complimentaryParents.length > 0
-                          ? `${complimentaryParents.length} na liście · kandydaci: ${complimentaryCandidates.length}`
-                          : `Kandydaci: ${complimentaryCandidates.length} (konta rodziców + zgłoszenia bez konta)`}
-                    </p>
-
-                    <h5 className="mt-4 text-sm font-semibold text-[#0f6e56]">
-                      Rodzice bez umowy
-                    </h5>
-                    <div className="mt-2 max-h-64 space-y-2 overflow-y-auto">
-                      {complimentaryParents.length === 0 ? (
-                        <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
-                          Brak rodziców w trybie bez umowy.
-                        </p>
-                      ) : filteredComplimentaryParents.length === 0 ? (
-                        <p className="rounded-xl border border-emerald-100 px-4 py-6 text-sm text-zinc-600">
-                          Brak wyników dla podanego wyszukiwania.
-                        </p>
-                      ) : (
-                        filteredComplimentaryParents.map((parent) => (
-                          <div
-                            key={parent.id}
-                            className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-100 px-4 py-3"
-                          >
-                            <div>
-                              <p className="font-semibold text-zinc-900">
-                                {parent.firstName} {parent.lastName}
-                              </p>
-                              <p className="text-sm text-zinc-600">{parent.email}</p>
-                              <p className="mt-0.5 text-xs text-zinc-500">
-                                {parent.source === 'ENROLLMENT'
-                                  ? 'Źródło: zgłoszenie · bez umowy po wysłaniu maila'
-                                  : 'Źródło: konto rodzica · bez umowy po wysłaniu maila'}
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              className="rounded-lg border border-rose-200 px-3 py-1.5 text-sm text-rose-700 hover:bg-rose-50"
-                              onClick={async () => {
-                                setDiscountsSaving(true);
-                                try {
-                                  const res = await fetch('/api/admin/discounts', {
-                                    method: 'DELETE',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ id: parent.id }),
-                                  });
-                                  const data = (await res.json().catch(() => ({}))) as {
-                                    message?: string;
-                                    complimentaryParents?: typeof complimentaryParents;
-                                    complimentaryCandidates?: typeof complimentaryCandidates;
-                                  };
-                                  if (!res.ok) {
-                                    pushToast('error', data.message ?? 'Nie udało się usunąć');
-                                    return;
-                                  }
-                                  setComplimentaryParents(
-                                    Array.isArray(data.complimentaryParents)
-                                      ? data.complimentaryParents
-                                      : [],
-                                  );
-                                  if (Array.isArray(data.complimentaryCandidates)) {
-                                    setComplimentaryCandidates(data.complimentaryCandidates);
-                                  }
-                                  pushToast('success', 'Usunięto z trybu bez umowy');
-                                } catch {
-                                  pushToast('error', 'Błąd usuwania rodzica');
-                                } finally {
-                                  setDiscountsSaving(false);
-                                }
-                              }}
-                            >
-                              Usuń
-                            </button>
-                          </div>
-                        ))
-                      )}
-                    </div>
-
-                    <h5 className="mt-4 text-sm font-semibold text-[#0f6e56]">
-                      Dodaj do trybu bez umowy
-                    </h5>
-                    <div className="mt-2 space-y-2">
-                      <div className="max-h-56 overflow-y-auto rounded-xl border border-emerald-200">
-                        {complimentaryCandidates.length === 0 ? (
-                          <p className="px-3 py-4 text-sm text-zinc-600">
-                            Brak kandydatów do dodania.
-                          </p>
-                        ) : filteredComplimentaryCandidates.length === 0 ? (
-                          <p className="px-3 py-4 text-sm text-zinc-600">
-                            Brak wyników — wpisz inne imię, nazwisko lub e-mail.
-                          </p>
-                        ) : (
-                          <>
-                            {filteredComplimentaryCandidates.some((c) => c.source === 'USER') && (
-                              <div>
-                                <p className="sticky top-0 bg-emerald-50 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                                  Konta rodziców
-                                </p>
-                                {filteredComplimentaryCandidates
-                                  .filter((c) => c.source === 'USER')
-                                  .map((c) => (
-                                    <button
-                                      key={c.key}
-                                      type="button"
-                                      onClick={() => setSelectedComplimentaryCandidateKey(c.key)}
-                                      className={`flex w-full flex-col items-start border-t border-emerald-50 px-3 py-2 text-left text-sm hover:bg-emerald-50/80 ${
-                                        selectedComplimentaryCandidateKey === c.key
-                                          ? 'bg-emerald-100'
-                                          : 'bg-white'
-                                      }`}
-                                    >
-                                      <span className="font-medium text-zinc-900">
-                                        {c.lastName} {c.firstName}
-                                      </span>
-                                      <span className="text-xs text-zinc-600">{c.email}</span>
-                                    </button>
-                                  ))}
-                              </div>
-                            )}
-                            {filteredComplimentaryCandidates.some(
-                              (c) => c.source === 'ENROLLMENT',
-                            ) && (
-                              <div>
-                                <p className="sticky top-0 bg-emerald-50 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                                  Zgłoszenia (bez konta rodzica)
-                                </p>
-                                {filteredComplimentaryCandidates
-                                  .filter((c) => c.source === 'ENROLLMENT')
-                                  .map((c) => (
-                                    <button
-                                      key={c.key}
-                                      type="button"
-                                      onClick={() => setSelectedComplimentaryCandidateKey(c.key)}
-                                      className={`flex w-full flex-col items-start border-t border-emerald-50 px-3 py-2 text-left text-sm hover:bg-emerald-50/80 ${
-                                        selectedComplimentaryCandidateKey === c.key
-                                          ? 'bg-emerald-100'
-                                          : 'bg-white'
-                                      }`}
-                                    >
-                                      <span className="font-medium text-zinc-900">
-                                        {c.lastName} {c.firstName}
-                                      </span>
-                                      <span className="text-xs text-zinc-600">{c.email}</span>
-                                    </button>
-                                  ))}
-                              </div>
-                            )}
-                          </>
-                        )}
-                      </div>
-                      <button
-                        type="button"
-                        disabled={!selectedComplimentaryCandidateKey || discountsSaving}
-                        className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                        onClick={async () => {
-                          if (!selectedComplimentaryCandidateKey) return;
-                          setDiscountsSaving(true);
-                          try {
-                            const res = await fetch('/api/admin/discounts', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({
-                                candidateKey: selectedComplimentaryCandidateKey,
-                              }),
-                            });
-                            const data = (await res.json().catch(() => ({}))) as {
-                              message?: string;
-                              complimentaryParents?: typeof complimentaryParents;
-                              complimentaryCandidates?: typeof complimentaryCandidates;
-                            };
-                            if (!res.ok) {
-                              pushToast('error', data.message ?? 'Nie udało się dodać rodzica');
-                              return;
-                            }
-                            setComplimentaryParents(
-                              Array.isArray(data.complimentaryParents)
-                                ? data.complimentaryParents
-                                : [],
-                            );
-                            if (Array.isArray(data.complimentaryCandidates)) {
-                              setComplimentaryCandidates(data.complimentaryCandidates);
-                            } else {
-                              setComplimentaryCandidates((prev) =>
-                                prev.filter((c) => c.key !== selectedComplimentaryCandidateKey),
-                              );
-                            }
-                            setSelectedComplimentaryCandidateKey('');
-                            pushToast('success', 'Dodano rodzica do trybu bez umowy');
-                          } catch {
-                            pushToast('error', 'Błąd dodawania rodzica');
-                          } finally {
-                            setDiscountsSaving(false);
-                          }
-                        }}
-                      >
-                        Dodaj wybranego
-                      </button>
-                    </div>
-                  </div>
-                </>
               )}
             </div>
           )}
@@ -6661,7 +6373,26 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                             Brak wygenerowanych zajęć
                           </p>
                         ) : g.active && (g.generated_lessons_count ?? 0) > 0 ? (
-                          <p className="mt-1 text-xs text-zinc-500">
+                          <p
+                            className={`mt-1 text-xs ${
+                              (g.generated_lessons_count ?? 0) !==
+                              defaultTargetLessonsPerYear(
+                                Number(g.lessons_per_week) === 2 ? 2 : 1,
+                              )
+                                ? 'font-semibold text-red-600'
+                                : 'text-zinc-500'
+                            }`}
+                            title={
+                              (g.generated_lessons_count ?? 0) !==
+                              defaultTargetLessonsPerYear(
+                                Number(g.lessons_per_week) === 2 ? 2 : 1,
+                              )
+                                ? `Założenie: ${defaultTargetLessonsPerYear(
+                                    Number(g.lessons_per_week) === 2 ? 2 : 1,
+                                  )} zajęć w roku`
+                                : undefined
+                            }
+                          >
                             {g.generated_lessons_count}{' '}
                             {(g.generated_lessons_count ?? 0) === 1
                               ? 'wygenerowane zajęcie'
@@ -8619,6 +8350,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               key={tab.key}
               onClick={() => {
                 setMobileTab(tab.key);
+                if (tab.key === 'organization') setActiveTab('organization');
+                if (tab.key === 'users') {
+                  setActiveTab('families');
+                  setFamiliesSubTab('children');
+                }
               }}
               className={`rounded-full px-2 py-2 text-xs font-semibold ${
                 mobileTab === tab.key ? 'bg-[#0f6e56] text-white' : 'text-zinc-700'
