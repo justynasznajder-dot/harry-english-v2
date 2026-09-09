@@ -590,22 +590,24 @@ export async function fetchStudentPipeline(
   }));
 }
 
-/** Wiersz listy „Podpisane faktury” — dzieci z podpisaną umową w aktywnym roku. */
+/** Wiersz listy „Umowy podpisane” — dzieci z podpisaną umową w aktywnym roku. */
 export type SignedContractConsentRow = {
   contractId: string;
   childId: string;
   childName: string;
+  locationId: string | null;
+  locationName: string | null;
+  groupId: string | null;
+  groupName: string | null;
   imageConsent: boolean | null;
-  /** true = podpisane upoważnienie; false = grupa wymaga, brak; null = nie dotyczy */
-  pickupConsent: boolean | null;
   paymentType: string | null;
   amount: string | null;
   signedAt: string | null;
 };
 
 /**
- * Podpisane umowy aktywnego roku — zgoda na wizerunek, upoważnienie do odbioru,
- * sposób płatności i kwota (do zakładki „Podpisane faktury”).
+ * Podpisane umowy aktywnego roku — lokalizacja, grupa, zgoda na wizerunek,
+ * sposób płatności i kwota (do zakładki „Umowy podpisane”).
  */
 export async function fetchSignedContractConsents(
   schoolId: string,
@@ -632,9 +634,11 @@ export async function fetchSignedContractConsents(
     child_id: string;
     child_first: string;
     child_last: string;
+    location_id: string | null;
+    location_name: string | null;
+    group_id: string | null;
+    group_name: string | null;
     image_consent: boolean | null;
-    has_pickup_doc: boolean;
-    teacher_pickup_consent: boolean;
     payment_type: string | null;
     amount: string | null;
     signed_at: string | null;
@@ -644,12 +648,11 @@ export async function fetchSignedContractConsents(
        ch.id AS child_id,
        COALESCE(ch.first_name, '') AS child_first,
        COALESCE(ch.last_name, '') AS child_last,
+       loc.id AS location_id,
+       loc.name AS location_name,
+       g.id AS group_id,
+       g.name AS group_name,
        cc.image_consent,
-       (
-         cc.attachment_2_html IS NOT NULL
-         AND BTRIM(cc.attachment_2_html) <> ''
-       ) AS has_pickup_doc,
-       COALESCE(g.teacher_pickup_consent, FALSE) AS teacher_pickup_consent,
        ct.payment_type,
        ct.amount::text AS amount,
        ct.signed_at::text AS signed_at
@@ -658,6 +661,7 @@ export async function fetchSignedContractConsents(
      JOIN children ch ON ch.id = cc.child_id
      LEFT JOIN users u ON u.id = ct.parent_id
      LEFT JOIN groups g ON g.id = COALESCE(cc.group_id, ct.group_id)
+     LEFT JOIN locations loc ON loc.id = g.location_id
      WHERE cc.school_id = $1
        AND ct.school_year_id = $2
        AND UPPER(BTRIM(COALESCE(ct.status::text, ''))) = 'SIGNED'
@@ -666,25 +670,19 @@ export async function fetchSignedContractConsents(
     params
   );
 
-  return res.rows.map((row) => {
-    let pickupConsent: boolean | null = null;
-    if (row.has_pickup_doc) {
-      pickupConsent = true;
-    } else if (row.teacher_pickup_consent) {
-      pickupConsent = false;
-    }
-
-    return {
-      contractId: row.contract_id,
-      childId: row.child_id,
-      childName: `${row.child_first} ${row.child_last}`.trim(),
-      imageConsent: row.image_consent,
-      pickupConsent,
-      paymentType: row.payment_type,
-      amount: row.amount,
-      signedAt: row.signed_at,
-    };
-  });
+  return res.rows.map((row) => ({
+    contractId: row.contract_id,
+    childId: row.child_id,
+    childName: `${row.child_first} ${row.child_last}`.trim(),
+    locationId: row.location_id,
+    locationName: row.location_name,
+    groupId: row.group_id,
+    groupName: row.group_name,
+    imageConsent: row.image_consent,
+    paymentType: row.payment_type,
+    amount: row.amount,
+    signedAt: row.signed_at,
+  }));
 }
 
 export type RenewalPipelineRow = {

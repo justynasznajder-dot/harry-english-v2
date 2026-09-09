@@ -8,12 +8,17 @@ type SignedContractRow = {
   contractId: string;
   childId: string;
   childName: string;
+  locationId: string | null;
+  locationName: string | null;
+  groupId: string | null;
+  groupName: string | null;
   imageConsent: boolean | null;
-  pickupConsent: boolean | null;
   paymentType: string | null;
   amount: string | null;
   signedAt: string | null;
 };
+
+type ImageConsentFilter = '' | 'yes' | 'no' | 'unknown';
 
 function consentLabel(value: boolean | null): string {
   if (value === true) return 'Tak';
@@ -43,9 +48,15 @@ function formatAmountPln(amount: string | null): string {
   return `${formatted} zł`;
 }
 
+const selectClass =
+  'rounded-full border border-emerald-100 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56] focus:ring-2';
+
 export default function SignedContractsPanel() {
   const [rows, setRows] = useState<SignedContractRow[]>([]);
   const [search, setSearch] = useState('');
+  const [locationFilter, setLocationFilter] = useState('');
+  const [groupFilter, setGroupFilter] = useState('');
+  const [imageConsentFilter, setImageConsentFilter] = useState<ImageConsentFilter>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -77,15 +88,89 @@ export default function SignedContractsPanel() {
     return () => clearTimeout(t);
   }, [load, search]);
 
+  const locationOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of rows) {
+      if (!row.locationId) continue;
+      const name = row.locationName?.trim() || 'Lokalizacja';
+      if (!map.has(row.locationId)) map.set(row.locationId, name);
+    }
+    return [...map.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'pl'));
+  }, [rows]);
+
+  const groupOptions = useMemo(() => {
+    const map = new Map<string, { name: string; locationId: string | null }>();
+    for (const row of rows) {
+      if (!row.groupId) continue;
+      if (locationFilter === '__none__') {
+        if (row.locationId) continue;
+      } else if (locationFilter && row.locationId !== locationFilter) {
+        continue;
+      }
+      const name = row.groupName?.trim() || 'Grupa';
+      if (!map.has(row.groupId)) {
+        map.set(row.groupId, { name, locationId: row.locationId });
+      }
+    }
+    return [...map.entries()]
+      .map(([id, meta]) => ({ id, name: meta.name }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'pl'));
+  }, [rows, locationFilter]);
+
+  useEffect(() => {
+    if (!groupFilter) return;
+    if (!groupOptions.some((g) => g.id === groupFilter)) {
+      setGroupFilter('');
+    }
+  }, [groupFilter, groupOptions]);
+
+  const filteredRows = useMemo(() => {
+    return rows.filter((row) => {
+      if (locationFilter === '__none__') {
+        if (row.locationId) return false;
+      } else if (locationFilter && row.locationId !== locationFilter) {
+        return false;
+      }
+
+      if (groupFilter === '__none__') {
+        if (row.groupId) return false;
+      } else if (groupFilter && row.groupId !== groupFilter) {
+        return false;
+      }
+
+      if (imageConsentFilter === 'yes' && row.imageConsent !== true) return false;
+      if (imageConsentFilter === 'no' && row.imageConsent !== false) return false;
+      if (imageConsentFilter === 'unknown' && row.imageConsent != null) return false;
+
+      return true;
+    });
+  }, [rows, locationFilter, groupFilter, imageConsentFilter]);
+
   const countLabel = useMemo(() => {
-    const n = rows.length;
+    const n = filteredRows.length;
     return n === 1 ? '1 podpisana umowa' : `${n} podpisanych umów`;
-  }, [rows.length]);
+  }, [filteredRows.length]);
+
+  const hasNoLocationRows = useMemo(
+    () => rows.some((row) => !row.locationId),
+    [rows],
+  );
+
+  const hasNoGroupRows = useMemo(() => {
+    return rows.some((row) => {
+      if (row.groupId) return false;
+      if (locationFilter === '__none__') return !row.locationId;
+      if (locationFilter) return row.locationId === locationFilter;
+      return true;
+    });
+  }, [rows, locationFilter]);
 
   return (
     <section className="space-y-4 rounded-2xl border border-emerald-100 bg-white p-4">
       <header className="space-y-1">
-        <h2 className="text-lg font-semibold text-zinc-900">Podpisane faktury</h2>
+        <h2 className="text-lg font-semibold text-zinc-900">Umowy podpisane</h2>
         <p className="text-sm text-zinc-600">
           Dzieci z podpisaną umową w aktywnym roku — zgody, sposób płatności i kwota z umowy.
         </p>
@@ -99,6 +184,50 @@ export default function SignedContractsPanel() {
           placeholder="Szukaj ucznia lub rodzica..."
           className="min-w-[220px] flex-1 rounded-full border border-emerald-100 bg-white px-4 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56] placeholder:text-zinc-400 focus:ring-2"
         />
+        <select
+          value={locationFilter}
+          onChange={(e) => {
+            setLocationFilter(e.target.value);
+            setGroupFilter('');
+          }}
+          className={selectClass}
+          aria-label="Filtr lokalizacji"
+        >
+          <option value="">Lokalizacja: wszystkie</option>
+          {locationOptions.map((loc) => (
+            <option key={loc.id} value={loc.id}>
+              {loc.name}
+            </option>
+          ))}
+          {hasNoLocationRows ? (
+            <option value="__none__">Bez lokalizacji</option>
+          ) : null}
+        </select>
+        <select
+          value={groupFilter}
+          onChange={(e) => setGroupFilter(e.target.value)}
+          className={selectClass}
+          aria-label="Filtr grupy"
+        >
+          <option value="">Grupa: wszystkie</option>
+          {groupOptions.map((g) => (
+            <option key={g.id} value={g.id}>
+              {g.name}
+            </option>
+          ))}
+          {hasNoGroupRows ? <option value="__none__">Bez grupy</option> : null}
+        </select>
+        <select
+          value={imageConsentFilter}
+          onChange={(e) => setImageConsentFilter(e.target.value as ImageConsentFilter)}
+          className={selectClass}
+          aria-label="Filtr zgody na wizerunek"
+        >
+          <option value="">Zgoda na wizerunek: wszystkie</option>
+          <option value="yes">Tak</option>
+          <option value="no">Nie</option>
+          <option value="unknown">Brak danych</option>
+        </select>
         <button
           type="button"
           onClick={() => void load(search)}
@@ -118,7 +247,7 @@ export default function SignedContractsPanel() {
         </div>
       ) : error ? (
         <p className="py-6 text-center text-sm text-rose-600">{error}</p>
-      ) : rows.length === 0 ? (
+      ) : filteredRows.length === 0 ? (
         <p className="py-6 text-center text-sm text-zinc-500">Brak podpisanych umów.</p>
       ) : (
         <div className="overflow-x-auto">
@@ -126,24 +255,26 @@ export default function SignedContractsPanel() {
             <thead className="bg-zinc-50 text-zinc-700">
               <tr>
                 <th className="px-3 py-2.5 font-semibold">Imię i nazwisko dziecka</th>
+                <th className="px-3 py-2.5 font-semibold">Lokalizacja</th>
                 <th className="px-3 py-2.5 font-semibold">Zgoda na wykorzystanie wizerunku</th>
-                <th className="px-3 py-2.5 font-semibold">Upoważnienie do odbioru</th>
                 <th className="px-3 py-2.5 font-semibold">Sposób płatności</th>
                 <th className="px-3 py-2.5 font-semibold text-right">Kwota na umowie</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
+              {filteredRows.map((row) => (
                 <tr
                   key={`${row.contractId}:${row.childId}`}
                   className="border-t border-zinc-100"
                 >
                   <td className="px-3 py-2.5 font-medium text-zinc-900">{row.childName}</td>
-                  <td className="px-3 py-2.5">
-                    <ConsentCell value={row.imageConsent} />
+                  <td className="px-3 py-2.5 text-zinc-800">
+                    {row.locationName?.trim() || (
+                      <span className="text-zinc-400">—</span>
+                    )}
                   </td>
                   <td className="px-3 py-2.5">
-                    <ConsentCell value={row.pickupConsent} />
+                    <ConsentCell value={row.imageConsent} />
                   </td>
                   <td className="px-3 py-2.5 text-zinc-800">
                     {row.paymentType ? paymentTypeShortLabel(row.paymentType) : '—'}

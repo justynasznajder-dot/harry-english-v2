@@ -502,7 +502,7 @@ const enrollmentFlowTabs: Array<{ key: EnrollmentFlowSubTab; label: string }> = 
   { key: 'enrollment', label: 'Zgłoszenia' },
   { key: 'renewals', label: 'Odnowienia' },
   { key: 'enrollment-status', label: 'Status zapisów' },
-  { key: 'signed-invoices', label: 'Podpisane faktury' },
+  { key: 'signed-invoices', label: 'Umowy podpisane' },
   { key: 'resignations', label: 'Rezygnacje' },
 ];
 
