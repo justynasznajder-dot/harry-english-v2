@@ -452,7 +452,7 @@ export default function ManagerDashboardPanel({
           </span>
         </div>
         <div className="mb-3 flex flex-wrap items-end gap-3">
-          <label className="flex min-w-[200px] flex-1 flex-col gap-1 text-xs font-medium text-zinc-600">
+          <label className="flex w-full max-w-[220px] min-w-[160px] flex-col gap-1 text-xs font-medium text-zinc-600">
             Szukaj dziecka
             <input
               type="search"

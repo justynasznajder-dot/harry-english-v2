@@ -14,6 +14,7 @@ type SignedContractRow = {
   groupId: string | null;
   groupName: string | null;
   imageConsent: boolean | null;
+  hasDiscountVoucher: boolean;
   paymentType: string | null;
   amount: string | null;
   signedAt: string | null;
@@ -290,6 +291,7 @@ export default function SignedContractsPanel() {
                 <th className="px-3 py-2.5 font-semibold">Imię i nazwisko dziecka</th>
                 <th className="px-3 py-2.5 font-semibold">Lokalizacja</th>
                 <th className="px-3 py-2.5 font-semibold">Zgoda na wykorzystanie wizerunku</th>
+                <th className="px-3 py-2.5 font-semibold">Kod zniżkowy</th>
                 <th className="px-3 py-2.5 font-semibold">Sposób płatności</th>
                 <th className="px-3 py-2.5 font-semibold text-right">Kwota na umowie</th>
               </tr>
@@ -308,6 +310,9 @@ export default function SignedContractsPanel() {
                   </td>
                   <td className="px-3 py-2.5">
                     <ConsentCell value={row.imageConsent} />
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <ConsentCell value={row.hasDiscountVoucher} />
                   </td>
                   <td className="px-3 py-2.5 text-zinc-800">
                     {row.paymentType ? paymentTypeShortLabel(row.paymentType) : '—'}

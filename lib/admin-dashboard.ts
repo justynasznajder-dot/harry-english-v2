@@ -688,6 +688,8 @@ export type SignedContractConsentRow = {
   groupId: string | null;
   groupName: string | null;
   imageConsent: boolean | null;
+  /** Deklaracja rodzica: dziecko ma bon zniżkowy (`children.has_discount_voucher`). */
+  hasDiscountVoucher: boolean;
   paymentType: string | null;
   amount: string | null;
   signedAt: string | null;
@@ -729,6 +731,7 @@ export async function fetchSignedContractConsents(
     group_id: string | null;
     group_name: string | null;
     image_consent: boolean | null;
+    has_discount_voucher: boolean;
     payment_type: string | null;
     amount: string | null;
     signed_at: string | null;
@@ -745,6 +748,7 @@ export async function fetchSignedContractConsents(
        g.id AS group_id,
        g.name AS group_name,
        cc.image_consent,
+       COALESCE(ch.has_discount_voucher, FALSE) AS has_discount_voucher,
        ct.payment_type,
        ct.amount::text AS amount,
        ct.signed_at::text AS signed_at,
@@ -774,6 +778,7 @@ export async function fetchSignedContractConsents(
     groupId: row.group_id,
     groupName: row.group_name,
     imageConsent: row.image_consent,
+    hasDiscountVoucher: Boolean(row.has_discount_voucher),
     paymentType: row.payment_type,
     amount: row.amount,
     signedAt: row.signed_at,
