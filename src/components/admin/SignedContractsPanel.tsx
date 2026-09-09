@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { formatContractAmount } from '@/lib/contract-html';
 import { paymentTypeShortLabel } from '@/lib/payment-labels';
+import { downloadSignedContractsXlsx } from '@/lib/signed-contracts-xlsx';
 
 type SignedContractRow = {
   contractId: string;
@@ -58,6 +59,7 @@ export default function SignedContractsPanel() {
   const [groupFilter, setGroupFilter] = useState('');
   const [imageConsentFilter, setImageConsentFilter] = useState<ImageConsentFilter>('');
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async (query: string) => {
@@ -148,6 +150,19 @@ export default function SignedContractsPanel() {
     });
   }, [rows, locationFilter, groupFilter, imageConsentFilter]);
 
+  const exportXlsx = useCallback(async () => {
+    if (filteredRows.length === 0 || exporting) return;
+    setExporting(true);
+    setError(null);
+    try {
+      await downloadSignedContractsXlsx({ rows: filteredRows });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się wygenerować pliku Excel');
+    } finally {
+      setExporting(false);
+    }
+  }, [filteredRows, exporting]);
+
   const countLabel = useMemo(() => {
     const n = filteredRows.length;
     return n === 1 ? '1 podpisana umowa' : `${n} podpisanych umów`;
@@ -230,10 +245,11 @@ export default function SignedContractsPanel() {
         </select>
         <button
           type="button"
-          onClick={() => void load(search)}
-          className="rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-[#0f6e56]"
+          disabled={loading || exporting || filteredRows.length === 0}
+          onClick={() => void exportXlsx()}
+          className="rounded-full border border-[#0f6e56] bg-white px-4 py-2.5 text-sm font-semibold text-[#0f6e56] transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Odśwież
+          {exporting ? 'Generowanie…' : 'Pobierz Excel'}
         </button>
       </div>
 

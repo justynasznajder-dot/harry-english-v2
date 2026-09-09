@@ -1240,10 +1240,7 @@ Zajęcia rozpoczynamy od 14 września 2026 zgodnie z harmonogramem ustalonym dla
       address: process.env.EMAIL_USER || "kontakt@harry-english.pl",
     },
     to,
-    subject:
-      childCount === 1
-        ? "Propozycja grupy - Harry English"
-        : `Propozycje grup (${childCount} dzieci) - Harry English`,
+    subject: "Informacje organizacyjne oraz umowa – Harry English",
     html: buildEmailShell({
       title: `Dzień dobry ${escapeHtmlForEmail(parentName)},`,
       intro: introFull,
