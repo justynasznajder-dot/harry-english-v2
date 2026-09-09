@@ -13,7 +13,7 @@ import { topUpLessonsAfterHolidayDeletion } from "@/lib/lesson-generation";
 import { notifyParents, type ParentNotifyRow } from "@/lib/parent-notifications";
 import { requireMessageActor } from "@/lib/messages";
 import { deleteScheduledLessonsInHolidayRange } from "@/lib/school-holiday-lessons";
-import { expandHolidayGroupIdsByFacilityKinds } from "@/lib/holiday-calendar-scope";
+import { expandHolidayGroupIdsByFacilityKinds } from "@/lib/holiday-calendar-scope-server";
 
 const HOLIDAY_TYPES = ["HOLIDAY", "PUBLIC", "SCHOOL", "CANCELLED"] as const;
 

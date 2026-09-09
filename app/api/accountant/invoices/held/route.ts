@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { requireAccountantSchoolContext } from "@/lib/accountant-school-context";
 import {
+  INVOICE_MANUAL_GENERATE_DISABLED_MESSAGE,
+  isInvoiceManualGenerateDisabled,
+} from "@/lib/invoice-generate-guard";
+import {
   createParentMonthlyInvoice,
   isContractMonthlyInvoiceHeld,
   previewMonthlyInvoicesForSchool,
@@ -73,6 +77,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { message: "Ta umowa nie ma wstrzymanego generowania faktury w tym miesiącu" },
         { status: 409 }
+      );
+    }
+
+    if (isInvoiceManualGenerateDisabled(ctx.schoolId)) {
+      return NextResponse.json(
+        { message: INVOICE_MANUAL_GENERATE_DISABLED_MESSAGE },
+        { status: 403 }
       );
     }
 

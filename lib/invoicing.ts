@@ -834,7 +834,7 @@ export async function createContractYearlyInvoice(contractId: string): Promise<I
         childId,
         amount,
         description: `${INVOICE_DESC_YEARLY_PREFIX} — rok szkolny`,
-        periodMonth: null,
+        periodMonth: periodMonthStartYmd(firstDayOfMonth(signedAt)),
         dueDate,
         schoolYearId: contract.school_year_id,
       });
@@ -1449,6 +1449,226 @@ export type MonthlyInvoicePreviewResult = {
     alreadyInvoicedLines: number;
   };
 };
+
+export type YearlyInvoicePreviewResult = {
+  periodMonth: string;
+  dueDate: string;
+  parents: MonthlyInvoicePreviewParent[];
+  totals: {
+    parents: number;
+    lines: number;
+    amount: number;
+    pendingAmount: number;
+    alreadyInvoicedLines: number;
+  };
+};
+
+export type YearlyInvoiceSchoolResult = {
+  periodMonth: string;
+  schoolId: string;
+  generated: number;
+  skipped: number;
+  alreadyInvoiced: number;
+  eligible: number;
+  errors: Array<{ contractId: string; message: string }>;
+};
+
+/**
+ * Podgląd płatności jednorazowych (YEARLY) na wybrany miesiąc — bez wystawiania.
+ * Pokazuje umowy podpisane w tym miesiącu oraz zaległe (jeszcze bez faktury).
+ */
+export async function previewYearlyInvoicesForSchool(
+  schoolId: string,
+  periodMonth: Date = new Date()
+): Promise<YearlyInvoicePreviewResult> {
+  const periodStart = firstDayOfMonth(periodMonth);
+  const periodMonthStr = periodMonthStartYmd(periodStart);
+  const dueDate = lastDayOfMonthDateString(periodStart);
+  const hasItems = await invoicesSupportInvoiceItems();
+
+  const alreadySql = hasItems
+    ? `EXISTS (
+         SELECT 1 FROM payments p
+         WHERE p.contract_id = c.id
+           AND p.description LIKE $3
+       )
+       OR EXISTS (
+         SELECT 1
+         FROM invoice_items ii
+         JOIN invoices i ON i.id = ii.invoice_id
+         JOIN payments p ON p.id = i.payment_id
+         WHERE ii.contract_id = c.id
+           AND p.description LIKE $3
+       )`
+    : `EXISTS (
+         SELECT 1 FROM payments p
+         WHERE p.contract_id = c.id
+           AND p.description LIKE $3
+       )`;
+
+  const res = await queryDb<{
+    contract_id: string;
+    parent_id: string;
+    parent_first_name: string;
+    parent_last_name: string;
+    parent_email: string;
+    amount: string;
+    signed_at: Date | string | null;
+    child_id: string | null;
+    child_first_name: string | null;
+    child_last_name: string | null;
+    already_invoiced: boolean;
+  }>(
+    `SELECT
+       c.id AS contract_id,
+       c.parent_id,
+       u.first_name AS parent_first_name,
+       u.last_name AS parent_last_name,
+       u.email AS parent_email,
+       c.amount::text AS amount,
+       c.signed_at,
+       COALESCE(
+         c.child_id,
+         (SELECT cc.child_id FROM contract_children cc WHERE cc.contract_id = c.id ORDER BY cc.sort_order ASC LIMIT 1)
+       ) AS child_id,
+       ch.first_name AS child_first_name,
+       ch.last_name AS child_last_name,
+       (${alreadySql}) AS already_invoiced
+     FROM contracts c
+     JOIN users u ON u.id = c.parent_id
+     LEFT JOIN children ch ON ch.id = COALESCE(
+       c.child_id,
+       (SELECT cc.child_id FROM contract_children cc WHERE cc.contract_id = c.id ORDER BY cc.sort_order ASC LIMIT 1)
+     )
+     WHERE c.school_id = $1
+       AND c.payment_type = 'YEARLY'
+       AND c.status = 'SIGNED'
+       AND c.billing_exempt = false
+       AND c.amount IS NOT NULL
+       AND c.amount > 0
+       AND (c.signed_at IS NULL OR DATE_TRUNC('month', c.signed_at) <= $2::date)
+       AND (
+         DATE_TRUNC('month', COALESCE(c.signed_at, c.created_at)) = $2::date
+         OR NOT (${alreadySql})
+       )
+     ORDER BY u.last_name ASC, u.first_name ASC, c.created_at ASC`,
+    [schoolId, periodMonthStr, `${INVOICE_DESC_YEARLY_PREFIX}%`]
+  );
+
+  type ParentBucket = MonthlyInvoicePreviewParent;
+  const byParent = new Map<string, ParentBucket>();
+
+  for (const row of res.rows) {
+    const amount = Number(row.amount);
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+
+    const childName =
+      `${formatPersonName(row.child_first_name ?? "")} ${formatPersonName(row.child_last_name ?? "")}`.trim() ||
+      "dziecko";
+    const signedAt =
+      row.signed_at == null
+        ? null
+        : row.signed_at instanceof Date
+          ? row.signed_at.toISOString()
+          : String(row.signed_at);
+
+    let parent = byParent.get(row.parent_id);
+    if (!parent) {
+      parent = {
+        parentId: row.parent_id,
+        parentFirstName: formatPersonName(row.parent_first_name),
+        parentLastName: formatPersonName(row.parent_last_name),
+        parentEmail: row.parent_email,
+        totalAmount: 0,
+        alreadyInvoiced: true,
+        lines: [],
+      };
+      byParent.set(row.parent_id, parent);
+    }
+
+    parent.lines.push({
+      contractId: row.contract_id,
+      childId: row.child_id,
+      childName,
+      amount,
+      alreadyInvoiced: Boolean(row.already_invoiced),
+      signedAt,
+    });
+    parent.totalAmount = Number((parent.totalAmount + amount).toFixed(2));
+    if (!row.already_invoiced) parent.alreadyInvoiced = false;
+  }
+
+  const parents = Array.from(byParent.values());
+  let lines = 0;
+  let amount = 0;
+  let pendingAmount = 0;
+  let alreadyInvoicedLines = 0;
+  for (const p of parents) {
+    for (const line of p.lines) {
+      lines += 1;
+      amount += line.amount;
+      if (line.alreadyInvoiced) alreadyInvoicedLines += 1;
+      else pendingAmount += line.amount;
+    }
+  }
+
+  return {
+    periodMonth: periodMonthStr,
+    dueDate,
+    parents,
+    totals: {
+      parents: parents.length,
+      lines,
+      amount: Number(amount.toFixed(2)),
+      pendingAmount: Number(pendingAmount.toFixed(2)),
+      alreadyInvoicedLines,
+    },
+  };
+}
+
+/** Generowanie faktur jednorazowych (YEARLY) dla szkoły — umowy z podglądu miesiąca bez faktury. */
+export async function generateYearlyInvoicesForSchool(
+  schoolId: string,
+  periodMonth: Date = new Date()
+): Promise<YearlyInvoiceSchoolResult> {
+  const preview = await previewYearlyInvoicesForSchool(schoolId, periodMonth);
+  let generated = 0;
+  let skipped = 0;
+  let alreadyInvoiced = 0;
+  const errors: Array<{ contractId: string; message: string }> = [];
+
+  const pendingContractIds: string[] = [];
+  for (const parent of preview.parents) {
+    for (const line of parent.lines) {
+      if (line.alreadyInvoiced) {
+        alreadyInvoiced += 1;
+        continue;
+      }
+      pendingContractIds.push(line.contractId);
+    }
+  }
+
+  for (const contractId of pendingContractIds) {
+    const result = await createContractYearlyInvoice(contractId);
+    if (!result.ok) {
+      errors.push({ contractId, message: result.message });
+      skipped += 1;
+      continue;
+    }
+    if (result.created) generated += 1;
+    else alreadyInvoiced += 1;
+  }
+
+  return {
+    periodMonth: preview.periodMonth,
+    schoolId,
+    generated,
+    skipped,
+    alreadyInvoiced,
+    eligible: pendingContractIds.length,
+    errors,
+  };
+}
 
 /** Podgląd faktur ratalnych (MONTHLY) na wybrany miesiąc — bez wystawiania. */
 export async function previewMonthlyInvoicesForSchool(

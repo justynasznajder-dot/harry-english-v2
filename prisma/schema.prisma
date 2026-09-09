@@ -118,6 +118,8 @@ model contract_children {
   sort_order            Int                  @default(0)
   attachment_1_html     String?
   attachment_2_html     String?
+  /// Zgoda na wizerunek przy podpisie: true / false; null = nie dotyczy / nieustalone
+  image_consent         Boolean?
   lesson_unit_price     Decimal?             @db.Decimal(10, 2)
   monthly_unit_price    Decimal?             @db.Decimal(10, 2)
   yearly_unit_price     Decimal?             @db.Decimal(10, 2)

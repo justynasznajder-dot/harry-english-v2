@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryDb } from "@/lib/db";
 import { requireAdminSchoolContext } from "@/lib/admin-school-context";
+import {
+  INVOICE_MANUAL_GENERATE_DISABLED_MESSAGE,
+  isInvoiceManualGenerateDisabled,
+} from "@/lib/invoice-generate-guard";
 import { createLessonBillingInvoice } from "@/lib/invoicing";
 
 export async function POST(
@@ -25,6 +29,13 @@ export async function POST(
 
     if (ctx.tenant.role === "MANAGER" && billing.school_id !== ctx.schoolId) {
       return NextResponse.json({ message: "Brak dostępu do rozliczenia" }, { status: 403 });
+    }
+
+    if (isInvoiceManualGenerateDisabled(billing.school_id)) {
+      return NextResponse.json(
+        { message: INVOICE_MANUAL_GENERATE_DISABLED_MESSAGE },
+        { status: 403 }
+      );
     }
 
     const result = await createLessonBillingInvoice(billingId);

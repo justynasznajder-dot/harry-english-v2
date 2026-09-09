@@ -57,6 +57,7 @@ export async function GET(request: NextRequest) {
       maxDiscountPercent: settings.maxPercent,
       invoiceGenerationDay,
       invoiceAutoGeneration,
+      schoolId,
       complimentaryParents,
       complimentaryCandidates,
       availableParents: complimentaryCandidates

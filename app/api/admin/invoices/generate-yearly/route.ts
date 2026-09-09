@@ -5,7 +5,7 @@ import {
   INVOICE_MANUAL_GENERATE_DISABLED_MESSAGE,
   isInvoiceManualGenerateDisabled,
 } from "@/lib/invoice-generate-guard";
-import { generateLessonBillingInvoicesForSchool } from "@/lib/invoicing";
+import { generateYearlyInvoicesForSchool } from "@/lib/invoicing";
 import { firstDayOfMonthUtcDate } from "@/lib/school-timezone";
 
 export const maxDuration = 120;
@@ -18,28 +18,25 @@ function parsePeriodMonth(value: unknown): Date | null {
   return new Date(Date.UTC(y, m - 1, 1));
 }
 
-function buildMessage(result: {
+function buildYearlyInvoiceMessage(result: {
   generated: number;
+  skipped: number;
   alreadyInvoiced: number;
-  eligible: number;
   errors: unknown[];
 }): string {
   if (result.generated > 0) {
-    return `Wygenerowano ${result.generated} faktur za zajęcia (już było: ${result.alreadyInvoiced})`;
+    return `Wygenerowano ${result.generated} faktur jednorazowych (już było: ${result.alreadyInvoiced}, pominięto: ${result.skipped})`;
   }
   if (result.alreadyInvoiced > 0) {
-    return `Brak nowych faktur — ${result.alreadyInvoiced} rozliczeń ma już fakturę`;
+    return `Brak nowych faktur — ${result.alreadyInvoiced} umów jednorazowych ma już fakturę`;
   }
   if (result.errors.length > 0) {
     return `Nie wygenerowano faktur (${result.errors.length} błędów)`;
   }
-  if (result.eligible === 0) {
-    return "Brak zapisanych rozliczeń do zafakturowania w tym miesiącu";
-  }
-  return "Brak faktur do wygenerowania";
+  return "Brak umów jednorazowych do zafakturowania w tym miesiącu";
 }
 
-/** Zbiorcze generowanie faktur za pojedyncze zajęcia dla miesiąca. */
+/** Ręczne generowanie faktur jednorazowych (YEARLY) dla szkoły. */
 export async function POST(request: NextRequest) {
   const ctx = await requireAdminSchoolContext(request);
   if (!ctx.ok) return ctx.response;
@@ -54,16 +51,16 @@ export async function POST(request: NextRequest) {
   try {
     const body = (await request.json().catch(() => ({}))) as { periodMonth?: string };
     const periodMonth = parsePeriodMonth(body.periodMonth) ?? firstDayOfMonthUtcDate();
-    const result = await generateLessonBillingInvoicesForSchool(ctx.schoolId, periodMonth);
+    const result = await generateYearlyInvoicesForSchool(ctx.schoolId, periodMonth);
 
     return NextResponse.json({
-      message: buildMessage(result),
+      message: buildYearlyInvoiceMessage(result),
       ...result,
     });
   } catch (error) {
-    console.error("POST /api/admin/lesson-billing/generate-invoices:", error);
+    console.error("POST /api/admin/invoices/generate-yearly:", error);
     return NextResponse.json(
-      { message: "Błąd generowania faktur za zajęcia" },
+      { message: "Błąd generowania faktur jednorazowych" },
       { status: 500 }
     );
   }

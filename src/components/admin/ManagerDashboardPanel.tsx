@@ -52,7 +52,30 @@ type GroupRosterRow = {
   level: string | null;
   locationName: string;
   teacherName: string;
-  children: Array<{ childId: string; childName: string; birthYear: string | null }>;
+  children: Array<{
+    childId: string;
+    childName: string;
+    birthYear: string | null;
+    notifyStatus: 'signed' | 'notified' | 'pending';
+  }>;
+};
+
+const ROSTER_CHILD_TILE: Record<
+  GroupRosterRow['children'][number]['notifyStatus'],
+  { className: string; title: string }
+> = {
+  signed: {
+    className: 'border-emerald-300 bg-emerald-100 text-emerald-950',
+    title: 'Umowa podpisana',
+  },
+  notified: {
+    className: 'border-sky-300 bg-sky-100 text-sky-950',
+    title: 'Wysłano mail z grupą / terminem',
+  },
+  pending: {
+    className: 'border-amber-300 bg-amber-100 text-amber-950',
+    title: 'Brak maila o terminie — szkic grupy',
+  },
 };
 
 function formatDt(value: string): string {
@@ -405,6 +428,20 @@ export default function ManagerDashboardPanel({
         title="Grupy i dzieci"
         description="Aktywne grupy w bieżącym roku szkolnym"
       >
+        <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-zinc-600">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-sm border border-emerald-300 bg-emerald-100" />
+            Umowa podpisana
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-sm border border-sky-300 bg-sky-100" />
+            Mail z terminem wysłany
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-sm border border-amber-300 bg-amber-100" />
+            Jeszcze bez informacji o terminie
+          </span>
+        </div>
         <div className="mb-3 flex flex-wrap items-end gap-3">
           <label className="flex min-w-[160px] flex-col gap-1 text-xs font-medium text-zinc-600">
             Lokalizacja
@@ -498,17 +535,21 @@ export default function ManagerDashboardPanel({
                   <p className="mt-2 text-sm text-zinc-500">Brak dzieci w grupie.</p>
                 ) : (
                   <ul className="mt-2 flex flex-wrap gap-1.5">
-                    {group.children.map((child) => (
-                      <li
-                        key={child.childId}
-                        className="rounded-lg border border-emerald-100 bg-white px-2.5 py-1 text-sm text-zinc-800"
-                      >
-                        {child.childName}
-                        {child.birthYear ? (
-                          <span className="ml-1 text-xs text-zinc-500">({child.birthYear})</span>
-                        ) : null}
-                      </li>
-                    ))}
+                    {group.children.map((child) => {
+                      const tile = ROSTER_CHILD_TILE[child.notifyStatus ?? 'pending'];
+                      return (
+                        <li
+                          key={child.childId}
+                          title={tile.title}
+                          className={`rounded-lg border px-2.5 py-1 text-sm ${tile.className}`}
+                        >
+                          {child.childName}
+                          {child.birthYear ? (
+                            <span className="ml-1 text-xs opacity-70">({child.birthYear})</span>
+                          ) : null}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </div>

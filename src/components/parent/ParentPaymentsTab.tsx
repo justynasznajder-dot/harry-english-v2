@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { paymentTypeShortLabel } from '@/lib/payment-labels';
 import {
   attendanceStatusClass,
   attendanceStatusLabel,
@@ -470,20 +469,12 @@ export default function ParentPaymentsTab({ complimentaryAccess }: { complimenta
           {children.map((child) => {
             const hasYearly = Boolean(child.yearly);
             const hasInstallments = Boolean(child.installments?.length);
-            const paymentLabel =
-              hideInvoiceAndStatus && hasYearly && hasInstallments
-                ? 'Jednorazowy / Ratalny'
-                : paymentTypeShortLabel(child.paymentType);
 
             return (
             <article key={`${child.childId}-${child.contractId}`} className="space-y-4">
               <div className="flex flex-wrap items-end justify-between gap-2 border-b border-emerald-100 pb-3">
                 <div>
                   <h3 className="text-lg font-bold text-zinc-900">{child.childName}</h3>
-                  <p className="text-sm text-zinc-600">
-                    {paymentLabel}
-                    {child.schoolYearName ? ` · ${child.schoolYearName}` : null}
-                  </p>
                 </div>
               </div>
               {hideInvoiceAndStatus ? (

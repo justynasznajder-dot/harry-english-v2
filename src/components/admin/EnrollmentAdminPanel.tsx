@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useMemo, useState } from 'react';
-import StudentPipelinePanel from '@/src/components/admin/StudentPipelinePanel';
 import {
   ENROLLMENT_LIST_FILTERS,
   ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE,
@@ -922,7 +921,6 @@ export default function EnrollmentAdminPanel({
   }, [parents, groups, reportedChildrenLocationKey, reportedChildrenGroupFilter]);
 
   const renderList = () => {
-    const isPipeline = enrollmentStatusFilter === 'pipeline';
     const isByGroupPrices = enrollmentStatusFilter === 'by-group-prices';
     const isReportedChildren = enrollmentStatusFilter === 'by-reported-children';
     const studentQuery = studentNameSearch.trim().toLocaleLowerCase('pl');
@@ -994,16 +992,14 @@ export default function EnrollmentAdminPanel({
       <section className="space-y-4 rounded-2xl border border-emerald-100 bg-white p-4">
         <h2 className="text-lg font-semibold text-zinc-900">Zgłoszenia</h2>
 
-        {!isPipeline && (
-          <input
-            type="search"
-            autoComplete="off"
-            value={studentNameSearch}
-            onChange={(e) => setStudentNameSearch(e.target.value)}
-            placeholder="Szukaj: dziecko, rodzic lub e-mail (pokazuje całe rodzeństwo)…"
-            className="w-full max-w-md rounded-xl border border-emerald-200 px-3 py-2 text-sm"
-          />
-        )}
+        <input
+          type="search"
+          autoComplete="off"
+          value={studentNameSearch}
+          onChange={(e) => setStudentNameSearch(e.target.value)}
+          placeholder="Szukaj: dziecko, rodzic lub e-mail (pokazuje całe rodzeństwo)…"
+          className="w-full max-w-md rounded-xl border border-emerald-200 px-3 py-2 text-sm"
+        />
 
         <div className="flex flex-wrap items-center gap-2">
           {ENROLLMENT_LIST_FILTERS.map((filter) => (
@@ -1020,17 +1016,6 @@ export default function EnrollmentAdminPanel({
               {filter.label} ({enrollmentStatusCounts[filter.value] ?? 0})
             </button>
           ))}
-          <button
-            type="button"
-            onClick={() => setEnrollmentStatusFilter('pipeline')}
-            className={`rounded-full border px-3 py-1 text-xs font-semibold ${
-              isPipeline
-                ? 'border-[#0f6e56] bg-[#0f6e56] text-white'
-                : 'border-emerald-200 bg-white text-zinc-700'
-            }`}
-          >
-            Status zapisów ({enrollmentStatusCounts[''] ?? 0})
-          </button>
           <button
             type="button"
             onClick={() => setEnrollmentStatusFilter('by-group-prices')}
@@ -1053,7 +1038,7 @@ export default function EnrollmentAdminPanel({
           >
             Zgłoszone dzieci ({reportedChildrenView.totalCount})
           </button>
-          {!isPipeline && !isByGroupPrices && !isReportedChildren && (
+          {!isByGroupPrices && !isReportedChildren && (
             <button
               type="button"
               disabled={exportingList || filteredEnrollmentRows.length === 0}
@@ -1099,17 +1084,7 @@ export default function EnrollmentAdminPanel({
           )}
         </div>
 
-        {isPipeline ? (
-          <div className="space-y-3">
-            <p className="text-sm text-zinc-600">
-              Zgłoszenie → przypisany do grupy → umowa wysłana → umowa podpisana
-            </p>
-            <StudentPipelinePanel
-              embedded
-              complimentaryParents={complimentaryParents}
-            />
-          </div>
-        ) : isByGroupPrices ? (
+        {isByGroupPrices ? (
 
           <div className="space-y-3">
             <div className="flex flex-wrap items-start justify-between gap-2">

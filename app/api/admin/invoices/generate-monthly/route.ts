@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireAdminSchoolContext } from "@/lib/admin-school-context";
+import {
+  INVOICE_MANUAL_GENERATE_DISABLED_MESSAGE,
+  isInvoiceManualGenerateDisabled,
+} from "@/lib/invoice-generate-guard";
 import { generateMonthlyInvoicesForSchool } from "@/lib/invoicing";
 import { firstDayOfMonthUtcDate } from "@/lib/school-timezone";
 
@@ -36,6 +40,13 @@ function buildMonthlyInvoiceMessage(result: {
 export async function POST(request: NextRequest) {
   const ctx = await requireAdminSchoolContext(request);
   if (!ctx.ok) return ctx.response;
+
+  if (isInvoiceManualGenerateDisabled(ctx.schoolId)) {
+    return NextResponse.json(
+      { message: INVOICE_MANUAL_GENERATE_DISABLED_MESSAGE },
+      { status: 403 }
+    );
+  }
 
   try {
     const body = (await request.json().catch(() => ({}))) as { periodMonth?: string };

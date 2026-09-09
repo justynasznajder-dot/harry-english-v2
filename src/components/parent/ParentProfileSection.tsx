@@ -192,9 +192,8 @@ export default function ParentProfileSection({
           </header>
 
           <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
-            Dane poniżej są tylko do podglądu — nie możesz ich samodzielnie zmieniać. Jeśli
-            potrzebujesz aktualizacji, skontaktuj się ze szkołą za pomocą modułu wiadomości albo
-            mailowo:{' '}
+            Jeśli potrzebujesz aktualizacji danych, skontaktuj się ze szkołą za pomocą modułu
+            wiadomości albo mailowo:{' '}
             <a
               href="mailto:kontakt@harry-english.pl"
               className="font-medium underline-offset-2 hover:underline"

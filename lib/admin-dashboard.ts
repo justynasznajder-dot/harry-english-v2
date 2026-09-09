@@ -706,6 +706,13 @@ export type GroupRosterChild = {
   childName: string;
   /** Rok urodzenia (YYYY) albo null. */
   birthYear: string | null;
+  /**
+   * Podgląd etapu powiadomienia:
+   * signed — umowa podpisana;
+   * notified — mail z grupą/terminem wysłany (lub tryb bez umowy zakończony);
+   * pending — w grupie, jeszcze bez maila o terminie.
+   */
+  notifyStatus: "signed" | "notified" | "pending";
 };
 
 export type GroupRosterRow = {
@@ -716,6 +723,44 @@ export type GroupRosterRow = {
   teacherName: string;
   children: GroupRosterChild[];
 };
+
+function resolveRosterNotifyStatus(input: {
+  accessLevel: string | null;
+  enrollmentStatus: string | null;
+  proposedAt: Date | string | null;
+  hasSignedContract: boolean;
+}): GroupRosterChild["notifyStatus"] {
+  const access = String(input.accessLevel ?? "")
+    .trim()
+    .toUpperCase();
+  const er = String(input.enrollmentStatus ?? "")
+    .trim()
+    .toUpperCase();
+
+  if (input.hasSignedContract || access === "SIGNED" || er === "SIGNED") {
+    return "signed";
+  }
+
+  // Mail z detalami / dalszy flow umowy, albo tryb bez umowy domknięty po mailu.
+  if (
+    input.proposedAt != null ||
+    er === "PROPOSED" ||
+    er === "ACCEPTED" ||
+    er === "AWAITING_CONTRACT" ||
+    er === "CONTRACT_READY" ||
+    er === "NEGOTIATING" ||
+    er === "COMPLETED" ||
+    access === "PROPOSED" ||
+    access === "ACCEPTED" ||
+    access === "AWAITING_CONTRACT" ||
+    access === "CONTRACT_READY" ||
+    access === "COMPLETED"
+  ) {
+    return "notified";
+  }
+
+  return "pending";
+}
 
 export async function fetchGroupsRoster(schoolId: string): Promise<GroupRosterRow[]> {
   const res = await queryDb<{
@@ -728,6 +773,10 @@ export async function fetchGroupsRoster(schoolId: string): Promise<GroupRosterRo
     child_first_name: string | null;
     child_last_name: string | null;
     child_birth_year: string | null;
+    child_access_level: string | null;
+    enrollment_status: string | null;
+    proposed_at: Date | string | null;
+    has_signed_contract: boolean;
   }>(
     `SELECT
        g.id AS group_id,
@@ -744,7 +793,23 @@ export async function fetchGroupsRoster(schoolId: string): Promise<GroupRosterRo
        CASE
          WHEN c.birth_date IS NULL THEN NULL
          ELSE TO_CHAR(c.birth_date, 'YYYY')
-       END AS child_birth_year
+       END AS child_birth_year,
+       c.access_level::text AS child_access_level,
+       er.status::text AS enrollment_status,
+       er.proposed_at,
+       EXISTS (
+         SELECT 1
+         FROM contracts ct
+         WHERE ct.school_id = g.school_id
+           AND UPPER(BTRIM(COALESCE(ct.status::text, ''))) = 'SIGNED'
+           AND (
+             ct.child_id = c.id
+             OR EXISTS (
+               SELECT 1 FROM contract_children cc
+               WHERE cc.contract_id = ct.id AND cc.child_id = c.id
+             )
+           )
+       ) AS has_signed_contract
      FROM groups g
      LEFT JOIN locations loc ON loc.id = g.location_id
      LEFT JOIN users t ON t.id = g.teacher_id
@@ -756,6 +821,7 @@ export async function fetchGroupsRoster(schoolId: string): Promise<GroupRosterRo
         WHERE sy.id = gs.school_year_id AND sy.active = TRUE
       )
      LEFT JOIN children c ON c.id = gs.child_id
+     LEFT JOIN enrollment_requests er ON er.id = c.enrollment_request_id
      WHERE g.school_id = $1 AND g.active = TRUE
      ORDER BY loc.name NULLS LAST, g.name, c.last_name NULLS LAST, c.first_name NULLS LAST`,
     [schoolId]
@@ -783,6 +849,12 @@ export async function fetchGroupsRoster(schoolId: string): Promise<GroupRosterRo
         childId: row.child_id,
         childName,
         birthYear: row.child_birth_year ? String(row.child_birth_year) : null,
+        notifyStatus: resolveRosterNotifyStatus({
+          accessLevel: row.child_access_level,
+          enrollmentStatus: row.enrollment_status,
+          proposedAt: row.proposed_at,
+          hasSignedContract: Boolean(row.has_signed_contract),
+        }),
       });
     }
   }

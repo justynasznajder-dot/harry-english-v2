@@ -1,4 +1,3 @@
-import { queryDb } from "@/lib/db";
 import {
   classifyLocationForGroupLevel,
   detectLevelFromGroupName,
@@ -72,61 +71,64 @@ export function holidayAudienceLabel(scope: HolidayCalendarScope): string | null
   }
 }
 
-export function isFullHolidayScope(scope: HolidayCalendarScope): boolean {
-  return scope === "all";
+/**
+ * Etykieta „Dotyczy: …” na liście dni wolnych w panelu admina.
+ * Porównuje wybrane grupy z aktywnymi grupami szkoły (przedszkole / szkoła).
+ */
+export function formatHolidayAppliesToLabel(opts: {
+  appliesToAllGroups: boolean;
+  groupIds: string[];
+  activeGroups: Array<{ id: string; facilityKind: HolidayFacilityKind }>;
+}): string {
+  const groupIds = (opts.groupIds ?? []).filter(Boolean);
+  if (opts.appliesToAllGroups || groupIds.length === 0) {
+    return "Dotyczy: wszyscy";
+  }
+
+  const selected = new Set(groupIds);
+  const schoolGroups = opts.activeGroups.filter((g) => g.facilityKind === "school");
+  const preschoolGroups = opts.activeGroups.filter((g) => g.facilityKind === "preschool");
+
+  const selectedSchoolCount = schoolGroups.filter((g) => selected.has(g.id)).length;
+  const selectedPreschoolCount = preschoolGroups.filter((g) => selected.has(g.id)).length;
+  const hasSchool = selectedSchoolCount > 0;
+  const hasPreschool = selectedPreschoolCount > 0;
+  const allSchools =
+    schoolGroups.length > 0 && selectedSchoolCount === schoolGroups.length;
+  const allPreschools =
+    preschoolGroups.length > 0 && selectedPreschoolCount === preschoolGroups.length;
+
+  const knownIds = new Set(
+    [...schoolGroups, ...preschoolGroups].map((g) => g.id),
+  );
+  const onlyKnownSelected = groupIds.every((id) => knownIds.has(id));
+
+  if (onlyKnownSelected && allSchools && allPreschools) {
+    return "Dotyczy: wszyscy";
+  }
+  if (onlyKnownSelected && allSchools && !hasPreschool) {
+    return "Dotyczy: Wszystkie grupy Szkolne";
+  }
+  if (onlyKnownSelected && allPreschools && !hasSchool) {
+    return "Dotyczy: Wszystkie grupy przedszkolne";
+  }
+
+  if (hasSchool && hasPreschool) {
+    return "Dotyczy: wybrane grupy szkolne/przedszkolne";
+  }
+  if (hasSchool) {
+    return allSchools
+      ? "Dotyczy: Wszystkie grupy Szkolne"
+      : "Dotyczy: wybrane grupy szkolne";
+  }
+  if (hasPreschool) {
+    return allPreschools
+      ? "Dotyczy: Wszystkie grupy przedszkolne"
+      : "Dotyczy: wybrane grupy przedszkolne";
+  }
+  return "Dotyczy: wybrane grupy";
 }
 
-/**
- * Rozszerza wybrane grupy o wszystkie aktywne grupy szkoły o tych samych
- * rodzajach placówki (przedszkole / szkoła). Dzięki temu „dzień wolny dla szkół”
- * obejmuje też grupy pominięte w UI (np. nowo dodane).
- */
-export async function expandHolidayGroupIdsByFacilityKinds(
-  schoolId: string,
-  selectedGroupIds: string[],
-): Promise<string[]> {
-  const selected = [
-    ...new Set(selectedGroupIds.filter((id) => typeof id === "string" && id.trim())),
-  ];
-  if (selected.length === 0) return [];
-
-  const groupsRes = await queryDb<{
-    id: string;
-    name: string;
-    level: string | null;
-    location_id: string | null;
-    location_facility: string | null;
-    location_name: string | null;
-    location_is_special: boolean | null;
-  }>(
-    `SELECT g.id, g.name, g.level, g.location_id,
-            loc.facility AS location_facility,
-            loc.name AS location_name,
-            loc.is_special AS location_is_special
-     FROM groups g
-     LEFT JOIN locations loc ON loc.id = g.location_id
-     WHERE g.school_id = $1
-       AND g.deleted_at IS NULL
-       AND g.active = TRUE`,
-    [schoolId],
-  );
-
-  const byId = new Map(groupsRes.rows.map((g) => [g.id, g]));
-  const kinds = new Set<"preschool" | "school">();
-  for (const id of selected) {
-    const g = byId.get(id);
-    if (!g) continue;
-    const kind = classifyGroupFacilityKindForHoliday(g);
-    if (kind === "preschool" || kind === "school") kinds.add(kind);
-  }
-  if (kinds.size === 0) return selected;
-
-  const expanded = groupsRes.rows
-    .filter((g) => {
-      const kind = classifyGroupFacilityKindForHoliday(g);
-      return kind === "preschool" || kind === "school" ? kinds.has(kind) : selected.includes(g.id);
-    })
-    .map((g) => g.id);
-
-  return [...new Set([...selected, ...expanded])];
+export function isFullHolidayScope(scope: HolidayCalendarScope): boolean {
+  return scope === "all";
 }

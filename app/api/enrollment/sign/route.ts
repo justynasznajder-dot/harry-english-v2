@@ -241,9 +241,9 @@ export async function POST(request: NextRequest) {
 
       await queryDb(
         `UPDATE contract_children
-         SET attachment_1_html = $2, attachment_2_html = $3
+         SET attachment_1_html = $2, attachment_2_html = $3, image_consent = $5
          WHERE contract_id = $1 AND child_id = $4`,
-        [contract.id, signedAttachment1, signedAttachment2, row.child_id]
+        [contract.id, signedAttachment1, signedAttachment2, row.child_id, imageConsent]
       );
     }
 
