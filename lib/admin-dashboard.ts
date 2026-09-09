@@ -2,6 +2,7 @@ import { queryDb } from "@/lib/db";
 import { parsePriceDecimal } from "@/lib/lesson-pricing";
 import { formatRenewalStatusLabel } from "@/lib/renewal-status";
 import { BASE_TARGET_LESSONS_PER_YEAR } from "@/lib/lessons-per-week";
+import { resolveBillingTypeFromProfile } from "@/lib/parent-contract-profile";
 import {
   SCHOOL_TIMEZONE,
   addDaysYmd,
@@ -424,6 +425,76 @@ export async function countPendingEnrollments(schoolId: string | null): Promise<
   return Number(res.rows[0]?.n ?? 0);
 }
 
+/** Liczba uczniów w „Status zapisów” (ten sam filtr co lista pipeline). */
+export async function countStudentPipeline(schoolId: string): Promise<number> {
+  const res = await queryDb<{ n: string }>(
+    `SELECT COUNT(*)::text AS n
+     FROM enrollment_requests er
+     LEFT JOIN users u
+       ON (
+         u.id = NULLIF(BTRIM(er.user_id), '')
+         OR (
+           u.school_id = er.school_id
+           AND LOWER(u.email::text) = LOWER(er.parent_email::text)
+         )
+       )
+     LEFT JOIN children c
+       ON c.parent_id = COALESCE(NULLIF(BTRIM(er.user_id), ''), u.id)
+      AND c.school_id = er.school_id
+      AND c.first_name = er.child_first_name
+      AND c.last_name = er.child_last_name
+     WHERE er.school_id = $1
+       AND UPPER(BTRIM(COALESCE(er.status::text, ''))) NOT IN ('REJECTED')
+       AND COALESCE(c.first_name, er.child_first_name, '') <> ''
+       AND COALESCE(c.last_name, er.child_last_name, '') <> ''
+       AND (
+         COALESCE(u.id, NULLIF(BTRIM(er.user_id), '')) IS NOT NULL
+         OR NULLIF(BTRIM(COALESCE(er.parent_email::text, '')), '') IS NOT NULL
+       )`,
+    [schoolId]
+  );
+  return Number(res.rows[0]?.n ?? 0);
+}
+
+/** Liczba podpisanych umów w danym roku szkolnym. */
+export async function countSignedContracts(
+  schoolId: string,
+  schoolYearId: string
+): Promise<number> {
+  const res = await queryDb<{ n: string }>(
+    `SELECT COUNT(*)::text AS n
+     FROM contract_children cc
+     JOIN contracts ct ON ct.id = cc.contract_id AND ct.school_id = cc.school_id
+     WHERE cc.school_id = $1
+       AND ct.school_year_id = $2
+       AND UPPER(BTRIM(COALESCE(ct.status::text, ''))) = 'SIGNED'`,
+    [schoolId, schoolYearId]
+  );
+  return Number(res.rows[0]?.n ?? 0);
+}
+
+/** Liczba odnowień (opcjonalnie filtr sezonu — jak lista Odnowienia). */
+export async function countRenewals(
+  schoolId: string,
+  season?: string | null
+): Promise<number> {
+  const params: unknown[] = [schoolId];
+  let seasonClause = "";
+  const seasonTrim = season?.trim();
+  if (seasonTrim) {
+    params.push(seasonTrim);
+    seasonClause = ` AND r.season = $2`;
+  }
+  const res = await queryDb<{ n: string }>(
+    `SELECT COUNT(*)::text AS n
+     FROM renewals r
+     WHERE r.school_id = $1
+       ${seasonClause}`,
+    params
+  );
+  return Number(res.rows[0]?.n ?? 0);
+}
+
 export type PipelineRow = {
   childId: string;
   /** Prawdziwy rekord w `children` — null gdy jest tylko zgłoszenie. */
@@ -620,6 +691,8 @@ export type SignedContractConsentRow = {
   paymentType: string | null;
   amount: string | null;
   signedAt: string | null;
+  /** Typ faktury rodzica: firma (NIP/nazwa) albo osoba prywatna. */
+  billingType: "company" | "private";
 };
 
 /**
@@ -659,6 +732,8 @@ export async function fetchSignedContractConsents(
     payment_type: string | null;
     amount: string | null;
     signed_at: string | null;
+    company_name: string | null;
+    nip: string | null;
   }>(
     `SELECT
        ct.id AS contract_id,
@@ -672,11 +747,14 @@ export async function fetchSignedContractConsents(
        cc.image_consent,
        ct.payment_type,
        ct.amount::text AS amount,
-       ct.signed_at::text AS signed_at
+       ct.signed_at::text AS signed_at,
+       pp.company_name,
+       pp.nip
      FROM contract_children cc
      JOIN contracts ct ON ct.id = cc.contract_id AND ct.school_id = cc.school_id
      JOIN children ch ON ch.id = cc.child_id
      LEFT JOIN users u ON u.id = ct.parent_id
+     LEFT JOIN parent_profiles pp ON pp.user_id = ct.parent_id
      LEFT JOIN groups g ON g.id = COALESCE(cc.group_id, ct.group_id)
      LEFT JOIN locations loc ON loc.id = g.location_id
      WHERE cc.school_id = $1
@@ -699,6 +777,11 @@ export async function fetchSignedContractConsents(
     paymentType: row.payment_type,
     amount: row.amount,
     signedAt: row.signed_at,
+    billingType: resolveBillingTypeFromProfile({
+      company_name: row.company_name,
+      nip: row.nip,
+      pesel: null,
+    }),
   }));
 }
 

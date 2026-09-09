@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { countRenewals } from "@/lib/admin-dashboard";
 import { POLISH_DAY_FROM_ST_SQL, queryDb } from "@/lib/db";
 import { requireAdminRenewalsContext } from "@/lib/admin-renewals-auth";
 import type { RenewalStatus } from "@/lib/renewal-status";
@@ -16,6 +17,7 @@ export async function GET(request: NextRequest) {
 
     const statusFilter = request.nextUrl.searchParams.get("status")?.trim().toUpperCase() ?? "";
     const seasonFilter = request.nextUrl.searchParams.get("season")?.trim() ?? "";
+    const countOnly = request.nextUrl.searchParams.get("countOnly") === "1";
 
     const [schoolRow, plannedNextYear, activeSchoolYear] = await Promise.all([
       queryDb<{ renewals_open: boolean; renewals_season: string | null }>(
@@ -27,6 +29,13 @@ export async function GET(request: NextRequest) {
     ]);
 
     const targetSeason = plannedNextYear?.name ?? "";
+
+    if (countOnly) {
+      const season = seasonFilter || targetSeason || null;
+      const count = await countRenewals(schoolId, season);
+      return NextResponse.json({ count });
+    }
+
     const params: unknown[] = [schoolId];
     let extraWhere = "";
     if (targetSeason && !seasonFilter) {

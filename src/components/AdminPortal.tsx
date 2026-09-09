@@ -15,6 +15,7 @@ import type { ComplimentaryParentRow, EnrollmentGroupRow, EnrollmentParentRow } 
 import MessagesPanel from '@/src/components/messages/MessagesPanel';
 import MessagesTabLabel from '@/src/components/messages/MessagesTabLabel';
 import { useUnreadMessagesCount } from '@/src/components/messages/useUnreadMessagesCount';
+import { useEnrollmentFlowTabCounts } from '@/src/components/admin/useEnrollmentFlowTabCounts';
 import { useOpenResignationsCount } from '@/src/components/admin/useOpenResignationsCount';
 import { usePendingEnrollmentsCount } from '@/src/components/admin/usePendingEnrollmentsCount';
 import {
@@ -37,6 +38,11 @@ import GroupNamingFields, {
 } from '@/src/components/admin/GroupNamingFields';
 import { formatHolidayAppliesToLabel } from '@/lib/holiday-calendar-scope';
 import { isInvoiceManualGenerateDisabled } from '@/lib/invoice-generate-guard';
+import {
+  downloadInvoicePreviewXlsx,
+  downloadLessonBillingXlsx,
+  type BillingSummaryExportLine,
+} from '@/lib/billing-summary-xlsx';
 
 type TabKey =
   | 'dashboard'
@@ -509,7 +515,6 @@ const enrollmentFlowTabs: Array<{ key: EnrollmentFlowSubTab; label: string }> = 
 const billingTabs: Array<{ key: BillingSubTab; label: string }> = [
   { key: 'summary', label: 'Zestawienie' },
   { key: 'invoices', label: 'Faktury' },
-  { key: 'settings', label: 'Ustawienia' },
 ];
 
 const billingSummaryKinds: Array<{ key: BillingSummaryKind; label: string }> = [
@@ -646,6 +651,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     useOpenResignationsCount();
   const { pendingCount: enrollmentsPendingCount, refresh: refreshEnrollmentsPendingCount } =
     usePendingEnrollmentsCount();
+  const { counts: enrollmentFlowTabCounts } = useEnrollmentFlowTabCounts(
+    activeTab === 'enrollments',
+  );
   const [organizationSubTab, setOrganizationSubTab] = useState<OrganizationSubTab>(
     initialGroupId ? 'groups' : 'schoolYear',
   );
@@ -906,6 +914,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   >({});
   const [lessonBillingBusyChildId, setLessonBillingBusyChildId] = useState<string | null>(null);
   const [lessonInvoicesGenerating, setLessonInvoicesGenerating] = useState(false);
+  const [billingSummaryExporting, setBillingSummaryExporting] = useState(false);
   const [organizeFilterTeacher, setOrganizeFilterTeacher] = useState('');
   const [groupLoading, setGroupLoading] = useState(false);
   const [initialGroupLoaded, setInitialGroupLoaded] = useState(false);
@@ -3126,10 +3135,41 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         ? 'border-[#0f6e56] bg-[#0f6e56] text-white shadow-sm'
         : 'border-emerald-100 bg-emerald-50/50 text-zinc-800 hover:border-emerald-200 hover:bg-emerald-50';
 
-    const enrollmentStatusChildrenCount = enrollmentParents.reduce(
-      (n, parent) => n + parent.children.length,
-      0,
-    );
+    const tabCount = (key: EnrollmentFlowSubTab): number => {
+      switch (key) {
+        case 'enrollment':
+          return enrollmentsPendingCount;
+        case 'renewals':
+          return enrollmentFlowTabCounts.renewals;
+        case 'enrollment-status':
+          return enrollmentFlowTabCounts.pipeline;
+        case 'signed-invoices':
+          return enrollmentFlowTabCounts.signedContracts;
+        case 'resignations':
+          return resignationsOpenCount;
+        default:
+          return 0;
+      }
+    };
+
+    const tabBadgeAria = (key: EnrollmentFlowSubTab, n: number): string => {
+      switch (key) {
+        case 'enrollment':
+          return n === 1 ? '1 nowe zgłoszenie' : `${n} nowych zgłoszeń`;
+        case 'renewals':
+          return n === 1 ? '1 odnowienie' : `${n} odnowień`;
+        case 'enrollment-status':
+          return n === 1 ? '1 uczeń w statusie zapisów' : `${n} uczniów w statusie zapisów`;
+        case 'signed-invoices':
+          return n === 1 ? '1 podpisana umowa' : `${n} podpisanych umów`;
+        case 'resignations':
+          return n === 1
+            ? '1 otwarte zgłoszenie rezygnacji'
+            : `${n} otwartych zgłoszeń rezygnacji`;
+        default:
+          return `${n}`;
+      }
+    };
 
     return (
       <div>
@@ -3141,31 +3181,12 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               onClick={() => setEnrollmentFlowSubTab(t.key)}
               className={`rounded-full border px-4 py-2.5 text-sm font-semibold transition ${tabBtn(enrollmentFlowSubTab === t.key)}`}
             >
-              {t.key === 'enrollment' ? (
-                <MessagesTabLabel
-                  label={t.label}
-                  unreadCount={enrollmentsPendingCount}
-                  isActive={enrollmentFlowSubTab === 'enrollment'}
-                  badgeAriaLabel={(n) =>
-                    n === 1 ? '1 nowe zgłoszenie' : `${n} nowych zgłoszeń`
-                  }
-                />
-              ) : t.key === 'enrollment-status' ? (
-                `${t.label} (${enrollmentStatusChildrenCount})`
-              ) : t.key === 'resignations' ? (
-                <MessagesTabLabel
-                  label={t.label}
-                  unreadCount={resignationsOpenCount}
-                  isActive={enrollmentFlowSubTab === 'resignations'}
-                  badgeAriaLabel={(n) =>
-                    n === 1
-                      ? '1 otwarte zgłoszenie rezygnacji'
-                      : `${n} otwartych zgłoszeń rezygnacji`
-                  }
-                />
-              ) : (
-                t.label
-              )}
+              <MessagesTabLabel
+                label={t.label}
+                unreadCount={tabCount(t.key)}
+                isActive={enrollmentFlowSubTab === t.key}
+                badgeAriaLabel={(n) => tabBadgeAria(t.key, n)}
+              />
             </button>
           ))}
         </div>
@@ -6933,6 +6954,91 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       </label>
     );
 
+    const flattenInvoicePreviewParents = (
+      parents: InvoicePreviewParent[],
+      held: boolean,
+    ): BillingSummaryExportLine[] =>
+      parents.flatMap((parent) => {
+        const parentName = `${parent.parentFirstName} ${parent.parentLastName}`.trim();
+        return parent.lines.map((line) => ({
+          parentName,
+          parentEmail: parent.parentEmail,
+          childName: line.childName,
+          amount: line.amount,
+          parentTotal: parent.totalAmount,
+          invoiceStatus: held
+            ? line.alreadyInvoiced
+              ? 'Wystawiona ręcznie'
+              : 'Wstrzymana'
+            : line.alreadyInvoiced
+              ? 'Wystawiona'
+              : 'Do wystawienia',
+        }));
+      });
+
+    const billingSummaryExportDisabled =
+      billingSummaryExporting ||
+      (billingSummaryKind === 'monthly' &&
+        (monthlyInvoicePreviewLoading ||
+          ((monthlyInvoicePreview?.parents.length ?? 0) === 0 &&
+            (monthlyInvoicePreview?.heldParents.length ?? 0) === 0))) ||
+      (billingSummaryKind === 'yearly' &&
+        (yearlyInvoicePreviewLoading ||
+          (yearlyInvoicePreview?.parents.length ?? 0) === 0)) ||
+      (billingSummaryKind === 'per_lesson' &&
+        (lessonBillingLoading || lessonBillingRows.length === 0));
+
+    const exportBillingSummaryXlsx = async () => {
+      if (billingSummaryExportDisabled) return;
+      setBillingSummaryExporting(true);
+      try {
+        if (billingSummaryKind === 'monthly') {
+          const lines = [
+            ...flattenInvoicePreviewParents(monthlyInvoicePreview?.parents ?? [], false),
+            ...flattenInvoicePreviewParents(monthlyInvoicePreview?.heldParents ?? [], true),
+          ];
+          await downloadInvoicePreviewXlsx({
+            kindLabel: 'Ratalne',
+            periodMonth: monthlyInvoiceMonth,
+            lines,
+          });
+        } else if (billingSummaryKind === 'yearly') {
+          await downloadInvoicePreviewXlsx({
+            kindLabel: 'Płatności jednorazowe',
+            periodMonth: monthlyInvoiceMonth,
+            lines: flattenInvoicePreviewParents(yearlyInvoicePreview?.parents ?? [], false),
+          });
+        } else {
+          await downloadLessonBillingXlsx({
+            periodMonth: lessonBillingMonth,
+            rows: lessonBillingRows.map((row) => {
+              const draft = lessonBillingDrafts[row.childId];
+              return {
+                childName: `${row.firstName} ${row.lastName}`.trim(),
+                parentEmail: row.parentEmail,
+                lessonUnitPrice:
+                  row.lessonUnitPrice != null ? `${row.lessonUnitPrice} PLN` : null,
+                present: row.attendanceSummary.present,
+                absent: row.attendanceSummary.absent,
+                lessonsCount:
+                  draft?.lessonsCount ||
+                  (row.billing?.lessonsCount != null ? String(row.billing.lessonsCount) : ''),
+                amount: draft?.amount || row.billing?.amount || '',
+                status: row.billing?.status ?? '—',
+              };
+            }),
+          });
+        }
+      } catch (e) {
+        pushToast(
+          'error',
+          e instanceof Error ? e.message : 'Nie udało się wygenerować pliku Excel',
+        );
+      } finally {
+        setBillingSummaryExporting(false);
+      }
+    };
+
     const renderPreviewTable = (
       parents: InvoicePreviewParent[],
       emptyMessage: string,
@@ -7037,8 +7143,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         <div>
           <h2 className="text-lg font-semibold text-zinc-900">Rozliczenia</h2>
           <p className="text-sm text-zinc-600">
-            Zestawienie (ratalne, jednorazowe i za zajęcia), wystawione faktury oraz ustawienia
-            generowania.
+            Zestawienie (ratalne, jednorazowe i za zajęcia) oraz wystawione faktury.
           </p>
         </div>
 
@@ -7068,19 +7173,29 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               {renderMonthPicker()}
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              {billingSummaryKinds.map((t) => (
-                <button
-                  key={t.key}
-                  type="button"
-                  onClick={() => setBillingSummaryKind(t.key)}
-                  className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${tabBtn(
-                    billingSummaryKind === t.key,
-                  )}`}
-                >
-                  {t.label}
-                </button>
-              ))}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap gap-2">
+                {billingSummaryKinds.map((t) => (
+                  <button
+                    key={t.key}
+                    type="button"
+                    onClick={() => setBillingSummaryKind(t.key)}
+                    className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${tabBtn(
+                      billingSummaryKind === t.key,
+                    )}`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                disabled={billingSummaryExportDisabled}
+                onClick={() => void exportBillingSummaryXlsx()}
+                className="rounded-full border border-[#0f6e56] bg-white px-4 py-2 text-sm font-semibold text-[#0f6e56] transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {billingSummaryExporting ? 'Generowanie…' : 'Pobierz Excel'}
+              </button>
             </div>
 
             {billingSummaryKind === 'monthly' ? (

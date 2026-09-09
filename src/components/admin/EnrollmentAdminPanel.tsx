@@ -1494,10 +1494,11 @@ export default function EnrollmentAdminPanel({
                                 <span>
                                   {child.firstName} {child.lastName}
                                 </span>
-                                {childHasMissingEnrollmentPrices(child) ? (
+                                {childHasMissingEnrollmentPrices(child) &&
+                                !child.proposedGroupId ? (
                                   <span
                                     className="inline-flex rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800"
-                                    title="Brak uzupełnionych cen"
+                                    title="Brak cen i brak przypisania do grupy"
                                   >
                                     NEW
                                   </span>
@@ -1828,6 +1829,9 @@ export default function EnrollmentAdminPanel({
                       child.status === 'ACCEPTED' ||
                       child.status === 'AWAITING_CONTRACT' ||
                       child.status === 'CONTRACT_READY';
+                    const pricesLockedReadOnly =
+                      child.status === 'SIGNED' || child.status === 'COMPLETED';
+                    const showPriceFields = pricesEditable || pricesLockedReadOnly;
                     const listBadge = resolveEnrollmentListBadge(child);
                     const proposedGroup =
                       child.proposedGroupId
@@ -1998,7 +2002,7 @@ export default function EnrollmentAdminPanel({
                             </div>
                           </div>
                         </div>
-                        {pricesEditable && (
+                        {showPriceFields && (
                             <>
                               <div className="space-y-2">
                                 {proposalAllowed &&
@@ -2109,7 +2113,13 @@ export default function EnrollmentAdminPanel({
                                     </>
                                   );
                                 })()}
-                                {!proposalAllowed && pricesEditable ? (
+                                {pricesLockedReadOnly ? (
+                                  <p className="text-xs text-zinc-500">
+                                    {child.status === 'SIGNED'
+                                      ? 'Umowa podpisana — stawki i rabat tylko do podglądu, bez edycji.'
+                                      : 'Zapis zakończony — stawki i rabat tylko do podglądu, bez edycji.'}
+                                  </p>
+                                ) : !proposalAllowed && pricesEditable ? (
                                   <p className="text-xs text-zinc-500">
                                     Możesz skorygować stawki i zapisać bez ponownej wysyłki e-maila.
                                   </p>
@@ -2124,7 +2134,7 @@ export default function EnrollmentAdminPanel({
                                       type="text"
                                       inputMode="decimal"
                                       required
-                                      className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
+                                      className={`w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:opacity-70`}
                                       disabled={!pricesEditable}
                                       placeholder="np. 1200"
                                       value={
@@ -2151,7 +2161,7 @@ export default function EnrollmentAdminPanel({
                                       type="text"
                                       inputMode="decimal"
                                       required
-                                      className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
+                                      className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:opacity-70"
                                       disabled={!pricesEditable}
                                       placeholder="np. 150"
                                       value={
@@ -2178,7 +2188,7 @@ export default function EnrollmentAdminPanel({
                                       type="text"
                                       inputMode="decimal"
                                       required={!proposalParentIsComplimentary}
-                                      className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
+                                      className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:opacity-70"
                                       disabled={!pricesEditable}
                                       placeholder={
                                         proposalParentIsComplimentary ? 'opcjonalnie' : 'np. 50'
@@ -2203,7 +2213,7 @@ export default function EnrollmentAdminPanel({
                                     <input
                                       type="text"
                                       inputMode="numeric"
-                                      className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm"
+                                      className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:opacity-70"
                                       disabled={!pricesEditable}
                                       placeholder="0–100"
                                       value={

@@ -17,9 +17,11 @@ type SignedContractRow = {
   paymentType: string | null;
   amount: string | null;
   signedAt: string | null;
+  billingType: 'company' | 'private';
 };
 
 type ImageConsentFilter = '' | 'yes' | 'no' | 'unknown';
+type BillingTypeFilter = '' | 'company' | 'private';
 
 function consentLabel(value: boolean | null): string {
   if (value === true) return 'Tak';
@@ -58,6 +60,7 @@ export default function SignedContractsPanel() {
   const [locationFilter, setLocationFilter] = useState('');
   const [groupFilter, setGroupFilter] = useState('');
   const [imageConsentFilter, setImageConsentFilter] = useState<ImageConsentFilter>('');
+  const [billingTypeFilter, setBillingTypeFilter] = useState<BillingTypeFilter>('');
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -146,9 +149,11 @@ export default function SignedContractsPanel() {
       if (imageConsentFilter === 'no' && row.imageConsent !== false) return false;
       if (imageConsentFilter === 'unknown' && row.imageConsent != null) return false;
 
+      if (billingTypeFilter && row.billingType !== billingTypeFilter) return false;
+
       return true;
     });
-  }, [rows, locationFilter, groupFilter, imageConsentFilter]);
+  }, [rows, locationFilter, groupFilter, imageConsentFilter, billingTypeFilter]);
 
   const exportXlsx = useCallback(async () => {
     if (filteredRows.length === 0 || exporting) return;
@@ -184,11 +189,21 @@ export default function SignedContractsPanel() {
 
   return (
     <section className="space-y-4 rounded-2xl border border-emerald-100 bg-white p-4">
-      <header className="space-y-1">
-        <h2 className="text-lg font-semibold text-zinc-900">Umowy podpisane</h2>
-        <p className="text-sm text-zinc-600">
-          Dzieci z podpisaną umową w aktywnym roku — zgody, sposób płatności i kwota z umowy.
-        </p>
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1">
+          <h2 className="text-lg font-semibold text-zinc-900">Umowy podpisane</h2>
+          <p className="text-sm text-zinc-600">
+            Dzieci z podpisaną umową w aktywnym roku — zgody, sposób płatności i kwota z umowy.
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={loading || exporting || filteredRows.length === 0}
+          onClick={() => void exportXlsx()}
+          className="shrink-0 rounded-full border border-[#0f6e56] bg-white px-4 py-2.5 text-sm font-semibold text-[#0f6e56] transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {exporting ? 'Generowanie…' : 'Pobierz Excel'}
+        </button>
       </header>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -243,14 +258,16 @@ export default function SignedContractsPanel() {
           <option value="no">Nie</option>
           <option value="unknown">Brak danych</option>
         </select>
-        <button
-          type="button"
-          disabled={loading || exporting || filteredRows.length === 0}
-          onClick={() => void exportXlsx()}
-          className="rounded-full border border-[#0f6e56] bg-white px-4 py-2.5 text-sm font-semibold text-[#0f6e56] transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+        <select
+          value={billingTypeFilter}
+          onChange={(e) => setBillingTypeFilter(e.target.value as BillingTypeFilter)}
+          className={selectClass}
+          aria-label="Filtr typu umowy"
         >
-          {exporting ? 'Generowanie…' : 'Pobierz Excel'}
-        </button>
+          <option value="">Typ umowy: wszystkie</option>
+          <option value="company">Na firmę</option>
+          <option value="private">Na os. prywatną</option>
+        </select>
       </div>
 
       <p className="text-sm text-zinc-600">Razem {countLabel}</p>

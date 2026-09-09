@@ -24,7 +24,7 @@ type PipelineRow = {
   groupName: string | null;
   billingStatus: string | null;
   renewalStatus: string | null;
-  /** Brak pełnego zestawu stawek — pokaż NEW przy nazwisku. */
+  /** Brak pełnego zestawu stawek + brak grupy — pokaż NEW przy nazwisku. */
   hasMissingPrices?: boolean;
 };
 
@@ -101,6 +101,7 @@ function PipelineTable({
         <tbody>
           {rows.map((row) => {
             const groupLabel = row.groupName || row.proposalGroup;
+            const showNewBadge = Boolean(row.hasMissingPrices) && !groupLabel;
             const current = resolveStudentListPipelineStage({
               enrollmentStatus: row.enrollmentStatus,
               hasGroup: Boolean(groupLabel),
@@ -130,10 +131,10 @@ function PipelineTable({
                     ) : (
                       row.childName
                     )}
-                    {row.hasMissingPrices ? (
+                    {showNewBadge ? (
                       <span
                         className="inline-flex rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800"
-                        title="Brak uzupełnionych cen"
+                        title="Brak cen i brak przypisania do grupy"
                       >
                         NEW
                       </span>

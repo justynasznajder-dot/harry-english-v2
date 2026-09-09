@@ -138,6 +138,22 @@ export async function GET(
 
     const payment = paymentRes.rows[0] ?? null;
 
+    const complimentaryRes = await queryDb<{ ok: boolean }>(
+      `SELECT TRUE AS ok
+       FROM school_complimentary_parents scp
+       WHERE scp.school_id = $1
+         AND (
+           scp.parent_id = $2
+           OR (
+             NULLIF(BTRIM(scp.parent_email), '') IS NOT NULL
+             AND LOWER(BTRIM(scp.parent_email)) = LOWER(BTRIM($3::text))
+           )
+         )
+       LIMIT 1`,
+      [ctx.schoolId, child.parent_id, child.parent_email]
+    );
+    const complimentaryAccess = Boolean(complimentaryRes.rows[0]?.ok);
+
     return NextResponse.json({
       child,
       membership: membershipRes.rows[0] ?? null,
@@ -149,6 +165,7 @@ export async function GET(
             signed_at: payment.signed_at,
           }
         : null,
+      complimentaryAccess,
     });
   } catch (error) {
     console.error("Get child detail error:", error);

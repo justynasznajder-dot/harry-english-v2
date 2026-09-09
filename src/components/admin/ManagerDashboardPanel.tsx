@@ -174,7 +174,8 @@ export default function ManagerDashboardPanel({
   const [groupRoster, setGroupRoster] = useState<GroupRosterRow[]>([]);
   const [rosterLocation, setRosterLocation] = useState('');
   const [rosterTeacher, setRosterTeacher] = useState('');
-  const [rosterBirthYear, setRosterBirthYear] = useState('');
+  const [rosterLevel, setRosterLevel] = useState('');
+  const [rosterChildSearch, setRosterChildSearch] = useState('');
 
   const loadDashboard = useCallback(async () => {
     setLoading(true);
@@ -210,41 +211,49 @@ export default function ManagerDashboardPanel({
   const rosterFilterOptions = useMemo(() => {
     const locations = new Set<string>();
     const teachers = new Set<string>();
-    const years = new Set<string>();
+    const levels = new Set<string>();
     for (const g of groupRoster) {
       if (g.locationName && g.locationName !== '—') locations.add(g.locationName);
       if (g.teacherName && g.teacherName !== '—') teachers.add(g.teacherName);
-      for (const c of g.children) {
-        if (c.birthYear) years.add(c.birthYear);
-      }
+      if (g.level?.trim()) levels.add(g.level.trim());
     }
     return {
       locations: [...locations].sort((a, b) => a.localeCompare(b, 'pl')),
       teachers: [...teachers].sort((a, b) => a.localeCompare(b, 'pl')),
-      years: [...years].sort((a, b) => a.localeCompare(b)),
+      levels: [...levels].sort((a, b) => a.localeCompare(b, 'pl', { numeric: true })),
     };
   }, [groupRoster]);
 
   const filteredGroupRoster = useMemo(() => {
+    const childQuery = rosterChildSearch.trim().toLocaleLowerCase('pl');
     return groupRoster
       .filter((g) => {
         if (rosterLocation && g.locationName !== rosterLocation) return false;
         if (rosterTeacher && g.teacherName !== rosterTeacher) return false;
-        if (rosterBirthYear) {
-          return g.children.some((c) => c.birthYear === rosterBirthYear);
+        if (rosterLevel && (g.level?.trim() ?? '') !== rosterLevel) return false;
+        if (
+          childQuery &&
+          !g.children.some((c) => c.childName.toLocaleLowerCase('pl').includes(childQuery))
+        ) {
+          return false;
         }
         return true;
       })
       .map((g) => {
-        if (!rosterBirthYear) return g;
+        if (!childQuery) return g;
         return {
           ...g,
-          children: g.children.filter((c) => c.birthYear === rosterBirthYear),
+          children: g.children.filter((c) =>
+            c.childName.toLocaleLowerCase('pl').includes(childQuery),
+          ),
         };
-      });
-  }, [groupRoster, rosterLocation, rosterTeacher, rosterBirthYear]);
+      })
+      .filter((g) => !childQuery || g.children.length > 0);
+  }, [groupRoster, rosterLocation, rosterTeacher, rosterLevel, rosterChildSearch]);
 
-  const hasRosterFilters = Boolean(rosterLocation || rosterTeacher || rosterBirthYear);
+  const hasRosterFilters = Boolean(
+    rosterLocation || rosterTeacher || rosterLevel || rosterChildSearch.trim(),
+  );
 
   if (loading && !dashboard) {
     return (
@@ -443,6 +452,16 @@ export default function ManagerDashboardPanel({
           </span>
         </div>
         <div className="mb-3 flex flex-wrap items-end gap-3">
+          <label className="flex min-w-[200px] flex-1 flex-col gap-1 text-xs font-medium text-zinc-600">
+            Szukaj dziecka
+            <input
+              type="search"
+              value={rosterChildSearch}
+              onChange={(e) => setRosterChildSearch(e.target.value)}
+              placeholder="Imię lub nazwisko…"
+              className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none ring-[#0f6e56] placeholder:text-zinc-400 focus:ring-2"
+            />
+          </label>
           <label className="flex min-w-[160px] flex-col gap-1 text-xs font-medium text-zinc-600">
             Lokalizacja
             <select
@@ -474,16 +493,16 @@ export default function ManagerDashboardPanel({
             </select>
           </label>
           <label className="flex min-w-[120px] flex-col gap-1 text-xs font-medium text-zinc-600">
-            Rocznik
+            Poziom grupy
             <select
               className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-zinc-900"
-              value={rosterBirthYear}
-              onChange={(e) => setRosterBirthYear(e.target.value)}
+              value={rosterLevel}
+              onChange={(e) => setRosterLevel(e.target.value)}
             >
               <option value="">Wszystkie</option>
-              {rosterFilterOptions.years.map((y) => (
-                <option key={y} value={y}>
-                  {y}
+              {rosterFilterOptions.levels.map((level) => (
+                <option key={level} value={level}>
+                  {level}
                 </option>
               ))}
             </select>
@@ -495,7 +514,8 @@ export default function ManagerDashboardPanel({
               onClick={() => {
                 setRosterLocation('');
                 setRosterTeacher('');
-                setRosterBirthYear('');
+                setRosterLevel('');
+                setRosterChildSearch('');
               }}
             >
               Wyczyść filtry
@@ -506,7 +526,9 @@ export default function ManagerDashboardPanel({
           <p className="text-sm text-zinc-500">
             {groupRoster.length === 0
               ? 'Brak aktywnych grup.'
-              : 'Brak grup dla wybranych filtrów.'}
+              : rosterChildSearch.trim()
+                ? 'Brak dziecka o tym imieniu lub nazwisku.'
+                : 'Brak grup dla wybranych filtrów.'}
           </p>
         ) : (
           <div className="space-y-3">

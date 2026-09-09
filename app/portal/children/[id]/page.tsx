@@ -15,10 +15,6 @@ type ChildDetail = {
   active: boolean;
   confirmed: boolean;
   client_number: string | null;
-  lesson_unit_price: string | null;
-  monthly_unit_price: string | null;
-  yearly_unit_price: string | null;
-  discount_percent: string | null;
   parent_first_name: string;
   parent_last_name: string;
   parent_email: string;
@@ -29,9 +25,6 @@ type Membership = {
   id: string;
   group_id: string;
   group_name: string;
-  group_price_monthly: string | null;
-  group_price_yearly: string | null;
-  group_price_per_lesson: string | null;
   lessons_per_week: number | null;
   group_lessons_per_week: number | null;
 };
@@ -43,35 +36,17 @@ type PaymentInfo = {
   signed_at: string | null;
 };
 
-function priceFromDb(value: string | null | undefined): string {
-  if (value == null || value === '') return '';
-  const n = Number(String(value).replace(',', '.'));
-  if (!Number.isFinite(n)) return '';
-  return String(n);
-}
-
-function formatGroupDefault(value: string | null | undefined): string {
-  const n = priceFromDb(value);
-  return n ? `${n} PLN` : 'brak';
-}
-
 export default function AdminChildProfilePage() {
   const params = useParams();
   const id = typeof params?.id === 'string' ? params.id : Array.isArray(params?.id) ? params.id[0] : '';
 
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const [child, setChild] = useState<ChildDetail | null>(null);
   const [membership, setMembership] = useState<Membership | null>(null);
   const [payment, setPayment] = useState<PaymentInfo | null>(null);
-
-  const [monthlyPrice, setMonthlyPrice] = useState('');
-  const [yearlyPrice, setYearlyPrice] = useState('');
-  const [lessonPrice, setLessonPrice] = useState('');
-  const [discountPercent, setDiscountPercent] = useState('');
+  const [complimentaryAccess, setComplimentaryAccess] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -83,21 +58,16 @@ export default function AdminChildProfilePage() {
       if (!res.ok) {
         throw new Error(data.message ?? 'Nie udało się wczytać dziecka');
       }
-      const c = data.child as ChildDetail;
-      const m = (data.membership as Membership | null) ?? null;
-      const p = (data.payment as PaymentInfo | null) ?? null;
-      setChild(c);
-      setMembership(m);
-      setPayment(p);
-      setMonthlyPrice(priceFromDb(c.monthly_unit_price));
-      setYearlyPrice(priceFromDb(c.yearly_unit_price));
-      setLessonPrice(priceFromDb(c.lesson_unit_price));
-      setDiscountPercent(priceFromDb(c.discount_percent));
+      setChild(data.child as ChildDetail);
+      setMembership((data.membership as Membership | null) ?? null);
+      setPayment((data.payment as PaymentInfo | null) ?? null);
+      setComplimentaryAccess(Boolean(data.complimentaryAccess));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Błąd ładowania');
       setChild(null);
       setMembership(null);
       setPayment(null);
+      setComplimentaryAccess(false);
     } finally {
       setLoading(false);
     }
@@ -106,40 +76,6 @@ export default function AdminChildProfilePage() {
   useEffect(() => {
     void load();
   }, [load]);
-
-  useEffect(() => {
-    if (!successMessage) return;
-    const timer = setTimeout(() => setSuccessMessage(null), 3000);
-    return () => clearTimeout(timer);
-  }, [successMessage]);
-
-  const handleSaveRates = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!child) return;
-    setSaving(true);
-    setError(null);
-    setSuccessMessage(null);
-    try {
-      const res = await fetch(`/api/admin/children/${child.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          monthlyUnitPrice: monthlyPrice.trim() || null,
-          yearlyUnitPrice: yearlyPrice.trim() || null,
-          lessonUnitPrice: lessonPrice.trim() || null,
-          discountPercent: discountPercent.trim() || null,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message ?? 'Nie udało się zapisać stawek');
-      setSuccessMessage('Stawki zapisane.');
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Błąd zapisu');
-    } finally {
-      setSaving(false);
-    }
-  };
 
   return (
     <PortalAppShell
@@ -159,9 +95,7 @@ export default function AdminChildProfilePage() {
 
         <header className="mb-6 rounded-2xl border border-emerald-900/30 bg-[#f8f6f3] px-5 py-4 shadow-lg">
           <h1 className="text-xl font-bold text-[#0f6e56] sm:text-2xl">Profil dziecka</h1>
-          <p className="mt-1 text-sm text-zinc-600">
-            Grupa, system płatności i indywidualne stawki.
-          </p>
+          <p className="mt-1 text-sm text-zinc-600">Grupa i system płatności.</p>
         </header>
 
         {loading ? (
@@ -175,11 +109,6 @@ export default function AdminChildProfilePage() {
             {error ? (
               <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
                 {error}
-              </div>
-            ) : null}
-            {successMessage ? (
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-                {successMessage}
               </div>
             ) : null}
 
@@ -274,79 +203,14 @@ export default function AdminChildProfilePage() {
                 <div>
                   <dt className="text-zinc-500">System płatności</dt>
                   <dd className="font-medium text-zinc-900">
-                    {payment?.payment_type
-                      ? paymentTypeShortLabel(payment.payment_type)
-                      : 'Brak podpisanej umowy'}
+                    {complimentaryAccess
+                      ? 'Tryb bez umowy'
+                      : payment?.payment_type
+                        ? paymentTypeShortLabel(payment.payment_type)
+                        : 'Brak podpisanej umowy'}
                   </dd>
                 </div>
               </dl>
-            </section>
-
-            <section className="rounded-2xl border border-emerald-100 bg-white p-5 shadow-sm sm:p-6">
-              <h2 className="text-lg font-semibold text-[#1e3a4c]">Stawki indywidualne</h2>
-              <form onSubmit={handleSaveRates} className="mt-4 space-y-4">
-                <p className="text-sm text-zinc-600">
-                  Nadpisanie należy do profilu dziecka (nie do grupy). Puste pole stawki = stawka
-                  domyślna grupy
-                  {membership
-                    ? `: ratalna ${formatGroupDefault(membership.group_price_monthly)}, jednorazowa ${formatGroupDefault(membership.group_price_yearly)}, za zajęcia ${formatGroupDefault(membership.group_price_per_lesson)}.`
-                    : ' (po przypisaniu do grupy).'}{' '}
-                  Puste % zniżki = brak zniżki.
-                </p>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  <label className="flex flex-col gap-1 text-sm text-zinc-700">
-                    Ratalna (PLN)
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      className="rounded-xl border border-emerald-200 px-3 py-2 text-zinc-900"
-                      value={monthlyPrice}
-                      onChange={(e) => setMonthlyPrice(e.target.value)}
-                      placeholder="Domyślna"
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1 text-sm text-zinc-700">
-                    Jednorazowa (PLN)
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      className="rounded-xl border border-emerald-200 px-3 py-2 text-zinc-900"
-                      value={yearlyPrice}
-                      onChange={(e) => setYearlyPrice(e.target.value)}
-                      placeholder="Domyślna"
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1 text-sm text-zinc-700">
-                    Za poj. zajęcia (PLN)
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      className="rounded-xl border border-emerald-200 px-3 py-2 text-zinc-900"
-                      value={lessonPrice}
-                      onChange={(e) => setLessonPrice(e.target.value)}
-                      placeholder="Domyślna"
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1 text-sm text-zinc-700">
-                    % zniżki
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      className="rounded-xl border border-emerald-200 px-3 py-2 text-zinc-900"
-                      value={discountPercent}
-                      onChange={(e) => setDiscountPercent(e.target.value)}
-                      placeholder="Brak"
-                    />
-                  </label>
-                </div>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="rounded-lg border border-zinc-800/40 bg-white px-3 py-1 text-[#1e3a4c] transition hover:border-[#0f6e56] hover:bg-emerald-50 hover:text-[#0f6e56] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {saving ? 'Zapisywanie…' : 'Zapisz stawki'}
-                </button>
-              </form>
             </section>
           </div>
         ) : null}
