@@ -578,11 +578,7 @@ export async function fetchStudentPipeline(
        )
        ${searchClause}
      ORDER BY
-       CASE
-         WHEN UPPER(BTRIM(COALESCE(er.status::text, c.access_level::text, 'NEW'))) = 'NEW'
-         THEN 0
-         ELSE 1
-       END,
+       er.created_at DESC NULLS LAST,
        COALESCE(c.last_name, er.child_last_name),
        COALESCE(c.first_name, er.child_first_name)`,
     params
