@@ -1,4 +1,5 @@
 import { queryDb } from "@/lib/db";
+import { parsePriceDecimal } from "@/lib/lesson-pricing";
 import { formatRenewalStatusLabel } from "@/lib/renewal-status";
 import { BASE_TARGET_LESSONS_PER_YEAR } from "@/lib/lessons-per-week";
 import {
@@ -437,6 +438,8 @@ export type PipelineRow = {
   groupName: string | null;
   billingStatus: string | null;
   renewalStatus: string | null;
+  /** Brak pełnego zestawu stawek (jednorazowa / ratalna / za zajęcia). */
+  hasMissingPrices: boolean;
 };
 
 /**
@@ -482,6 +485,9 @@ export async function fetchStudentPipeline(
     group_name: string | null;
     billing_status: string | null;
     renewal_status: string | null;
+    lesson_unit_price: string | null;
+    monthly_unit_price: string | null;
+    yearly_unit_price: string | null;
   }>(
     `SELECT
        COALESCE(c.id, er.id) AS child_id,
@@ -509,7 +515,10 @@ export async function fetchStudentPipeline(
        ct.status AS contract_status,
        cg.name AS group_name,
        lbp.status AS billing_status,
-       rn.status AS renewal_status
+       rn.status AS renewal_status,
+       COALESCE(er.lesson_unit_price, c.lesson_unit_price)::text AS lesson_unit_price,
+       COALESCE(er.monthly_unit_price, c.monthly_unit_price)::text AS monthly_unit_price,
+       COALESCE(er.yearly_unit_price, c.yearly_unit_price)::text AS yearly_unit_price
      FROM enrollment_requests er
      LEFT JOIN users u
        ON (
@@ -574,20 +583,27 @@ export async function fetchStudentPipeline(
     params
   );
 
-  return res.rows.map((row) => ({
-    childId: row.child_id,
-    childProfileId: row.child_profile_id,
-    childName: `${row.child_first} ${row.child_last}`.trim(),
-    parentId: row.parent_id,
-    parentName: `${row.parent_first} ${row.parent_last}`.trim(),
-    parentEmail: row.parent_email,
-    enrollmentStatus: row.access_level,
-    proposalGroup: row.proposal_group,
-    contractStatus: row.contract_status,
-    groupName: row.group_name,
-    billingStatus: row.billing_status,
-    renewalStatus: row.renewal_status,
-  }));
+  return res.rows.map((row) => {
+    const hasMissingPrices =
+      parsePriceDecimal(row.yearly_unit_price) == null ||
+      parsePriceDecimal(row.monthly_unit_price) == null ||
+      parsePriceDecimal(row.lesson_unit_price) == null;
+    return {
+      childId: row.child_id,
+      childProfileId: row.child_profile_id,
+      childName: `${row.child_first} ${row.child_last}`.trim(),
+      parentId: row.parent_id,
+      parentName: `${row.parent_first} ${row.parent_last}`.trim(),
+      parentEmail: row.parent_email,
+      enrollmentStatus: row.access_level,
+      proposalGroup: row.proposal_group,
+      contractStatus: row.contract_status,
+      groupName: row.group_name,
+      billingStatus: row.billing_status,
+      renewalStatus: row.renewal_status,
+      hasMissingPrices,
+    };
+  });
 }
 
 /** Wiersz listy „Umowy podpisane” — dzieci z podpisaną umową w aktywnym roku. */

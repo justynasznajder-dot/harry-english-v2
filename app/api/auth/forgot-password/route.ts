@@ -38,12 +38,11 @@ export async function POST(request: Request) {
       });
     }
 
-    // Wygeneruj token resetowania hasła
+    // Wygeneruj token resetowania hasła (ważność 1h ustawiana w SQL przy zapisie)
     const resetToken = crypto.randomBytes(32).toString('hex');
-    const resetTokenExpiry = new Date(Date.now() + 3600000); // 1 godzina
 
     // Zapisz nowy token (nadpisuje poprzedni) — każdy request generuje nowy, jednorazowy link
-    const tokenSaved = await setResetTokenByUserId(user.id, resetToken, resetTokenExpiry);
+    const tokenSaved = await setResetTokenByUserId(user.id, resetToken);
     if (!tokenSaved) {
       return NextResponse.json(
         { message: "Nie udało się wygenerować nowego linku resetowania hasła" },

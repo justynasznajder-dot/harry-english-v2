@@ -758,32 +758,33 @@ export async function canAccessSchoolAdminApis(userId: string): Promise<boolean>
 export async function setResetToken(
   email: string,
   token: string,
-  expiry: Date
+  _expiry?: Date
 ): Promise<void> {
   const tenant = getRegistrationSchoolId();
+  // Expiry w SQL (NOW()+1h) — unikamy rozjazdu UTC vs timestamp without time zone.
   await pool.query(
     `UPDATE users
-     SET reset_token = $1, reset_token_expiry = $2
-     WHERE LOWER(email::text) = LOWER($4::text)
+     SET reset_token = $1, reset_token_expiry = NOW() + interval '1 hour'
+     WHERE LOWER(email::text) = LOWER($3::text)
        AND (
-         school_id IS NOT DISTINCT FROM $3::text
+         school_id IS NOT DISTINCT FROM $2::text
          OR (role = 'ADMIN' AND school_id IS NULL)
        )`,
-    [token, expiry, tenant, email]
+    [token, tenant, email]
   );
 }
 
 export async function setResetTokenByUserId(
   userId: string,
   token: string,
-  expiry: Date
+  _expiry?: Date
 ): Promise<boolean> {
   const r = await pool.query(
     `UPDATE users
-     SET reset_token = $1, reset_token_expiry = $2
-     WHERE id = $3
+     SET reset_token = $1, reset_token_expiry = NOW() + interval '1 hour'
+     WHERE id = $2
      RETURNING id`,
-    [token, expiry, userId]
+    [token, userId]
   );
   return (r.rowCount ?? 0) > 0;
 }
@@ -798,12 +799,22 @@ export async function clearResetTokenByUserId(userId: string): Promise<void> {
   );
 }
 
+/**
+ * Token ważny gdy expiry > NOW().
+ * OR z AT TIME ZONE 'UTC': legacy tokeny zapisane z Date JS (UTC wall-clock
+ * w kolumnie timestamp without time zone) przy sesji DB w Europe/Warsaw.
+ */
+const RESET_TOKEN_STILL_VALID = `(
+  reset_token_expiry > NOW()
+  OR (reset_token_expiry AT TIME ZONE 'UTC') > NOW()
+)`;
+
 export async function getUserByResetToken(token: string): Promise<User | null> {
   const r = await pool.query<UserRow>(
     `SELECT * FROM users
      WHERE reset_token = $1
        AND reset_token_expiry IS NOT NULL
-       AND reset_token_expiry > NOW()
+       AND ${RESET_TOKEN_STILL_VALID}
      LIMIT 1`,
     [token]
   );
@@ -822,7 +833,7 @@ export async function resetPassword(
          must_change_password = FALSE
      WHERE reset_token = $2
        AND reset_token_expiry IS NOT NULL
-       AND reset_token_expiry > NOW()
+       AND ${RESET_TOKEN_STILL_VALID}
      RETURNING id`,
     [newPasswordHash, token]
   );

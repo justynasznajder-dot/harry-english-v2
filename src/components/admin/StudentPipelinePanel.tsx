@@ -24,6 +24,8 @@ type PipelineRow = {
   groupName: string | null;
   billingStatus: string | null;
   renewalStatus: string | null;
+  /** Brak pełnego zestawu stawek — pokaż NEW przy nazwisku. */
+  hasMissingPrices?: boolean;
 };
 
 const STAGE_ORDER: Record<StudentListPipelineStage, number> = {
@@ -117,16 +119,26 @@ function PipelineTable({
             return (
               <tr key={row.childId} className="border-t border-zinc-100">
                 <td className="px-2 py-2 font-medium">
-                  {row.childProfileId ? (
-                    <Link
-                      href={`/portal/children/${row.childProfileId}`}
-                      className="text-[#0f6e56] hover:underline"
-                    >
-                      {row.childName}
-                    </Link>
-                  ) : (
-                    row.childName
-                  )}
+                  <span className="inline-flex flex-wrap items-center gap-1.5">
+                    {row.childProfileId ? (
+                      <Link
+                        href={`/portal/children/${row.childProfileId}`}
+                        className="text-[#0f6e56] hover:underline"
+                      >
+                        {row.childName}
+                      </Link>
+                    ) : (
+                      row.childName
+                    )}
+                    {row.hasMissingPrices ? (
+                      <span
+                        className="inline-flex rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800"
+                        title="Brak uzupełnionych cen"
+                      >
+                        NEW
+                      </span>
+                    ) : null}
+                  </span>
                 </td>
                 <td className="px-2 py-2">{row.parentName}</td>
                 <td className="px-2 py-2">
