@@ -56,7 +56,7 @@ function childActivityLabel(child: ProfileChild): { label: string; className: st
     return { label: 'Aktywne', className: 'bg-emerald-100 text-emerald-800' };
   }
   if (level === 'REJECTED') {
-    return { label: 'Odrzucone', className: 'bg-rose-100 text-rose-800' };
+    return { label: 'Rezygnacja', className: 'bg-rose-100 text-rose-800' };
   }
   if (level) {
     return {

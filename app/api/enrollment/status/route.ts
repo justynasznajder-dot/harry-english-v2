@@ -11,7 +11,7 @@ import {
   computeEnrollmentContractReadiness,
   fetchParentEnrollmentPipelineStatuses,
 } from "@/lib/enrollment-contract-readiness";
-import { fetchParentContractForPortal, fetchSignedContractDownloadsForParent } from "@/lib/parent-contract";
+import { fetchParentContractForPortal, fetchSignedContractDownloadsForParent, countParentChildrenEnrollingOrRenewing } from "@/lib/parent-contract";
 import { requireParentContext } from "@/lib/parent-portal-auth";
 import { getSchoolDiscountSettings, isComplimentaryForParent } from "@/lib/school-discounts";
 import { resolveContractDiscountSettings } from "@/lib/contract-pricing-preview";
@@ -399,6 +399,11 @@ export async function GET(request: NextRequest) {
     const enrollingMultipleChildren =
       multiChildrenRes.rows[0]?.enrolling_multiple_children === true;
 
+    const siblingEligibleChildCount = await countParentChildrenEnrollingOrRenewing(
+      parentId,
+      SCHOOL_ID
+    );
+
     return NextResponse.json({
 
       proposals,
@@ -414,6 +419,7 @@ export async function GET(request: NextRequest) {
       },
 
       enrollingMultipleChildren,
+      siblingEligibleChildCount,
 
       parentContract: parentContract
 

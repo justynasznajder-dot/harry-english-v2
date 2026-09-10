@@ -7615,26 +7615,35 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               </p>
             </div>
 
+            {!canGenerateInvoices ? (
+              <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                Generowanie faktur jest dostępne tylko na środowisku DEV (testy). Na produkcji
+                pozostaje wyłączone.
+              </p>
+            ) : null}
+
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
+                disabled={!canGenerateInvoices}
                 onClick={() => setInvoiceAutoGenerationDraft(false)}
                 className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
                   !invoiceAutoGenerationDraft
                     ? 'border-[#0f6e56] bg-[#0f6e56] text-white shadow-sm'
                     : 'border-emerald-100 bg-emerald-50/50 text-zinc-800 hover:border-emerald-200'
-                }`}
+                } disabled:cursor-not-allowed disabled:opacity-50`}
               >
                 Ręczne generowanie
               </button>
               <button
                 type="button"
+                disabled={!canGenerateInvoices}
                 onClick={() => setInvoiceAutoGenerationDraft(true)}
                 className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
                   invoiceAutoGenerationDraft
                     ? 'border-[#0f6e56] bg-[#0f6e56] text-white shadow-sm'
                     : 'border-emerald-100 bg-emerald-50/50 text-zinc-800 hover:border-emerald-200'
-                }`}
+                } disabled:cursor-not-allowed disabled:opacity-50`}
               >
                 Automatyczne generowanie
               </button>
@@ -7684,9 +7693,16 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             <div className="flex flex-wrap items-center gap-3">
               <button
                 type="button"
-                disabled={discountsSaving}
+                disabled={discountsSaving || !canGenerateInvoices}
                 className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
                 onClick={async () => {
+                  if (!canGenerateInvoices) {
+                    pushToast(
+                      'error',
+                      'Generowanie faktur jest dostępne tylko na środowisku DEV (testy).',
+                    );
+                    return;
+                  }
                   const day = Math.round(Number(invoiceGenerationDayDraft));
                   if (
                     invoiceAutoGenerationDraft &&

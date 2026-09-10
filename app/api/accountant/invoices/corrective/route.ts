@@ -1,11 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAccountantSchoolContext } from "@/lib/accountant-school-context";
+import {
+  INVOICE_MANUAL_GENERATE_DISABLED_MESSAGE,
+  isInvoiceManualGenerateDisabled,
+} from "@/lib/invoice-generate-guard";
 import { invoicesSupportCorrectiveDocuments } from "@/lib/invoice-schema";
 import { createCorrectiveInvoice } from "@/lib/invoicing";
 
 export async function POST(request: NextRequest) {
   const ctx = await requireAccountantSchoolContext(request);
   if (!ctx.ok) return ctx.response;
+
+  if (isInvoiceManualGenerateDisabled(ctx.schoolId)) {
+    return NextResponse.json(
+      { message: INVOICE_MANUAL_GENERATE_DISABLED_MESSAGE },
+      { status: 403 }
+    );
+  }
 
   if (!(await invoicesSupportCorrectiveDocuments())) {
     return NextResponse.json(

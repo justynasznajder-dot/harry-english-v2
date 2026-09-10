@@ -11,6 +11,10 @@ import {
   setSchoolInvoiceGenerationDay,
 } from "@/lib/invoicing";
 import {
+  INVOICE_MANUAL_GENERATE_DISABLED_MESSAGE,
+  isInvoiceGenerationAllowed,
+} from "@/lib/invoice-generate-guard";
+import {
   ALL_DISCOUNT_KEYS,
   DISCOUNT_LABELS,
   addComplimentaryParent,
@@ -147,9 +151,16 @@ export async function PUT(request: NextRequest) {
       body?.invoice_auto_generation != null
     ) {
       const raw = body?.invoiceAutoGeneration ?? body?.invoice_auto_generation;
+      const wantAuto = raw === true || raw === "true" || raw === 1 || raw === "1";
+      if (wantAuto && !isInvoiceGenerationAllowed(schoolId)) {
+        return NextResponse.json(
+          { message: INVOICE_MANUAL_GENERATE_DISABLED_MESSAGE },
+          { status: 403 }
+        );
+      }
       invoiceAutoGeneration = await setSchoolInvoiceAutoGeneration(
         schoolId,
-        raw === true || raw === "true" || raw === 1 || raw === "1"
+        wantAuto
       );
     }
 

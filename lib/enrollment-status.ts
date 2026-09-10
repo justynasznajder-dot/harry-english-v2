@@ -32,7 +32,7 @@ export const ENROLLMENT_STATUS_LABELS: Record<EnrollmentStatus, string> = {
   CONTRACT_READY: "Umowa gotowa — oczekuje na podpis",
   SIGNED: "Umowa podpisana",
   COMPLETED: "Zakończone",
-  REJECTED: "Odrzucone przez managera",
+  REJECTED: "Rezygnacja",
 };
 
 export const ENROLLMENT_STATUS_BADGE_BASE =

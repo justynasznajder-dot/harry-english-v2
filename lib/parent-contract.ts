@@ -12,6 +12,10 @@ import {
   type DiscountKey,
   type SchoolDiscountSettings,
 } from "@/lib/school-discounts";
+import {
+  SIBLING_DISCOUNT_MIN_CHILDREN,
+  SIBLING_DISCOUNT_MIN_CHILDREN_MESSAGE,
+} from "@/lib/discount-math";
 import { getParentLargeFamilyCard } from "@/lib/parent-profile-discount";
 import { getActiveSchoolYear, queryDb, runPgTransaction } from "@/lib/db";
 import { sumChildrenBaseAmounts } from "@/lib/enrollment-pricing";
@@ -138,6 +142,61 @@ export async function countActiveSiblingChildren(
     [parentId, schoolId]
   );
   return Number(res.rows[0]?.count ?? 0);
+}
+
+export {
+  SIBLING_DISCOUNT_MIN_CHILDREN,
+  SIBLING_DISCOUNT_MIN_CHILDREN_MESSAGE,
+} from "@/lib/discount-math";
+
+/**
+ * Liczba dzieci rodzica w aktywnym zapisie lub odnowieniu
+ * (do walidacji checkboxa „zapisuję więcej niż jedno dziecko”).
+ */
+export async function countParentChildrenEnrollingOrRenewing(
+  parentId: string,
+  schoolId: string
+): Promise<number> {
+  const res = await queryDb<{ count: string }>(
+    `SELECT COUNT(DISTINCT c.id)::text AS count
+     FROM children c
+     WHERE c.parent_id = $1
+       AND c.school_id = $2
+       AND (
+         (
+           c.active = TRUE
+           AND UPPER(BTRIM(COALESCE(c.access_level::text, ''))) IN (
+             'NEW', 'PROPOSED', 'NEGOTIATING', 'ACCEPTED',
+             'AWAITING_CONTRACT', 'CONTRACT_READY', 'SIGNED'
+           )
+         )
+         OR EXISTS (
+           SELECT 1
+           FROM renewals r
+           WHERE r.child_id = c.id
+             AND r.school_id = $2
+             AND UPPER(BTRIM(COALESCE(r.status::text, ''))) NOT IN ('DRAFT', 'RESIGNED')
+         )
+       )`,
+    [parentId, schoolId]
+  );
+  return Number(res.rows[0]?.count ?? 0);
+}
+
+/** Czy rodzic może zaznaczyć deklarację zniżki na rodzeństwo. */
+export async function assertSiblingDiscountEligible(
+  parentId: string,
+  schoolId: string
+): Promise<{ ok: true; count: number } | { ok: false; count: number; message: string }> {
+  const count = await countParentChildrenEnrollingOrRenewing(parentId, schoolId);
+  if (count < SIBLING_DISCOUNT_MIN_CHILDREN) {
+    return {
+      ok: false,
+      count,
+      message: SIBLING_DISCOUNT_MIN_CHILDREN_MESSAGE,
+    };
+  }
+  return { ok: true, count };
 }
 
 export async function parentHasSiblingDiscount(

@@ -24,6 +24,7 @@ import {
   resolveIncludeAttachment2FromGroups,
   validateParentContractSelection,
   validateSingleChildForContract,
+  assertSiblingDiscountEligible,
 } from "@/lib/parent-contract";
 import {
   isParentContractProfileComplete,
@@ -134,6 +135,12 @@ export async function POST(request: NextRequest) {
         enrollingMultipleChildrenRaw === "true" ||
         enrollingMultipleChildrenRaw === 1 ||
         enrollingMultipleChildrenRaw === "1";
+      if (enrollingMultipleChildren) {
+        const eligible = await assertSiblingDiscountEligible(parentId, SCHOOL_ID);
+        if (!eligible.ok) {
+          return NextResponse.json({ message: eligible.message }, { status: 400 });
+        }
+      }
       await queryDb(
         `UPDATE enrollment_requests
          SET enrolling_multiple_children = $3

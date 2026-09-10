@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryDb } from "@/lib/db";
 import { reapplyComplimentaryNetRatesForParent } from "@/lib/complimentary-enrollment";
+import { assertSiblingDiscountEligible } from "@/lib/parent-contract";
 import { setParentLargeFamilyCard } from "@/lib/parent-profile-discount";
 import { requireParentContext } from "@/lib/parent-portal-auth";
 import { isComplimentaryForParent } from "@/lib/school-discounts";
@@ -64,6 +65,12 @@ export async function PATCH(request: NextRequest) {
       }
     }
     if (enrollingMultipleChildren !== undefined) {
+      if (enrollingMultipleChildren === true) {
+        const eligible = await assertSiblingDiscountEligible(parentId, schoolId);
+        if (!eligible.ok) {
+          return NextResponse.json({ message: eligible.message }, { status: 400 });
+        }
+      }
       const kdrActive =
         discountLargeFamily === true ||
         (discountLargeFamily !== false &&

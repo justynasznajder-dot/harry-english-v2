@@ -12,6 +12,12 @@ export const DISCOUNT_LABELS: Record<DiscountKey, string> = {
   SIBLING: "Rodzeństwo",
 };
 
+/** Minimum dzieci w zapisie/odnowieniu do deklaracji zniżki rodzeństwa. */
+export const SIBLING_DISCOUNT_MIN_CHILDREN = 2;
+
+export const SIBLING_DISCOUNT_MIN_CHILDREN_MESSAGE =
+  "Zniżka na rodzeństwo wymaga minimum dwojga dzieci w zapisie lub odnowieniu.";
+
 /** Domyślny max rabat %, gdy szkoła nie ma jeszcze ustawienia. */
 export const DEFAULT_MAX_DISCOUNT_PERCENT = 10;
 

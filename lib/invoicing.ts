@@ -6,7 +6,6 @@ import {
   buildParentAddress,
   formatContractAmount,
 } from "@/lib/contract-html";
-import { renderHtmlToPdf } from "@/lib/contract-pdf";
 import { queryDb, runPgTransaction, withPgAdvisoryLock, getActiveSchoolYear } from "@/lib/db";
 import { sendInvoiceNotificationEmail } from "@/lib/email";
 import {
@@ -34,6 +33,7 @@ import {
   buildSaleInvoiceNumber,
   ensureChildClientNumber,
 } from "@/lib/client-numbers";
+import { isInvoiceGenerationAllowed } from "@/lib/invoice-generate-guard";
 
 export const INVOICE_DESC_MONTHLY_PREFIX = "Rata miesięczna";
 export const INVOICE_DESC_YEARLY_PREFIX = "Płatność jednorazowa";
@@ -713,7 +713,15 @@ async function insertPaymentWithInvoice(params: {
   );
 
   try {
-    const pdf = await renderHtmlToPdf(contentHtml);
+    const { buildInvoicePdf, invoicePdfModelFromPlaceholders } = await import(
+      "@/lib/invoice-pdf"
+    );
+    const pdf = await buildInvoicePdf(
+      invoicePdfModelFromPlaceholders(
+        { ...placeholders, invoice_number: invoiceNumber },
+        htmlItems
+      )
+    );
     const filename = `Faktura-${safePdfSlug(invoiceNumber.replace(/\//g, "-"))}.pdf`;
     const schoolYearName = await resolveSchoolYearFolderName(
       params.schoolId,
@@ -1955,9 +1963,13 @@ export async function generateAllMonthlyInvoices(
   let generated = 0;
   let skipped = 0;
   let alreadyInvoiced = 0;
+  let schoolsProcessed = 0;
   const errors: Array<{ contractId: string; schoolId?: string; message: string }> = [];
 
   for (const school of schoolsRes.rows) {
+    // PROD (i inne poza DEV) — cron nigdy nie wystawia faktur.
+    if (!isInvoiceGenerationAllowed(school.id)) continue;
+    schoolsProcessed += 1;
     const result = await generateMonthlyInvoicesForSchool(school.id, periodStart);
     generated += result.generated;
     skipped += result.skipped;
@@ -1970,7 +1982,7 @@ export async function generateAllMonthlyInvoices(
   return {
     periodMonth: periodMonthStr,
     generationDay,
-    schoolsProcessed: schoolsRes.rows.length,
+    schoolsProcessed,
     generated,
     skipped,
     alreadyInvoiced,
@@ -2347,7 +2359,23 @@ export async function createCorrectiveInvoice(
     );
 
     try {
-      const pdf = await renderHtmlToPdf(contentHtml);
+      const { buildInvoicePdf, invoicePdfModelFromPlaceholders } = await import(
+        "@/lib/invoice-pdf"
+      );
+      const pdf = await buildInvoicePdf(
+        invoicePdfModelFromPlaceholders(
+          { ...placeholders, invoice_number: invoiceNumber },
+          [
+            {
+              name: itemName,
+              qty: itemQty,
+              discount: itemDiscount,
+              unitPrice: input.itemUnitPrice,
+              value: input.itemValue,
+            },
+          ]
+        )
+      );
       const filename = `Faktura-korygujaca-${safePdfSlug(invoiceNumber.replace(/\//g, "-"))}.pdf`;
       const buyer = await fetchBuyerInvoiceData(original.parent_id);
       const schoolYearName = await resolveSchoolYearFolderName(

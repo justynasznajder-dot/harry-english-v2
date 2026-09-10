@@ -5,12 +5,17 @@ import ContractPortal from '@/src/components/ContractPortal';
 import RenewalParentFlowSection from '@/src/components/parent/RenewalParentFlowSection';
 import type { ContractPricingContext } from '@/lib/contract-pricing-preview';
 import { resolveChildBaseAmount } from '@/lib/enrollment-pricing';
-import { ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE } from '@/lib/enrollment-status';
+import {
+  ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE,
+  formatEnrollmentStatusLabel,
+} from '@/lib/enrollment-status';
 import { resolveLessonUnitPrice } from '@/lib/lesson-pricing';
 import {
   applyManualDiscountPercent,
   formatEffectiveDiscountInfo,
   resolveEffectiveDiscountPercent,
+  SIBLING_DISCOUNT_MIN_CHILDREN,
+  SIBLING_DISCOUNT_MIN_CHILDREN_MESSAGE,
 } from '@/lib/discount-math';
 import { validateParentContractProfileInput } from '@/lib/parent-contract-profile';
 import { parseContentDispositionFilename } from '@/lib/content-disposition';
@@ -592,6 +597,8 @@ export default function EnrollmentParentFlow({
   /** Deklaracja rodzica — zapisuję więcej niż jedno dziecko (`enrollment_requests.enrolling_multiple_children`). */
   const [enrollingMultipleChildren, setEnrollingMultipleChildren] = useState(false);
   const [savedEnrollingMultipleChildren, setSavedEnrollingMultipleChildren] = useState(false);
+  /** Liczba dzieci w zapisie/odnowieniu — walidacja zniżki rodzeństwa. */
+  const [siblingEligibleChildCount, setSiblingEligibleChildCount] = useState(0);
   /** Deklaracja bonu zniżkowego per dziecko (tylko zapis z umową). */
   const [discountVoucherByChildId, setDiscountVoucherByChildId] = useState<Record<string, boolean>>(
     {},
@@ -666,6 +673,7 @@ export default function EnrollmentParentFlow({
         contractReadiness?: ContractReadiness;
         contractPricing?: ContractPricing | null;
         enrollingMultipleChildren?: boolean;
+        siblingEligibleChildCount?: number;
         enrollmentRequestSummary?: EnrollmentRequestSummary | null;
         parentIdentity?: {
           firstName: string;
@@ -675,6 +683,11 @@ export default function EnrollmentParentFlow({
         schoolYearName?: string | null;
       };
       const incoming = Array.isArray(data.proposals) ? data.proposals : [];
+      const eligibleFromApi =
+        typeof data.siblingEligibleChildCount === 'number'
+          ? data.siblingEligibleChildCount
+          : incoming.filter((p) => childAccessLevel(p) !== 'REJECTED').length;
+      setSiblingEligibleChildCount(eligibleFromApi);
       setSchoolYearName(data.schoolYearName?.trim() ? data.schoolYearName.trim() : null);
       if (proposalOrderRef.current.length === 0) {
         proposalOrderRef.current = incoming.map((p) => p.request_id);
@@ -1068,6 +1081,25 @@ export default function EnrollmentParentFlow({
     const id = setTimeout(() => setFlash(null), 6000);
     return () => clearTimeout(id);
   }, [flash]);
+
+  /** Włącza zniżkę rodzeństwa tylko gdy są min. 2 dzieci w zapisie/odnowieniu. */
+  const tryEnableSiblingDiscount = useCallback(
+    (checked: boolean): boolean => {
+      if (checked && siblingEligibleChildCount < SIBLING_DISCOUNT_MIN_CHILDREN) {
+        setFlash({
+          kind: 'error',
+          message: SIBLING_DISCOUNT_MIN_CHILDREN_MESSAGE,
+        });
+        return false;
+      }
+      setEnrollingMultipleChildren(checked);
+      if (checked) {
+        setDiscountLargeFamily(false);
+      }
+      return true;
+    },
+    [siblingEligibleChildCount],
+  );
 
   /** Podsumowanie: przyciski zgód odzwierciedlają już istniejące PDF-y w Dokumentach. */
   useEffect(() => {
@@ -1645,7 +1677,7 @@ export default function EnrollmentParentFlow({
                                 ? 'Zaakceptowana'
                                 : 'Grupa przypisana'
                               : level === 'REJECTED'
-                                ? 'Odrzucone przez szkołę'
+                                ? 'Rezygnacja'
                               : level === 'COMPLETED'
                                 ? 'Zapis zakończony'
                                 : 'Umowa podpisana'}
@@ -1734,13 +1766,10 @@ export default function EnrollmentParentFlow({
                             checked={enrollingMultipleChildren && !discountLargeFamily}
                             onChange={(e) => {
                               const checked = e.target.checked;
-                              setEnrollingMultipleChildren(checked);
-                              if (checked) {
-                                setDiscountLargeFamily(false);
-                              }
+                              if (!tryEnableSiblingDiscount(checked)) return;
                               void (async () => {
                                 try {
-                                  await fetch('/api/enrollment/discounts', {
+                                  const res = await fetch('/api/enrollment/discounts', {
                                     method: 'PATCH',
                                     headers: { 'Content-Type': 'application/json' },
                                     credentials: 'include',
@@ -1749,6 +1778,17 @@ export default function EnrollmentParentFlow({
                                       discountLargeFamily: checked ? false : discountLargeFamily,
                                     }),
                                   });
+                                  if (!res.ok) {
+                                    const data = (await res.json().catch(() => ({}))) as {
+                                      message?: string;
+                                    };
+                                    setEnrollingMultipleChildren(false);
+                                    setFlash({
+                                      kind: 'error',
+                                      message:
+                                        data.message ?? SIBLING_DISCOUNT_MIN_CHILDREN_MESSAGE,
+                                    });
+                                  }
                                 } catch {
                                   /* ignore */
                                 }
@@ -2278,9 +2318,8 @@ export default function EnrollmentParentFlow({
                                     }
                                     onChange={(e) => {
                                       const checked = e.target.checked;
-                                      setEnrollingMultipleChildren(checked);
+                                      if (!tryEnableSiblingDiscount(checked)) return;
                                       if (checked) {
-                                        setDiscountLargeFamily(false);
                                         setContractPricing((prev) =>
                                           prev ? { ...prev, discountLargeFamily: false } : prev,
                                         );
@@ -2467,7 +2506,7 @@ export default function EnrollmentParentFlow({
                                 )}
                                 {!isPipeline && !isPending && !isSignedDone && (
                                   <span className="mt-1 block text-xs text-zinc-500">
-                                    Status: {level}
+                                    Status: {formatEnrollmentStatusLabel(level)}
                                   </span>
                                 )}
                               </div>
@@ -2881,6 +2920,16 @@ export default function EnrollmentParentFlow({
                   discountLargeFamily !== savedDiscountLargeFamily ||
                   effectiveSibling !== savedEnrollingMultipleChildren;
                 const saveSummaryDiscounts = async () => {
+                  if (
+                    effectiveSibling &&
+                    siblingEligibleChildCount < SIBLING_DISCOUNT_MIN_CHILDREN
+                  ) {
+                    setFlash({
+                      kind: 'error',
+                      message: SIBLING_DISCOUNT_MIN_CHILDREN_MESSAGE,
+                    });
+                    return;
+                  }
                   setSavingSummaryDiscounts(true);
                   try {
                     const res = await fetch('/api/enrollment/discounts', {
@@ -2965,8 +3014,7 @@ export default function EnrollmentParentFlow({
                             checked={effectiveSibling}
                             onChange={(e) => {
                               const checked = e.target.checked;
-                              setEnrollingMultipleChildren(checked);
-                              if (checked) setDiscountLargeFamily(false);
+                              if (!tryEnableSiblingDiscount(checked)) return;
                             }}
                           />
                           <span>zapisuję więcej niż jedno dziecko</span>

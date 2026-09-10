@@ -6,6 +6,7 @@ import {
   syncParentUserAccessLevel,
 } from "@/lib/enrollment-sync";
 import { setParentLargeFamilyCard } from "@/lib/parent-profile-discount";
+import { assertSiblingDiscountEligible } from "@/lib/parent-contract";
 import { requireParentContext } from "@/lib/parent-portal-auth";
 import { isComplimentaryForParent } from "@/lib/school-discounts";
 
@@ -110,6 +111,12 @@ export async function PUT(request: NextRequest) {
       });
     }
     if (enrollingMultipleChildren !== undefined) {
+      if (enrollingMultipleChildren === true) {
+        const eligible = await assertSiblingDiscountEligible(parentId, SCHOOL_ID);
+        if (!eligible.ok) {
+          return NextResponse.json({ message: eligible.message }, { status: 400 });
+        }
+      }
       await queryDb(
         `UPDATE enrollment_requests
          SET enrolling_multiple_children = $3
