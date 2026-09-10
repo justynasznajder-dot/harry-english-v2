@@ -220,6 +220,8 @@ model enrollment_requests {
   user_id            String?
   created_at         DateTime            @default(now()) @db.Timestamp(6)
   rejected_at        DateTime?           @db.Timestamp(6)
+  /// Powód rezygnacji / odrzucenia (wpis managera przy „Rodzic zrezygnował”)
+  rejection_comment  String?
   lesson_unit_price  Decimal?            @db.Decimal(10, 2)
   monthly_unit_price Decimal?            @db.Decimal(10, 2)
   yearly_unit_price  Decimal?            @db.Decimal(10, 2)

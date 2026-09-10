@@ -7,13 +7,23 @@ export async function POST(request: NextRequest) {
     const ctx = await requireAdminSchoolContext(request);
     if (!ctx.ok) return ctx.response;
 
-    const body = (await request.json().catch(() => ({}))) as { requestId?: string };
+    const body = (await request.json().catch(() => ({}))) as {
+      requestId?: string;
+      rejectionComment?: string;
+      comment?: string;
+    };
     const requestId = String(body.requestId ?? "").trim();
     if (!requestId) {
       return NextResponse.json({ message: "Brak identyfikatora zgłoszenia" }, { status: 400 });
     }
 
-    const result = await rejectEnrollmentParentResignation(ctx.tenant, requestId);
+    const rejectionComment = String(body.rejectionComment ?? body.comment ?? "");
+
+    const result = await rejectEnrollmentParentResignation(
+      ctx.tenant,
+      requestId,
+      rejectionComment
+    );
     if (!result.ok) {
       return NextResponse.json({ message: result.message }, { status: result.status });
     }

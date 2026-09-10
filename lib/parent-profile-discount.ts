@@ -86,11 +86,17 @@ export async function setEnrollmentSiblingDiscount(params: {
   const email = String(params.parentEmail ?? "").trim().toLowerCase();
   if (!parentUserId && !email) return 0;
 
+  // Przy wyłączaniu czyść też REJECTED — inaczej BOOL_OR w panelu admina
+  // zostawia checkbox zaznaczony po rezygnacji jednego dziecka.
+  const statusClause = params.enrollingMultipleChildren
+    ? `UPPER(BTRIM(COALESCE(status::text, ''))) NOT IN ('REJECTED', 'COMPLETED')`
+    : `UPPER(BTRIM(COALESCE(status::text, ''))) <> 'COMPLETED'`;
+
   const res = await queryDb(
     `UPDATE enrollment_requests
      SET enrolling_multiple_children = $3
      WHERE school_id = $1
-       AND UPPER(BTRIM(COALESCE(status::text, ''))) NOT IN ('REJECTED', 'COMPLETED')
+       AND ${statusClause}
        AND (
          ($4::text <> '' AND user_id = $4)
          OR ($2::text <> '' AND LOWER(BTRIM(parent_email::text)) = $2)

@@ -377,6 +377,19 @@ export default function EnrollmentAdminPanel({
     }>;
     resolve: (ok: boolean) => void;
   } | null>(null);
+  const [actionConfirm, setActionConfirm] = useState<{
+    tone: 'danger' | 'warning';
+    eyebrow: string;
+    title: string;
+    body: string;
+    confirmLabel: string;
+    /** Gdy true — modal zbiera powód rezygnacji. */
+    withComment?: boolean;
+    commentLabel?: string;
+    commentRequired?: boolean;
+    resolve: (result: { confirmed: boolean; comment: string }) => void;
+  } | null>(null);
+  const [actionConfirmComment, setActionConfirmComment] = useState('');
   const discountSettings = _discountSettings;
 
   /** KDR / rodzeństwo — te same pola co checkboxy rodzica. */
@@ -587,6 +600,119 @@ export default function EnrollmentAdminPanel({
     setShowOtherLocationGroups({});
     setNotifyingGroupChangeRequestId(null);
   }, []);
+
+  const askActionConfirm = useCallback(
+    (input: {
+      tone: 'danger' | 'warning';
+      eyebrow: string;
+      title: string;
+      body: string;
+      confirmLabel: string;
+      withComment?: boolean;
+      commentLabel?: string;
+      commentRequired?: boolean;
+    }): Promise<{ confirmed: boolean; comment: string }> =>
+      new Promise((resolve) => {
+        setActionConfirmComment('');
+        setActionConfirm((prev) => {
+          prev?.resolve({ confirmed: false, comment: '' });
+          return { ...input, resolve };
+        });
+      }),
+    [],
+  );
+
+  const closeActionConfirm = useCallback(
+    (confirmed: boolean) => {
+      setActionConfirm((prev) => {
+        if (!prev) return null;
+        const comment = actionConfirmComment.trim();
+        if (confirmed && prev.withComment && prev.commentRequired && !comment) {
+          return prev;
+        }
+        prev.resolve({ confirmed, comment });
+        return null;
+      });
+    },
+    [actionConfirmComment],
+  );
+
+  const handleParentResignation = useCallback(
+    async (child: EnrollmentParentRow['children'][number]) => {
+      const childName = `${child.firstName} ${child.lastName}`.trim();
+      const resign = await askActionConfirm({
+        tone: 'danger',
+        eyebrow: 'Rezygnacja',
+        title: `Oznaczyć rezygnację rodzica dla ${childName}?`,
+        body: 'Zgłoszenie otrzyma status REJECTED, dziecko zniknie z panelu rodzica i zostanie usunięte z grupy.',
+        confirmLabel: 'Oznacz rezygnację',
+        withComment: true,
+        commentLabel: 'Powód rezygnacji',
+        commentRequired: true,
+      });
+      if (!resign.confirmed) return;
+
+      setRejectingParentResignationId(child.requestId);
+      try {
+        const res = await fetch('/api/admin/enrollment/reject', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            requestId: child.requestId,
+            rejectionComment: resign.comment,
+          }),
+        });
+        const data = (await res.json().catch(() => ({}))) as { message?: string };
+        if (!res.ok) {
+          pushToast(
+            'error',
+            data.message ?? 'Nie udało się oznaczyć rezygnacji rodzica',
+          );
+          return;
+        }
+
+        pushToast(
+          'success',
+          data.message ?? `Oznaczono rezygnację: ${childName}`,
+        );
+
+        const remainingSiblings =
+          proposalParent?.children.filter(
+            (c) => c.requestId !== child.requestId && c.status !== 'REJECTED',
+          ).length ?? 0;
+        const siblingDiscountOn = Boolean(proposalParent?.enrollingMultipleChildren);
+        if (proposalParent && siblingDiscountOn && remainingSiblings < 2) {
+          const sibling = await askActionConfirm({
+            tone: 'warning',
+            eyebrow: 'Zniżka',
+            title: 'Zniżka na rodzeństwo nie ma zastosowania',
+            body: 'Po tej rezygnacji zostaje mniej niż dwoje aktywnych dzieci. Usunąć zniżkę na rodzeństwo?',
+            confirmLabel: 'Usuń zniżkę',
+          });
+          if (sibling.confirmed) {
+            await saveParentDiscounts(proposalParent, {
+              enrollingMultipleChildren: false,
+            });
+          }
+        }
+
+        setProposalDrafts((prev) => {
+          const next = { ...prev };
+          delete next[child.requestId];
+          return next;
+        });
+        await onRefresh();
+      } catch (err) {
+        pushToast(
+          'error',
+          err instanceof Error ? err.message : 'Błąd oznaczania rezygnacji rodzica',
+        );
+      } finally {
+        setRejectingParentResignationId(null);
+      }
+    },
+    [askActionConfirm, onRefresh, proposalParent, pushToast, saveParentDiscounts],
+  );
 
   useEffect(() => {
     const key = (focusParentKey ?? '').trim();
@@ -2155,9 +2281,17 @@ export default function EnrollmentAdminPanel({
                             </div>
                           )}
                           {child.status === 'REJECTED' && (
-                            <p className="rounded-xl border border-rose-200 bg-rose-50 p-2 text-xs text-rose-800">
-                              Zgłoszenie odrzucone (rezygnacja rodzica lub decyzja szkoły).
-                            </p>
+                            <div className="rounded-xl border border-rose-200 bg-rose-50 p-2 text-xs text-rose-800">
+                              <p>
+                                Zgłoszenie odrzucone (rezygnacja rodzica lub decyzja szkoły).
+                              </p>
+                              {child.rejectionComment?.trim() ? (
+                                <p className="mt-1.5 whitespace-pre-wrap">
+                                  <span className="font-semibold">Powód: </span>
+                                  {child.rejectionComment.trim()}
+                                </p>
+                              ) : null}
+                            </div>
                           )}
                             </div>
                           </div>
@@ -2286,11 +2420,6 @@ export default function EnrollmentAdminPanel({
                                     {child.status === 'SIGNED'
                                       ? 'Umowa podpisana — stawki i rabat tylko do podglądu, bez edycji.'
                                       : 'Zapis zakończony — stawki i rabat tylko do podglądu, bez edycji.'}
-                                  </p>
-                                ) : pricesEditable && scheduleMailAlreadySent ? (
-                                  <p className="text-xs text-zinc-500">
-                                    Możesz zmienić grupę (i opcjonalnie stawki), potem zapisz bez
-                                    ponownej wysyłki e-maila — także gdy stawki są jeszcze puste.
                                   </p>
                                 ) : pricesEditable && !showGroupSelect ? (
                                   <p className="text-xs text-zinc-500">
@@ -2424,6 +2553,31 @@ export default function EnrollmentAdminPanel({
                                     />
                                   </label>
                                 </div>
+                                {pricesEditable && child.status !== 'REJECTED' ? (
+                                  <label className="mt-1 flex items-start gap-2 text-sm text-zinc-700">
+                                    <input
+                                      type="checkbox"
+                                      className="mt-0.5 accent-rose-600"
+                                      checked={false}
+                                      disabled={
+                                        rejectingParentResignationId === child.requestId ||
+                                        submittingProposalRequestId != null ||
+                                        submittingBatchProposals ||
+                                        savingBatchProposals ||
+                                        notifyingGroupChangeRequestId != null
+                                      }
+                                      onChange={(e) => {
+                                        if (!e.target.checked) return;
+                                        void handleParentResignation(child);
+                                      }}
+                                    />
+                                    <span>
+                                      {rejectingParentResignationId === child.requestId
+                                        ? 'Oznaczanie rezygnacji…'
+                                        : 'Rodzic zrezygnował'}
+                                    </span>
+                                  </label>
+                                ) : null}
                                 {showGroupSelect &&
                                   (() => {
                                   const selectedGroupId =
@@ -2556,50 +2710,8 @@ export default function EnrollmentAdminPanel({
                                       savingBatchProposals
                                     }
                                     className="rounded-xl border border-rose-300 bg-white px-3 py-2 text-rose-800 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
-                                    onClick={async () => {
-                                      const confirmed = window.confirm(
-                                        `Oznaczyć rezygnację rodzica dla ${child.firstName} ${child.lastName}? Zgłoszenie zostanie odrzucone.`,
-                                      );
-                                      if (!confirmed) return;
-                                      setRejectingParentResignationId(child.requestId);
-                                      try {
-                                        const res = await fetch('/api/admin/enrollment/reject', {
-                                          method: 'POST',
-                                          headers: { 'Content-Type': 'application/json' },
-                                          body: JSON.stringify({ requestId: child.requestId }),
-                                        });
-                                        const data = (await res.json().catch(() => ({}))) as {
-                                          message?: string;
-                                        };
-                                        if (!res.ok) {
-                                          pushToast(
-                                            'error',
-                                            data?.message ??
-                                              'Nie udało się oznaczyć rezygnacji rodzica',
-                                          );
-                                          return;
-                                        }
-                                        pushToast(
-                                          'success',
-                                          data.message ??
-                                            'Zgłoszenie oznaczone jako rezygnacja rodzica.',
-                                        );
-                                        setProposalDrafts((prev) => {
-                                          const next = { ...prev };
-                                          delete next[child.requestId];
-                                          return next;
-                                        });
-                                        await onRefresh();
-                                      } catch (err) {
-                                        pushToast(
-                                          'error',
-                                          err instanceof Error
-                                            ? err.message
-                                            : 'Błąd oznaczania rezygnacji rodzica',
-                                        );
-                                      } finally {
-                                        setRejectingParentResignationId(null);
-                                      }
+                                    onClick={() => {
+                                      void handleParentResignation(child);
                                     }}
                                   >
                                     {rejectingParentResignationId === child.requestId
@@ -2961,6 +3073,85 @@ export default function EnrollmentAdminPanel({
                 onClick={() => closeGroupChangeConfirm(true)}
               >
                 Zmień grupę
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {actionConfirm ? (
+        <div className="fixed inset-0 z-[70] grid place-items-center bg-black/45 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="action-confirm-title"
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-zinc-100 bg-white shadow-xl"
+          >
+            <div
+              className={`border-b px-5 py-4 ${
+                actionConfirm.tone === 'danger'
+                  ? 'border-rose-100 bg-rose-50'
+                  : 'border-amber-100 bg-amber-50'
+              }`}
+            >
+              <p
+                className={`text-xs font-semibold uppercase tracking-wide ${
+                  actionConfirm.tone === 'danger' ? 'text-rose-800' : 'text-amber-800'
+                }`}
+              >
+                {actionConfirm.eyebrow}
+              </p>
+              <h3
+                id="action-confirm-title"
+                className="mt-1 text-lg font-semibold text-zinc-900"
+              >
+                {actionConfirm.title}
+              </h3>
+            </div>
+            <div className="space-y-3 px-5 py-4">
+              <p className="text-sm leading-relaxed text-zinc-600">{actionConfirm.body}</p>
+              {actionConfirm.withComment ? (
+                <label className="block space-y-1.5">
+                  <span className="text-sm font-medium text-zinc-800">
+                    {actionConfirm.commentLabel ?? 'Komentarz'}
+                    {actionConfirm.commentRequired ? (
+                      <span className="text-rose-600"> *</span>
+                    ) : null}
+                  </span>
+                  <textarea
+                    value={actionConfirmComment}
+                    onChange={(e) => setActionConfirmComment(e.target.value)}
+                    rows={3}
+                    maxLength={2000}
+                    placeholder="Np. rodzice zmienili plany / za daleko / inna szkoła…"
+                    className="w-full resize-y rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none ring-[#0f6e56]/30 placeholder:text-zinc-400 focus:border-[#0f6e56] focus:ring-2"
+                  />
+                </label>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap justify-end gap-2 border-t border-zinc-100 bg-zinc-50 px-5 py-3">
+              <button
+                type="button"
+                className="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-100"
+                onClick={() => closeActionConfirm(false)}
+              >
+                Anuluj
+              </button>
+              <button
+                type="button"
+                disabled={
+                  Boolean(actionConfirm.withComment) &&
+                  Boolean(actionConfirm.commentRequired) &&
+                  !actionConfirmComment.trim()
+                }
+                className={`rounded-xl px-4 py-2 text-sm font-semibold text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                  actionConfirm.tone === 'danger'
+                    ? 'bg-rose-700 hover:bg-rose-800'
+                    : 'bg-amber-600 hover:bg-amber-700'
+                }`}
+                onClick={() => closeActionConfirm(true)}
+              >
+                {actionConfirm.confirmLabel}
               </button>
             </div>
           </div>

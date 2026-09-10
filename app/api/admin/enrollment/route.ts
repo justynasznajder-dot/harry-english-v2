@@ -85,7 +85,10 @@ export async function GET(request: NextRequest) {
            COALESCE(pp.discount_large_family, FALSE)
            OR COALESCE(er.discount_large_family, FALSE)
          ) AS discount_large_family,
-         BOOL_OR(COALESCE(er.enrolling_multiple_children, FALSE)) AS enrolling_multiple_children,
+         BOOL_OR(
+           COALESCE(er.enrolling_multiple_children, FALSE)
+           AND UPPER(BTRIM(COALESCE(er.status::text, ''))) NOT IN ('REJECTED', 'COMPLETED')
+         ) AS enrolling_multiple_children,
          MAX(er.created_at) AS latest_created_at,
          COALESCE(
            JSON_AGG(
@@ -101,6 +104,7 @@ export async function GET(request: NextRequest) {
                'preferredLocation', COALESCE(loc.name, NULLIF(TRIM(er.preferred_location), '')),
                'preferredLocationId', NULLIF(TRIM(BOTH FROM COALESCE(er.preferred_location, '')), ''),
                'notes', er.notes,
+               'rejectionComment', er.rejection_comment,
                'proposedGroupId', er.proposed_group_id,
                'proposedAt', er.proposed_at,
                'createdAt', er.created_at,
