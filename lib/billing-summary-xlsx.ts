@@ -5,7 +5,7 @@ export type BillingSummaryExportLine = {
   parentEmail: string;
   childName: string;
   amount: number;
-  parentTotal: number;
+  invoiceIssueDate: string | null;
   invoiceStatus: string;
 };
 
@@ -49,7 +49,13 @@ export async function downloadInvoicePreviewXlsx(input: {
     Email: row.parentEmail,
     Dziecko: row.childName,
     Kwota: formatAmount(row.amount),
-    "Suma rodzica": formatAmount(row.parentTotal),
+    "Data wystawienia": row.invoiceIssueDate
+      ? (() => {
+          const raw = String(row.invoiceIssueDate).slice(0, 10);
+          const [y, m, d] = raw.split("-");
+          return y && m && d ? `${d}.${m}.${y}` : raw;
+        })()
+      : "",
     "Status faktury": row.invoiceStatus,
   }));
   const stamp = new Date().toISOString().slice(0, 10);

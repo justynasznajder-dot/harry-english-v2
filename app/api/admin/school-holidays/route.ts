@@ -139,14 +139,18 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const withYearManager = `SELECT h.id, h.school_id, h.school_year_id, h.name, h.date_from::text, h.date_to::text, h.type, h.created_at,
+    const holidaySelectCols = `h.id, h.school_id, h.school_year_id, h.name, h.date_from::text, h.date_to::text, h.type, h.created_at,
+            COALESCE(h.applies_to_preschool, FALSE) AS applies_to_preschool,
+            COALESCE(h.applies_to_school, FALSE) AS applies_to_school,
             COALESCE(
               (SELECT array_agg(shg.group_id ORDER BY g.name)
                FROM school_holiday_groups shg
                LEFT JOIN groups g ON g.id = shg.group_id
                WHERE shg.holiday_id = h.id),
               '{}'::text[]
-            ) AS group_ids
+            ) AS group_ids`;
+
+    const withYearManager = `SELECT ${holidaySelectCols}
            FROM school_holidays h
            INNER JOIN school_years sy ON sy.school_id = h.school_id AND sy.id = $2 AND sy.school_id = $1
            WHERE h.date_from <= sy.date_to
@@ -157,14 +161,7 @@ export async function GET(request: NextRequest) {
              )
            ORDER BY h.date_from ASC`;
 
-    const withYearAdmin = `SELECT h.id, h.school_id, h.school_year_id, h.name, h.date_from::text, h.date_to::text, h.type, h.created_at,
-            COALESCE(
-              (SELECT array_agg(shg.group_id ORDER BY g.name)
-               FROM school_holiday_groups shg
-               LEFT JOIN groups g ON g.id = shg.group_id
-               WHERE shg.holiday_id = h.id),
-              '{}'::text[]
-            ) AS group_ids
+    const withYearAdmin = `SELECT ${holidaySelectCols}
            FROM school_holidays h
            INNER JOIN school_years sy ON sy.school_id = h.school_id AND sy.id = $1
            WHERE h.date_from <= sy.date_to
@@ -185,6 +182,8 @@ export async function GET(request: NextRequest) {
       type: string;
       created_at: Date;
       group_ids: string[] | null;
+      applies_to_preschool: boolean;
+      applies_to_school: boolean;
     }>(
       schoolYearId
         ? ctx.tenant.role === "MANAGER"
@@ -192,6 +191,8 @@ export async function GET(request: NextRequest) {
           : withYearAdmin
         : ctx.tenant.role === "MANAGER"
           ? `SELECT id, school_id, school_year_id, name, date_from::text, date_to::text, type, created_at,
+                COALESCE(applies_to_preschool, FALSE) AS applies_to_preschool,
+                COALESCE(applies_to_school, FALSE) AS applies_to_school,
                 COALESCE(
                   (SELECT array_agg(shg.group_id ORDER BY g.name)
                    FROM school_holiday_groups shg
@@ -203,6 +204,8 @@ export async function GET(request: NextRequest) {
            WHERE school_id = $1
            ORDER BY date_from DESC`
           : `SELECT id, school_id, school_year_id, name, date_from::text, date_to::text, type, created_at,
+                COALESCE(applies_to_preschool, FALSE) AS applies_to_preschool,
+                COALESCE(applies_to_school, FALSE) AS applies_to_school,
                 COALESCE(
                   (SELECT array_agg(shg.group_id ORDER BY g.name)
                    FROM school_holiday_groups shg
@@ -221,13 +224,22 @@ export async function GET(request: NextRequest) {
           : []
     );
 
-    const holidays = r.rows.map((row) => ({
-      ...row,
-      date_from: String(row.date_from).slice(0, 10),
-      date_to: String(row.date_to).slice(0, 10),
-      group_ids: Array.isArray(row.group_ids) ? row.group_ids : [],
-      applies_to_all_groups: !Array.isArray(row.group_ids) || row.group_ids.length === 0,
-    }));
+    const holidays = r.rows.map((row) => {
+      const groupIds = Array.isArray(row.group_ids) ? row.group_ids : [];
+      const appliesToPreschool = Boolean(row.applies_to_preschool);
+      const appliesToSchool = Boolean(row.applies_to_school);
+      return {
+        ...row,
+        date_from: String(row.date_from).slice(0, 10),
+        date_to: String(row.date_to).slice(0, 10),
+        group_ids: groupIds,
+        applies_to_preschool: appliesToPreschool,
+        applies_to_school: appliesToSchool,
+        applies_to_all_groups:
+          (appliesToPreschool && appliesToSchool) ||
+          (!appliesToPreschool && !appliesToSchool && groupIds.length === 0),
+      };
+    });
 
     return NextResponse.json({ holidays });
   } catch (error) {
@@ -253,6 +265,10 @@ export async function POST(request: NextRequest) {
       schoolId: bodySchoolIdCamel,
       group_ids: bodyGroupIds,
       groupIds: bodyGroupIdsCamel,
+      applies_to_preschool: bodyAppliesPreschool,
+      applies_to_school: bodyAppliesSchool,
+      include_preschool: bodyIncludePreschool,
+      include_school: bodyIncludeSchool,
     } = body as {
       name?: string;
       date_from?: string;
@@ -264,8 +280,22 @@ export async function POST(request: NextRequest) {
       schoolId?: string;
       group_ids?: unknown;
       groupIds?: unknown;
+      applies_to_preschool?: unknown;
+      applies_to_school?: unknown;
+      include_preschool?: unknown;
+      include_school?: unknown;
     };
     const shouldNotifyParents = notifyParentsRaw === true;
+    const appliesToPreschool =
+      bodyAppliesPreschool === true ||
+      bodyIncludePreschool === true ||
+      bodyAppliesPreschool === "true" ||
+      bodyIncludePreschool === "true";
+    const appliesToSchool =
+      bodyAppliesSchool === true ||
+      bodyIncludeSchool === true ||
+      bodyAppliesSchool === "true" ||
+      bodyIncludeSchool === "true";
     if (!name?.trim() || !date_from || !date_to) {
       return NextResponse.json({ message: "Brak nazwy lub zakresu dat" }, { status: 400 });
     }
@@ -335,8 +365,22 @@ export async function POST(request: NextRequest) {
     }
 
     const id = randomUUID();
+    const facilityFlagsSet = appliesToPreschool || appliesToSchool;
+    // Obie placówki = wszyscy (bez listy grup). Jedna placówka: lista grup na usuwanie
+    // bieżących zajęć; flaga blokuje też przyszłe grupy tego typu.
+    const storeAllGroups = appliesToPreschool && appliesToSchool;
+    const holidayGroupIds =
+      storeAllGroups || !scopedGroupIds || scopedGroupIds.length === 0
+        ? null
+        : scopedGroupIds;
+
     const parentsToNotify = shouldNotifyParents
-      ? await getParentsWithScheduledLessonsInRange(insertSchoolId, df, dt, scopedGroupIds)
+      ? await getParentsWithScheduledLessonsInRange(
+          insertSchoolId,
+          df,
+          dt,
+          storeAllGroups ? null : scopedGroupIds,
+        )
       : [];
 
     let messageActor: Awaited<ReturnType<typeof requireMessageActor>> | null = null;
@@ -348,18 +392,32 @@ export async function POST(request: NextRequest) {
     }
 
     const ins = await queryDb(
-      `INSERT INTO school_holidays (id, school_id, school_year_id, name, date_from, date_to, type, created_at)
-       VALUES ($1, $2, $3, $4, $5::date, $6::date, $7, NOW())
-       RETURNING id, school_id, school_year_id, name, date_from::text, date_to::text, type, created_at`,
-      [id, insertSchoolId, yearId, name.trim(), df, dt, type]
+      `INSERT INTO school_holidays (
+         id, school_id, school_year_id, name, date_from, date_to, type,
+         applies_to_preschool, applies_to_school, created_at
+       )
+       VALUES ($1, $2, $3, $4, $5::date, $6::date, $7, $8, $9, NOW())
+       RETURNING id, school_id, school_year_id, name, date_from::text, date_to::text, type,
+                 applies_to_preschool, applies_to_school, created_at`,
+      [
+        id,
+        insertSchoolId,
+        yearId,
+        name.trim(),
+        df,
+        dt,
+        type,
+        facilityFlagsSet ? appliesToPreschool : false,
+        facilityFlagsSet ? appliesToSchool : false,
+      ],
     );
     const row = ins.rows[0] as Record<string, unknown>;
 
-    if (scopedGroupIds && scopedGroupIds.length > 0) {
+    if (holidayGroupIds && holidayGroupIds.length > 0) {
       await queryDb(
         `INSERT INTO school_holiday_groups (holiday_id, group_id)
          SELECT $1, UNNEST($2::text[])`,
-        [id, scopedGroupIds],
+        [id, holidayGroupIds],
       );
     }
 
@@ -367,7 +425,7 @@ export async function POST(request: NextRequest) {
       insertSchoolId,
       df,
       dt,
-      scopedGroupIds,
+      storeAllGroups ? null : scopedGroupIds,
       {
         actorUserId: ctx.userId,
         holidayId: id,
@@ -405,7 +463,13 @@ export async function POST(request: NextRequest) {
     }
 
     let message = "Dodano dzień wolny.";
-    if (scopedGroupIds && scopedGroupIds.length > 0) {
+    if (storeAllGroups) {
+      message += " Dotyczy wszystkich grup (przedszkola i szkoły).";
+    } else if (appliesToSchool && !appliesToPreschool) {
+      message += " Dotyczy wszystkich grup szkolnych (także przyszłych).";
+    } else if (appliesToPreschool && !appliesToSchool) {
+      message += " Dotyczy wszystkich grup przedszkolnych (także przyszłych).";
+    } else if (scopedGroupIds && scopedGroupIds.length > 0) {
       message += ` Dotyczy ${scopedGroupIds.length} grup.`;
     }
     if (deletion.deleted > 0) {
@@ -430,8 +494,10 @@ export async function POST(request: NextRequest) {
         ...row,
         date_from: String(row.date_from).slice(0, 10),
         date_to: String(row.date_to).slice(0, 10),
-        group_ids: scopedGroupIds ?? [],
-        applies_to_all_groups: !scopedGroupIds || scopedGroupIds.length === 0,
+        group_ids: holidayGroupIds ?? [],
+        applies_to_preschool: facilityFlagsSet ? appliesToPreschool : false,
+        applies_to_school: facilityFlagsSet ? appliesToSchool : false,
+        applies_to_all_groups: storeAllGroups || !holidayGroupIds || holidayGroupIds.length === 0,
       },
       lessonsCancelled: deletion.deleted,
       lessonsDeleted: deletion.deleted,

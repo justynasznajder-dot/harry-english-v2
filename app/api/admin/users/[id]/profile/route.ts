@@ -10,6 +10,33 @@ import {
   requireAdminSchoolContext,
 } from "@/lib/admin-school-context";
 import { parentHasSiblingDeclared } from "@/lib/parent-contract";
+import { diffTrackedFields, writeAdminChangeLog } from "@/lib/admin-change-log";
+
+const PARENT_PROFILE_FIELDS = [
+  "address",
+  "city",
+  "zip_code",
+  "company_name",
+  "nip",
+  "billing_type",
+] as const;
+
+function profileSnapshot(profile: {
+  address: string | null;
+  city: string | null;
+  zip_code: string | null;
+  company_name: string | null;
+  nip: string | null;
+} | null): Record<string, unknown> {
+  return {
+    address: profile?.address ?? null,
+    city: profile?.city ?? null,
+    zip_code: profile?.zip_code ?? null,
+    company_name: profile?.company_name ?? null,
+    nip: profile?.nip ?? null,
+    billing_type: profile?.company_name || profile?.nip ? "company" : "private",
+  };
+}
 
 async function loadParentDiscountDeclarations(
   parentId: string,
@@ -222,6 +249,23 @@ export async function PUT(
 
     if (!profile) {
       return NextResponse.json({ message: "Nie udało się zapisać profilu" }, { status: 500 });
+    }
+
+    const diff = diffTrackedFields(
+      profileSnapshot(existing),
+      profileSnapshot(profile),
+      [...PARENT_PROFILE_FIELDS],
+    );
+    if (diff) {
+      await writeAdminChangeLog({
+        schoolId: target.school_id,
+        actorUserId: actor.id,
+        entityType: "parent",
+        entityId: targetUserId,
+        action: "PROFILE_UPDATE",
+        summary: `Zmiana danych do faktury: ${target.first_name} ${target.last_name}`,
+        payload: diff,
+      });
     }
 
     return NextResponse.json({

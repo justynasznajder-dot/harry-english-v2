@@ -5,7 +5,10 @@ import {
   INVOICE_MANUAL_GENERATE_DISABLED_MESSAGE,
   isInvoiceManualGenerateDisabled,
 } from "@/lib/invoice-generate-guard";
-import { generateMonthlyInvoicesForSchool } from "@/lib/invoicing";
+import {
+  generateMonthlyInvoicesForSchool,
+  parseDiscountsByContractId,
+} from "@/lib/invoicing";
 import { firstDayOfMonthUtcDate } from "@/lib/school-timezone";
 
 export const maxDuration = 120;
@@ -49,9 +52,26 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const body = (await request.json().catch(() => ({}))) as { periodMonth?: string };
+    const body = (await request.json().catch(() => ({}))) as {
+      periodMonth?: string;
+      contractIds?: unknown;
+      discountsByContractId?: unknown;
+    };
     const periodMonth = parsePeriodMonth(body.periodMonth) ?? firstDayOfMonthUtcDate();
-    const result = await generateMonthlyInvoicesForSchool(ctx.schoolId, periodMonth);
+    const contractIds = Array.isArray(body.contractIds)
+      ? body.contractIds.map((id) => String(id ?? "").trim()).filter(Boolean)
+      : null;
+    if (contractIds && contractIds.length === 0) {
+      return NextResponse.json(
+        { message: "Zaznacz co najmniej jedną fakturę do wygenerowania" },
+        { status: 400 }
+      );
+    }
+    const discountsByContractId = parseDiscountsByContractId(body.discountsByContractId);
+    const result = await generateMonthlyInvoicesForSchool(ctx.schoolId, periodMonth, {
+      contractIds,
+      discountsByContractId,
+    });
 
     return NextResponse.json({
       message: buildMonthlyInvoiceMessage(result),

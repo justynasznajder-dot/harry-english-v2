@@ -1560,6 +1560,10 @@ export async function sendInvoiceNotificationEmail(params: {
   description: string;
   periodLabel?: string | null;
   dueDateLabel: string;
+  invoiceNumber?: string | null;
+  paymentMethod?: string | null;
+  bankAccountLabel?: string | null;
+  transferTitle?: string | null;
   schoolEmail?: string;
 }) {
   const p = getEmailPalette();
@@ -1569,20 +1573,51 @@ export async function sendInvoiceNotificationEmail(params: {
   };
   const schoolEmail = params.schoolEmail?.trim() || "kontakt@harry-english.pl";
   const portalUrl = `${getAppBaseUrl()}/portal/login`;
-  const periodPart = params.periodLabel?.trim()
-    ? `<p><strong>Okres:</strong> ${escapeHtmlForEmail(params.periodLabel.trim())}</p>`
-    : "";
+  const invoiceNumber = params.invoiceNumber?.trim() || "";
+  const paymentMethod = params.paymentMethod?.trim() || "Przelew";
+  const bankAccountLabel = params.bankAccountLabel?.trim() || "";
+  const transferTitle = params.transferTitle?.trim() || "";
+
+  const detailLine = (label: string, value: string) =>
+    value
+      ? `<p><strong>${escapeHtmlForEmail(label)}:</strong> ${escapeHtmlForEmail(value)}</p>`
+      : "";
+
+  const transferHint = transferTitle
+    ? `W tytule przelewu prosimy wpisać numer umowy (${escapeHtmlForEmail(transferTitle)}) — to wystarczy, żeby system zweryfikował płatności w kolejnych miesiącach, a Wam ułatwi ustawienie stałego zlecenia.`
+    : `W tytule przelewu prosimy wpisać numer umowy — to wystarczy, żeby system zweryfikował płatności w kolejnych miesiącach, a Wam ułatwi ustawienie stałego zlecenia.`;
+
   const contentHtml = `
-    <p>Wystawiliśmy nową fakturę. <strong>Faktury nie wysyłamy mailem</strong> — dokument PDF jest do pobrania w panelu rodzica (zakładka <strong>Płatności</strong>).</p>
-    <p><strong>Opis:</strong> ${escapeHtmlForEmail(params.description)}</p>
-    ${periodPart}
-    <p><strong>Kwota:</strong> ${escapeHtmlForEmail(params.amountLabel)}</p>
-    <p><strong>Termin płatności:</strong> ${escapeHtmlForEmail(params.dueDateLabel)}</p>
+    <p>Wystawiliśmy nową fakturę. <strong>Faktur nie wysyłamy mailem</strong> — dokument PDF jest do pobrania w panelu rodzica (zakładka <strong>Płatności</strong>).</p>
+    <p>${transferHint}</p>
+    ${detailLine("Numer faktury", invoiceNumber)}
+    ${detailLine("Okres", params.periodLabel?.trim() || "")}
+    ${detailLine("Kwota", params.amountLabel)}
+    ${detailLine("Tytuł przelewu", transferTitle)}
+    ${detailLine("Termin płatności", params.dueDateLabel)}
+    ${detailLine("Sposób płatności", paymentMethod)}
+    ${detailLine("Numer konta", bankAccountLabel)}
     ${emailCtaButton(portalUrl, "Przejdź do panelu rodzica")}
     <p>W razie pytań prosimy o kontakt: <a href="mailto:${escapeHtmlForEmail(schoolEmail)}" style="color:${p.link};">${escapeHtmlForEmail(schoolEmail)}</a>.</p>
   `;
-  const textPeriod = params.periodLabel?.trim() ? ` Okres: ${params.periodLabel.trim()}.` : "";
-  const textBody = `Wystawiono fakturę (do pobrania w panelu rodzica / Płatności): ${params.description}.${textPeriod} Kwota: ${params.amountLabel}. Termin płatności: ${params.dueDateLabel}. Panel: ${portalUrl}. Kontakt: ${schoolEmail}.`;
+
+  const textTransferHint = transferTitle
+    ? `W tytule przelewu prosimy wpisać numer umowy (${transferTitle}) — to wystarczy, żeby system zweryfikował płatności w kolejnych miesiącach, a Wam ułatwi ustawienie stałego zlecenia.`
+    : `W tytule przelewu prosimy wpisać numer umowy — to wystarczy, żeby system zweryfikował płatności w kolejnych miesiącach, a Wam ułatwi ustawienie stałego zlecenia.`;
+
+  const textParts = [
+    "Wystawiliśmy nową fakturę. Faktur nie wysyłamy mailem — dokument PDF jest do pobrania w panelu rodzica (zakładka Płatności).",
+    textTransferHint,
+    invoiceNumber ? `Numer faktury: ${invoiceNumber}.` : null,
+    params.periodLabel?.trim() ? `Okres: ${params.periodLabel.trim()}.` : null,
+    `Kwota: ${params.amountLabel}.`,
+    transferTitle ? `Tytuł przelewu: ${transferTitle}.` : null,
+    `Termin płatności: ${params.dueDateLabel}.`,
+    `Sposób płatności: ${paymentMethod}.`,
+    bankAccountLabel ? `Numer konta: ${bankAccountLabel}.` : null,
+    `Panel: ${portalUrl}.`,
+    `Kontakt: ${schoolEmail}.`,
+  ].filter(Boolean);
 
   await sendHarryMail({
     from,
@@ -1590,9 +1625,8 @@ export async function sendInvoiceNotificationEmail(params: {
     subject: "Nowa faktura w panelu rodzica — Harry English",
     html: buildEmailShell({
       title: `Dzień dobry,`,
-      intro: "Faktura jest gotowa do pobrania w panelu rodzica.",
       contentHtml,
     }),
-    text: `Dzień dobry, ${textBody}`,
+    text: `Dzień dobry, ${textParts.join(" ")}`,
   });
 }

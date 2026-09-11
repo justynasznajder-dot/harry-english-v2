@@ -1,0 +1,588 @@
+'use client';
+
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import AdminEntityChangeHistory from '@/src/components/admin/AdminEntityChangeHistory';
+
+type AdminUserDetail = {
+  id: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  role: string;
+  confirmed: boolean;
+  active: boolean;
+  phone: string | null;
+  hasSignedContract?: boolean;
+};
+
+type ParentProfileDto = {
+  id: string;
+  address: string | null;
+  city: string | null;
+  zipCode: string | null;
+  companyName?: string | null;
+  nip?: string | null;
+  billingType?: 'private' | 'company';
+  discountLargeFamily?: boolean;
+  enrollingMultipleChildren?: boolean;
+} | null;
+
+type ParentChildRow = {
+  child_id: string;
+  first_name: string;
+  last_name: string;
+  birth_date: string;
+  active: boolean;
+  confirmed: boolean;
+  client_number: string | null;
+  group_name: string | null;
+};
+
+type Props = {
+  parentId: string;
+  /** W modalu: bez linków „powrót” / pełnej nawigacji strony. */
+  embedded?: boolean;
+  onOpenChild?: (childId: string) => void;
+  onChanged?: () => void;
+};
+
+export default function AdminParentProfilePanel({
+  parentId,
+  embedded = false,
+  onOpenChild,
+  onChanged,
+}: Props) {
+  const router = useRouter();
+  const id = parentId;
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [user, setUser] = useState<AdminUserDetail | null>(null);
+
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [confirmed, setConfirmed] = useState(false);
+
+  const [address, setAddress] = useState('');
+  const [city, setCity] = useState('');
+  const [zipCode, setZipCode] = useState('');
+  const [billingType, setBillingType] = useState<'private' | 'company'>('private');
+  const [companyName, setCompanyName] = useState('');
+  const [nip, setNip] = useState('');
+  const [discountLargeFamily, setDiscountLargeFamily] = useState(false);
+  const [enrollingMultipleChildren, setEnrollingMultipleChildren] = useState(false);
+  const [children, setChildren] = useState<ParentChildRow[]>([]);
+  const [hasInvoiceProfile, setHasInvoiceProfile] = useState(false);
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
+
+  const load = useCallback(async () => {
+    if (!id) return;
+    setError(null);
+    setLoading(true);
+    try {
+      const [uRes, pRes, cRes] = await Promise.all([
+        fetch(`/api/admin/users/${id}`, { cache: 'no-store' }),
+        fetch(`/api/admin/users/${id}/profile`, { cache: 'no-store' }),
+        fetch(`/api/admin/children?parentId=${encodeURIComponent(id)}`, { cache: 'no-store' }),
+      ]);
+      const uJson = await uRes.json();
+      if (!uRes.ok) {
+        throw new Error(uJson.message ?? 'Nie udało się wczytać użytkownika');
+      }
+      const u = uJson.user as AdminUserDetail;
+      if (u.role !== 'PARENT') {
+        throw new Error('Ten widok dotyczy wyłącznie kont rodzica');
+      }
+      setUser(u);
+      setFirstName(u.first_name ?? '');
+      setLastName(u.last_name ?? '');
+      setEmail(u.email ?? '');
+      setPhone(u.phone ?? '');
+      setConfirmed(Boolean(u.confirmed));
+
+      if (pRes.ok) {
+        const pJson = await pRes.json();
+        const p = pJson.profile as ParentProfileDto;
+        setAddress(p?.address ?? '');
+        setCity(p?.city ?? '');
+        setZipCode(p?.zipCode ?? '');
+        setBillingType(p?.billingType === 'company' ? 'company' : 'private');
+        setCompanyName(p?.companyName ?? '');
+        setNip(p?.nip ?? '');
+        setDiscountLargeFamily(Boolean(pJson.discountLargeFamily ?? p?.discountLargeFamily));
+        setEnrollingMultipleChildren(
+          Boolean(pJson.enrollingMultipleChildren ?? p?.enrollingMultipleChildren),
+        );
+        setHasInvoiceProfile(
+          Boolean(
+            p &&
+              (p.address?.trim() ||
+                p.city?.trim() ||
+                p.zipCode?.trim() ||
+                p.companyName?.trim() ||
+                p.nip?.trim()),
+          ),
+        );
+      } else {
+        setAddress('');
+        setCity('');
+        setZipCode('');
+        setBillingType('private');
+        setCompanyName('');
+        setNip('');
+        setDiscountLargeFamily(false);
+        setEnrollingMultipleChildren(false);
+        setHasInvoiceProfile(false);
+      }
+
+      if (cRes.ok) {
+        const cJson = await cRes.json();
+        setChildren((cJson.children as ParentChildRow[]) ?? []);
+      } else {
+        setChildren([]);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd ładowania');
+      setUser(null);
+      setChildren([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    if (!successMessage) return;
+    const timer = setTimeout(() => setSuccessMessage(null), 3000);
+    return () => clearTimeout(timer);
+  }, [successMessage]);
+
+  const handleSave = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!id || !user) return;
+    setSaving(true);
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      const uRes = await fetch(`/api/admin/users/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          first_name: firstName.trim(),
+          last_name: lastName.trim(),
+          email: email.trim(),
+          role: 'PARENT',
+          confirmed,
+          phone: phone.trim() || null,
+        }),
+      });
+      const uData = await uRes.json();
+      if (!uRes.ok) throw new Error(uData.message ?? 'Błąd zapisu danych użytkownika');
+
+      const pRes = await fetch(`/api/admin/users/${id}/profile`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          billingType,
+          address: address.trim() || null,
+          city: city.trim() || null,
+          zipCode: zipCode.trim() || null,
+          companyName: billingType === 'company' ? companyName.trim() || null : null,
+          nip: billingType === 'company' ? nip.trim() || null : null,
+        }),
+      });
+      const pData = await pRes.json();
+      if (!pRes.ok) throw new Error(pData.message ?? 'Błąd zapisu profilu rodzica');
+      setHasInvoiceProfile(
+        Boolean(
+          address.trim() ||
+            city.trim() ||
+            zipCode.trim() ||
+            (billingType === 'company' && (companyName.trim() || nip.trim())),
+        ),
+      );
+
+      setUser((prev) =>
+        prev
+          ? {
+              ...prev,
+              first_name: firstName.trim(),
+              last_name: lastName.trim(),
+              email: email.trim(),
+              phone: phone.trim() || null,
+              confirmed,
+            }
+          : prev,
+      );
+      setSuccessMessage('Zmiany zapisane.');
+      setHistoryRefreshKey((k) => k + 1);
+      onChanged?.();
+      if (!embedded) router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd zapisu');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleToggleActive = async () => {
+    if (!id || !user) return;
+    setSaving(true);
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      if (user.active) {
+        const res = await fetch(`/api/admin/users/${id}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message ?? 'Nie udało się dezaktywować');
+        setUser({ ...user, active: false });
+        setSuccessMessage('Konto zostało dezaktywowane.');
+      } else {
+        const res = await fetch(`/api/admin/users/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ restore: true }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message ?? 'Nie udało się przywrócić');
+        setUser({ ...user, active: true });
+        setSuccessMessage('Konto zostało aktywowane.');
+      }
+      setHistoryRefreshKey((k) => k + 1);
+      onChanged?.();
+      if (!embedded) router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd operacji');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openChild = (childId: string) => {
+    if (onOpenChild) {
+      onOpenChild(childId);
+      return;
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="rounded-2xl border border-emerald-100 bg-white p-10 text-center text-zinc-600">
+        Wczytywanie…
+      </div>
+    );
+  }
+
+  if (error && !user) {
+    return (
+      <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-red-800">{error}</div>
+    );
+  }
+
+  if (!user) return null;
+
+  return (
+    <div className={embedded ? 'mx-auto max-w-3xl' : undefined}>
+      {!embedded ? (
+        <header className="mb-6 rounded-2xl border border-emerald-900/30 bg-[#f8f6f3] px-5 py-4 shadow-lg">
+          <h1 className="text-xl font-bold text-[#0f6e56] sm:text-2xl">Edycja rodzica</h1>
+          <p className="mt-1 text-sm text-zinc-600">
+            Pełny widok konta i adresu — tutaj możesz rozbudowywać dane w przyszłości.
+          </p>
+        </header>
+      ) : null}
+
+      <form onSubmit={handleSave} className="space-y-6">
+        {error ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+            {error}
+          </div>
+        ) : null}
+
+        <section className="rounded-2xl border border-emerald-100 bg-white p-5 shadow-sm sm:p-6">
+          <h2 className="text-lg font-semibold text-[#1e3a4c]">Dane konta</h2>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <label className="flex flex-col gap-1 text-sm text-zinc-700">
+              Imię
+              <input
+                required
+                className="rounded-xl border border-emerald-200 px-3 py-2 text-zinc-900"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm text-zinc-700">
+              Nazwisko
+              <input
+                required
+                className="rounded-xl border border-emerald-200 px-3 py-2 text-zinc-900"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm text-zinc-700 sm:col-span-2">
+              Email
+              <input
+                required
+                type="email"
+                className="rounded-xl border border-emerald-200 px-3 py-2 text-zinc-900"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm text-zinc-700 sm:col-span-2">
+              Telefon
+              <input
+                type="tel"
+                className="rounded-xl border border-emerald-200 px-3 py-2 text-zinc-900"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="+48 …"
+              />
+            </label>
+            <label className="flex items-center gap-2 text-sm text-zinc-700 sm:col-span-2">
+              <input
+                type="checkbox"
+                checked={confirmed}
+                disabled={Boolean(user.hasSignedContract)}
+                onChange={(e) => setConfirmed(e.target.checked)}
+                className="h-4 w-4 rounded border-emerald-300 text-[#0f6e56] focus:ring-[#0f6e56] disabled:opacity-60"
+              />
+              Konto potwierdzone
+            </label>
+            {user.hasSignedContract ? (
+              <p className="text-xs text-zinc-500 sm:col-span-2">
+                Automatycznie po podpisanej umowie — nie można odznaczyć.
+              </p>
+            ) : null}
+          </div>
+          <p className="mt-3 text-xs text-zinc-500">
+            Status:{' '}
+            <span className="font-medium text-zinc-800">
+              {user.active ? 'aktywny' : 'nieaktywny'}
+            </span>
+          </p>
+        </section>
+
+        <section className="rounded-2xl border border-emerald-100 bg-white p-5 shadow-sm sm:p-6">
+          <h2 className="text-lg font-semibold text-[#1e3a4c]">Dane do faktury</h2>
+          <p className="mt-1 text-sm text-zinc-600">
+            Te same pola, które rodzic wypełnia w „Profil i dane do faktury”. Po zapisie u rodzica
+            pojawiają się tutaj automatycznie.
+          </p>
+          {!hasInvoiceProfile ? (
+            <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              Rodzic nie uzupełnił jeszcze danych do faktury.
+            </p>
+          ) : null}
+          <div className="mt-4 space-y-4">
+            <div className="flex flex-wrap gap-4 text-sm text-zinc-700">
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="billingType"
+                  checked={billingType === 'private'}
+                  onChange={() => setBillingType('private')}
+                  className="h-4 w-4 border-emerald-300 text-[#0f6e56] focus:ring-[#0f6e56]"
+                />
+                Osoba prywatna
+              </label>
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="billingType"
+                  checked={billingType === 'company'}
+                  onChange={() => setBillingType('company')}
+                  className="h-4 w-4 border-emerald-300 text-[#0f6e56] focus:ring-[#0f6e56]"
+                />
+                Firma
+              </label>
+            </div>
+            {billingType === 'company' ? (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="flex flex-col gap-1 text-sm text-zinc-700 sm:col-span-2">
+                  Nazwa firmy
+                  <input
+                    className="rounded-xl border border-emerald-200 px-3 py-2 text-zinc-900"
+                    value={companyName}
+                    onChange={(e) => setCompanyName(e.target.value)}
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm text-zinc-700">
+                  NIP
+                  <input
+                    className="rounded-xl border border-emerald-200 px-3 py-2 text-zinc-900"
+                    value={nip}
+                    onChange={(e) => setNip(e.target.value)}
+                    inputMode="numeric"
+                  />
+                </label>
+              </div>
+            ) : null}
+            <label className="flex flex-col gap-1 text-sm text-zinc-700">
+              Ulica i numer
+              <input
+                className="rounded-xl border border-emerald-200 px-3 py-2 text-zinc-900"
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+              />
+            </label>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="flex flex-col gap-1 text-sm text-zinc-700">
+                Miasto
+                <input
+                  className="rounded-xl border border-emerald-200 px-3 py-2 text-zinc-900"
+                  value={city}
+                  onChange={(e) => setCity(e.target.value)}
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-sm text-zinc-700">
+                Kod pocztowy (max 10 znaków)
+                <input
+                  maxLength={10}
+                  className="rounded-xl border border-emerald-200 px-3 py-2 text-zinc-900"
+                  value={zipCode}
+                  onChange={(e) => setZipCode(e.target.value)}
+                />
+              </label>
+            </div>
+            <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 px-3 py-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                Deklaracje rabatów rodzica
+              </p>
+              <p className="mt-1 text-xs text-zinc-500">
+                Zaznaczone przez rodzica przy zapisie / umowie — tylko podgląd.
+              </p>
+              <div className="mt-3 flex flex-col gap-2 text-sm text-zinc-700">
+                <label className="inline-flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={discountLargeFamily}
+                    disabled
+                    readOnly
+                    className="mt-0.5 h-4 w-4 rounded border-emerald-300 text-[#0f6e56] focus:ring-[#0f6e56] disabled:opacity-90"
+                  />
+                  <span>Karta Dużej Rodziny (KDR)</span>
+                </label>
+                <label className="inline-flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={enrollingMultipleChildren}
+                    disabled
+                    readOnly
+                    className="mt-0.5 h-4 w-4 rounded border-emerald-300 text-[#0f6e56] focus:ring-[#0f6e56] disabled:opacity-90"
+                  />
+                  <span>Rodzeństwo (więcej niż jedno dziecko)</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="submit"
+            disabled={saving}
+            className="cursor-pointer rounded-lg border border-zinc-800/40 bg-white px-3 py-1 text-[#1e3a4c] transition hover:border-[#0f6e56] hover:bg-emerald-50 hover:text-[#0f6e56] disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {saving ? 'Zapisywanie…' : 'Zapisz zmiany'}
+          </button>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void handleToggleActive()}
+            className={`rounded-lg px-3 py-1 text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
+              user.active ? 'admin-user-toggle-danger' : 'admin-user-toggle-success'
+            }`}
+          >
+            {user.active ? 'Dezaktywuj konto' : 'Aktywuj konto'}
+          </button>
+        </div>
+        {successMessage ? (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            {successMessage}
+          </div>
+        ) : null}
+      </form>
+
+      <section className="mt-6 rounded-2xl border border-emerald-100 bg-white p-5 shadow-sm sm:p-6">
+        <h2 className="text-lg font-semibold text-[#1e3a4c]">
+          Dzieci <span className="font-normal text-zinc-500">({children.length})</span>
+        </h2>
+        {children.length === 0 ? (
+          <p className="mt-3 text-sm text-zinc-500">Brak dzieci powiązanych z tym kontem.</p>
+        ) : (
+          <ul className="mt-4 divide-y divide-emerald-50">
+            {children.map((ch) => (
+              <li
+                key={ch.child_id}
+                className="flex flex-wrap items-center justify-between gap-2 py-3 first:pt-0 last:pb-0"
+              >
+                <div className="min-w-0">
+                  {onOpenChild ? (
+                    <button
+                      type="button"
+                      onClick={() => openChild(ch.child_id)}
+                      className="font-medium text-[#0f6e56] underline-offset-2 hover:underline"
+                    >
+                      {ch.first_name} {ch.last_name}
+                    </button>
+                  ) : (
+                    <Link
+                      href={`/portal/children/${ch.child_id}`}
+                      className="font-medium text-[#0f6e56] underline-offset-2 hover:underline"
+                    >
+                      {ch.first_name} {ch.last_name}
+                    </Link>
+                  )}
+                  <p className="mt-0.5 text-xs text-zinc-500">
+                    {ch.client_number ? `ID ${ch.client_number} · ` : null}
+                    {ch.birth_date}
+                    {ch.group_name ? ` · ${ch.group_name}` : null}
+                    {' · '}
+                    {ch.confirmed ? 'potwierdzony' : 'niepotwierdzony'}
+                    {' · '}
+                    {ch.active ? 'aktywny' : 'nieaktywny'}
+                  </p>
+                </div>
+                {onOpenChild ? (
+                  <button
+                    type="button"
+                    onClick={() => openChild(ch.child_id)}
+                    className="shrink-0 rounded-lg bg-zinc-100 px-3 py-1 text-xs font-semibold text-zinc-800 hover:bg-emerald-50 hover:text-[#0f6e56]"
+                  >
+                    Profil
+                  </button>
+                ) : (
+                  <Link
+                    href={`/portal/children/${ch.child_id}`}
+                    className="shrink-0 rounded-lg bg-zinc-100 px-3 py-1 text-xs font-semibold text-zinc-800 hover:bg-emerald-50 hover:text-[#0f6e56]"
+                  >
+                    Profil
+                  </Link>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <div className="mt-6">
+        <AdminEntityChangeHistory
+          entityType="parent"
+          entityId={id}
+          refreshKey={historyRefreshKey}
+        />
+      </div>
+    </div>
+  );
+}

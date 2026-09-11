@@ -25,6 +25,14 @@ export function formatInvoiceDatePl(date: Date | string): string {
   return `${day}-${month}-${year}`;
 }
 
+/** Treść pola „Tytuł przelewu” na fakturze. */
+export function formatInvoiceTransferTitle(contractNumber: string | null | undefined): string {
+  const raw = String(contractNumber ?? "").trim();
+  if (!raw || raw === "—") return "—";
+  if (/^umowa\s+numer\s*:/i.test(raw)) return raw;
+  return `umowa numer: ${raw}`;
+}
+
 const ONES = [
   "",
   "jeden",
@@ -167,6 +175,8 @@ export type InvoiceHtmlPlaceholders = {
   due_date: string;
   bank_label: string;
   bank_account: string;
+  /** Tytuł przelewu — zwykle numer umowy. */
+  transfer_title: string;
   vat_exemption: string;
   issuer_name: string;
 };
@@ -301,12 +311,20 @@ export const INVOICE_HTML_TEMPLATE = `<!DOCTYPE html>
       width: 100%;
       border-collapse: collapse;
       margin-bottom: 16px;
+      table-layout: fixed;
     }
     .pay td {
       border: 1px solid #333;
       padding: 6px 8px;
       vertical-align: top;
     }
+    .pay td.pay-method { width: 16%; }
+    .pay td.pay-due { width: 18%; }
+    .pay td.pay-account { width: 40%; }
+    .pay td.pay-title { width: 26%; }
+    .pay .heading { font-weight: 700; margin-bottom: 4px; }
+    .pay .bank-label { margin-bottom: 2px; }
+    .pay .bank-account { white-space: nowrap; font-size: 10px; }
     .vat {
       border: 1px solid #333;
       padding: 8px 10px;
@@ -392,12 +410,22 @@ export const INVOICE_HTML_TEMPLATE = `<!DOCTYPE html>
 
   <table class="pay">
     <tr>
-      <td style="width:25%">{{payment_method}}</td>
-      <td style="width:25%">do dnia {{due_date}}</td>
-      <td style="width:20%">Na rachunek</td>
-      <td>
-        <div>{{bank_label}}</div>
-        <div>{{bank_account}}</div>
+      <td class="pay-method">
+        <div class="heading">Sposób płatności</div>
+        <div>{{payment_method}}</div>
+      </td>
+      <td class="pay-due">
+        <div class="heading">Termin płatności</div>
+        <div>do dnia {{due_date}}</div>
+      </td>
+      <td class="pay-account">
+        <div class="heading">Na rachunek</div>
+        <div class="bank-label">{{bank_label}}</div>
+        <div class="bank-account">{{bank_account}}</div>
+      </td>
+      <td class="pay-title">
+        <div class="heading">Tytuł przelewu</div>
+        <div>{{transfer_title}}</div>
       </td>
     </tr>
   </table>
@@ -455,6 +483,8 @@ export function buildInvoicePlaceholders(params: {
   documentTitle?: string;
   originalInvoiceNumber?: string | null;
   correctionReason?: string | null;
+  /** Numer umowy → tytuł przelewu na fakturze. */
+  transferTitle?: string | null;
 }): InvoiceHtmlPlaceholders {
   const items: InvoiceHtmlItemInput[] =
     params.items && params.items.length > 0
@@ -514,6 +544,7 @@ export function buildInvoicePlaceholders(params: {
     due_date: formatInvoiceDatePl(params.dueDate),
     bank_label: params.bankLabel,
     bank_account: params.bankAccount,
+    transfer_title: formatInvoiceTransferTitle(params.transferTitle),
     vat_exemption: params.vatExemption,
     issuer_name: params.issuerName,
   };

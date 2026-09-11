@@ -78,31 +78,31 @@ describe("contract numbers", () => {
 });
 
 describe("invoice numbers", () => {
-  it("builds sale ChildID/month/year/n without month padding", () => {
+  it("builds sale contractNumber/month/year/n without month padding", () => {
     expect(
       buildSaleInvoiceNumber({
-        childClientNumber: "00001/1",
+        contractNumber: "00053/2/2026",
         month: 9,
         year: 2026,
         sequence: 1,
       })
-    ).toBe("00001/1/9/2026/1");
+    ).toBe("00053/2/2026/9/2026/1");
     expect(
       buildSaleInvoiceNumber({
-        childClientNumber: "00042/2",
+        contractNumber: "00042/2/2026/A1",
         month: 12,
         year: 2026,
         sequence: 3,
       })
-    ).toBe("00042/2/12/2026/3");
+    ).toBe("00042/2/2026/A1/12/2026/3");
   });
 
   it("builds corrective /K1 /K2 suffixes", () => {
-    expect(buildCorrectiveInvoiceNumber("00001/1/9/2026/1", 1)).toBe(
-      "00001/1/9/2026/1/K1"
+    expect(buildCorrectiveInvoiceNumber("00053/2/2026/9/2026/1", 1)).toBe(
+      "00053/2/2026/9/2026/1/K1"
     );
-    expect(buildCorrectiveInvoiceNumber("00001/1/9/2026/1", 2)).toBe(
-      "00001/1/9/2026/1/K2"
+    expect(buildCorrectiveInvoiceNumber("00053/2/2026/9/2026/1", 2)).toBe(
+      "00053/2/2026/9/2026/1/K2"
     );
   });
 });

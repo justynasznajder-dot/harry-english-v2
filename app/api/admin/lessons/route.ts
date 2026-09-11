@@ -141,6 +141,8 @@ export async function GET(request: NextRequest) {
         h.date_from::text,
         h.date_to::text,
         h.type,
+        COALESCE(h.applies_to_preschool, FALSE) AS applies_to_preschool,
+        COALESCE(h.applies_to_school, FALSE) AS applies_to_school,
         COALESCE(
           (SELECT array_agg(shg.group_id ORDER BY shg.group_id)
            FROM school_holiday_groups shg
@@ -173,6 +175,8 @@ export async function GET(request: NextRequest) {
         date_to: string;
         type: string;
         group_ids: string[] | null;
+        applies_to_preschool: boolean;
+        applies_to_school: boolean;
       }>(holidaysSql, holidayParams),
     ]);
 
@@ -241,10 +245,14 @@ export async function GET(request: NextRequest) {
     }> = holidaysRes.rows.map((row) => {
       const gids = normalizeGroupIds(row.group_ids);
       const kinds = gids.map((id) => groupKindById.get(id) ?? "unknown");
+      const appliesToPreschool = Boolean(row.applies_to_preschool);
+      const appliesToSchool = Boolean(row.applies_to_school);
       const scope = resolveHolidayCalendarScope({
         type: row.type,
         groupIds: gids,
         groupKinds: kinds,
+        appliesToPreschool,
+        appliesToSchool,
       });
       return {
         id: row.id,
@@ -253,7 +261,9 @@ export async function GET(request: NextRequest) {
         date_to: String(row.date_to).slice(0, 10),
         type: row.type,
         group_ids: gids,
-        applies_to_all_groups: gids.length === 0,
+        applies_to_all_groups:
+          (appliesToPreschool && appliesToSchool) ||
+          (!appliesToPreschool && !appliesToSchool && gids.length === 0),
         scope,
         audience_label: holidayAudienceLabel(scope),
       };

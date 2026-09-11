@@ -644,7 +644,7 @@ export default function EnrollmentAdminPanel({
         tone: 'danger',
         eyebrow: 'Rezygnacja',
         title: `Oznaczyć rezygnację rodzica dla ${childName}?`,
-        body: 'Zgłoszenie otrzyma status REJECTED, dziecko zniknie z panelu rodzica i zostanie usunięte z grupy.',
+        body: 'Zgłoszenie otrzyma status REJECTED (bez możliwości cofnięcia). Dziecko zniknie z panelu rodzica i zostanie usunięte z grupy. Ponowny zapis wymaga nowego zgłoszenia.',
         confirmLabel: 'Oznacz rezygnację',
         withComment: true,
         commentLabel: 'Powód rezygnacji',
@@ -2282,8 +2282,12 @@ export default function EnrollmentAdminPanel({
                           )}
                           {child.status === 'REJECTED' && (
                             <div className="rounded-xl border border-rose-200 bg-rose-50 p-2 text-xs text-rose-800">
-                              <p>
-                                Zgłoszenie odrzucone (rezygnacja rodzica lub decyzja szkoły).
+                              <p className="font-semibold">
+                                Rodzic zrezygnował — status REZYGNACJA (bez możliwości cofnięcia).
+                              </p>
+                              <p className="mt-1">
+                                Dziecko zostało usunięte z grupy i dezaktywowane. Ponowny zapis wymaga
+                                nowego zgłoszenia.
                               </p>
                               {child.rejectionComment?.trim() ? (
                                 <p className="mt-1.5 whitespace-pre-wrap">
@@ -2554,29 +2558,24 @@ export default function EnrollmentAdminPanel({
                                   </label>
                                 </div>
                                 {pricesEditable && child.status !== 'REJECTED' ? (
-                                  <label className="mt-1 flex items-start gap-2 text-sm text-zinc-700">
-                                    <input
-                                      type="checkbox"
-                                      className="mt-0.5 accent-rose-600"
-                                      checked={false}
-                                      disabled={
-                                        rejectingParentResignationId === child.requestId ||
-                                        submittingProposalRequestId != null ||
-                                        submittingBatchProposals ||
-                                        savingBatchProposals ||
-                                        notifyingGroupChangeRequestId != null
-                                      }
-                                      onChange={(e) => {
-                                        if (!e.target.checked) return;
-                                        void handleParentResignation(child);
-                                      }}
-                                    />
-                                    <span>
-                                      {rejectingParentResignationId === child.requestId
-                                        ? 'Oznaczanie rezygnacji…'
-                                        : 'Rodzic zrezygnował'}
-                                    </span>
-                                  </label>
+                                  <button
+                                    type="button"
+                                    disabled={
+                                      rejectingParentResignationId === child.requestId ||
+                                      submittingProposalRequestId != null ||
+                                      submittingBatchProposals ||
+                                      savingBatchProposals ||
+                                      notifyingGroupChangeRequestId != null
+                                    }
+                                    className="mt-1 rounded-xl border border-rose-300 bg-white px-3 py-2 text-left text-sm font-medium text-rose-800 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                    onClick={() => {
+                                      void handleParentResignation(child);
+                                    }}
+                                  >
+                                    {rejectingParentResignationId === child.requestId
+                                      ? 'Oznaczanie rezygnacji…'
+                                      : 'Oznacz: rodzic zrezygnował'}
+                                  </button>
                                 ) : null}
                                 {showGroupSelect &&
                                   (() => {

@@ -16,6 +16,17 @@ import {
   ensureStreetUlPrefix,
   type BillingType,
 } from "@/lib/parent-contract-profile";
+import { diffTrackedFields, writeAdminChangeLog } from "@/lib/admin-change-log";
+
+const PARENT_ACCOUNT_FIELDS = ["first_name", "last_name", "phone"] as const;
+const PARENT_PROFILE_FIELDS = [
+  "address",
+  "city",
+  "zip_code",
+  "company_name",
+  "nip",
+  "billing_type",
+] as const;
 
 function normalizeZip(raw: unknown): string | null {
   if (raw == null) return null;
@@ -196,6 +207,64 @@ export async function PUT(request: NextRequest) {
 
     if (!profile) {
       return NextResponse.json({ message: "Nie udało się zapisać profilu" }, { status: 500 });
+    }
+
+    const accountDiff = diffTrackedFields(
+      {
+        first_name: user.first_name,
+        last_name: user.last_name,
+        phone: user.phone,
+      },
+      {
+        first_name: formatPersonName(firstName),
+        last_name: formatPersonName(lastName),
+        phone,
+      },
+      [...PARENT_ACCOUNT_FIELDS],
+    );
+    if (accountDiff) {
+      await writeAdminChangeLog({
+        schoolId: user.school_id,
+        actorUserId: userId,
+        entityType: "parent",
+        entityId: userId,
+        action: "ACCOUNT_UPDATE",
+        summary: `Zmiana konta rodzica (panel rodzica) ${formatPersonName(firstName)} ${formatPersonName(lastName)}`,
+        payload: accountDiff,
+      });
+    }
+
+    const profileDiff = diffTrackedFields(
+      {
+        address: existingProfile?.address ?? null,
+        city: existingProfile?.city ?? null,
+        zip_code: existingProfile?.zip_code ?? null,
+        company_name: existingProfile?.company_name ?? null,
+        nip: existingProfile?.nip ?? null,
+        billing_type: existingProfile
+          ? resolveBillingTypeFromProfile(existingProfile)
+          : "private",
+      },
+      {
+        address: profile.address,
+        city: profile.city,
+        zip_code: profile.zip_code,
+        company_name: profile.company_name,
+        nip: profile.nip,
+        billing_type: resolveBillingTypeFromProfile(profile),
+      },
+      [...PARENT_PROFILE_FIELDS],
+    );
+    if (profileDiff) {
+      await writeAdminChangeLog({
+        schoolId: user.school_id,
+        actorUserId: userId,
+        entityType: "parent",
+        entityId: userId,
+        action: "PROFILE_UPDATE",
+        summary: `Zmiana danych do faktury (panel rodzica) ${formatPersonName(firstName)} ${formatPersonName(lastName)}`,
+        payload: profileDiff,
+      });
     }
 
     return NextResponse.json({

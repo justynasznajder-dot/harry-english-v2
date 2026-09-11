@@ -187,7 +187,85 @@ export async function GET(request: NextRequest) {
 
     );
 
+    const proposalRows = [...proposalsRes.rows];
 
+    // Rezygnacje bez rekordu children (np. REJECTED zanim powstał profil dziecka)
+    // — i tak pokaż na etapie Umowy.
+    const rejectedOnlyRes = await queryDb<{
+      request_id: string;
+      child_first_name: string;
+      child_last_name: string;
+      preferred_location_name: string | null;
+      preferred_location: string | null;
+      proposed_group_name: string | null;
+      location_name: string | null;
+    }>(
+      `SELECT
+         er.id AS request_id,
+         er.child_first_name,
+         er.child_last_name,
+         l.name AS preferred_location_name,
+         er.preferred_location,
+         g.name AS proposed_group_name,
+         gl.name AS location_name
+       FROM enrollment_requests er
+       LEFT JOIN locations l ON l.id = er.preferred_location
+       LEFT JOIN groups g ON g.id = er.proposed_group_id
+       LEFT JOIN locations gl ON gl.id = g.location_id
+       WHERE er.school_id = $2
+         AND UPPER(BTRIM(COALESCE(er.status::text, ''))) = 'REJECTED'
+         AND (
+           er.user_id = $1
+           OR (
+             EXISTS (
+               SELECT 1 FROM users u
+               WHERE u.id = $1
+                 AND LOWER(BTRIM(u.email::text)) = LOWER(BTRIM(er.parent_email::text))
+             )
+           )
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM children c
+           WHERE c.enrollment_request_id = er.id
+              OR (
+                c.parent_id = $1
+                AND LOWER(BTRIM(c.first_name)) = LOWER(BTRIM(er.child_first_name))
+                AND LOWER(BTRIM(c.last_name)) = LOWER(BTRIM(er.child_last_name))
+              )
+         )`,
+      [parentId, SCHOOL_ID]
+    );
+
+    const existingRequestIds = new Set(
+      proposalRows.map((row) => row.request_id).filter(Boolean) as string[]
+    );
+    for (const row of rejectedOnlyRes.rows) {
+      if (existingRequestIds.has(row.request_id)) continue;
+      proposalRows.push({
+        child_id: row.request_id,
+        request_id: row.request_id,
+        access_level: "REJECTED",
+        child_first_name: row.child_first_name,
+        child_last_name: row.child_last_name,
+        group_name: row.proposed_group_name,
+        location_name:
+          row.location_name ??
+          row.preferred_location_name ??
+          (row.preferred_location?.trim() || "Do ustalenia"),
+        schedule: "—",
+        proposed_at: null,
+        price_monthly: null,
+        price_yearly: null,
+        price_per_lesson: null,
+        lesson_unit_price: null,
+        monthly_unit_price: null,
+        yearly_unit_price: null,
+        lessons_per_week: null,
+        discount_percent: null,
+        teacher_pickup_consent: false,
+        has_discount_voucher: false,
+      });
+    }
 
     const parentRes = await queryDb<{ email: string | null }>(
       `SELECT email FROM users WHERE id = $1 LIMIT 1`,
@@ -296,7 +374,7 @@ export async function GET(request: NextRequest) {
 
 
 
-    const proposals = proposalsRes.rows.map((row) => ({
+    const proposals = proposalRows.map((row) => ({
 
       child_id: row.child_id,
 

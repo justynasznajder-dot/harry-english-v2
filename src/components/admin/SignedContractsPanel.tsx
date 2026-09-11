@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { formatContractAmount } from '@/lib/contract-html';
 import { paymentTypeShortLabel } from '@/lib/payment-labels';
 import { downloadSignedContractsXlsx } from '@/lib/signed-contracts-xlsx';
@@ -21,8 +21,10 @@ type SignedContractRow = {
   billingType: 'company' | 'private';
 };
 
-type ImageConsentFilter = '' | 'yes' | 'no' | 'unknown';
+type ImageConsentFilter = '' | 'yes' | 'no';
 type BillingTypeFilter = '' | 'company' | 'private';
+type VoucherFilter = '' | 'yes' | 'no';
+type PaymentTypeFilter = '' | 'MONTHLY' | 'YEARLY' | 'PER_LESSON';
 
 function consentLabel(value: boolean | null): string {
   if (value === true) return 'Tak';
@@ -52,8 +54,33 @@ function formatAmountPln(amount: string | null): string {
   return `${formatted} zł`;
 }
 
-const selectClass =
-  'rounded-full border border-emerald-100 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56] focus:ring-2';
+function HeaderFilterSelect({
+  value,
+  onChange,
+  ariaLabel,
+  children,
+  className = '',
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  const active = value !== '';
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label={ariaLabel}
+      className={`w-full max-w-[11rem] cursor-pointer rounded-lg border bg-white px-2 py-1.5 text-left text-xs font-semibold text-zinc-800 outline-none ring-[#0f6e56] focus:ring-2 ${
+        active ? 'border-[#0f6e56] text-[#0f6e56]' : 'border-emerald-100'
+      } ${className}`}
+    >
+      {children}
+    </select>
+  );
+}
 
 export default function SignedContractsPanel() {
   const [rows, setRows] = useState<SignedContractRow[]>([]);
@@ -62,6 +89,8 @@ export default function SignedContractsPanel() {
   const [groupFilter, setGroupFilter] = useState('');
   const [imageConsentFilter, setImageConsentFilter] = useState<ImageConsentFilter>('');
   const [billingTypeFilter, setBillingTypeFilter] = useState<BillingTypeFilter>('');
+  const [voucherFilter, setVoucherFilter] = useState<VoucherFilter>('');
+  const [paymentTypeFilter, setPaymentTypeFilter] = useState<PaymentTypeFilter>('');
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -148,13 +177,27 @@ export default function SignedContractsPanel() {
 
       if (imageConsentFilter === 'yes' && row.imageConsent !== true) return false;
       if (imageConsentFilter === 'no' && row.imageConsent !== false) return false;
-      if (imageConsentFilter === 'unknown' && row.imageConsent != null) return false;
 
       if (billingTypeFilter && row.billingType !== billingTypeFilter) return false;
 
+      if (voucherFilter === 'yes' && !row.hasDiscountVoucher) return false;
+      if (voucherFilter === 'no' && row.hasDiscountVoucher) return false;
+
+      if (paymentTypeFilter && row.paymentType !== paymentTypeFilter) {
+        return false;
+      }
+
       return true;
     });
-  }, [rows, locationFilter, groupFilter, imageConsentFilter, billingTypeFilter]);
+  }, [
+    rows,
+    locationFilter,
+    groupFilter,
+    imageConsentFilter,
+    billingTypeFilter,
+    voucherFilter,
+    paymentTypeFilter,
+  ]);
 
   const exportXlsx = useCallback(async () => {
     if (filteredRows.length === 0 || exporting) return;
@@ -188,6 +231,137 @@ export default function SignedContractsPanel() {
     });
   }, [rows, locationFilter]);
 
+  const paymentTypeOptions = useMemo(() => {
+    const present = new Set<string>();
+    for (const row of rows) {
+      const t = row.paymentType?.trim();
+      if (!t) continue;
+      present.add(t);
+    }
+    const order = ['MONTHLY', 'YEARLY', 'PER_LESSON'] as const;
+    const options: { value: string; label: string }[] = order
+      .filter((t) => present.has(t))
+      .map((t) => ({ value: t, label: paymentTypeShortLabel(t) }));
+    for (const t of present) {
+      if (!(order as readonly string[]).includes(t)) {
+        options.push({ value: t, label: paymentTypeShortLabel(t) });
+      }
+    }
+    return options;
+  }, [rows]);
+
+  const tableHeader = (
+    <thead className="bg-zinc-50 text-zinc-700">
+      <tr>
+        <th className="px-3 py-2 align-bottom font-semibold">
+          <div className="space-y-1.5">
+            <span className="block leading-snug">Imię i nazwisko dziecka</span>
+            <HeaderFilterSelect
+              value={billingTypeFilter}
+              onChange={(v) => setBillingTypeFilter(v as BillingTypeFilter)}
+              ariaLabel="Filtr typu umowy"
+              className="max-w-[12rem]"
+            >
+              <option value="">Typ: wszystkie</option>
+              <option value="company">Na firmę</option>
+              <option value="private">Na os. prywatną</option>
+            </HeaderFilterSelect>
+          </div>
+        </th>
+        <th className="px-3 py-2 align-bottom font-semibold">
+          <div className="space-y-1.5">
+            <span className="block">Lokalizacja</span>
+            <HeaderFilterSelect
+              value={locationFilter}
+              onChange={(v) => {
+                setLocationFilter(v);
+                setGroupFilter('');
+              }}
+              ariaLabel="Filtr lokalizacji"
+            >
+              <option value="">Wszystkie</option>
+              {locationOptions.map((loc) => (
+                <option key={loc.id} value={loc.id}>
+                  {loc.name}
+                </option>
+              ))}
+              {hasNoLocationRows ? <option value="__none__">Bez lokalizacji</option> : null}
+            </HeaderFilterSelect>
+          </div>
+        </th>
+        <th className="px-3 py-2 align-bottom font-semibold">
+          <div className="space-y-1.5">
+            <span className="block">Grupa</span>
+            <HeaderFilterSelect
+              value={groupFilter}
+              onChange={setGroupFilter}
+              ariaLabel="Filtr grupy"
+            >
+              <option value="">Wszystkie</option>
+              {groupOptions.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+              {hasNoGroupRows ? <option value="__none__">Bez grupy</option> : null}
+            </HeaderFilterSelect>
+          </div>
+        </th>
+        <th className="max-w-[8.5rem] px-3 py-2 align-bottom font-semibold">
+          <div className="space-y-1.5">
+            <span className="block leading-snug">
+              Wykorzystanie
+              <br />
+              wizerunku
+            </span>
+            <HeaderFilterSelect
+              value={imageConsentFilter}
+              onChange={(v) => setImageConsentFilter(v as ImageConsentFilter)}
+              ariaLabel="Filtr wykorzystania wizerunku"
+            >
+              <option value="">Wszystkie</option>
+              <option value="yes">Tak</option>
+              <option value="no">Nie</option>
+            </HeaderFilterSelect>
+          </div>
+        </th>
+        <th className="px-3 py-2 align-bottom font-semibold">
+          <div className="space-y-1.5">
+            <span className="block">Bon zniżkowy</span>
+            <HeaderFilterSelect
+              value={voucherFilter}
+              onChange={(v) => setVoucherFilter(v as VoucherFilter)}
+              ariaLabel="Filtr bonu zniżkowego"
+            >
+              <option value="">Wszystkie</option>
+              <option value="yes">Tak</option>
+              <option value="no">Nie</option>
+            </HeaderFilterSelect>
+          </div>
+        </th>
+        <th className="px-3 py-2 align-bottom font-semibold">
+          <div className="space-y-1.5">
+            <span className="block">Sposób płatności</span>
+            <HeaderFilterSelect
+              value={paymentTypeFilter}
+              onChange={(v) => setPaymentTypeFilter(v as PaymentTypeFilter)}
+              ariaLabel="Filtr sposobu płatności"
+              className="max-w-[12rem]"
+            >
+              <option value="">Wszystkie</option>
+              {paymentTypeOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </HeaderFilterSelect>
+          </div>
+        </th>
+        <th className="px-3 py-2.5 align-bottom text-right font-semibold">Kwota na umowie</th>
+      </tr>
+    </thead>
+  );
+
   return (
     <section className="space-y-4 rounded-2xl border border-emerald-100 bg-white p-4">
       <header className="flex flex-wrap items-start justify-between gap-3">
@@ -215,60 +389,6 @@ export default function SignedContractsPanel() {
           placeholder="Szukaj ucznia lub rodzica..."
           className="min-w-[220px] flex-1 rounded-full border border-emerald-100 bg-white px-4 py-2.5 text-sm text-zinc-900 outline-none ring-[#0f6e56] placeholder:text-zinc-400 focus:ring-2"
         />
-        <select
-          value={locationFilter}
-          onChange={(e) => {
-            setLocationFilter(e.target.value);
-            setGroupFilter('');
-          }}
-          className={selectClass}
-          aria-label="Filtr lokalizacji"
-        >
-          <option value="">Lokalizacja: wszystkie</option>
-          {locationOptions.map((loc) => (
-            <option key={loc.id} value={loc.id}>
-              {loc.name}
-            </option>
-          ))}
-          {hasNoLocationRows ? (
-            <option value="__none__">Bez lokalizacji</option>
-          ) : null}
-        </select>
-        <select
-          value={groupFilter}
-          onChange={(e) => setGroupFilter(e.target.value)}
-          className={selectClass}
-          aria-label="Filtr grupy"
-        >
-          <option value="">Grupa: wszystkie</option>
-          {groupOptions.map((g) => (
-            <option key={g.id} value={g.id}>
-              {g.name}
-            </option>
-          ))}
-          {hasNoGroupRows ? <option value="__none__">Bez grupy</option> : null}
-        </select>
-        <select
-          value={imageConsentFilter}
-          onChange={(e) => setImageConsentFilter(e.target.value as ImageConsentFilter)}
-          className={selectClass}
-          aria-label="Filtr zgody na wizerunek"
-        >
-          <option value="">Zgoda na wizerunek: wszystkie</option>
-          <option value="yes">Tak</option>
-          <option value="no">Nie</option>
-          <option value="unknown">Brak danych</option>
-        </select>
-        <select
-          value={billingTypeFilter}
-          onChange={(e) => setBillingTypeFilter(e.target.value as BillingTypeFilter)}
-          className={selectClass}
-          aria-label="Filtr typu umowy"
-        >
-          <option value="">Typ umowy: wszystkie</option>
-          <option value="company">Na firmę</option>
-          <option value="private">Na os. prywatną</option>
-        </select>
       </div>
 
       <p className="text-sm text-zinc-600">Razem {countLabel}</p>
@@ -281,47 +401,61 @@ export default function SignedContractsPanel() {
         </div>
       ) : error ? (
         <p className="py-6 text-center text-sm text-rose-600">{error}</p>
-      ) : filteredRows.length === 0 ? (
-        <p className="py-6 text-center text-sm text-zinc-500">Brak podpisanych umów.</p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="min-w-[720px] w-full text-left text-xs sm:text-sm">
-            <thead className="bg-zinc-50 text-zinc-700">
-              <tr>
-                <th className="px-3 py-2.5 font-semibold">Imię i nazwisko dziecka</th>
-                <th className="px-3 py-2.5 font-semibold">Lokalizacja</th>
-                <th className="px-3 py-2.5 font-semibold">Zgoda na wykorzystanie wizerunku</th>
-                <th className="px-3 py-2.5 font-semibold">Bon zniżkowy</th>
-                <th className="px-3 py-2.5 font-semibold">Sposób płatności</th>
-                <th className="px-3 py-2.5 font-semibold text-right">Kwota na umowie</th>
-              </tr>
-            </thead>
+          <table className="min-w-[920px] w-full text-left text-xs sm:text-sm">
+            {tableHeader}
             <tbody>
-              {filteredRows.map((row) => (
-                <tr
-                  key={`${row.contractId}:${row.childId}`}
-                  className="border-t border-zinc-100"
-                >
-                  <td className="px-3 py-2.5 font-medium text-zinc-900">{row.childName}</td>
-                  <td className="px-3 py-2.5 text-zinc-800">
-                    {row.locationName?.trim() || (
-                      <span className="text-zinc-400">—</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <ConsentCell value={row.imageConsent} />
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <ConsentCell value={row.hasDiscountVoucher} />
-                  </td>
-                  <td className="px-3 py-2.5 text-zinc-800">
-                    {row.paymentType ? paymentTypeShortLabel(row.paymentType) : '—'}
-                  </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-zinc-900">
-                    {formatAmountPln(row.amount)}
+              {filteredRows.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-3 py-8 text-center text-sm text-zinc-500">
+                    {rows.length === 0
+                      ? 'Brak podpisanych umów.'
+                      : 'Brak wyników dla wybranych filtrów.'}
                   </td>
                 </tr>
-              ))}
+              ) : (
+                filteredRows.map((row) => (
+                  <tr
+                    key={`${row.contractId}:${row.childId}`}
+                    className="border-t border-zinc-100"
+                  >
+                    <td className="px-3 py-2.5 font-medium text-zinc-900">
+                      <span className="inline-flex flex-wrap items-center gap-1.5">
+                        {row.childName}
+                        {row.billingType === 'company' ? (
+                          <span
+                            className="inline-flex items-center rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-900 ring-1 ring-inset ring-sky-200"
+                            title="Umowa na firmę"
+                          >
+                            Firma
+                          </span>
+                        ) : null}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-zinc-800">
+                      {row.locationName?.trim() || (
+                        <span className="text-zinc-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 text-zinc-800">
+                      {row.groupName?.trim() || <span className="text-zinc-400">—</span>}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <ConsentCell value={row.imageConsent} />
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <ConsentCell value={row.hasDiscountVoucher} />
+                    </td>
+                    <td className="px-3 py-2.5 text-zinc-800">
+                      {row.paymentType ? paymentTypeShortLabel(row.paymentType) : '—'}
+                    </td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-zinc-900">
+                      {formatAmountPln(row.amount)}
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

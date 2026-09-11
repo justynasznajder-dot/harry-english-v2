@@ -15,7 +15,7 @@ function parsePeriodMonth(value: unknown): Date | null {
   return new Date(Date.UTC(y, m - 1, 1));
 }
 
-/** Wstrzymaj / wznów generowanie pozycji faktury ratalnej dla umowy (dziecka) w wybranym miesiącu. */
+/** Wstrzymaj / wznów / zleć wystawienie ręczne dla pozycji faktury ratalnej. */
 export async function POST(request: NextRequest) {
   const ctx = await requireAdminSchoolContext(request);
   if (!ctx.ok) return ctx.response;
@@ -24,6 +24,7 @@ export async function POST(request: NextRequest) {
     const body = (await request.json().catch(() => ({}))) as {
       contractId?: string;
       held?: boolean;
+      manualIssue?: boolean;
       periodMonth?: string;
     };
     const contractId = String(body.contractId ?? "").trim();
@@ -34,16 +35,34 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: "Pole held musi być boolean" }, { status: 400 });
     }
 
+    const manualIssue = body.manualIssue === true;
+    if (manualIssue && !body.held) {
+      return NextResponse.json(
+        { message: "manualIssue wymaga held=true" },
+        { status: 400 }
+      );
+    }
+
     const periodMonth = parsePeriodMonth(body.periodMonth) ?? firstDayOfMonthUtcDate();
-    await setContractMonthlyInvoiceHold(ctx.schoolId, contractId, periodMonth, body.held);
+    await setContractMonthlyInvoiceHold(ctx.schoolId, contractId, periodMonth, body.held, {
+      manualIssue: manualIssue || undefined,
+    });
 
     const preview = await previewMonthlyInvoicesForSchool(ctx.schoolId, periodMonth);
 
+    let message: string;
+    if (!body.held) {
+      message = "Wznowiono generowanie faktury dla dziecka w tym miesiącu";
+    } else if (manualIssue) {
+      message = "Zlecono wystawienie ręczne — pozycja czeka na księgową";
+    } else {
+      message = "Wstrzymano generowanie faktury dla dziecka w tym miesiącu";
+    }
+
     return NextResponse.json({
-      message: body.held
-        ? "Wstrzymano generowanie faktury dla dziecka w tym miesiącu"
-        : "Wznowiono generowanie faktury dla dziecka w tym miesiącu",
+      message,
       held: body.held,
+      manualIssue,
       ...preview,
     });
   } catch (error) {

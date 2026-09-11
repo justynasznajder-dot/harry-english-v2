@@ -9,6 +9,56 @@ import {
 import { requireAdminSchoolContext, tenantNotFoundResponse } from "@/lib/admin-school-context";
 import { updateChildPriceOverrides } from "@/lib/enrollment-sync";
 import { parsePriceDecimal } from "@/lib/lesson-pricing";
+import { diffTrackedFields, writeAdminChangeLog } from "@/lib/admin-change-log";
+
+const CHILD_ACCOUNT_FIELDS = [
+  "first_name",
+  "last_name",
+  "birth_date",
+  "active",
+  "confirmed",
+] as const;
+
+const CHILD_PRICE_FIELDS = [
+  "lesson_unit_price",
+  "monthly_unit_price",
+  "yearly_unit_price",
+  "discount_percent",
+] as const;
+
+function childAccountSnapshot(child: {
+  first_name: string;
+  last_name: string;
+  birth_date: string | Date;
+  active: boolean;
+  confirmed: boolean;
+}): Record<string, unknown> {
+  const birth =
+    typeof child.birth_date === "string"
+      ? child.birth_date.slice(0, 10)
+      : child.birth_date.toISOString().slice(0, 10);
+  return {
+    first_name: child.first_name,
+    last_name: child.last_name,
+    birth_date: birth,
+    active: child.active,
+    confirmed: child.confirmed,
+  };
+}
+
+function childPriceSnapshot(child: {
+  lesson_unit_price?: string | number | null;
+  monthly_unit_price?: string | number | null;
+  yearly_unit_price?: string | number | null;
+  discount_percent?: string | number | null;
+}): Record<string, unknown> {
+  return {
+    lesson_unit_price: child.lesson_unit_price ?? null,
+    monthly_unit_price: child.monthly_unit_price ?? null,
+    yearly_unit_price: child.yearly_unit_price ?? null,
+    discount_percent: child.discount_percent ?? null,
+  };
+}
 
 function parseOptionalPrice(
   raw: unknown,
@@ -185,8 +235,30 @@ export async function PUT(
     const body = await request.json();
 
     if (body.restore === true) {
+      const before = await getChildByIdForSchool(id, ctx.schoolId);
       const restored = await restoreChild(id, ctx.schoolId);
       if (!restored) return tenantNotFoundResponse("Dziecko nie zostało znalezione");
+      const after = await getChildByIdForSchool(id, ctx.schoolId);
+      if (before && after) {
+        const diff = diffTrackedFields(
+          childAccountSnapshot(before),
+          childAccountSnapshot(after),
+          [...CHILD_ACCOUNT_FIELDS],
+        );
+        await writeAdminChangeLog({
+          schoolId: ctx.schoolId,
+          actorUserId: ctx.userId,
+          entityType: "child",
+          entityId: id,
+          action: "RESTORE",
+          summary: `Aktywacja dziecka ${after.first_name} ${after.last_name}`,
+          payload: diff ?? {
+            fields: ["active"],
+            before: { active: false },
+            after: { active: true },
+          },
+        });
+      }
       return NextResponse.json({ message: "Dziecko zostało przywrócone" });
     }
 
@@ -225,13 +297,33 @@ export async function PUT(
       if (body.yearlyUnitPrice !== undefined) prices.yearlyUnitPrice = yearlyParsed.value;
       if (body.discountPercent !== undefined) prices.discountPercent = discountParsed.value;
 
+      const before = await getChildByIdForSchool(id, ctx.schoolId);
       const ok = await updateChildPriceOverrides(id, ctx.schoolId, prices);
       if (!ok) return tenantNotFoundResponse("Dziecko nie zostało znalezione");
 
       const child = await getChildByIdForSchool(id, ctx.schoolId);
+      if (before && child) {
+        const diff = diffTrackedFields(
+          childPriceSnapshot(before),
+          childPriceSnapshot(child),
+          [...CHILD_PRICE_FIELDS],
+        );
+        if (diff) {
+          await writeAdminChangeLog({
+            schoolId: ctx.schoolId,
+            actorUserId: ctx.userId,
+            entityType: "child",
+            entityId: id,
+            action: "PRICES_UPDATE",
+            summary: `Zmiana stawek: ${child.first_name} ${child.last_name}`,
+            payload: diff,
+          });
+        }
+      }
       return NextResponse.json({ child, message: "Stawki zaktualizowane" });
     }
 
+    const before = await getChildByIdForSchool(id, ctx.schoolId);
     const updated = await updateChild(id, ctx.schoolId, {
       first_name: body.first_name,
       last_name: body.last_name,
@@ -243,6 +335,24 @@ export async function PUT(
     if (!updated) return tenantNotFoundResponse("Dziecko nie zostało znalezione");
 
     const child = await getChildByIdForSchool(id, ctx.schoolId);
+    if (before && child) {
+      const diff = diffTrackedFields(
+        childAccountSnapshot(before),
+        childAccountSnapshot(child),
+        [...CHILD_ACCOUNT_FIELDS],
+      );
+      if (diff) {
+        await writeAdminChangeLog({
+          schoolId: ctx.schoolId,
+          actorUserId: ctx.userId,
+          entityType: "child",
+          entityId: id,
+          action: "ACCOUNT_UPDATE",
+          summary: `Zmiana danych dziecka ${child.first_name} ${child.last_name}`,
+          payload: diff,
+        });
+      }
+    }
     return NextResponse.json({ child, message: "Dziecko zostało zaktualizowane" });
   } catch (error) {
     console.error("Update child error:", error);
@@ -259,8 +369,31 @@ export async function DELETE(
 
   try {
     const { id } = await params;
+    const before = await getChildByIdForSchool(id, ctx.schoolId);
     const deleted = await deleteChild(id, ctx.schoolId);
     if (!deleted) return tenantNotFoundResponse("Dziecko nie zostało znalezione");
+
+    const after = await getChildByIdForSchool(id, ctx.schoolId);
+    if (before && after) {
+      const diff = diffTrackedFields(
+        childAccountSnapshot(before),
+        childAccountSnapshot(after),
+        [...CHILD_ACCOUNT_FIELDS],
+      );
+      await writeAdminChangeLog({
+        schoolId: ctx.schoolId,
+        actorUserId: ctx.userId,
+        entityType: "child",
+        entityId: id,
+        action: "DEACTIVATE",
+        summary: `Dezaktywacja dziecka ${after.first_name} ${after.last_name}`,
+        payload: diff ?? {
+          fields: ["active"],
+          before: { active: true },
+          after: { active: false },
+        },
+      });
+    }
 
     return NextResponse.json({ message: "Dziecko zostało oznaczone jako nieaktywne" });
   } catch (error) {

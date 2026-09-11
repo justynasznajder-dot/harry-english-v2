@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   formatSchoolDateShort,
@@ -539,12 +538,18 @@ export default function ManagerDashboardPanel({
                 className="rounded-xl border border-emerald-100 bg-emerald-50/30 px-3 py-3 sm:px-4"
               >
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <Link
-                    href={`/portal/groups/${group.groupId}`}
-                    className="font-semibold text-[#0f6e56] hover:underline"
-                  >
-                    {group.groupName}
-                  </Link>
+                  {onOpenGroup ? (
+                    <button
+                      type="button"
+                      className="text-left font-semibold text-[#0f6e56] hover:underline"
+                      onClick={() => onOpenGroup(group.groupId)}
+                    >
+                      {group.groupName}
+                    </button>
+                  ) : (
+                    <p className="font-semibold text-[#0f6e56]">{group.groupName}</p>
+                  )}
+
                   <p className="text-xs font-medium text-zinc-500">
                     {group.children.length}{' '}
                     {group.children.length === 1

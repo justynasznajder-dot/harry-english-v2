@@ -37,6 +37,7 @@ export type InvoicePdfModel = {
   dueDate: string;
   bankLabel: string;
   bankAccount: string;
+  transferTitle: string;
   vatExemption: string;
   issuerName: string;
 };
@@ -254,14 +255,40 @@ function buildDocDefinition(model: InvoicePdfModel): TDocumentDefinitions {
     },
     {
       table: {
-        widths: ["25%", "25%", "20%", "*"],
+        widths: ["16%", "18%", "40%", "26%"],
         body: [
           [
-            { text: model.paymentMethod, margin: [6, 5, 6, 5] },
-            { text: `do dnia ${model.dueDate}`, margin: [6, 5, 6, 5] },
-            { text: "Na rachunek", margin: [6, 5, 6, 5] },
             {
-              stack: [{ text: model.bankLabel }, { text: model.bankAccount }],
+              stack: [
+                { text: "Sposób płatności", bold: true, margin: [0, 0, 0, 4] },
+                { text: model.paymentMethod },
+              ],
+              margin: [6, 5, 6, 5],
+            },
+            {
+              stack: [
+                { text: "Termin płatności", bold: true, margin: [0, 0, 0, 4] },
+                { text: `do dnia ${model.dueDate}` },
+              ],
+              margin: [6, 5, 6, 5],
+            },
+            {
+              stack: [
+                { text: "Na rachunek", bold: true, margin: [0, 0, 0, 4] },
+                { text: model.bankLabel, margin: [0, 0, 0, 2] },
+                {
+                  text: model.bankAccount,
+                  fontSize: 9,
+                  noWrap: true,
+                },
+              ],
+              margin: [6, 5, 6, 5],
+            },
+            {
+              stack: [
+                { text: "Tytuł przelewu", bold: true, margin: [0, 0, 0, 4] },
+                { text: model.transferTitle || "—" },
+              ],
               margin: [6, 5, 6, 5],
             },
           ],
@@ -397,6 +424,7 @@ export function invoicePdfModelFromPlaceholders(
     dueDate: placeholders.due_date,
     bankLabel: placeholders.bank_label,
     bankAccount: placeholders.bank_account,
+    transferTitle: placeholders.transfer_title,
     vatExemption: placeholders.vat_exemption,
     issuerName: placeholders.issuer_name,
   };

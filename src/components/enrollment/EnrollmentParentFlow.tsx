@@ -404,8 +404,12 @@ function deriveEnrollmentStepIndex(
   complimentaryAccess?: boolean,
   contractReadiness?: Pick<
     ContractReadiness,
-    'hasPendingDecisions' | 'allDecisionsResolved' | 'canPrepareContract'
-  >
+    | 'hasPendingDecisions'
+    | 'allDecisionsResolved'
+    | 'canPrepareContract'
+    | 'acceptedCount'
+    | 'rejectedCount'
+  >,
 ): number {
   const levels = collectEnrollmentLevels(proposals, children);
   const steps = getEnrollmentStepsForUser(complimentaryAccess);
@@ -452,6 +456,17 @@ function deriveEnrollmentStepIndex(
 
   if (hasPendingDecisions) {
     return 0;
+  }
+
+  // Same rezygnacje (np. jedno dziecko) — zostań na Umowie z informacją o rezygnacji,
+  // zamiast wracać do pustego kroku „Zgłoszenie”.
+  const allRejectedOnly =
+    (contractReadiness?.allDecisionsResolved &&
+      (contractReadiness.rejectedCount ?? 0) > 0 &&
+      (contractReadiness.acceptedCount ?? 0) === 0) ||
+    (levels.length > 0 && levels.every((s) => s === 'REJECTED'));
+  if (allRejectedOnly && !complimentaryAccess) {
+    return contractIndex >= 0 ? contractIndex : summaryIndex;
   }
 
   if (
@@ -2045,7 +2060,38 @@ export default function EnrollmentParentFlow({
           {proposalsLoading && proposals.length === 0 ? (
             <EmptyState message="Ładujemy dane umowy…" />
           ) : proposals.length === 0 ? (
-            <EmptyState message="Brak dzieci w procesie zapisu." />
+            contractReadiness.allDecisionsResolved &&
+            contractReadiness.rejectedCount > 0 &&
+            enrollmentRequestSummary &&
+            enrollmentRequestSummary.children.length > 0 ? (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+                  Wszystkie zgłoszenia zostały odrzucone — umowa nie jest wymagana.
+                </div>
+                <div className="space-y-3">
+                  {enrollmentRequestSummary.children.map((child) => (
+                    <div
+                      key={child.requestId}
+                      className="rounded-2xl border border-rose-200 bg-rose-50/50 p-4"
+                    >
+                      <div className="flex flex-wrap items-baseline justify-between gap-2">
+                        <p className="text-base font-semibold text-zinc-900">
+                          {child.firstName} {child.lastName}
+                        </p>
+                        <span className="inline-flex rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-800">
+                          Rezygnacja
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm text-zinc-600">
+                        Preferowana lokalizacja: {child.preferredLocation}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <EmptyState message="Brak dzieci w procesie zapisu." />
+            )
           ) : (
                 <div className="space-y-4">
                   <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 space-y-4">
@@ -2487,6 +2533,11 @@ export default function EnrollmentParentFlow({
                                       : ''}
                                   </span>
                                 ) : null}
+                                {level === 'REJECTED' ? (
+                                  <span className="mt-1 inline-flex rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-800">
+                                    Rezygnacja
+                                  </span>
+                                ) : null}
                                 {level === 'AWAITING_CONTRACT' ? (
                                   <span className="mt-1 inline-flex rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-900">
                                     Dane uzupełnione — umowa w procesie
@@ -2504,7 +2555,10 @@ export default function EnrollmentParentFlow({
                                       : 'Oczekuje na przypisanie grupy przez szkołę'}
                                   </span>
                                 )}
-                                {!isPipeline && !isPending && !isSignedDone && (
+                                {!isPipeline &&
+                                  !isPending &&
+                                  !isSignedDone &&
+                                  level !== 'REJECTED' && (
                                   <span className="mt-1 block text-xs text-zinc-500">
                                     Status: {formatEnrollmentStatusLabel(level)}
                                   </span>

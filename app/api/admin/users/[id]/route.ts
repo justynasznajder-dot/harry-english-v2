@@ -15,6 +15,34 @@ import {
 } from "@/lib/admin-school-context";
 import { syncParentUserAccessLevel } from "@/lib/enrollment-sync";
 import { formatIdCardNumber } from "@/lib/format-id-card-number";
+import { diffTrackedFields, writeAdminChangeLog } from "@/lib/admin-change-log";
+
+const PARENT_ACCOUNT_FIELDS = [
+  "first_name",
+  "last_name",
+  "email",
+  "phone",
+  "confirmed",
+  "active",
+] as const;
+
+function parentAccountSnapshot(u: User): Record<string, unknown> {
+  return {
+    first_name: u.first_name,
+    last_name: u.last_name,
+    email: u.email,
+    phone: u.phone,
+    confirmed: u.confirmed,
+    active: u.active,
+  };
+}
+
+function resolveChangeSchoolId(
+  target: User | null | undefined,
+  fallbackSchoolId: string,
+): string | null {
+  return target?.school_id ?? fallbackSchoolId ?? null;
+}
 
 function managerForbiddenSchoolFields(actor: User, body: Record<string, unknown>): NextResponse | null {
   if (actor.role !== "MANAGER") return null;
@@ -160,6 +188,29 @@ export async function PUT(
       if (!user) {
         return NextResponse.json({ message: "Nie można pobrać zaktualizowanych danych" }, { status: 404 });
       }
+      if (user.role === "PARENT") {
+        const schoolId = resolveChangeSchoolId(user, ctx.schoolId);
+        if (schoolId) {
+          const diff = diffTrackedFields(
+            parentAccountSnapshot(targetUser!),
+            parentAccountSnapshot(user),
+            [...PARENT_ACCOUNT_FIELDS],
+          );
+          await writeAdminChangeLog({
+            schoolId,
+            actorUserId: actor.id,
+            entityType: "parent",
+            entityId: user.id,
+            action: "RESTORE",
+            summary: `Aktywacja konta rodzica ${user.first_name} ${user.last_name}`,
+            payload: diff ?? {
+              fields: ["active"],
+              before: { active: false },
+              after: { active: true },
+            },
+          });
+        }
+      }
       const safeUser = {
         id: user.id,
         first_name: user.first_name,
@@ -260,6 +311,28 @@ export async function PUT(
       return NextResponse.json({ message: "Nie można pobrać zaktualizowanych danych" }, { status: 404 });
     }
 
+    if (user.role === "PARENT" && targetForUpdate) {
+      const schoolId = resolveChangeSchoolId(user, ctx.schoolId);
+      if (schoolId) {
+        const diff = diffTrackedFields(
+          parentAccountSnapshot(targetForUpdate),
+          parentAccountSnapshot(user),
+          [...PARENT_ACCOUNT_FIELDS],
+        );
+        if (diff) {
+          await writeAdminChangeLog({
+            schoolId,
+            actorUserId: actor.id,
+            entityType: "parent",
+            entityId: user.id,
+            action: "ACCOUNT_UPDATE",
+            summary: `Zmiana konta rodzica ${user.first_name} ${user.last_name}`,
+            payload: diff,
+          });
+        }
+      }
+    }
+
     const safeUser = {
       id: user.id,
       first_name: user.first_name,
@@ -344,6 +417,30 @@ export async function DELETE(
     console.log(`User ${targetUserId} successfully marked as former`);
 
     const user = await getUserById(targetUserId);
+
+    if (targetUser?.role === "PARENT" && user) {
+      const schoolId = resolveChangeSchoolId(user, ctx.schoolId);
+      if (schoolId) {
+        const diff = diffTrackedFields(
+          parentAccountSnapshot(targetUser),
+          parentAccountSnapshot(user),
+          [...PARENT_ACCOUNT_FIELDS],
+        );
+        await writeAdminChangeLog({
+          schoolId,
+          actorUserId: actor.id,
+          entityType: "parent",
+          entityId: user.id,
+          action: "DEACTIVATE",
+          summary: `Dezaktywacja konta rodzica ${user.first_name} ${user.last_name}`,
+          payload: diff ?? {
+            fields: ["active"],
+            before: { active: true },
+            after: { active: false },
+          },
+        });
+      }
+    }
 
     return NextResponse.json({ 
       user: user ? {

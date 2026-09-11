@@ -597,6 +597,8 @@ model school_invoice_holds {
   school_id    String
   contract_id  String
   period_month DateTime  @db.Date
+  /// true = admin zlecił wystawienie ręczne przez księgową (status „Do wystawienia ręcznie”).
+  manual_issue Boolean   @default(false)
   created_at   DateTime  @default(now()) @db.Timestamptz(6)
   contracts    contracts @relation(fields: [contract_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   schools      schools   @relation(fields: [school_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -626,9 +628,13 @@ model school_holidays {
   type           String        @default("HOLIDAY")
   created_at     DateTime      @default(now()) @db.Timestamp(6)
   school_year_id String?
+  /// Zakres placówek: true = dotyczy też przyszłych grup tego typu (przedszkole / szkoła).
+  /// Oba true = wszystkie grupy. Oba false = legacy: tylko school_holiday_groups (puste = wszyscy).
+  applies_to_preschool Boolean @default(false)
+  applies_to_school    Boolean @default(false)
   schools        schools       @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   school_years   school_years? @relation(fields: [school_year_id], references: [id], onUpdate: NoAction)
-  /// Puste = dzień wolny dotyczy wszystkich grup szkoły (np. święta państwowe).
+  /// Puste = dzień wolny dotyczy wszystkich grup szkoły (np. święta państwowe), gdy flagi placówek są false.
   school_holiday_groups school_holiday_groups[]
 
   @@index([date_from, date_to], map: "idx_school_holidays_date")
@@ -683,6 +689,25 @@ model admin_deletion_logs {
 
   @@index([school_id, created_at], map: "idx_admin_deletion_logs_school_created")
   @@index([action, created_at], map: "idx_admin_deletion_logs_action_created")
+}
+
+/// Historia zmian kont rodziców / dzieci (kto, kiedy, przed/po).
+model admin_change_logs {
+  id             String   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  school_id      String
+  actor_user_id  String?
+  entity_type    String   @db.VarChar(32)
+  entity_id      String
+  action         String   @db.VarChar(64)
+  summary        String
+  payload        Json
+  created_at     DateTime @default(now()) @db.Timestamptz(6)
+  schools        schools  @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users          users?   @relation("admin_change_logs_actor", fields: [actor_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([school_id, created_at], map: "idx_admin_change_logs_school_created")
+  @@index([entity_type, entity_id, created_at], map: "idx_admin_change_logs_entity_created")
+  @@index([action, created_at], map: "idx_admin_change_logs_action_created")
 }
 
 /// Log operacji Cloudflare R2 (Class A/B) — monitoring limitu free tier / atrybucja procesów.
@@ -809,6 +834,7 @@ model schools {
   bank_statement_imports       bank_statement_imports[]
   bank_transfers               bank_transfers[]
   admin_deletion_logs          admin_deletion_logs[]
+  admin_change_logs            admin_change_logs[]
 }
 
 /// Przetworzony plik wyciągu z Google Drive — zapobiega ponownemu skanowaniu.
@@ -1045,6 +1071,7 @@ model users {
   school_years_closed                   school_years[]                 @relation("school_years_closed_by")
   subscriptions                         subscriptions[]
   admin_deletion_logs                   admin_deletion_logs[]
+  admin_change_logs_actor               admin_change_logs[]            @relation("admin_change_logs_actor")
   schools                               schools?                       @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([school_id, email])

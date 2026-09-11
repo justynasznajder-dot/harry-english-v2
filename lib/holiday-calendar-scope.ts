@@ -45,8 +45,15 @@ export function resolveHolidayCalendarScope(opts: {
   type: string;
   groupIds: string[];
   groupKinds: HolidayFacilityKind[];
+  appliesToPreschool?: boolean;
+  appliesToSchool?: boolean;
 }): HolidayCalendarScope {
   if (String(opts.type).toUpperCase() === "PUBLIC") return "all";
+  const flagP = opts.appliesToPreschool === true;
+  const flagS = opts.appliesToSchool === true;
+  if (flagP && flagS) return "all";
+  if (flagP && !flagS) return "preschool";
+  if (flagS && !flagP) return "school";
   if (!opts.groupIds.length) return "all";
 
   const kinds = new Set(
@@ -79,7 +86,15 @@ export function formatHolidayAppliesToLabel(opts: {
   appliesToAllGroups: boolean;
   groupIds: string[];
   activeGroups: Array<{ id: string; facilityKind: HolidayFacilityKind }>;
+  appliesToPreschool?: boolean;
+  appliesToSchool?: boolean;
 }): string {
+  const flagP = opts.appliesToPreschool === true;
+  const flagS = opts.appliesToSchool === true;
+  if (flagP && flagS) return "Dotyczy: wszyscy";
+  if (flagS && !flagP) return "Dotyczy: Wszystkie grupy Szkolne";
+  if (flagP && !flagS) return "Dotyczy: Wszystkie grupy przedszkolne";
+
   const groupIds = (opts.groupIds ?? []).filter(Boolean);
   if (opts.appliesToAllGroups || groupIds.length === 0) {
     return "Dotyczy: wszyscy";
