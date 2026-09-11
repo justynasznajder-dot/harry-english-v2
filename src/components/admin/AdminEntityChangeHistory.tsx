@@ -42,6 +42,7 @@ const FIELD_LABELS: Record<string, string> = {
   monthly_unit_price: 'Stawka ratalna',
   yearly_unit_price: 'Stawka jednorazowa',
   discount_percent: '% zniżki',
+  group: 'Grupa',
 };
 
 const ACTION_LABELS: Record<string, string> = {
@@ -50,6 +51,7 @@ const ACTION_LABELS: Record<string, string> = {
   DEACTIVATE: 'Dezaktywacja',
   RESTORE: 'Aktywacja',
   PRICES_UPDATE: 'Zmiana stawek',
+  GROUP_TRANSFER: 'Zmiana grupy',
 };
 
 function formatValue(value: unknown): string {

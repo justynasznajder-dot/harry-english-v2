@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import nodemailer, { type SendMailOptions } from "nodemailer";
 import { ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE } from "@/lib/enrollment-status";
+import { formatPolishLongDate } from "@/lib/group-lesson-bounds";
 
 const EMAIL_IMAGES_DIR = path.join(process.cwd(), "public", "images");
 
@@ -216,25 +217,25 @@ function emailDividerRow(palette: EmailPalette, heightPx = EMAIL_DIVIDER_HEIGHT)
 }
 
 function emailInsetCellOpen(palette: EmailPalette = getEmailPalette()): string {
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0;">
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0 0 8px 0;">
     <tr>
-      <td bgcolor="${palette.insetBg}" style="border:1px solid ${palette.insetBorder};${emailSolidCellStyle(palette.insetBg, palette.insetText)}padding:20px 22px;border-radius:12px;">`;
+      <td bgcolor="${palette.insetBg}" style="border:1px solid ${palette.insetBorder};${emailSolidCellStyle(palette.insetBg, palette.insetText)}padding:24px 28px;border-radius:12px;">`;
 }
 
 function buildEmailTitleBlock(title: string, palette: EmailPalette): string {
-  return `<h1 style="margin:0 0 12px 0;font-family:${BRAND_FONT};font-size:24px;line-height:1.3;font-weight:700;color:${palette.title};">${title}</h1>`;
+  return `<h1 style="margin:0 0 18px 0;font-family:${BRAND_FONT};font-size:24px;line-height:1.35;font-weight:700;color:${palette.title};">${title}</h1>`;
 }
 
 function buildEmailIntroBlock(intro: string, palette: EmailPalette): string {
-  return `<p style="margin:0 0 16px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${palette.text};">${intro}</p>`;
+  return `<p style="margin:0 0 22px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.65;font-weight:400;color:${palette.text};">${intro}</p>`;
 }
 
 function emailCtaButton(href: string, label: string): string {
   return `
-        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:22px 0 0 0;">
           <tr>
             <td style="border-radius:999px;background:${BRAND_YELLOW};">
-              <a href="${href}" style="display:inline-block;padding:12px 24px;font-family:${BRAND_FONT};font-size:14px;font-weight:700;color:#3b2a10;text-decoration:none;">
+              <a href="${href}" style="display:inline-block;padding:14px 28px;font-family:${BRAND_FONT};font-size:14px;font-weight:700;color:#3b2a10;text-decoration:none;">
                 ${label}
               </a>
             </td>
@@ -336,7 +337,7 @@ ${buildEmailHeadBlock(p)}
             </tr>
             ${emailDividerRow(p)}
             <tr>
-              <td bgcolor="${p.content}" style="${emailSolidCellStyle(p.content, p.text)}padding:24px 22px 18px 22px;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;">
+              <td bgcolor="${p.content}" style="${emailSolidCellStyle(p.content, p.text)}padding:32px 26px 28px 26px;font-family:${BRAND_FONT};font-size:15px;line-height:1.65;font-weight:400;">
                 ${buildEmailTitleBlock(params.title, p)}
                 ${params.intro ? buildEmailIntroBlock(params.intro, p) : ""}
                 ${params.contentHtml}
@@ -810,9 +811,9 @@ export async function sendMessageNotificationEmail(params: {
   const portalCtaHtml = emailCtaButton(`${portalLink}/portal`, "Przejdź do panelu");
 
   const portalContentHtml = `
-        <p style="margin:0 0 8px 0;font-size:15px;line-height:1.6;color:${p.text};"><strong style="color:${p.accentWarm};">Temat:</strong> ${escapeHtmlForEmail(params.subject)}</p>
+        <p style="margin:0 0 20px 0;font-size:15px;line-height:1.65;color:${p.text};"><strong style="color:${p.accentWarm};">Temat:</strong> ${escapeHtmlForEmail(params.subject)}</p>
         ${emailInsetCellOpen(p)}
-              <p style="margin:0;font-size:14px;line-height:1.6;white-space:pre-wrap;color:${p.insetText};">${linkifyEscapedEmailText(escapeHtmlForEmail(preview), p.insetLink)}</p>
+              <p style="margin:0;font-size:14px;line-height:1.7;white-space:pre-wrap;color:${p.insetText};">${linkifyEscapedEmailText(escapeHtmlForEmail(preview), p.insetLink)}</p>
         ${emailInsetCellClose()}
         ${portalCtaHtml}`;
 
@@ -920,9 +921,9 @@ export async function sendParentPortalMessageToSchoolEmail(params: {
           <p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;color:${p.insetText};"><strong>Rodzic:</strong> ${escapeHtmlForEmail(parentName)}</p>
           <p style="margin:0;font-size:14px;line-height:1.6;color:${p.insetText};"><strong>Email:</strong> ${buildEmailMailtoLink(params.parentEmail, p.insetLink)}</p>
         ${emailInsetCellClose()}
-        <p style="margin:14px 0 8px 0;font-size:15px;line-height:1.6;color:${p.text};"><strong style="color:${p.accentWarm};">Temat:</strong> ${escapeHtmlForEmail(params.subject)}</p>
+        <p style="margin:20px 0 20px 0;font-size:15px;line-height:1.65;color:${p.text};"><strong style="color:${p.accentWarm};">Temat:</strong> ${escapeHtmlForEmail(params.subject)}</p>
         ${emailInsetCellOpen(p)}
-          <p style="margin:0;font-size:14px;line-height:1.6;white-space:pre-wrap;color:${p.insetText};">${linkifyEscapedEmailText(escapeHtmlForEmail(params.content), p.insetLink)}</p>
+          <p style="margin:0;font-size:14px;line-height:1.7;white-space:pre-wrap;color:${p.insetText};">${linkifyEscapedEmailText(escapeHtmlForEmail(params.content), p.insetLink)}</p>
         ${emailInsetCellClose()}
         ${emailCtaButton(`${portalLink}/portal`, "Przejdź do panelu")}
       `,
@@ -964,6 +965,8 @@ export async function sendProposalEmail(
     teacherName?: string;
     childFirstName?: string;
     childLastName?: string;
+    schoolYearStartOn?: string | null;
+    groupLessonsStartOn?: string | null;
   },
   options?: { complimentaryCompleted?: boolean },
 ) {
@@ -979,6 +982,31 @@ export async function sendProposalEmail(
       ? `${proposal.childFirstName} ${proposal.childLastName}`
       : "Twojego dziecka";
 
+  const yearStartYmd = proposal.schoolYearStartOn?.slice(0, 10) || null;
+  const groupStartYmd =
+    proposal.groupLessonsStartOn?.slice(0, 10) || yearStartYmd;
+  const yearStartLabel = yearStartYmd ? formatPolishLongDate(yearStartYmd) : null;
+  const groupStartLabel = groupStartYmd ? formatPolishLongDate(groupStartYmd) : null;
+
+  const lessonsStartHtml =
+    yearStartLabel && groupStartLabel
+      ? `
+      <p style="margin:0 0 8px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
+        Zajęcia rozpoczynają się dnia <strong>${escapeHtmlForEmail(yearStartLabel)}</strong> według harmonogramu.
+      </p>
+      <p style="margin:0 0 16px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
+        Data rozpoczęcia zajęć dla grupy: <strong>${escapeHtmlForEmail(groupStartLabel)}</strong>.
+      </p>
+    `
+      : "";
+  const lessonsStartText =
+    yearStartLabel && groupStartLabel
+      ? `
+Zajęcia rozpoczynają się dnia ${yearStartLabel} według harmonogramu.
+Data rozpoczęcia zajęć dla grupy: ${groupStartLabel}.
+`
+      : "";
+
   const pickupConsentHtml = options?.complimentaryCompleted
     ? `
       <p style="margin:0 0 12px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
@@ -991,9 +1019,7 @@ export async function sendProposalEmail(
       <p style="margin:0 0 12px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
         Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować, podpisać własnoręcznie i oddać w placówce przed pierwszymi zajęciami (świetlica / wychowawca grupy przedszkolnej).
       </p>
-      <p style="margin:0 0 16px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
-        Zajęcia rozpoczynamy od 14 września 2026 zgodnie z harmonogramem ustalonym dla poszczególnych grup.
-      </p>
+      ${lessonsStartHtml}
     `;
 
   const loginHtml = `
@@ -1038,9 +1064,7 @@ Wydrukuj dokument i podpisz ręcznie — nie podpisuje się go elektronicznie.
 `
     : `
 Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować, podpisać własnoręcznie i oddać w placówce przed pierwszymi zajęciami (świetlica / wychowawca grupy przedszkolnej).
-
-Zajęcia rozpoczynamy od 14 września 2026 zgodnie z harmonogramem ustalonym dla poszczególnych grup.
-`;
+${lessonsStartText}`;
 
   await sendHarryMail({
     from: {
@@ -1171,6 +1195,8 @@ export async function sendCombinedProposalEmail(
     teacherName?: string;
     childFirstName: string;
     childLastName: string;
+    schoolYearStartOn?: string | null;
+    groupLessonsStartOn?: string | null;
   }>,
   login: {
     loginEmail: string;
@@ -1182,10 +1208,21 @@ export async function sendCombinedProposalEmail(
   const portalUrl = PUBLIC_SITE_URL;
   const p = getEmailPalette();
 
+  const yearStartYmd =
+    proposals.map((pr) => pr.schoolYearStartOn?.slice(0, 10)).find(Boolean) ?? null;
+  const yearStartLabel = yearStartYmd ? formatPolishLongDate(yearStartYmd) : null;
+
   const proposalsHtml = proposals
     .map((proposal) => {
       const safeChildName = `${escapeHtmlForEmail(proposal.childFirstName)} ${escapeHtmlForEmail(proposal.childLastName)}`;
       const teacherName = (proposal.teacherName ?? "").trim() || "Do ustalenia";
+      const groupStartYmd =
+        proposal.groupLessonsStartOn?.slice(0, 10) ||
+        proposal.schoolYearStartOn?.slice(0, 10) ||
+        null;
+      const groupStartLabel = groupStartYmd
+        ? formatPolishLongDate(groupStartYmd)
+        : null;
       return `
         <div style="margin:0 0 16px 0;padding:14px 16px;border:2px solid ${p.insetBorder};border-radius:10px;background:${p.insetBg};">
           <p style="margin:0 0 8px 0;font-family:${BRAND_FONT};font-size:15px;font-weight:700;color:${p.text};">${safeChildName}</p>
@@ -1194,6 +1231,11 @@ export async function sendCombinedProposalEmail(
             <li><strong>Lokalizacja:</strong> ${escapeHtmlForEmail(proposal.locationName)}</li>
             <li><strong>Termin:</strong> ${escapeHtmlForEmail(proposal.schedule)}</li>
             <li><strong>Lektor:</strong> ${escapeHtmlForEmail(teacherName)}</li>
+            ${
+              groupStartLabel
+                ? `<li><strong>Data rozpoczęcia zajęć:</strong> ${escapeHtmlForEmail(groupStartLabel)}</li>`
+                : ""
+            }
           </ul>
         </div>
       `;
@@ -1204,13 +1246,35 @@ export async function sendCombinedProposalEmail(
     .map((proposal) => {
       const childName = `${proposal.childFirstName} ${proposal.childLastName}`;
       const teacherName = (proposal.teacherName ?? "").trim() || "Do ustalenia";
+      const groupStartYmd =
+        proposal.groupLessonsStartOn?.slice(0, 10) ||
+        proposal.schoolYearStartOn?.slice(0, 10) ||
+        null;
+      const groupStartLabel = groupStartYmd
+        ? formatPolishLongDate(groupStartYmd)
+        : null;
       return `${childName}:
 - Grupa: ${proposal.groupName}
 - Lokalizacja: ${proposal.locationName}
 - Termin: ${proposal.schedule}
-- Lektor: ${teacherName}`;
+- Lektor: ${teacherName}${
+        groupStartLabel ? `\n- Data rozpoczęcia zajęć: ${groupStartLabel}` : ""
+      }`;
     })
     .join("\n\n");
+
+  const lessonsStartHtml = yearStartLabel
+    ? `
+      <p style="margin:0 0 16px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
+        Zajęcia rozpoczynają się dnia <strong>${escapeHtmlForEmail(yearStartLabel)}</strong> według harmonogramu.
+      </p>
+    `
+    : "";
+  const lessonsStartText = yearStartLabel
+    ? `
+Zajęcia rozpoczynają się dnia ${yearStartLabel} według harmonogramu.
+`
+    : "";
 
   const isNewAccount = Boolean(login.tempPassword);
   const passwordHtml = isNewAccount
@@ -1295,9 +1359,7 @@ ${
       <p style="margin:0 0 12px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
         Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować, podpisać własnoręcznie i oddać w placówce przed pierwszymi zajęciami (świetlica / wychowawca grupy przedszkolnej).
       </p>
-      <p style="margin:0 0 16px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
-        Zajęcia rozpoczynamy od 14 września 2026 zgodnie z harmonogramem ustalonym dla poszczególnych grup.
-      </p>
+      ${lessonsStartHtml}
     `;
 
   const pickupConsentText = options?.complimentaryCompleted
@@ -1308,9 +1370,7 @@ Wydrukuj dokument i podpisz ręcznie — nie podpisuje się go elektronicznie.
 `
     : `
 Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować, podpisać własnoręcznie i oddać w placówce przed pierwszymi zajęciami (świetlica / wychowawca grupy przedszkolnej).
-
-Zajęcia rozpoczynamy od 14 września 2026 zgodnie z harmonogramem ustalonym dla poszczególnych grup.
-`;
+${lessonsStartText}`;
 
   await sendHarryMail({
     from: {

@@ -20,6 +20,7 @@ type BatchProposalBody = {
   monthlyUnitPrice?: number | string | null;
   yearlyUnitPrice?: number | string | null;
   discountPercent?: number | string | null;
+  managerComment?: string | null;
 };
 
 function hasAllPriceInputs(p: BatchProposalBody): boolean {
@@ -63,6 +64,7 @@ export async function POST(request: NextRequest) {
                 monthlyUnitPrice: p.monthlyUnitPrice,
                 yearlyUnitPrice: p.yearlyUnitPrice,
                 discountPercent: p.discountPercent,
+                managerComment: p.managerComment,
               },
               { ...schoolRestrict, complimentaryPrices: true }
             );
@@ -84,6 +86,7 @@ export async function POST(request: NextRequest) {
               monthlyUnitPrice: p.monthlyUnitPrice,
               yearlyUnitPrice: p.yearlyUnitPrice,
               discountPercent: p.discountPercent,
+              managerComment: p.managerComment,
             },
             schoolRestrict
           );
@@ -101,6 +104,7 @@ export async function POST(request: NextRequest) {
             monthlyUnitPrice: p.monthlyUnitPrice,
             yearlyUnitPrice: p.yearlyUnitPrice,
             discountPercent: p.discountPercent,
+            managerComment: p.managerComment,
           },
           {
             ...schoolRestrict,
@@ -177,6 +181,7 @@ export async function POST(request: NextRequest) {
           monthlyUnitPrice: p.monthlyUnitPrice,
           yearlyUnitPrice: p.yearlyUnitPrice,
           discountPercent: p.discountPercent,
+          managerComment: p.managerComment,
         },
         sharedParent,
         {

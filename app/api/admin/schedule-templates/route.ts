@@ -7,6 +7,7 @@ import {
   requireAdminSchoolContext,
   tenantNotFoundResponse,
 } from "@/lib/admin-school-context";
+import { assertGroupScheduleMutationAllowed } from "@/lib/group-schedule-change";
 
 export async function POST(request: NextRequest) {
   const ctx = await requireAdminSchoolContext(request);
@@ -36,6 +37,11 @@ export async function POST(request: NextRequest) {
 
     const group = await assertGroupInSchool(String(groupId), ctx.schoolId);
     if (!group.ok) return tenantNotFoundResponse("Nie znaleziono grupy");
+
+    const gate = await assertGroupScheduleMutationAllowed(String(groupId), ctx.schoolId);
+    if (!gate.ok) {
+      return NextResponse.json({ message: gate.message }, { status: gate.status });
+    }
 
     const groupMeta = await queryDb<{ lessons_per_week: number | null }>(
       `SELECT lessons_per_week FROM groups WHERE id = $1 LIMIT 1`,

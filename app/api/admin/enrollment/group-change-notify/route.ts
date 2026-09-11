@@ -26,6 +26,7 @@ export async function POST(request: NextRequest) {
       monthlyUnitPrice,
       yearlyUnitPrice,
       discountPercent,
+      managerComment,
     } = body as {
       requestId?: string;
       groupId?: string;
@@ -33,6 +34,7 @@ export async function POST(request: NextRequest) {
       monthlyUnitPrice?: number | string | null;
       yearlyUnitPrice?: number | string | null;
       discountPercent?: number | string | null;
+      managerComment?: string | null;
     };
 
     const rid = typeof requestId === "string" ? requestId.trim() : "";
@@ -126,6 +128,7 @@ export async function POST(request: NextRequest) {
         monthlyUnitPrice,
         yearlyUnitPrice,
         discountPercent,
+        managerComment,
       },
       {
         ...schoolRestrict,

@@ -17,18 +17,20 @@ export async function GET(request: NextRequest) {
     await completePastScheduledLessons();
 
     const groups = await fetchParentGroups(parentId, schoolId);
-    const groupIds = [...new Set(groups.map((g) => g.groupId))];
-    const upcomingLessons = await fetchUpcomingLessonsForGroups(groupIds, null, {
+    // Lekcje po oknie członkostwa (także historyczne grupy) — bez filtra aktualnych groupIds.
+    const upcomingLessons = await fetchUpcomingLessonsForGroups([], null, {
       parentId,
       schoolId,
+      includePast: true,
     });
 
-    const lessonsByChildGroup = new Map<string, typeof upcomingLessons>();
+    const lessonsByChild = new Map<string, typeof upcomingLessons>();
     for (const lesson of upcomingLessons) {
-      const key = `${lesson.childId ?? ""}:${lesson.groupId}`;
-      const list = lessonsByChildGroup.get(key) ?? [];
+      const childId = lesson.childId ?? "";
+      if (!childId) continue;
+      const list = lessonsByChild.get(childId) ?? [];
       list.push(lesson);
-      lessonsByChildGroup.set(key, list);
+      lessonsByChild.set(childId, list);
     }
 
     const proposedGroups =
@@ -37,7 +39,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       groups: groups.map((g) => ({
         ...g,
-        upcomingLessons: lessonsByChildGroup.get(`${g.childId}:${g.groupId}`) ?? [],
+        // Wszystkie lekcje dziecka w aktywnym roku (aktualna + odbyte ze starych grup).
+        upcomingLessons: lessonsByChild.get(g.childId) ?? [],
       })),
       proposedGroups,
     });

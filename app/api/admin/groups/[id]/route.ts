@@ -43,14 +43,41 @@ export async function GET(
     const groupRow = group.rows[0];
     const groupSchoolId = String(groupRow.school_id);
 
-    const activeYear = await queryDb<{ id: string; name: string }>(
-      `SELECT id, name FROM school_years
+    const activeYear = await queryDb<{
+      id: string;
+      name: string;
+      date_from: string;
+      date_to: string;
+    }>(
+      `SELECT id, name, date_from::text AS date_from, date_to::text AS date_to
+       FROM school_years
        WHERE school_id = $1 AND active = TRUE
        LIMIT 1`,
       [groupSchoolId],
     );
     const activeYearId = activeYear.rows[0]?.id ?? null;
     const activeYearName = activeYear.rows[0]?.name ?? null;
+    const activeYearDateFrom = activeYear.rows[0]?.date_from?.slice(0, 10) ?? null;
+    const activeYearDateTo = activeYear.rows[0]?.date_to?.slice(0, 10) ?? null;
+
+    const lessonBoundsRes = activeYearId
+      ? await queryDb<{
+          lessons_start_on: string | null;
+          lessons_end_on: string | null;
+        }>(
+          `SELECT lessons_start_on::text AS lessons_start_on,
+                  lessons_end_on::text AS lessons_end_on
+           FROM group_school_year_bounds
+           WHERE group_id = $1 AND school_year_id = $2
+           LIMIT 1`,
+          [id, activeYearId],
+        )
+      : { rows: [] as Array<{ lessons_start_on: string | null; lessons_end_on: string | null }> };
+    const lessonBoundsRow = lessonBoundsRes.rows[0];
+    const lessonBounds = {
+      lessonsStartOn: lessonBoundsRow?.lessons_start_on?.slice(0, 10) ?? null,
+      lessonsEndOn: lessonBoundsRow?.lessons_end_on?.slice(0, 10) ?? null,
+    };
 
     const scheduleTemplatesRaw = await queryDb(
       `SELECT st.*, l.name AS location_name
@@ -257,8 +284,14 @@ export async function GET(
       },
       missingGeneratedLessons: Boolean(missingGeneratedRes.rows[0]?.missing),
       activeSchoolYear: activeYearId
-        ? { id: activeYearId, name: activeYearName }
+        ? {
+            id: activeYearId,
+            name: activeYearName,
+            dateFrom: activeYearDateFrom,
+            dateTo: activeYearDateTo,
+          }
         : null,
+      lessonBounds,
       lessonsSchoolYear: lessonsYearId
         ? { id: lessonsYearId, name: lessonsYearName }
         : null,

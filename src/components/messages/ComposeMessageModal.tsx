@@ -316,8 +316,6 @@ export interface ComposeMessageModalProps {
   onApplyTemplate?: (subject: string, content: string) => void;
   /** Aktywne dzieci rodzica — pole szablonu `dziecko` jako select. */
   parentChildren?: Array<{ id: string; firstName: string; lastName: string }>;
-  filterRenewalNoResponse?: boolean;
-  onFilterRenewalNoResponseChange?: (value: boolean) => void;
 }
 
 export default function ComposeMessageModal(props: ComposeMessageModalProps) {
@@ -590,22 +588,6 @@ export default function ComposeMessageModal(props: ComposeMessageModalProps) {
                                 onFilterChange={props.onGroupFilterChange}
                                 onConfirm={props.onConfirmGroupFilter}
                               />
-                              {props.mode === 'manager' && props.onFilterRenewalNoResponseChange && (
-                                <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm">
-                                  <input
-                                    type="checkbox"
-                                    checked={props.filterRenewalNoResponse ?? false}
-                                    onChange={(e) => {
-                                      props.onFilterRenewalNoResponseChange?.(e.target.checked);
-                                      props.onGroupFilterChange(props.filterGroupIds);
-                                    }}
-                                    className="rounded border-zinc-300 text-[#0f6e56]"
-                                  />
-                                  <span className="text-zinc-800">
-                                    Tylko rodzice bez odpowiedzi na odnowienie
-                                  </span>
-                                </label>
-                              )}
                             </>
                           )}
                         </div>

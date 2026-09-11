@@ -10,6 +10,7 @@ import ParentDocumentsTab from '@/src/components/parent/ParentDocumentsTab';
 import ParentGroupTab from '@/src/components/parent/ParentGroupTab';
 import ParentPaymentsTab from '@/src/components/parent/ParentPaymentsTab';
 import ParentProfileSection from '@/src/components/parent/ParentProfileSection';
+import { isRenewalVisibleToParent } from '@/lib/renewal-status';
 
 export type { UserInfo };
 
@@ -37,6 +38,24 @@ const ALL_TOP_TABS: Array<{ key: PortalTab; label: string }> = [
   { key: 'profile', label: 'Profil' },
 ];
 
+/** Statusy zapisu, w których rodzic ma coś do zrobienia w „Proces zapisu”. */
+const OPEN_ENROLLMENT_LEVELS = new Set([
+  'NEW',
+  'PROPOSED',
+  'NEGOTIATING',
+  'ACCEPTED',
+  'AWAITING_CONTRACT',
+  'CONTRACT_READY',
+]);
+
+function hasOpenEnrollmentProcess(userInfo: UserInfo): boolean {
+  return (userInfo.children ?? []).some((c) => {
+    if (c.active === false) return false;
+    const level = String(c.accessLevel ?? 'NEW').trim().toUpperCase();
+    return OPEN_ENROLLMENT_LEVELS.has(level);
+  });
+}
+
 function BurgerIcon({ open }: { open: boolean }) {
   return (
     <span className="relative block h-4 w-5" aria-hidden>
@@ -63,14 +82,51 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
   const complimentaryAccess = userInfo.complimentaryAccess === true;
   const topTabs = ALL_TOP_TABS;
 
-  const [activeTab, setActiveTab] = useState<PortalTab>('enrollment');
+  const [activeTab, setActiveTab] = useState<PortalTab | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [messagesListResetToken, setMessagesListResetToken] = useState(0);
+  const initialTabResolvedForUser = useRef<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const { unreadCount: messagesUnreadCount, refresh: refreshMessagesUnreadCount } =
     useUnreadMessagesCount(messagesListResetToken);
 
-  const activeTabMeta = topTabs.find((t) => t.key === activeTab) ?? topTabs[0];
+  useEffect(() => {
+    if (initialTabResolvedForUser.current === userInfo.id) return;
+    let cancelled = false;
+
+    void (async () => {
+      const openEnrollment = hasOpenEnrollmentProcess(userInfo);
+      let openRenewal = false;
+      try {
+        const res = await fetch('/api/renewals/status', {
+          cache: 'no-store',
+          credentials: 'include',
+        });
+        if (res.ok) {
+          const data = (await res.json().catch(() => ({}))) as {
+            renewals?: Array<{ status?: string }>;
+          };
+          openRenewal = (data.renewals ?? []).some((r) => {
+            const status = String(r.status ?? '').trim().toUpperCase();
+            return isRenewalVisibleToParent(status) && status !== 'SIGNED';
+          });
+        }
+      } catch {
+        // Brak odnowień / błąd sieci — decyzja tylko po statusach dzieci.
+      }
+
+      if (cancelled) return;
+      setActiveTab(openEnrollment || openRenewal ? 'enrollment' : 'group');
+      initialTabResolvedForUser.current = userInfo.id;
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userInfo]);
+
+  const activeTabMeta =
+    topTabs.find((t) => t.key === activeTab) ?? topTabs[0];
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -131,6 +187,13 @@ export default function UserPortal({ userInfo, onUserInfoUpdate }: UserPortalPro
     );
 
   const renderContent = () => {
+    if (activeTab == null) {
+      return (
+        <section className="rounded-3xl border border-emerald-100 bg-white p-5 md:p-6">
+          <p className="text-sm text-zinc-600">Ładowanie panelu…</p>
+        </section>
+      );
+    }
     if (activeTab === 'enrollment') {
       return (
         <EnrollmentParentFlow

@@ -28,6 +28,7 @@ export interface PortalShellUserInfo {
     lastName: string;
     birthDate: string;
     active?: boolean;
+    accessLevel?: string;
   }>;
   impersonation?:
     | {

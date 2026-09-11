@@ -64,7 +64,6 @@ export async function GET(request: NextRequest) {
     if (teacherId) filters.teacherId = teacherId;
     const enrollmentStatus = sp.get("enrollmentStatus");
     if (enrollmentStatus) filters.enrollmentStatus = enrollmentStatus;
-    if (sp.get("renewalNoResponse") === "true") filters.renewalNoResponse = true;
   }
 
   try {

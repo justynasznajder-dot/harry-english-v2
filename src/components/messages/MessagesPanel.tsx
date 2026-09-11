@@ -161,7 +161,6 @@ export default function MessagesPanel({
 
   const [filterMeta, setFilterMeta] = useState<FilterMeta | null>(null);
   const [filterGroupIds, setFilterGroupIds] = useState<string[]>([]);
-  const [filterRenewalNoResponse, setFilterRenewalNoResponse] = useState(false);
   const [sendPreviewOpen, setSendPreviewOpen] = useState(false);
   const [messageTemplates, setMessageTemplates] = useState<
     Array<{ key: string; label: string; subject: string; content: string }>
@@ -201,7 +200,6 @@ export default function MessagesPanel({
     setRecipientSearch('');
     setRecipientSearchDebounced('');
     setFilterGroupIds([]);
-    setFilterRenewalNoResponse(false);
     setSendPreviewOpen(false);
     setShowGroupFilters(false);
     setBulkAddLoading(null);
@@ -309,18 +307,17 @@ export default function MessagesPanel({
       }
 
       if (mode === 'manager') {
-        const hasBulk = groupIds.length > 0 || filterRenewalNoResponse;
+        const hasBulk = groupIds.length > 0;
         if (!hasBulk) q.set('all', 'true');
         else {
           if (groupIds.length > 0) q.set('groupIds', groupIds.join(','));
-          if (filterRenewalNoResponse) q.set('renewalNoResponse', 'true');
         }
       } else if (mode === 'teacher') {
         if (groupIds.length > 0) q.set('groupIds', groupIds.join(','));
       }
       return q;
     },
-    [mode, composeSection, recipientSearchDebounced, filterGroupIds, filterRenewalNoResponse]
+    [mode, composeSection, recipientSearchDebounced, filterGroupIds]
   );
 
   const fetchRecipientsList = useCallback(
@@ -385,7 +382,6 @@ export default function MessagesPanel({
     loadRecipients,
     recipientsReloadToken,
     filterGroupIds,
-    filterRenewalNoResponse,
   ]);
 
   const handleComposeSectionChange = useCallback((section: ComposeSection) => {
@@ -398,7 +394,6 @@ export default function MessagesPanel({
       setSelectedRecipientLabels({});
       setSingleRecipientId('');
       setFilterGroupIds([]);
-      setFilterRenewalNoResponse(false);
       setShowGroupFilters(false);
       setExternalEmailRecipients([]);
       setExternalEmailBulkPaste('');
@@ -429,7 +424,6 @@ export default function MessagesPanel({
     setSelectedRecipientIds([]);
     setSelectedRecipientLabels({});
     setFilterGroupIds([]);
-    setFilterRenewalNoResponse(false);
     setShowGroupFilters(false);
     setRecipientsReloadToken((t) => t + 1);
   }, []);
@@ -1135,8 +1129,6 @@ export default function MessagesPanel({
           setComposeContent(content);
         }}
         parentChildren={parentChildren}
-        filterRenewalNoResponse={filterRenewalNoResponse}
-        onFilterRenewalNoResponseChange={setFilterRenewalNoResponse}
       />
 
       {sendPreviewOpen && (

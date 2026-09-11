@@ -10,6 +10,7 @@ export const ADMIN_CHANGE_ACTIONS = [
   "DEACTIVATE",
   "RESTORE",
   "PRICES_UPDATE",
+  "GROUP_TRANSFER",
 ] as const;
 export type AdminChangeAction = (typeof ADMIN_CHANGE_ACTIONS)[number];
 

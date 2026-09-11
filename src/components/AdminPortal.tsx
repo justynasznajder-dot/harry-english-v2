@@ -291,6 +291,8 @@ interface GroupDetail {
     price_per_lesson?: string | number | null;
     teacher_pickup_consent?: boolean;
     lessons_per_week?: number | null;
+    schedule_change_notice?: boolean;
+    schedule_before_label?: string | null;
   };
   scheduleTemplates: Array<{
     id: string;
@@ -333,7 +335,16 @@ interface GroupDetail {
   };
   missingGeneratedLessons?: boolean;
   locations: Array<{ id: string; name: string }>;
-  activeSchoolYear?: { id: string; name: string | null } | null;
+  activeSchoolYear?: {
+    id: string;
+    name: string | null;
+    dateFrom?: string | null;
+    dateTo?: string | null;
+  } | null;
+  lessonBounds?: {
+    lessonsStartOn: string | null;
+    lessonsEndOn: string | null;
+  } | null;
   lessonsSchoolYear?: { id: string; name: string | null } | null;
   scheduleConfirmedForActiveYear?: boolean;
   scheduleNeedsConfirmation?: boolean;
@@ -570,6 +581,19 @@ const classesSubTabs: Array<{ key: ClassesSubTab; label: string }> = [
 /** Wartości filtrów listy „Organizacja grup” (select); pusty string = wszystkie. */
 const ORGANIZE_FILTER_NO_LOCATION = '__no_location__';
 const ORGANIZE_FILTER_NO_TEACHER = '__no_teacher__';
+const LIST_FILTER_NO_LEVEL = '__no_level__';
+const LIST_FILTER_NO_SCHEDULE = '__no_schedule__';
+
+/** Etykieta terminu zajęć używana w filtrze i w komórce listy grup. */
+function groupScheduleFilterLabel(g: Pick<GroupRow, 'schedule' | 'has_schedule'>): string {
+  const scheduleText = (g.schedule ?? '').trim();
+  const hasProperSchedule =
+    g.has_schedule === true &&
+    Boolean(scheduleText) &&
+    scheduleText !== '-' &&
+    !scheduleText.split(/,\s*/).every((line) => /^Dzień(\s|\d|$)/i.test(line.trim()));
+  return hasProperSchedule ? scheduleText : 'brak harmonogramu';
+}
 
 interface AdminPortalProps {
   initialGroupId?: string;
@@ -711,6 +735,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [generateLessonsCount, setGenerateLessonsCount] = useState(() =>
     String(defaultTargetLessonsPerYear(1)),
   );
+  const [lessonBoundsDraft, setLessonBoundsDraft] = useState({
+    startsLater: false,
+    lessonsStartOn: '',
+    endsEarlier: false,
+    lessonsEndOn: '',
+  });
+  const [lessonBoundsSaving, setLessonBoundsSaving] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [search, setSearch] = useState('');
   const [showInactive, setShowInactive] = useState(false);
@@ -901,6 +932,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [organizeFilterName, setOrganizeFilterName] = useState('');
   const [organizeFilterLocation, setOrganizeFilterLocation] = useState('');
   const [listFilterActive, setListFilterActive] = useState<'all' | 'active' | 'inactive'>('active');
+  const [listFilterName, setListFilterName] = useState('');
+  const [listFilterLevel, setListFilterLevel] = useState('');
+  const [listFilterTeacher, setListFilterTeacher] = useState('');
+  const [listFilterLocation, setListFilterLocation] = useState('');
+  const [listFilterSchedule, setListFilterSchedule] = useState('');
   const [yearLessonsYearId, setYearLessonsYearId] = useState('');
   const [yearLessonsLoading, setYearLessonsLoading] = useState(false);
   const [yearLessonsGroups, setYearLessonsGroups] = useState<GroupYearLessonsRow[]>([]);
@@ -2219,19 +2255,108 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       .sort(compareGroupsYoungestToOldest);
   }, [groups, organizeFilterName, organizeFilterLocation, organizeFilterTeacher]);
 
+  const listFilterBaseGroups = useMemo(() => {
+    return groups.filter((g) => {
+      if (listFilterActive === 'active' && !g.active) return false;
+      if (listFilterActive === 'inactive' && g.active) return false;
+      return true;
+    });
+  }, [groups, listFilterActive]);
+
+  const listFilterNameOptions = useMemo(() => {
+    const set = new Set(listFilterBaseGroups.map((g) => g.name).filter(Boolean));
+    return [...set].sort((a, b) => a.localeCompare(b, 'pl'));
+  }, [listFilterBaseGroups]);
+
+  const listFilterLevelOptions = useMemo(() => {
+    const set = new Set(
+      listFilterBaseGroups
+        .map((g) => (g.level && g.level.trim() ? g.level.trim() : null))
+        .filter(Boolean) as string[],
+    );
+    return [...set].sort((a, b) => a.localeCompare(b, 'pl'));
+  }, [listFilterBaseGroups]);
+
+  const listFilterTeacherOptions = useMemo(() => {
+    const set = new Set(
+      listFilterBaseGroups
+        .map((g) => (g.teacher_name && g.teacher_name.trim() ? g.teacher_name : null))
+        .filter(Boolean) as string[],
+    );
+    return [...set].sort((a, b) => a.localeCompare(b, 'pl'));
+  }, [listFilterBaseGroups]);
+
+  const listFilterLocationOptions = useMemo(() => {
+    const set = new Set(
+      listFilterBaseGroups
+        .map((g) => (g.location_name && g.location_name.trim() ? g.location_name : null))
+        .filter(Boolean) as string[],
+    );
+    return [...set].sort((a, b) => a.localeCompare(b, 'pl'));
+  }, [listFilterBaseGroups]);
+
+  const listFilterScheduleOptions = useMemo(() => {
+    const set = new Set(listFilterBaseGroups.map((g) => groupScheduleFilterLabel(g)));
+    return [...set].sort((a, b) => {
+      if (a === 'brak harmonogramu') return 1;
+      if (b === 'brak harmonogramu') return -1;
+      return a.localeCompare(b, 'pl');
+    });
+  }, [listFilterBaseGroups]);
+
+  const listHasGroupsWithoutLevel = useMemo(
+    () => listFilterBaseGroups.some((g) => !g.level?.trim()),
+    [listFilterBaseGroups],
+  );
+  const listHasGroupsWithoutTeacher = useMemo(
+    () => listFilterBaseGroups.some((g) => !g.teacher_name?.trim()),
+    [listFilterBaseGroups],
+  );
+  const listHasGroupsWithoutLocation = useMemo(
+    () => listFilterBaseGroups.some((g) => !g.location_name?.trim()),
+    [listFilterBaseGroups],
+  );
+  const listHasGroupsWithoutSchedule = useMemo(
+    () => listFilterBaseGroups.some((g) => groupScheduleFilterLabel(g) === 'brak harmonogramu'),
+    [listFilterBaseGroups],
+  );
+
   const listFilteredGroups = useMemo(() => {
-    return groups
+    return listFilterBaseGroups
       .filter((g) => {
-        if (listFilterActive === 'active' && !g.active) return false;
-        if (listFilterActive === 'inactive' && g.active) return false;
-        if (!organizeFilterLocation) return true;
-        if (organizeFilterLocation === ORGANIZE_FILTER_NO_LOCATION) {
-          return !g.location_name?.trim();
+        if (listFilterName && g.name !== listFilterName) return false;
+        if (listFilterLevel) {
+          if (listFilterLevel === LIST_FILTER_NO_LEVEL) {
+            if (g.level?.trim()) return false;
+          } else if ((g.level ?? '').trim() !== listFilterLevel) return false;
         }
-        return (g.location_name ?? '') === organizeFilterLocation;
+        if (listFilterTeacher) {
+          if (listFilterTeacher === ORGANIZE_FILTER_NO_TEACHER) {
+            if (g.teacher_name?.trim()) return false;
+          } else if ((g.teacher_name ?? '') !== listFilterTeacher) return false;
+        }
+        if (listFilterLocation) {
+          if (listFilterLocation === ORGANIZE_FILTER_NO_LOCATION) {
+            if (g.location_name?.trim()) return false;
+          } else if ((g.location_name ?? '') !== listFilterLocation) return false;
+        }
+        if (listFilterSchedule) {
+          const label = groupScheduleFilterLabel(g);
+          if (listFilterSchedule === LIST_FILTER_NO_SCHEDULE) {
+            if (label !== 'brak harmonogramu') return false;
+          } else if (label !== listFilterSchedule) return false;
+        }
+        return true;
       })
       .sort(compareGroupsYoungestToOldest);
-  }, [groups, organizeFilterLocation, listFilterActive]);
+  }, [
+    listFilterBaseGroups,
+    listFilterName,
+    listFilterLevel,
+    listFilterTeacher,
+    listFilterLocation,
+    listFilterSchedule,
+  ]);
 
   useEffect(() => {
     if (organizeFilterName && !organizeFilterNameOptions.includes(organizeFilterName)) {
@@ -2268,6 +2393,56 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     organizeFilterTeacherOptions,
     organizeHasGroupsWithoutTeacher,
   ]);
+
+  useEffect(() => {
+    if (listFilterName && !listFilterNameOptions.includes(listFilterName)) {
+      setListFilterName('');
+    }
+  }, [listFilterName, listFilterNameOptions]);
+
+  useEffect(() => {
+    if (!listFilterLevel) return;
+    if (listFilterLevel === LIST_FILTER_NO_LEVEL) {
+      if (!listHasGroupsWithoutLevel) setListFilterLevel('');
+      return;
+    }
+    if (!listFilterLevelOptions.includes(listFilterLevel)) {
+      setListFilterLevel('');
+    }
+  }, [listFilterLevel, listFilterLevelOptions, listHasGroupsWithoutLevel]);
+
+  useEffect(() => {
+    if (!listFilterTeacher) return;
+    if (listFilterTeacher === ORGANIZE_FILTER_NO_TEACHER) {
+      if (!listHasGroupsWithoutTeacher) setListFilterTeacher('');
+      return;
+    }
+    if (!listFilterTeacherOptions.includes(listFilterTeacher)) {
+      setListFilterTeacher('');
+    }
+  }, [listFilterTeacher, listFilterTeacherOptions, listHasGroupsWithoutTeacher]);
+
+  useEffect(() => {
+    if (!listFilterLocation) return;
+    if (listFilterLocation === ORGANIZE_FILTER_NO_LOCATION) {
+      if (!listHasGroupsWithoutLocation) setListFilterLocation('');
+      return;
+    }
+    if (!listFilterLocationOptions.includes(listFilterLocation)) {
+      setListFilterLocation('');
+    }
+  }, [listFilterLocation, listFilterLocationOptions, listHasGroupsWithoutLocation]);
+
+  useEffect(() => {
+    if (!listFilterSchedule) return;
+    if (listFilterSchedule === LIST_FILTER_NO_SCHEDULE) {
+      if (!listHasGroupsWithoutSchedule) setListFilterSchedule('');
+      return;
+    }
+    if (!listFilterScheduleOptions.includes(listFilterSchedule)) {
+      setListFilterSchedule('');
+    }
+  }, [listFilterSchedule, listFilterScheduleOptions, listHasGroupsWithoutSchedule]);
 
   useEffect(() => {
     if (groupsSubTab !== 'organize' || !organizeExpandedGroupId) return;
@@ -2526,6 +2701,22 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   useEffect(() => {
     setGenerateLessonsCount(String(defaultTargetLessonsPerYear(groupForm.lessonsPerWeek)));
   }, [groupForm.id, groupForm.lessonsPerWeek]);
+
+  useEffect(() => {
+    const start = groupDetail?.lessonBounds?.lessonsStartOn?.slice(0, 10) ?? '';
+    const end = groupDetail?.lessonBounds?.lessonsEndOn?.slice(0, 10) ?? '';
+    setLessonBoundsDraft({
+      startsLater: Boolean(start),
+      lessonsStartOn: start,
+      endsEarlier: Boolean(end),
+      lessonsEndOn: end,
+    });
+  }, [
+    groupDetail?.group.id,
+    groupDetail?.activeSchoolYear?.id,
+    groupDetail?.lessonBounds?.lessonsStartOn,
+    groupDetail?.lessonBounds?.lessonsEndOn,
+  ]);
 
   const loadChildren = useCallback(async () => {
     try {
@@ -5550,6 +5741,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           : (detail?.group.lessons_per_week ?? groupForm.lessonsPerWeek),
       ) === 2;
     const hasOnceWeeklyDay = scheduleTemplates.some((st) => st.once_weekly_day);
+    const scheduleChangeNotice = Boolean(detail?.group.schedule_change_notice);
+    const scheduleBeforeLabel = detail?.group.schedule_before_label?.trim() || null;
+    const expectedScheduleSlots = groupIsTwiceWeekly ? 2 : 1;
+    const initialScheduleSetupIncomplete =
+      scheduleTemplates.length < expectedScheduleSlots;
+    const scheduleChangeUnlocked =
+      initialScheduleSetupIncomplete || scheduleChangeNotice;
     const schoolYearLessons = detail?.schoolYearLessons ?? [];
     const futureLessonsCount = detail?.generatedLessons?.futureCount ?? 0;
     const completedLessonsCount = detail?.generatedLessons?.completedCount ?? 0;
@@ -5558,7 +5756,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     const lessonsYearLabel =
       detail?.lessonsSchoolYear?.name ?? detail?.activeSchoolYear?.name ?? null;
     const hasActiveSchoolYear = Boolean(detail?.activeSchoolYear ?? activeSchoolYear);
-    const scheduleActionsDisabled = disabled || !hasActiveSchoolYear;
+    const scheduleActionsDisabled =
+      disabled || !hasActiveSchoolYear || !scheduleChangeUnlocked;
     const dayNames: Record<number, string> = {
       1: 'Poniedziałek',
       2: 'Wtorek',
@@ -5572,7 +5771,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     return (
       <>
         <section className="rounded-2xl border border-emerald-100 bg-white p-4 md:p-5">
-          <div className="mb-3 flex items-center justify-between">
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
             <div>
               <h4 className="font-semibold text-zinc-900">Harmonogram</h4>
               <p className="text-sm text-zinc-500">
@@ -5583,20 +5782,78 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               {disabled && (
                 <p className="mt-1 text-xs text-amber-700">Najpierw zapisz grupę, aby dodać terminy.</p>
               )}
+              {!disabled &&
+                !initialScheduleSetupIncomplete &&
+                !scheduleChangeNotice &&
+                hasActiveSchoolYear && (
+                  <p className="mt-1 text-xs text-amber-800">
+                    Harmonogram zablokowany. Zaznacz „zmiana harmonogramu”, aby edytować terminy.
+                  </p>
+                )}
             </div>
-            <button
-              type="button"
-              disabled={scheduleActionsDisabled}
-              className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
-              onClick={() => openScheduleModal()}
-              title={
-                !hasActiveSchoolYear
-                  ? 'Harmonogram można ustawić tylko przy aktywnym roku szkolnym'
-                  : undefined
-              }
-            >
-              + Dodaj termin
-            </button>
+            <div className="flex flex-col items-end gap-2">
+              {!disabled && groupId && !initialScheduleSetupIncomplete ? (
+                <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-sm text-zinc-800">
+                  <input
+                    type="checkbox"
+                    className="accent-emerald-700"
+                    checked={scheduleChangeNotice}
+                    disabled={!hasActiveSchoolYear}
+                    onChange={(e) => {
+                      const enabled = e.target.checked;
+                      void (async () => {
+                        const res = await fetch(
+                          `/api/admin/groups/${groupId}/schedule-change-notice`,
+                          {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ scheduleChangeNotice: enabled }),
+                          },
+                        );
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) {
+                          pushToast(
+                            'error',
+                            (data as { message?: string }).message ??
+                              'Nie udało się zapisać flagi zmiany harmonogramu',
+                          );
+                          return;
+                        }
+                        pushToast(
+                          'success',
+                          (data as { message?: string }).message ??
+                            (enabled
+                              ? 'Zmiana harmonogramu włączona'
+                              : 'Zmiana harmonogramu wyłączona'),
+                        );
+                        await reloadDetail();
+                      })();
+                    }}
+                  />
+                  <span className="font-medium">zmiana harmonogramu</span>
+                </label>
+              ) : null}
+              {scheduleBeforeLabel ? (
+                <p className="max-w-xs text-right text-xs text-zinc-500">
+                  Termin z umowy (snapshot): {scheduleBeforeLabel}
+                </p>
+              ) : null}
+              <button
+                type="button"
+                disabled={scheduleActionsDisabled}
+                className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={() => openScheduleModal()}
+                title={
+                  !hasActiveSchoolYear
+                    ? 'Harmonogram można ustawić tylko przy aktywnym roku szkolnym'
+                    : !scheduleChangeUnlocked
+                      ? 'Zaznacz „zmiana harmonogramu”, aby dodać lub zmienić terminy'
+                      : undefined
+                }
+              >
+                + Dodaj termin
+              </button>
+            </div>
           </div>
           {!hasActiveSchoolYear && (
             <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
@@ -5608,6 +5865,192 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               </p>
             </div>
           )}
+          {hasActiveSchoolYear && (detail?.activeSchoolYear ?? activeSchoolYear) && (
+            <div className="mb-3 rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-700">
+              <p>
+                Rok szkolny{' '}
+                <span className="font-semibold text-zinc-900">
+                  {detail?.activeSchoolYear?.name ?? activeSchoolYear?.name ?? '—'}
+                </span>
+                :{' '}
+                <span className="font-medium">
+                  {(detail?.activeSchoolYear?.dateFrom ?? activeSchoolYear?.date_from ?? '—')
+                    .toString()
+                    .slice(0, 10)}{' '}
+                  –{' '}
+                  {(detail?.activeSchoolYear?.dateTo ?? activeSchoolYear?.date_to ?? '—')
+                    .toString()
+                    .slice(0, 10)}
+                </span>
+              </p>
+              <p className="mt-1 text-xs text-zinc-500">
+                Generowanie zajęć używa tych dat, chyba że poniżej zawężysz zakres dla tej grupy.
+              </p>
+              {!disabled && groupId ? (
+                <div className="mt-3 space-y-3 border-t border-zinc-200 pt-3">
+                  <label className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="checkbox"
+                      className="accent-emerald-700"
+                      checked={lessonBoundsDraft.startsLater}
+                      disabled={lessonBoundsSaving}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setLessonBoundsDraft((prev) => ({
+                          ...prev,
+                          startsLater: checked,
+                          lessonsStartOn: checked ? prev.lessonsStartOn : '',
+                        }));
+                      }}
+                    />
+                    <span className="font-medium text-zinc-800">grupa zaczyna później</span>
+                  </label>
+                  {lessonBoundsDraft.startsLater ? (
+                    <div className="ml-6">
+                      <label className="block text-xs font-medium text-zinc-600">
+                        Data rozpoczęcia generowania zajęć
+                      </label>
+                      <input
+                        type="date"
+                        className="mt-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm"
+                        min={(
+                          detail?.activeSchoolYear?.dateFrom ??
+                          activeSchoolYear?.date_from ??
+                          ''
+                        )
+                          .toString()
+                          .slice(0, 10)}
+                        max={(
+                          detail?.activeSchoolYear?.dateTo ?? activeSchoolYear?.date_to ?? ''
+                        )
+                          .toString()
+                          .slice(0, 10)}
+                        value={lessonBoundsDraft.lessonsStartOn}
+                        disabled={lessonBoundsSaving}
+                        onChange={(e) =>
+                          setLessonBoundsDraft((prev) => ({
+                            ...prev,
+                            lessonsStartOn: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                  ) : null}
+                  <label className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="checkbox"
+                      className="accent-emerald-700"
+                      checked={lessonBoundsDraft.endsEarlier}
+                      disabled={lessonBoundsSaving}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setLessonBoundsDraft((prev) => ({
+                          ...prev,
+                          endsEarlier: checked,
+                          lessonsEndOn: checked ? prev.lessonsEndOn : '',
+                        }));
+                      }}
+                    />
+                    <span className="font-medium text-zinc-800">grupa kończy wcześniej</span>
+                  </label>
+                  {lessonBoundsDraft.endsEarlier ? (
+                    <div className="ml-6">
+                      <label className="block text-xs font-medium text-zinc-600">
+                        Data końca generowania zajęć
+                      </label>
+                      <input
+                        type="date"
+                        className="mt-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm"
+                        min={(
+                          detail?.activeSchoolYear?.dateFrom ??
+                          activeSchoolYear?.date_from ??
+                          ''
+                        )
+                          .toString()
+                          .slice(0, 10)}
+                        max={(
+                          detail?.activeSchoolYear?.dateTo ?? activeSchoolYear?.date_to ?? ''
+                        )
+                          .toString()
+                          .slice(0, 10)}
+                        value={lessonBoundsDraft.lessonsEndOn}
+                        disabled={lessonBoundsSaving}
+                        onChange={(e) =>
+                          setLessonBoundsDraft((prev) => ({
+                            ...prev,
+                            lessonsEndOn: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                  ) : null}
+                  <button
+                    type="button"
+                    disabled={lessonBoundsSaving}
+                    className="rounded-lg bg-emerald-700 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+                    onClick={() => {
+                      void (async () => {
+                        if (
+                          lessonBoundsDraft.startsLater &&
+                          !lessonBoundsDraft.lessonsStartOn
+                        ) {
+                          pushToast('error', 'Podaj datę rozpoczęcia zajęć dla grupy');
+                          return;
+                        }
+                        if (
+                          lessonBoundsDraft.endsEarlier &&
+                          !lessonBoundsDraft.lessonsEndOn
+                        ) {
+                          pushToast('error', 'Podaj datę zakończenia zajęć dla grupy');
+                          return;
+                        }
+                        setLessonBoundsSaving(true);
+                        try {
+                          const res = await fetch(
+                            `/api/admin/groups/${groupId}/lesson-bounds`,
+                            {
+                              method: 'PATCH',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                schoolYearId: detail?.activeSchoolYear?.id,
+                                startsLater: lessonBoundsDraft.startsLater,
+                                lessonsStartOn: lessonBoundsDraft.startsLater
+                                  ? lessonBoundsDraft.lessonsStartOn
+                                  : null,
+                                endsEarlier: lessonBoundsDraft.endsEarlier,
+                                lessonsEndOn: lessonBoundsDraft.endsEarlier
+                                  ? lessonBoundsDraft.lessonsEndOn
+                                  : null,
+                              }),
+                            },
+                          );
+                          const data = await res.json().catch(() => ({}));
+                          if (!res.ok) {
+                            pushToast(
+                              'error',
+                              (data as { message?: string }).message ??
+                                'Nie udało się zapisać zakresu dat',
+                            );
+                            return;
+                          }
+                          pushToast(
+                            'success',
+                            (data as { message?: string }).message ??
+                              'Zapisano zakres dat zajęć grupy',
+                          );
+                          await reloadDetail();
+                        } finally {
+                          setLessonBoundsSaving(false);
+                        }
+                      })();
+                    }}
+                  >
+                    {lessonBoundsSaving ? 'Zapisywanie…' : 'Zapisz zakres dat grupy'}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          )}
           <div className="space-y-2 text-sm">
             {scheduleTemplates.length === 0 ? (
               <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-6 text-center text-zinc-600">
@@ -5617,11 +6060,17 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               </p>
             ) : (
               scheduleTemplates.map((st) => {
-                const hasGeneratedLessons =
-                  (st.future_lessons_count ?? 0) > 0 ||
-                  (st.completed_lessons_count ?? 0) > 0;
+                const futureCount = st.future_lessons_count ?? 0;
+                const completedCount = st.completed_lessons_count ?? 0;
+                const hasGeneratedLessons = futureCount > 0 || completedCount > 0;
+                // Edycja terminu zablokowana tylko przez nadchodzące — zakończone zostają w historii.
+                const hasFutureGeneratedLessons = futureCount > 0;
                 const canEditSchedule =
-                  !disabled && hasActiveSchoolYear && Boolean(groupId) && !hasGeneratedLessons;
+                  !disabled &&
+                  hasActiveSchoolYear &&
+                  Boolean(groupId) &&
+                  !hasFutureGeneratedLessons &&
+                  scheduleChangeUnlocked;
                 return (
                 <div key={st.id} className="flex items-center justify-between rounded-xl border border-emerald-100 p-3">
                   <div>
@@ -5640,12 +6089,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       <p className="mt-1 text-xs font-medium text-emerald-700">
                         Z tego terminu:{" "}
                         {[
-                          (st.future_lessons_count ?? 0) > 0
-                            ? `${st.future_lessons_count} nadchodzących`
-                            : null,
-                          (st.completed_lessons_count ?? 0) > 0
-                            ? `${st.completed_lessons_count} zakończonych`
-                            : null,
+                          futureCount > 0 ? `${futureCount} nadchodzących` : null,
+                          completedCount > 0 ? `${completedCount} zakończonych` : null,
                         ]
                           .filter(Boolean)
                           .join(", ")}
@@ -5657,7 +6102,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     )}
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    {groupIsTwiceWeekly && hasActiveSchoolYear && !hasGeneratedLessons ? (
+                    {groupIsTwiceWeekly && hasActiveSchoolYear && !hasFutureGeneratedLessons ? (
                       <button
                         type="button"
                         className={`rounded-lg px-3 py-1 text-sm font-semibold ${
@@ -5693,8 +6138,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       disabled={!canEditSchedule}
                       className="rounded-lg bg-emerald-600 px-3 py-1 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
                       title={
-                        hasGeneratedLessons
-                          ? 'Edycja niedostępna — są już wygenerowane zajęcia. Usuń je poniżej, żeby zmienić harmonogram.'
+                        !scheduleChangeUnlocked
+                          ? 'Zaznacz „zmiana harmonogramu”, aby edytować terminy'
+                          : hasFutureGeneratedLessons
+                          ? 'Edycja niedostępna — są nadchodzące zajęcia. Usuń je poniżej, żeby zmienić harmonogram (zakończone zostaną).'
                           : !hasActiveSchoolYear
                             ? 'Harmonogram można edytować tylko przy aktywnym roku szkolnym'
                             : undefined
@@ -5705,8 +6152,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     </button>
                     <button
                       type="button"
-                      disabled={!hasActiveSchoolYear || !groupId}
+                      disabled={!hasActiveSchoolYear || !groupId || !scheduleChangeUnlocked}
                       className="rounded-lg bg-red-600 px-3 py-1 text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      title={
+                        !scheduleChangeUnlocked
+                          ? 'Zaznacz „zmiana harmonogramu”, aby usunąć terminy'
+                          : undefined
+                      }
                       onClick={() => {
                         if (!groupId) return;
                         const dayLabel =
@@ -5845,9 +6297,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     .
                   </p>
                   <p className="mt-1 text-xs text-emerald-800/90">
-                    Żeby zmienić dni lub godziny w harmonogramie, najpierw usuń wygenerowane
-                    zajęcia — potem ustaw termin i wygeneruj je od nowa.
+                    Żeby zmienić dni lub godziny w harmonogramie, usuń nadchodzące zajęcia —
+                    zakończone zostaną w historii. Potem ustaw termin i wygeneruj nowe.
                   </p>
+                  {futureLessonsCount > 0 ? (
                   <button
                     type="button"
                     className="mt-2 rounded-lg border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-800 hover:bg-red-50"
@@ -5856,14 +6309,15 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       setClearGeneratedLessonsModal({
                         groupId,
                         yearLabel: lessonsYearLabel,
-                        lessonCount: schoolYearLessonCount,
+                        lessonCount: futureLessonsCount,
                         completedCount: completedLessonsCount,
                         futureCount: futureLessonsCount,
                       });
                     }}
                   >
-                    Usuń wszystkie wygenerowane zajęcia
+                    Usuń nadchodzące wygenerowane zajęcia
                   </button>
+                  ) : null}
                 </div>
               )}
             </div>
@@ -6282,45 +6736,22 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           )}
           {groupsSubTab === 'list' ? (
             <div className="space-y-3">
-              <div className="grid gap-3 sm:grid-cols-2 max-w-2xl">
-                <div className="space-y-1">
-                  <label htmlFor="list-filter-location" className="block text-xs font-medium text-zinc-600">
-                    Lokalizacja
-                  </label>
-                  <select
-                    id="list-filter-location"
-                    className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
-                    value={organizeFilterLocation}
-                    onChange={(e) => setOrganizeFilterLocation(e.target.value)}
-                  >
-                    <option value="">Wszystkie</option>
-                    {organizeHasGroupsWithoutLocation && (
-                      <option value={ORGANIZE_FILTER_NO_LOCATION}>Brak lokalizacji</option>
-                    )}
-                    {organizeFilterLocationOptions.map((loc) => (
-                      <option key={loc} value={loc}>
-                        {loc}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <label htmlFor="list-filter-active" className="block text-xs font-medium text-zinc-600">
-                    Status grupy
-                  </label>
-                  <select
-                    id="list-filter-active"
-                    className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
-                    value={listFilterActive}
-                    onChange={(e) =>
-                      setListFilterActive(e.target.value as 'all' | 'active' | 'inactive')
-                    }
-                  >
-                    <option value="all">Wszystkie</option>
-                    <option value="active">Aktywne</option>
-                    <option value="inactive">Nieaktywne</option>
-                  </select>
-                </div>
+              <div className="max-w-xs space-y-1">
+                <label htmlFor="list-filter-active" className="block text-xs font-medium text-zinc-600">
+                  Status grupy
+                </label>
+                <select
+                  id="list-filter-active"
+                  className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
+                  value={listFilterActive}
+                  onChange={(e) =>
+                    setListFilterActive(e.target.value as 'all' | 'active' | 'inactive')
+                  }
+                >
+                  <option value="all">Wszystkie</option>
+                  <option value="active">Aktywne</option>
+                  <option value="inactive">Nieaktywne</option>
+                </select>
               </div>
               {(() => {
                 const hasActiveYear = Boolean(activeSchoolYear);
@@ -6425,14 +6856,118 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               <table className="w-full min-w-[960px] text-sm">
                 <thead className="bg-emerald-50 text-zinc-700">
                   <tr>
-                    <th className="px-4 py-3 text-left">Nazwa</th>
-                    <th className="px-4 py-3 text-left">Poziom</th>
-                    <th className="px-4 py-3 text-left">Nauczyciel</th>
-                    <th className="px-4 py-3 text-left">Lokalizacja</th>
-                    <th className="px-4 py-3 text-left">Termin zajęć</th>
+                    <th className="px-4 py-3 text-left align-bottom">
+                      <div className="space-y-1.5">
+                        <span className="block">Nazwa</span>
+                        <select
+                          aria-label="Filtruj po nazwie"
+                          className="w-full min-w-[9rem] rounded-lg border border-emerald-200 bg-white px-2 py-1.5 text-xs font-normal text-zinc-800"
+                          value={listFilterName}
+                          onChange={(e) => setListFilterName(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <option value="">Wszystkie</option>
+                          {listFilterNameOptions.map((name) => (
+                            <option key={name} value={name}>
+                              {name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </th>
+                    <th className="px-4 py-3 text-left align-bottom">
+                      <div className="space-y-1.5">
+                        <span className="block">Poziom</span>
+                        <select
+                          aria-label="Filtruj po poziomie"
+                          className="w-full min-w-[6rem] rounded-lg border border-emerald-200 bg-white px-2 py-1.5 text-xs font-normal text-zinc-800"
+                          value={listFilterLevel}
+                          onChange={(e) => setListFilterLevel(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <option value="">Wszystkie</option>
+                          {listHasGroupsWithoutLevel && (
+                            <option value={LIST_FILTER_NO_LEVEL}>Brak poziomu</option>
+                          )}
+                          {listFilterLevelOptions.map((level) => (
+                            <option key={level} value={level}>
+                              {level}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </th>
+                    <th className="px-4 py-3 text-left align-bottom">
+                      <div className="space-y-1.5">
+                        <span className="block">Nauczyciel</span>
+                        <select
+                          aria-label="Filtruj po nauczycielu"
+                          className="w-full min-w-[8rem] rounded-lg border border-emerald-200 bg-white px-2 py-1.5 text-xs font-normal text-zinc-800"
+                          value={listFilterTeacher}
+                          onChange={(e) => setListFilterTeacher(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <option value="">Wszyscy</option>
+                          {listHasGroupsWithoutTeacher && (
+                            <option value={ORGANIZE_FILTER_NO_TEACHER}>Brak nauczyciela</option>
+                          )}
+                          {listFilterTeacherOptions.map((teacher) => (
+                            <option key={teacher} value={teacher}>
+                              {teacher}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </th>
+                    <th className="px-4 py-3 text-left align-bottom">
+                      <div className="space-y-1.5">
+                        <span className="block">Lokalizacja</span>
+                        <select
+                          aria-label="Filtruj po lokalizacji"
+                          className="w-full min-w-[8rem] rounded-lg border border-emerald-200 bg-white px-2 py-1.5 text-xs font-normal text-zinc-800"
+                          value={listFilterLocation}
+                          onChange={(e) => setListFilterLocation(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <option value="">Wszystkie</option>
+                          {listHasGroupsWithoutLocation && (
+                            <option value={ORGANIZE_FILTER_NO_LOCATION}>Brak lokalizacji</option>
+                          )}
+                          {listFilterLocationOptions.map((loc) => (
+                            <option key={loc} value={loc}>
+                              {loc}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </th>
+                    <th className="px-4 py-3 text-left align-bottom">
+                      <div className="space-y-1.5">
+                        <span className="block">Termin zajęć</span>
+                        <select
+                          aria-label="Filtruj po terminie zajęć"
+                          className="w-full min-w-[9rem] rounded-lg border border-emerald-200 bg-white px-2 py-1.5 text-xs font-normal text-zinc-800"
+                          value={listFilterSchedule}
+                          onChange={(e) => setListFilterSchedule(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <option value="">Wszystkie</option>
+                          {listHasGroupsWithoutSchedule && (
+                            <option value={LIST_FILTER_NO_SCHEDULE}>brak harmonogramu</option>
+                          )}
+                          {listFilterScheduleOptions
+                            .filter((s) => s !== 'brak harmonogramu')
+                            .map((schedule) => (
+                              <option key={schedule} value={schedule}>
+                                {schedule}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                    </th>
                     {/* <th className="px-4 py-3 text-left">Ceny</th> — cennik grupy wyłączony */}
-                    <th className="px-4 py-3 text-left">Uczniowie</th>
-                    <th className="px-4 py-3 text-left">Akcje</th>
+                    <th className="px-4 py-3 text-left align-bottom">Uczniowie</th>
+                    <th className="px-4 py-3 text-left align-bottom">Akcje</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -6501,20 +7036,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       <td className="px-4 py-3">{g.location_name ?? '-'}</td>
                       <td className="px-4 py-3 whitespace-normal text-zinc-700">
                         {(() => {
-                          const scheduleText = (g.schedule ?? '').trim();
-                          const hasProperSchedule =
-                            g.has_schedule === true &&
-                            Boolean(scheduleText) &&
-                            scheduleText !== '-' &&
-                            !scheduleText
-                              .split(/,\s*/)
-                              .every((line) => /^Dzień(\s|\d|$)/i.test(line.trim()));
-                          if (!hasProperSchedule) {
+                          const label = groupScheduleFilterLabel(g);
+                          if (label === 'brak harmonogramu') {
                             return <span className="text-zinc-500">brak harmonogramu</span>;
                           }
                           return (
                             <span className="flex flex-col gap-0.5">
-                              {scheduleText.split(/,\s*/).map((line) => (
+                              {label.split(/,\s*/).map((line) => (
                                 <span key={line}>{line}</span>
                               ))}
                             </span>
@@ -9298,10 +9826,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl border border-red-100 bg-white p-5 shadow-xl">
             <h3 className="text-lg font-semibold text-zinc-900">
-              Usuń wygenerowane zajęcia
+              Usuń nadchodzące zajęcia
             </h3>
             <p className="mt-3 text-sm text-zinc-600">
-              Usunąć wszystkie wygenerowane zajęcia tej grupy
+              Usunąć nadchodzące wygenerowane zajęcia tej grupy
               {clearGeneratedLessonsModal.yearLabel
                 ? ` w roku ${clearGeneratedLessonsModal.yearLabel}`
                 : ''}
@@ -9309,26 +9837,21 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             </p>
             <div className="mt-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2.5 text-sm text-red-950">
               <p className="font-semibold">
-                Zostanie usuniętych: {clearGeneratedLessonsModal.lessonCount}{' '}
-                {clearGeneratedLessonsModal.lessonCount === 1
-                  ? 'zajęcie'
-                  : clearGeneratedLessonsModal.lessonCount < 5
-                    ? 'zajęcia'
-                    : 'zajęć'}
+                Zostanie usuniętych: {clearGeneratedLessonsModal.futureCount}{' '}
+                {clearGeneratedLessonsModal.futureCount === 1
+                  ? 'nadchodzące zajęcie'
+                  : clearGeneratedLessonsModal.futureCount < 5
+                    ? 'nadchodzące zajęcia'
+                    : 'nadchodzących zajęć'}
               </p>
-              {(clearGeneratedLessonsModal.futureCount > 0 ||
-                clearGeneratedLessonsModal.completedCount > 0) && (
+              {clearGeneratedLessonsModal.completedCount > 0 ? (
                 <p className="mt-1 text-xs text-red-900/90">
-                  {[
-                    clearGeneratedLessonsModal.futureCount > 0
-                      ? `${clearGeneratedLessonsModal.futureCount} nadchodzących`
-                      : null,
-                    clearGeneratedLessonsModal.completedCount > 0
-                      ? `${clearGeneratedLessonsModal.completedCount} zakończonych (wraz z obecnościami)`
-                      : null,
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')}
+                  {clearGeneratedLessonsModal.completedCount} zakończonych zostanie zachowanych
+                  (historia / obecności).
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-red-900/90">
+                  Zakończone i przeszłe zajęcia nie są usuwane.
                 </p>
               )}
             </div>
@@ -9382,7 +9905,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                   }
                 }}
               >
-                {busy ? 'Usuwanie…' : 'Usuń zajęcia'}
+                {busy ? 'Usuwanie…' : 'Usuń nadchodzące'}
               </button>
             </div>
           </div>

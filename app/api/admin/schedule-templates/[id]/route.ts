@@ -5,10 +5,11 @@ import {
   requireAdminSchoolContext,
   tenantNotFoundResponse,
 } from "@/lib/admin-school-context";
+import { assertGroupScheduleMutationAllowed } from "@/lib/group-schedule-change";
 import { purgeFutureOrphanScheduledLessons } from "@/lib/lesson-generation";
 import { sqlSchoolTimestampAsTimestamptz } from "@/lib/school-timezone";
 
-async function countGeneratedLessonsForTemplate(
+async function countFutureGeneratedLessonsForTemplate(
   templateId: string,
   groupId: string,
   dayOfWeek: number,
@@ -18,7 +19,8 @@ async function countGeneratedLessonsForTemplate(
     `SELECT COUNT(*)::int AS cnt
      FROM lessons l
      WHERE l.group_id = $1
-       AND l.status IN ('SCHEDULED', 'COMPLETED')
+       AND l.status = 'SCHEDULED'
+       AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} > NOW()
        AND (
          l.schedule_template_id = $2
          OR (
@@ -115,6 +117,11 @@ export async function PATCH(
       return NextResponse.json({ message: "Zaktualizowano termin" });
     }
 
+    const gate = await assertGroupScheduleMutationAllowed(row.group_id, ctx.schoolId);
+    if (!gate.ok) {
+      return NextResponse.json({ message: gate.message }, { status: gate.status });
+    }
+
     const dayOfWeek = Number(body.dayOfWeek ?? row.day_of_week);
     const startTimeRaw = String(body.startTime ?? row.start_time.slice(0, 5));
     const startTime =
@@ -136,7 +143,7 @@ export async function PATCH(
       );
     }
 
-    const generatedCount = await countGeneratedLessonsForTemplate(
+    const generatedCount = await countFutureGeneratedLessonsForTemplate(
       id,
       row.group_id,
       row.day_of_week,
@@ -146,7 +153,7 @@ export async function PATCH(
       return NextResponse.json(
         {
           message:
-            "Nie można edytować terminu — są już wygenerowane zajęcia. Usuń termin albo zajęcia, a potem dodaj nowy.",
+            "Nie można edytować terminu — są nadchodzące zajęcia. Usuń je, a potem zmień harmonogram (zakończone zostaną w historii).",
         },
         { status: 409 }
       );
@@ -248,6 +255,20 @@ export async function PATCH(
       [id, locationId, dayOfWeek, startTime, durationMin, markOnceWeekly]
     );
 
+    if (hasScheduleFields) {
+      // Zakończone / przeszłe: odłącz od szablonu (zostają w historii bez powiązania z nowym terminem).
+      await queryDb(
+        `UPDATE lessons
+         SET schedule_template_id = NULL
+         WHERE schedule_template_id = $1
+           AND (
+             status <> 'SCHEDULED'
+             OR ${sqlSchoolTimestampAsTimestamptz("scheduled_at")} <= NOW()
+           )`,
+        [id]
+      );
+    }
+
     return NextResponse.json({ message: "Termin zaktualizowany" });
   } catch (error) {
     console.error("PATCH schedule template error:", error);
@@ -284,6 +305,11 @@ export async function DELETE(
     const template = existing.rows[0];
     if (!template) {
       return tenantNotFoundResponse("Nie znaleziono terminu");
+    }
+
+    const gate = await assertGroupScheduleMutationAllowed(template.group_id, ctx.schoolId);
+    if (!gate.ok) {
+      return NextResponse.json({ message: gate.message }, { status: gate.status });
     }
 
     const lessonsRemoved = await runPgTransaction(async (client) => {

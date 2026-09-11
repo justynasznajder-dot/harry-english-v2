@@ -32,6 +32,7 @@ type ProposalDraft = {
   monthlyUnitPrice: string;
   yearlyUnitPrice: string;
   discountPercent: string;
+  managerComment: string;
 };
 
 /** Domyślny % zniżki w trybie bez umowy (manager może zmienić). */
@@ -54,6 +55,7 @@ function emptyProposalDraft(groupId = ''): ProposalDraft {
     monthlyUnitPrice: '',
     yearlyUnitPrice: '',
     discountPercent: '',
+    managerComment: '',
   };
 }
 
@@ -586,6 +588,9 @@ export default function EnrollmentAdminPanel({
           } else if (parentIsComplimentary) {
             draft.discountPercent = COMPLIMENTARY_DEFAULT_DISCOUNT_PERCENT;
           }
+          if (child.managerComment != null && String(child.managerComment).trim() !== '') {
+            draft.managerComment = String(child.managerComment);
+          }
           next[child.requestId] = draft;
         }
         return next;
@@ -892,6 +897,7 @@ export default function EnrollmentAdminPanel({
           monthlyUnitPrice: draft?.monthlyUnitPrice?.trim() || null,
           yearlyUnitPrice: draft?.yearlyUnitPrice?.trim() || null,
           discountPercent: draft?.discountPercent?.trim() || null,
+          managerComment: draft?.managerComment?.trim() || null,
         };
       });
 
@@ -905,6 +911,7 @@ export default function EnrollmentAdminPanel({
         monthlyUnitPrice: draft?.monthlyUnitPrice?.trim() || null,
         yearlyUnitPrice: draft?.yearlyUnitPrice?.trim() || null,
         discountPercent: draft?.discountPercent?.trim() || null,
+        managerComment: draft?.managerComment?.trim() || null,
       };
     });
 
@@ -2430,8 +2437,8 @@ export default function EnrollmentAdminPanel({
                                     Możesz skorygować stawki i zapisać bez ponownej wysyłki e-maila.
                                   </p>
                                 ) : null}
-                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4 sm:items-end">
-                                  <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
+                                <div className="flex flex-wrap items-end gap-2">
+                                  <label className="flex w-[6.75rem] shrink-0 flex-col gap-1 text-xs font-medium text-zinc-600">
                                     <span className="leading-snug">
                                       Jednorazowa{' '}
                                       <span className="font-normal text-zinc-400">(PLN)</span>
@@ -2440,7 +2447,7 @@ export default function EnrollmentAdminPanel({
                                       type="text"
                                       inputMode="decimal"
                                       required
-                                      className={`w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:opacity-70`}
+                                      className={`w-full rounded-lg border border-emerald-200 px-2 py-1.5 text-sm disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:opacity-70`}
                                       disabled={!pricesEditable}
                                       placeholder="np. 1200"
                                       value={
@@ -2458,7 +2465,7 @@ export default function EnrollmentAdminPanel({
                                       }
                                     />
                                   </label>
-                                  <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
+                                  <label className="flex w-[6.75rem] shrink-0 flex-col gap-1 text-xs font-medium text-zinc-600">
                                     <span className="leading-snug">
                                       Ratalna{' '}
                                       <span className="font-normal text-zinc-400">(PLN)</span>
@@ -2467,7 +2474,7 @@ export default function EnrollmentAdminPanel({
                                       type="text"
                                       inputMode="decimal"
                                       required
-                                      className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:opacity-70"
+                                      className="w-full rounded-lg border border-emerald-200 px-2 py-1.5 text-sm disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:opacity-70"
                                       disabled={!pricesEditable}
                                       placeholder="np. 150"
                                       value={
@@ -2485,7 +2492,7 @@ export default function EnrollmentAdminPanel({
                                       }
                                     />
                                   </label>
-                                  <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
+                                  <label className="flex w-[6.75rem] shrink-0 flex-col gap-1 text-xs font-medium text-zinc-600">
                                     <span className="leading-snug">
                                       Za zajęcia{' '}
                                       <span className="font-normal text-zinc-400">(PLN)</span>
@@ -2494,7 +2501,7 @@ export default function EnrollmentAdminPanel({
                                       type="text"
                                       inputMode="decimal"
                                       required={!proposalParentIsComplimentary}
-                                      className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:opacity-70"
+                                      className="w-full rounded-lg border border-emerald-200 px-2 py-1.5 text-sm disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:opacity-70"
                                       disabled={!pricesEditable}
                                       placeholder={
                                         proposalParentIsComplimentary ? 'opcjonalnie' : 'np. 50'
@@ -2514,12 +2521,12 @@ export default function EnrollmentAdminPanel({
                                       }
                                     />
                                   </label>
-                                  <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
+                                  <label className="flex w-[4.75rem] shrink-0 flex-col gap-1 text-xs font-medium text-zinc-600">
                                     <span className="leading-snug">% zniżki</span>
                                     <input
                                       type="text"
                                       inputMode="numeric"
-                                      className="w-full rounded-lg border border-emerald-200 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:opacity-70"
+                                      className="w-full rounded-lg border border-emerald-200 px-2 py-1.5 text-sm disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:opacity-70"
                                       disabled={!pricesEditable}
                                       placeholder="0–100"
                                       value={
@@ -2553,6 +2560,65 @@ export default function EnrollmentAdminPanel({
                                             discountPercent: formatted,
                                           },
                                         }));
+                                      }}
+                                    />
+                                  </label>
+                                  <label className="flex min-w-[10rem] flex-1 flex-col gap-1 text-xs font-medium text-zinc-600">
+                                    <span className="leading-snug">Komentarz</span>
+                                    <input
+                                      type="text"
+                                      className="w-full rounded-lg border border-emerald-200 px-2 py-1.5 text-sm disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:opacity-70"
+                                      disabled={!pricesEditable}
+                                      placeholder="Opcjonalnie"
+                                      value={
+                                        proposalDrafts[child.requestId]?.managerComment ?? ''
+                                      }
+                                      onChange={(e) =>
+                                        setProposalDrafts((prev) => ({
+                                          ...prev,
+                                          [child.requestId]: {
+                                            ...emptyProposalDraft(),
+                                            ...prev[child.requestId],
+                                            managerComment: e.target.value,
+                                          },
+                                        }))
+                                      }
+                                      onBlur={() => {
+                                        if (!pricesEditable) return;
+                                        const comment =
+                                          proposalDrafts[child.requestId]?.managerComment?.trim() ||
+                                          null;
+                                        const saved =
+                                          child.managerComment != null
+                                            ? String(child.managerComment).trim() || null
+                                            : null;
+                                        if (comment === saved) return;
+                                        void (async () => {
+                                          try {
+                                            const res = await fetch(
+                                              '/api/admin/enrollment/manager-comment',
+                                              {
+                                                method: 'PATCH',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({
+                                                  requestId: child.requestId,
+                                                  managerComment: comment,
+                                                }),
+                                              },
+                                            );
+                                            if (!res.ok) {
+                                              const data = (await res.json().catch(() => ({}))) as {
+                                                message?: string;
+                                              };
+                                              pushToast(
+                                                'error',
+                                                data.message ?? 'Nie udało się zapisać komentarza',
+                                              );
+                                            }
+                                          } catch {
+                                            pushToast('error', 'Nie udało się zapisać komentarza');
+                                          }
+                                        })();
                                       }}
                                     />
                                   </label>
@@ -2655,6 +2721,9 @@ export default function EnrollmentAdminPanel({
                                               null,
                                             discountPercent:
                                               proposalDrafts[child.requestId]?.discountPercent?.trim() ||
+                                              null,
+                                            managerComment:
+                                              proposalDrafts[child.requestId]?.managerComment?.trim() ||
                                               null,
                                           }),
                                         });
@@ -2875,6 +2944,7 @@ export default function EnrollmentAdminPanel({
                                   monthlyUnitPrice: draft?.monthlyUnitPrice?.trim() || null,
                                   yearlyUnitPrice: draft?.yearlyUnitPrice?.trim() || null,
                                   discountPercent: draft?.discountPercent?.trim() || null,
+                                  managerComment: draft?.managerComment?.trim() || null,
                                 }),
                               },
                             );

@@ -25,6 +25,7 @@ import {
   type EnrollmentStatus,
 } from "@/lib/enrollment-status";
 import { isComplimentaryForParent } from "@/lib/school-discounts";
+import { resolveEffectiveLessonRange } from "@/lib/group-lesson-bounds";
 import {
   normalizeLessonsPerWeek,
   sqlScheduleTemplateVisibleForStudent,
@@ -54,6 +55,10 @@ export type ProposalEmailItem = {
   locationName: string;
   schedule: string;
   teacherName: string;
+  /** Data rozpoczęcia roku szkolnego (YYYY-MM-DD) — „według harmonogramu”. */
+  schoolYearStartOn?: string | null;
+  /** Efektywna data startu zajęć grupy (YYYY-MM-DD). */
+  groupLessonsStartOn?: string | null;
 };
 
 export type SharedParentState = {
@@ -74,6 +79,8 @@ export type ProposalInput = {
   yearlyUnitPrice?: number | string | null;
   /** Opcjonalny % zniżki na profilu dziecka (0–100). */
   discountPercent?: number | string | null;
+  /** Komentarz managera (enrollment_requests.manager_comment). */
+  managerComment?: string | null;
 };
 
 export type EnrollmentProposalStatus =
@@ -122,6 +129,14 @@ function parseOptionalDiscountPercent(
     return { ok: false, message: "% zniżki musi być w zakresie 0–100" };
   }
   return { ok: true, value: Math.round(n * 100) / 100 };
+}
+
+/** Komentarz managera — pusty string → NULL; max 4000 znaków. */
+export function normalizeManagerComment(raw: unknown): string | null {
+  if (raw == null) return null;
+  const t = String(raw).trim();
+  if (!t) return null;
+  return t.length > 4000 ? t.slice(0, 4000) : t;
 }
 
 function roleLabelPl(role: string): string {
@@ -353,7 +368,10 @@ export async function submitEnrollmentProposal(
     monthlyUnitPrice,
     yearlyUnitPrice,
     discountPercent,
+    managerComment: managerCommentRaw,
   } = input;
+  const managerComment =
+    managerCommentRaw === undefined ? undefined : normalizeManagerComment(managerCommentRaw);
   const allowedStatuses = options?.allowedStatuses ?? ["NEW", "NEGOTIATING"];
   const draftOnly = options?.draftOnly === true;
 
@@ -468,6 +486,13 @@ export async function submitEnrollmentProposal(
   );
   const group = groupRes.rows[0];
   if (!group) return { ok: false, status: 404, message: "Nie znaleziono grupy" };
+
+  const lessonRange = await resolveEffectiveLessonRange({
+    schoolId: parentSchoolId,
+    groupId,
+  });
+  const schoolYearStartOn = lessonRange?.yearFrom ?? null;
+  const groupLessonsStartOn = lessonRange?.effectiveFrom ?? schoolYearStartOn;
 
   let parentUserId: string;
   let parentFirstName: string;
@@ -604,9 +629,19 @@ export async function submitEnrollmentProposal(
            user_id = COALESCE(user_id, $3),
            lesson_unit_price = $4,
            monthly_unit_price = $5,
-           yearly_unit_price = $6
+           yearly_unit_price = $6,
+           manager_comment = CASE WHEN $7::boolean THEN $8 ELSE manager_comment END
        WHERE id = $1`,
-      [requestId, groupId, parentUserId, parsedLesson, parsedMonthly, parsedYearly]
+      [
+        requestId,
+        groupId,
+        parentUserId,
+        parsedLesson,
+        parsedMonthly,
+        parsedYearly,
+        managerComment !== undefined,
+        managerComment ?? null,
+      ]
     );
   } else {
     await queryDb(
@@ -621,7 +656,8 @@ export async function submitEnrollmentProposal(
            user_id = COALESCE(user_id, $3),
            lesson_unit_price = $4,
            monthly_unit_price = $5,
-           yearly_unit_price = $6
+           yearly_unit_price = $6,
+           manager_comment = CASE WHEN $8::boolean THEN $9 ELSE manager_comment END
        WHERE id = $1`,
       [
         requestId,
@@ -631,6 +667,8 @@ export async function submitEnrollmentProposal(
         parsedMonthly,
         parsedYearly,
         initialStatus,
+        managerComment !== undefined,
+        managerComment ?? null,
       ]
     );
   }
@@ -784,6 +822,8 @@ export async function submitEnrollmentProposal(
       locationName: group.location_name,
       schedule: group.schedule,
       teacherName: group.teacher_name,
+      schoolYearStartOn,
+      groupLessonsStartOn,
     },
     complimentaryCompleted: complimentaryReadyToComplete,
     childId: resolvedChildId,
@@ -877,6 +917,7 @@ export async function saveEnrollmentRequestPrices(
     monthlyUnitPrice?: number | string | null;
     yearlyUnitPrice?: number | string | null;
     discountPercent?: number | string | null;
+    managerComment?: string | null;
   },
   options?: { restrictToSchoolId?: string; complimentaryPrices?: boolean }
 ): Promise<{ ok: true } | { ok: false; status: number; message: string }> {
@@ -982,15 +1023,28 @@ export async function saveEnrollmentRequestPrices(
     return { ok: false, status: resolved.status, message: resolved.message };
   }
   const parentUserId = resolved.parentUserId;
+  const managerComment =
+    input.managerComment === undefined
+      ? undefined
+      : normalizeManagerComment(input.managerComment);
 
   await queryDb(
     `UPDATE enrollment_requests
      SET user_id = COALESCE(user_id, $2),
          lesson_unit_price = $3,
          monthly_unit_price = $4,
-         yearly_unit_price = $5
+         yearly_unit_price = $5,
+         manager_comment = CASE WHEN $6::boolean THEN $7 ELSE manager_comment END
      WHERE id = $1`,
-    [input.requestId, parentUserId, parsedLesson, parsedMonthly, parsedYearly]
+    [
+      input.requestId,
+      parentUserId,
+      parsedLesson,
+      parsedMonthly,
+      parsedYearly,
+      managerComment !== undefined,
+      managerComment ?? null,
+    ]
   );
 
   const childFirst = formatPersonName(enrollment.child_first_name ?? "");
@@ -1088,5 +1142,35 @@ export async function saveEnrollmentRequestPrices(
     });
   }
 
+  return { ok: true };
+}
+
+/** Sam zapis komentarza managera na zgłoszeniu (np. blur pola w UI). */
+export async function saveEnrollmentManagerComment(
+  requestId: string,
+  managerCommentRaw: unknown,
+  options?: { restrictToSchoolId?: string }
+): Promise<{ ok: true } | { ok: false; status: number; message: string }> {
+  const rid = String(requestId ?? "").trim();
+  if (!rid) {
+    return { ok: false, status: 400, message: "Brak identyfikatora zgłoszenia" };
+  }
+  const managerComment = normalizeManagerComment(managerCommentRaw);
+  const schoolId = options?.restrictToSchoolId?.trim() || null;
+  const res = await queryDb<{ id: string }>(
+    schoolId
+      ? `UPDATE enrollment_requests
+         SET manager_comment = $2
+         WHERE id = $1 AND school_id = $3
+         RETURNING id`
+      : `UPDATE enrollment_requests
+         SET manager_comment = $2
+         WHERE id = $1
+         RETURNING id`,
+    schoolId ? [rid, managerComment, schoolId] : [rid, managerComment]
+  );
+  if (!res.rows[0]) {
+    return { ok: false, status: 404, message: "Nie znaleziono zgłoszenia" };
+  }
   return { ok: true };
 }

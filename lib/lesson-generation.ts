@@ -1,6 +1,11 @@
 import { randomUUID } from "crypto";
 import { getActiveSchoolYear, queryDb } from "@/lib/db";
 import { ensurePolishPublicHolidaysForSchoolYear } from "@/lib/ensure-polish-public-holidays";
+import {
+  clampLessonRangeToBounds,
+  fetchGroupLessonBounds,
+  ymdSlice,
+} from "@/lib/group-lesson-bounds";
 import type { HolidayLessonDeletionByGroup } from "@/lib/school-holiday-lessons";
 import { sqlHolidayAppliesToGroup } from "@/lib/school-holiday-scope";
 import { SCHOOL_TIMEZONE, sqlSchoolTimestampAsTimestamptz, sqlSchoolWallTimestamp } from "@/lib/school-timezone";
@@ -66,10 +71,18 @@ export function sqlExistsUnfilledFutureScheduleSlot(
       ON st_gap.group_id = ${groupIdSql}
      AND st_gap.active = TRUE
      AND st_gap.school_year_id = sy_gap.id
+    LEFT JOIN group_school_year_bounds gsyb_gap
+      ON gsyb_gap.group_id = ${groupIdSql}
+     AND gsyb_gap.school_year_id = sy_gap.id
     CROSS JOIN LATERAL generate_series(
-      GREATEST(sy_gap.date_from, (NOW() AT TIME ZONE '${TZ}')::date),
+      GREATEST(
+        sy_gap.date_from,
+        COALESCE(gsyb_gap.lessons_start_on, sy_gap.date_from),
+        (NOW() AT TIME ZONE '${TZ}')::date
+      ),
       LEAST(
         sy_gap.date_to,
+        COALESCE(gsyb_gap.lessons_end_on, sy_gap.date_to),
         COALESCE(
           (
             SELECT MAX(l_span.scheduled_at::date)
@@ -77,7 +90,7 @@ export function sqlExistsUnfilledFutureScheduleSlot(
             WHERE l_span.group_id = ${groupIdSql}
               AND l_span.school_year_id = sy_gap.id
           ),
-          sy_gap.date_to
+          LEAST(sy_gap.date_to, COALESCE(gsyb_gap.lessons_end_on, sy_gap.date_to))
         )
       ),
       interval '1 day'
@@ -211,6 +224,27 @@ export async function generateLessonsForGroup(opts: {
     return { ok: false, reason: "EMPTY_RANGE", message: "Nieprawidłowy zakres dat" };
   }
 
+  const bounds = await fetchGroupLessonBounds(groupId, yearId);
+  const clamped = clampLessonRangeToBounds({
+    dateFrom,
+    dateTo,
+    yearFrom: yFrom,
+    yearTo: yTo,
+    lessonsStartOn: bounds?.lessons_start_on,
+    lessonsEndOn: bounds?.lessons_end_on,
+  });
+  const genFrom = clamped.dateFrom;
+  const genTo = clamped.dateTo;
+
+  if (genFrom > genTo) {
+    return {
+      ok: true,
+      created: 0,
+      retroactive: false,
+      message: "Brak terminów w zakresie dat zajęć tej grupy.",
+    };
+  }
+
   if (!skipHolidayEnsure) {
     await ensurePolishPublicHolidaysForSchoolYear({
       schoolId,
@@ -223,7 +257,7 @@ export async function generateLessonsForGroup(opts: {
     `SELECT (NOW() AT TIME ZONE '${TZ}')::date::text AS today`,
   );
   const todayYmd = todayRes.rows[0]?.today ?? dateOnlyYmd(new Date());
-  const retroactive = dateFrom < todayYmd;
+  const retroactive = genFrom < todayYmd;
 
   const holidays = await queryDb<{ date_from: string; date_to: string }>(
     `SELECT h.date_from::text, h.date_to::text
@@ -234,7 +268,7 @@ export async function generateLessonsForGroup(opts: {
        AND h.date_to >= $4::date
        AND ${sqlHolidayAppliesToGroup("h", "$5")}
     `,
-    [schoolId, yearId, dateTo, dateFrom, groupId],
+    [schoolId, yearId, genTo, genFrom, groupId],
   );
 
   const templates = await queryDb<{
@@ -266,8 +300,8 @@ export async function generateLessonsForGroup(opts: {
     };
   }
 
-  const from = new Date(dateFrom + "T12:00:00");
-  const to = new Date(dateTo + "T12:00:00");
+  const from = new Date(genFrom + "T12:00:00");
+  const to = new Date(genTo + "T12:00:00");
 
   type Slot = {
     dateStr: string;
@@ -373,13 +407,18 @@ export async function ensureLessonsThroughActiveSchoolYear(opts: {
   const yFrom = ymdFromDb((activeYear as { date_from: string | Date }).date_from);
   const yTo = ymdFromDb((activeYear as { date_to: string | Date }).date_to);
 
+  const bounds = await fetchGroupLessonBounds(groupId, yearId);
+  const groupFrom = ymdSlice(bounds?.lessons_start_on) ?? yFrom;
+  const groupTo = ymdSlice(bounds?.lessons_end_on) ?? yTo;
+
   const todayRes = await queryDb<{ today: string }>(
     `SELECT (NOW() AT TIME ZONE '${TZ}')::date::text AS today`,
   );
   const todayYmd = todayRes.rows[0]?.today ?? dateOnlyYmd(new Date());
-  const dateFrom = todayYmd > yFrom ? todayYmd : yFrom;
+  let dateFrom = todayYmd > groupFrom ? todayYmd : groupFrom;
+  if (dateFrom < yFrom) dateFrom = yFrom;
 
-  if (dateFrom > yTo) {
+  if (dateFrom > groupTo || dateFrom > yTo) {
     return {
       ok: true,
       created: 0,
@@ -390,7 +429,7 @@ export async function ensureLessonsThroughActiveSchoolYear(opts: {
 
   // Bez limitu: dopełniaj tylko luki w zakresie już zaplanowanych zajęć
   // (nie przedłużaj kalendarza poza ostatni termin — to robi „Wygeneruj zajęcia”).
-  let dateTo = yTo;
+  let dateTo = groupTo < yTo ? groupTo : yTo;
   if (limit == null) {
     const lastRes = await queryDb<{ d: string | null }>(
       `SELECT MAX(scheduled_at::date)::text AS d

@@ -14,6 +14,8 @@ export type EnrollmentChildRow = {
   notes: string | null;
   /** Powód rezygnacji / odrzucenia (manager). */
   rejectionComment?: string | null;
+  /** Komentarz managera przy obsłudze zgłoszenia. */
+  managerComment?: string | null;
   proposedGroupId: string | null;
   proposedAt: string | null;
   /** Data utworzenia zgłoszenia (enrollment_requests.created_at). */

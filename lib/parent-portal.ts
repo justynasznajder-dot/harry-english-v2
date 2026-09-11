@@ -43,6 +43,16 @@ export type ParentGroupRow = {
   locationAddress: string | null;
   teacherName: string;
   paymentType: string | null;
+  /** Checkbox managera — komunikat w Moja grupa (bez maila). */
+  scheduleChangeNotice: boolean;
+  /** Snapshot terminu z umowy (nie czyścimy). */
+  scheduleBeforeLabel: string | null;
+  /** Aktualny pełny harmonogram grupy (do komunikatu „na …”). */
+  scheduleCurrentLabel: string | null;
+  /** Checkbox „zmiana grupy” na członkostwie. */
+  groupChangeNotice: boolean;
+  /** Snapshot poprzedniej grupy. */
+  groupBeforeLabel: string | null;
 };
 
 /** Propozycja grupy w trakcie zapisu (przed członkostwem w group_students). */
@@ -63,6 +73,8 @@ export type ParentProposedGroupRow = {
 export type ParentUpcomingLesson = {
   id: string;
   groupId: string;
+  /** Nazwa grupy lekcji (może różnić się od aktualnej po transferze). */
+  groupName?: string | null;
   childId?: string;
   scheduledAt: string;
   durationMin: number;
@@ -139,6 +151,16 @@ export type ParentSignedContract = {
   children: Array<{ childId: string; firstName: string; lastName: string }>;
 };
 
+/** Etykieta harmonogramu dla rodzica — bez poprawnego dnia/godziny → „brak harmonogramu”. */
+function parentScheduleLabel(schedule: string | null | undefined): string {
+  const text = (schedule ?? "").trim();
+  if (!text || text === "-" || text === "Do ustalenia") return "brak harmonogramu";
+  if (text.split(/,\s*/).every((line) => /^Dzień(\s|\d|$)/i.test(line.trim()))) {
+    return "brak harmonogramu";
+  }
+  return text;
+}
+
 export async function fetchParentGroups(
   parentId: string,
   schoolId: string
@@ -156,6 +178,11 @@ export async function fetchParentGroups(
     teacher_first: string | null;
     teacher_last: string | null;
     payment_type: string | null;
+    schedule_change_notice: boolean;
+    schedule_before_label: string | null;
+    schedule_current_label: string | null;
+    group_change_notice: boolean;
+    group_before_label: string | null;
   }>(
     `SELECT
        c.id AS child_id,
@@ -168,8 +195,12 @@ export async function fetchParentGroups(
          STRING_AGG(
            DISTINCT CONCAT(${POLISH_DAY_FROM_ST_SQL}, ' ', TO_CHAR(st.start_time, 'HH24:MI')),
            ', '
+         ) FILTER (
+           WHERE st.id IS NOT NULL
+             AND st.day_of_week BETWEEN 1 AND 7
+             AND st.start_time IS NOT NULL
          ),
-         'Do ustalenia'
+         'brak harmonogramu'
        ) AS schedule,
        COALESCE(MAX(gl.name), MAX(sl.name), 'Do ustalenia') AS location_name,
        COALESCE(MAX(gl.address), MAX(sl.address)) AS location_address,
@@ -182,7 +213,36 @@ export async function fetchParentGroups(
          WHERE ct.parent_id = $1 AND ct.status = 'SIGNED'
          ORDER BY ct.signed_at DESC NULLS LAST
          LIMIT 1
-       ) AS payment_type
+       ) AS payment_type,
+       BOOL_OR(g.schedule_change_notice) AS schedule_change_notice,
+       MAX(g.schedule_before_label) AS schedule_before_label,
+       (
+         SELECT NULLIF(
+           STRING_AGG(
+             DISTINCT CONCAT(
+               CASE st2.day_of_week
+                 WHEN 1 THEN 'Poniedziałek'
+                 WHEN 2 THEN 'Wtorek'
+                 WHEN 3 THEN 'Środa'
+                 WHEN 4 THEN 'Czwartek'
+                 WHEN 5 THEN 'Piątek'
+                 WHEN 6 THEN 'Sobota'
+                 WHEN 7 THEN 'Niedziela'
+                 ELSE CONCAT('Dzień ', st2.day_of_week)
+               END,
+               ' ',
+               TO_CHAR(st2.start_time, 'HH24:MI')
+             ),
+             ', '
+           ),
+           ''
+         )
+         FROM schedule_templates st2
+         WHERE st2.group_id = g.id
+           AND st2.active = TRUE
+       ) AS schedule_current_label,
+       BOOL_OR(COALESCE(gs.group_change_notice, FALSE)) AS group_change_notice,
+       MAX(gs.group_before_label) AS group_before_label
      FROM children c
      JOIN group_students gs ON gs.child_id = c.id AND gs.left_at IS NULL
      JOIN groups g ON g.id = gs.group_id AND g.active = TRUE
@@ -208,11 +268,16 @@ export async function fetchParentGroups(
     groupId: row.group_id,
     groupName: row.group_name,
     level: row.level,
-    schedule: row.schedule,
+    schedule: parentScheduleLabel(row.schedule),
     locationName: row.location_name,
     locationAddress: row.location_address,
     teacherName: `${row.teacher_first ?? ""} ${row.teacher_last ?? ""}`.trim() || "Do ustalenia",
     paymentType: row.payment_type,
+    scheduleChangeNotice: Boolean(row.schedule_change_notice),
+    scheduleBeforeLabel: row.schedule_before_label?.trim() || null,
+    scheduleCurrentLabel: row.schedule_current_label?.trim() || null,
+    groupChangeNotice: Boolean(row.group_change_notice),
+    groupBeforeLabel: row.group_before_label?.trim() || null,
   }));
 }
 
@@ -250,8 +315,12 @@ export async function fetchParentProposedGroups(
          STRING_AGG(
            DISTINCT CONCAT(${POLISH_DAY_FROM_ST_SQL}, ' ', TO_CHAR(st.start_time, 'HH24:MI')),
            ', '
+         ) FILTER (
+           WHERE st.id IS NOT NULL
+             AND st.day_of_week BETWEEN 1 AND 7
+             AND st.start_time IS NOT NULL
          ),
-         'Do ustalenia'
+         'brak harmonogramu'
        ) AS schedule,
        COALESCE(MAX(gl.name), MAX(sl.name), 'Do ustalenia') AS location_name,
        COALESCE(MAX(gl.address), MAX(sl.address)) AS location_address,
@@ -295,7 +364,7 @@ export async function fetchParentProposedGroups(
     groupId: row.group_id,
     groupName: row.group_name,
     level: row.level,
-    schedule: row.schedule,
+    schedule: parentScheduleLabel(row.schedule),
     locationName: row.location_name,
     locationAddress: row.location_address,
     teacherName: `${row.teacher_first ?? ""} ${row.teacher_last ?? ""}`.trim() || "Do ustalenia",
@@ -303,66 +372,125 @@ export async function fetchParentProposedGroups(
   }));
 }
 
+/** Okno członkostwa względem daty lekcji (jak w settlementach). */
+const SQL_MEMBERSHIP_COVERS_LESSON = `(
+  gs.enrolled_at <= l.scheduled_at::date
+  AND (gs.left_at IS NULL OR gs.left_at > l.scheduled_at::date)
+)`;
+
 export async function fetchUpcomingLessonsForGroups(
   groupIds: string[],
   limit: number | null = 5,
-  opts?: { parentId?: string; schoolId?: string }
+  opts?: { parentId?: string; schoolId?: string; includePast?: boolean }
 ): Promise<ParentUpcomingLesson[]> {
-  if (groupIds.length === 0) return [];
-
   const parentId = opts?.parentId;
   const schoolId = opts?.schoolId;
+  const includePast = opts?.includePast === true;
   const sqlLimit =
     limit == null || !Number.isFinite(limit) || limit <= 0
       ? null
       : Math.max(1, Math.floor(limit));
 
+  const timeFilter = includePast
+    ? `AND (
+         l.school_year_id IS NULL
+         OR EXISTS (
+           SELECT 1 FROM school_years sy
+           WHERE sy.id = l.school_year_id
+             AND sy.active = TRUE
+             ${schoolId ? "AND sy.school_id = $2" : ""}
+         )
+       )`
+    : `AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} >= NOW()`;
+
+  // Rodzic: lekcje z okna członkostwa (także zamknięte grupy w roku), nie tylko aktualne group_id.
+  // Zamknięte członkostwo → tylko odbyte (bez przyszłych ze starej grupy).
   if (parentId && schoolId) {
+    const closedMembershipPastOnly = includePast
+      ? `AND (
+           gs.left_at IS NULL
+           OR l.status = 'COMPLETED'
+           OR ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} <= NOW()
+         )`
+      : `AND gs.left_at IS NULL`;
+
     const res = await queryDb<{
       id: string;
       group_id: string;
+      group_name: string;
       child_id: string;
       scheduled_at: Date | string;
       duration_min: number;
       status: string;
       location_name: string | null;
     }>(
-      `SELECT l.id,
+      `SELECT DISTINCT ON (l.id, gs.child_id)
+              l.id,
               l.group_id,
+              g.name AS group_name,
               gs.child_id,
               ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} AS scheduled_at,
               l.duration_min,
               l.status::text AS status,
               loc.name AS location_name
        FROM lessons l
-       JOIN group_students gs ON gs.group_id = l.group_id AND gs.left_at IS NULL
-       JOIN groups g ON g.id = gs.group_id
+       JOIN group_students gs
+         ON gs.group_id = l.group_id
+        AND gs.school_id = $2
+        AND ${SQL_MEMBERSHIP_COVERS_LESSON}
+        AND (
+          gs.school_year_id IS NULL
+          OR EXISTS (
+            SELECT 1 FROM school_years sy_gs
+            WHERE sy_gs.id = gs.school_year_id
+              AND sy_gs.school_id = $2
+              AND sy_gs.active = TRUE
+          )
+        )
+       JOIN groups g ON g.id = l.group_id
        JOIN children c ON c.id = gs.child_id
        LEFT JOIN locations loc ON loc.id = l.location_id
-       WHERE l.group_id = ANY($1::text[])
-         AND l.status IN ('SCHEDULED', 'COMPLETED')
-         AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} >= NOW()
-         AND c.parent_id = $2
-         AND c.school_id = $3
+       WHERE l.status IN ('SCHEDULED', 'COMPLETED')
+         ${timeFilter}
+         ${closedMembershipPastOnly}
+         AND c.parent_id = $1
+         AND c.school_id = $2
          AND c.active = TRUE
          AND ${sqlStudentAttendsLesson("gs", "g", "l")}
-       ORDER BY l.scheduled_at ASC
-       ${sqlLimit == null ? "" : "LIMIT $4"}`,
-      sqlLimit == null
-        ? [groupIds, parentId, schoolId]
-        : [groupIds, parentId, schoolId, sqlLimit]
+       ORDER BY l.id, gs.child_id, l.scheduled_at ASC
+       ${sqlLimit == null ? "" : "LIMIT $3"}`,
+      sqlLimit == null ? [parentId, schoolId] : [parentId, schoolId, sqlLimit]
     );
 
-    return res.rows.map((row) => ({
-      id: row.id,
-      groupId: row.group_id,
-      childId: row.child_id,
-      scheduledAt: toIso(row.scheduled_at),
-      durationMin: row.duration_min,
-      status: row.status,
-      locationName: row.location_name,
-    }));
+    // DISTINCT ON sortuje po id; posortuj chronologicznie w JS.
+    return res.rows
+      .map((row) => ({
+        id: row.id,
+        groupId: row.group_id,
+        groupName: row.group_name,
+        childId: row.child_id,
+        scheduledAt: toIso(row.scheduled_at),
+        durationMin: row.duration_min,
+        status: row.status,
+        locationName: row.location_name,
+      }))
+      .sort(
+        (a, b) =>
+          new Date(a.scheduledAt).getTime() - new Date(b.scheduledAt).getTime()
+      );
   }
+
+  if (groupIds.length === 0) return [];
+
+  const pastFilterNoSchool = includePast
+    ? `AND (
+         l.school_year_id IS NULL
+         OR EXISTS (
+           SELECT 1 FROM school_years sy
+           WHERE sy.id = l.school_year_id AND sy.active = TRUE
+         )
+       )`
+    : `AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} >= NOW()`;
 
   const res = await queryDb<{
     id: string;
@@ -382,7 +510,7 @@ export async function fetchUpcomingLessonsForGroups(
      LEFT JOIN locations loc ON loc.id = l.location_id
      WHERE l.group_id = ANY($1::text[])
        AND l.status IN ('SCHEDULED', 'COMPLETED')
-       AND ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} >= NOW()
+       ${pastFilterNoSchool}
      ORDER BY l.scheduled_at ASC
      ${sqlLimit == null ? "" : "LIMIT $2"}`,
     sqlLimit == null ? [groupIds] : [groupIds, sqlLimit]
@@ -445,10 +573,35 @@ export async function fetchParentAttendance(
            AND (cc.group_id IS NULL OR cc.group_id = gs.group_id)
        ) AS billed_per_lesson
      FROM children c
-     JOIN group_students gs ON gs.child_id = c.id AND gs.left_at IS NULL
+     JOIN group_students gs ON gs.child_id = c.id
+       AND (
+         gs.school_year_id IS NULL
+         OR EXISTS (
+           SELECT 1 FROM school_years sy_gs
+           WHERE sy_gs.id = gs.school_year_id
+             AND sy_gs.school_id = $2
+             AND sy_gs.active = TRUE
+         )
+       )
      JOIN groups g ON g.id = gs.group_id
-     JOIN school_years sy ON sy.id = gs.school_year_id AND sy.active = TRUE
      JOIN lessons l ON l.group_id = g.id
+       AND gs.enrolled_at <= l.scheduled_at::date
+       AND (gs.left_at IS NULL OR gs.left_at > l.scheduled_at::date)
+       AND (
+         l.school_year_id IS NULL
+         OR EXISTS (
+           SELECT 1 FROM school_years sy_l
+           WHERE sy_l.id = l.school_year_id
+             AND sy_l.school_id = $2
+             AND sy_l.active = TRUE
+         )
+       )
+       -- Zamknięte członkostwo: tylko odbyte (bez przyszłych ze starej grupy).
+       AND (
+         gs.left_at IS NULL
+         OR l.status = 'COMPLETED'
+         OR ${sqlSchoolTimestampAsTimestamptz("l.scheduled_at")} <= NOW()
+       )
      LEFT JOIN attendance a ON a.lesson_id = l.id AND a.child_id = c.id
      LEFT JOIN locations loc ON loc.id = l.location_id
      WHERE c.parent_id = $1

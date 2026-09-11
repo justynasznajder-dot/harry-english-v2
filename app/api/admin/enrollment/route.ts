@@ -105,6 +105,7 @@ export async function GET(request: NextRequest) {
                'preferredLocationId', NULLIF(TRIM(BOTH FROM COALESCE(er.preferred_location, '')), ''),
                'notes', er.notes,
                'rejectionComment', er.rejection_comment,
+               'managerComment', er.manager_comment,
                'proposedGroupId', er.proposed_group_id,
                'proposedAt', er.proposed_at,
                'createdAt', er.created_at,
@@ -236,13 +237,14 @@ export async function POST(request: NextRequest) {
     if (!ctx.ok) return ctx.response;
 
     const body = await request.json();
-    const { requestId, groupId, lessonUnitPrice, monthlyUnitPrice, yearlyUnitPrice, discountPercent } = body as {
+    const { requestId, groupId, lessonUnitPrice, monthlyUnitPrice, yearlyUnitPrice, discountPercent, managerComment } = body as {
       requestId?: string;
       groupId?: string;
       lessonUnitPrice?: number | string | null;
       monthlyUnitPrice?: number | string | null;
       yearlyUnitPrice?: number | string | null;
       discountPercent?: number | string | null;
+      managerComment?: string | null;
     };
     if (!requestId || !groupId) {
       return NextResponse.json({ message: "Brak wymaganych pól" }, { status: 400 });
@@ -256,6 +258,7 @@ export async function POST(request: NextRequest) {
         monthlyUnitPrice,
         yearlyUnitPrice,
         discountPercent,
+        managerComment,
       },
       null,
       {

@@ -6,10 +6,11 @@ import {
   tenantNotFoundResponse,
 } from "@/lib/admin-school-context";
 import { writeAdminDeletionLog } from "@/lib/admin-deletion-log";
+import { sqlSchoolTimestampAsTimestamptz } from "@/lib/school-timezone";
 
 /**
- * Usuwa wszystkie wygenerowane zajęcia grupy w aktywnym roku szkolnym
- * (SCHEDULED / COMPLETED / CANCELLED), żeby dało się ponownie edytować harmonogram.
+ * Usuwa nadchodzące wygenerowane zajęcia grupy w aktywnym roku (tylko przyszłe SCHEDULED).
+ * COMPLETED i lekcje w przeszłości zostają — historia / frekwencja rodzica.
  */
 export async function POST(
   request: NextRequest,
@@ -63,7 +64,8 @@ export async function POST(
        FROM lessons
        WHERE group_id = $1
          AND school_year_id = $2
-         AND status IN ('SCHEDULED', 'COMPLETED', 'CANCELLED')
+         AND status = 'SCHEDULED'
+         AND ${sqlSchoolTimestampAsTimestamptz("scheduled_at")} > NOW()
        ORDER BY scheduled_at ASC`,
       [groupId, activeYear.id],
     );
@@ -74,14 +76,14 @@ export async function POST(
         scheduledDeleted: 0,
         completedDeleted: 0,
         cancelledDeleted: 0,
-        message: "Brak wygenerowanych zajęć do usunięcia",
+        preservedPastOrCompleted: true,
+        message:
+          "Brak nadchodzących zajęć do usunięcia (zakończone i przeszłe zostają w historii)",
       });
     }
 
     const ids = snapshot.rows.map((r) => r.id);
-    const scheduledDeleted = snapshot.rows.filter((r) => r.status === "SCHEDULED").length;
-    const completedDeleted = snapshot.rows.filter((r) => r.status === "COMPLETED").length;
-    const cancelledDeleted = snapshot.rows.filter((r) => r.status === "CANCELLED").length;
+    const scheduledDeleted = ids.length;
 
     await runPgTransaction(async (client) => {
       await client.query(`DELETE FROM attendance WHERE lesson_id = ANY($1::text[])`, [ids]);
@@ -90,7 +92,9 @@ export async function POST(
         `DELETE FROM lessons
          WHERE id = ANY($1::text[])
            AND group_id = $2
-           AND school_year_id = $3`,
+           AND school_year_id = $3
+           AND status = 'SCHEDULED'
+           AND ${sqlSchoolTimestampAsTimestamptz("scheduled_at")} > NOW()`,
         [ids, groupId, activeYear.id],
       );
     });
@@ -99,7 +103,7 @@ export async function POST(
       schoolId: groupRow.school_id,
       actorUserId: ctx.userId,
       action: "LESSONS_GENERATED_CLEAR",
-      summary: `Usunięto ${ids.length} wygenerowanych zajęć grupy „${groupRow.name}” (rok ${activeYear.name})`,
+      summary: `Usunięto ${ids.length} nadchodzących zajęć grupy „${groupRow.name}” (rok ${activeYear.name}; zakończone zachowane)`,
       payload: {
         groupId,
         groupName: groupRow.name,
@@ -107,8 +111,9 @@ export async function POST(
         schoolYearName: activeYear.name,
         deletedCount: ids.length,
         scheduledDeleted,
-        completedDeleted,
-        cancelledDeleted,
+        completedDeleted: 0,
+        cancelledDeleted: 0,
+        preservedPastOrCompleted: true,
         source: "POST /api/admin/groups/[id]/clear-generated-lessons",
         lessons: snapshot.rows.map((r) => ({
           id: r.id,
@@ -131,12 +136,13 @@ export async function POST(
     return NextResponse.json({
       deleted: ids.length,
       scheduledDeleted,
-      completedDeleted,
-      cancelledDeleted,
+      completedDeleted: 0,
+      cancelledDeleted: 0,
+      preservedPastOrCompleted: true,
       schoolYearName: activeYear.name,
       message: `Usunięto ${ids.length} ${
-        ids.length === 1 ? "zajęcie" : ids.length < 5 ? "zajęcia" : "zajęć"
-      } z roku ${activeYear.name}. Możesz teraz edytować harmonogram i wygenerować zajęcia od nowa.`,
+        ids.length === 1 ? "nadchodzące zajęcie" : ids.length < 5 ? "nadchodzące zajęcia" : "nadchodzących zajęć"
+      } z roku ${activeYear.name}. Zakończone i przeszłe zajęcia zostały zachowane — możesz edytować harmonogram i wygenerować nowe terminy.`,
     });
   } catch (error) {
     console.error("POST groups/[id]/clear-generated-lessons:", error);
