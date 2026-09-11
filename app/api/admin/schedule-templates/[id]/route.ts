@@ -117,7 +117,11 @@ export async function PATCH(
       return NextResponse.json({ message: "Zaktualizowano termin" });
     }
 
-    const gate = await assertGroupScheduleMutationAllowed(row.group_id, ctx.schoolId);
+    const gate = await assertGroupScheduleMutationAllowed(
+      row.group_id,
+      ctx.schoolId,
+      "update"
+    );
     if (!gate.ok) {
       return NextResponse.json({ message: gate.message }, { status: gate.status });
     }
@@ -307,7 +311,11 @@ export async function DELETE(
       return tenantNotFoundResponse("Nie znaleziono terminu");
     }
 
-    const gate = await assertGroupScheduleMutationAllowed(template.group_id, ctx.schoolId);
+    const gate = await assertGroupScheduleMutationAllowed(
+      template.group_id,
+      ctx.schoolId,
+      "delete"
+    );
     if (!gate.ok) {
       return NextResponse.json({ message: gate.message }, { status: gate.status });
     }

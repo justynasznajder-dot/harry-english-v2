@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE } from '@/lib/enrollment-status';
-import { paymentTypeShortLabel } from '@/lib/payment-labels';
 import { formatLessonDateTime } from '@/src/components/parent/parent-portal-utils';
 
 const COLLAPSED_LESSON_COUNT = 3;
@@ -28,7 +27,6 @@ type GroupInfo = {
   locationName: string;
   locationAddress: string | null;
   teacherName: string;
-  paymentType: string | null;
   upcomingLessons: UpcomingLesson[];
   scheduleChangeNotice?: boolean;
   scheduleBeforeLabel?: string | null;
@@ -270,9 +268,7 @@ export default function ParentGroupTab() {
                 <span className="font-semibold text-zinc-800">Harmonogram:</span>
                 <div className="space-y-2">
                   <span className="block">{g.schedule}</span>
-                  {g.scheduleChangeNotice &&
-                  g.scheduleBeforeLabel &&
-                  (g.scheduleCurrentLabel || g.schedule) ? (
+                  {g.scheduleChangeNotice && g.scheduleBeforeLabel ? (
                     <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950">
                       <p className="font-semibold">Zmiana terminu zajęć</p>
                       <p className="mt-1">
@@ -280,7 +276,7 @@ export default function ParentGroupTab() {
                         <span className="text-amber-900/80">{g.scheduleBeforeLabel}</span>
                         {' '}na{' '}
                         <span className="font-bold text-amber-950">
-                          {g.scheduleCurrentLabel?.trim() || g.schedule}
+                          {g.scheduleCurrentLabel?.trim() || g.schedule || 'brak harmonogramu'}
                         </span>
                         .
                       </p>
@@ -296,12 +292,6 @@ export default function ParentGroupTab() {
                 </span>
                 <span className="font-semibold text-zinc-800">Lektor:</span>
                 <span>{g.teacherName}</span>
-                {g.paymentType ? (
-                  <>
-                    <span className="font-semibold text-zinc-800">Rozliczenie:</span>
-                    <span>{paymentTypeShortLabel(g.paymentType)}</span>
-                  </>
-                ) : null}
               </div>
 
               <div className="mt-5">

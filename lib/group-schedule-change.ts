@@ -1,5 +1,8 @@
 import { POLISH_DAY_FROM_ST_SQL, queryDb } from "@/lib/db";
+import { SCHEDULE_CHANGE_NOTICE_REQUIRED_MESSAGE } from "@/lib/group-schedule-change-notice";
 import { normalizeLessonsPerWeek } from "@/lib/lessons-per-week";
+
+export { SCHEDULE_CHANGE_NOTICE_REQUIRED_MESSAGE } from "@/lib/group-schedule-change-notice";
 
 /** Etykieta jak u rodzica: „Poniedziałek 12:45” lub „Poniedziałek 12:45, Środa 12:45”. */
 export async function buildGroupScheduleLabel(groupId: string): Promise<string> {
@@ -19,6 +22,8 @@ export async function buildGroupScheduleLabel(groupId: string): Promise<string> 
   return (res.rows[0]?.schedule ?? "").trim();
 }
 
+export type ScheduleMutationKind = "create" | "update" | "delete";
+
 export type ScheduleMutationGate = {
   ok: true;
   scheduleChangeNotice: boolean;
@@ -33,12 +38,15 @@ export type ScheduleMutationGate = {
 };
 
 /**
- * Pierwsze uzupełnienie harmonogramu (0→1 przy 1×, 0→2 przy 2×) bez checkboxa.
- * Gdy oczekiwana liczba terminów już jest — mutacje tylko przy zaznaczonej „zmianie harmonogramu”.
+ * Pierwsze uzupełnienie harmonogramu (0→1 przy 1×, 0→2 przy 2×) bez checkboxa —
+ * tylko gdy nie było jeszcze snapshotu z umowy (`schedule_before_label`).
+ * Edycja / usuwanie terminu oraz ponowne ustawianie po wyczyszczeniu — tylko przy
+ * zaznaczonej „zmianie harmonogramu”.
  */
 export async function assertGroupScheduleMutationAllowed(
   groupId: string,
-  schoolId: string
+  schoolId: string,
+  kind: ScheduleMutationKind = "create"
 ): Promise<ScheduleMutationGate> {
   const res = await queryDb<{
     schedule_change_notice: boolean;
@@ -71,20 +79,24 @@ export async function assertGroupScheduleMutationAllowed(
   const templateCount = Number(row.template_count) || 0;
   const initialSetupIncomplete = templateCount < expectedSlots;
   const scheduleChangeNotice = Boolean(row.schedule_change_notice);
+  const scheduleBeforeLabel = row.schedule_before_label?.trim() || null;
+  const hasScheduleSnapshot = Boolean(scheduleBeforeLabel);
 
-  if (!initialSetupIncomplete && !scheduleChangeNotice) {
+  const allowCreateWithoutNotice =
+    kind === "create" && initialSetupIncomplete && !hasScheduleSnapshot;
+
+  if (!scheduleChangeNotice && !allowCreateWithoutNotice) {
     return {
       ok: false,
       status: 403,
-      message:
-        "Harmonogram jest zablokowany. Zaznacz „zmiana harmonogramu”, aby dodać lub zmienić terminy.",
+      message: SCHEDULE_CHANGE_NOTICE_REQUIRED_MESSAGE,
     };
   }
 
   return {
     ok: true,
     scheduleChangeNotice,
-    scheduleBeforeLabel: row.schedule_before_label,
+    scheduleBeforeLabel,
     templateCount,
     expectedSlots,
     initialSetupIncomplete,

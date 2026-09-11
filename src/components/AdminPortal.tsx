@@ -41,6 +41,7 @@ import GroupNamingFields, {
 } from '@/src/components/admin/GroupNamingFields';
 import { formatHolidayAppliesToLabel } from '@/lib/holiday-calendar-scope';
 import { isInvoiceManualGenerateDisabled } from '@/lib/invoice-generate-guard';
+import { SCHEDULE_CHANGE_NOTICE_REQUIRED_MESSAGE } from '@/lib/group-schedule-change-notice';
 import {
   applyInvoiceDiscountPercent,
   clampInvoiceDiscountPercent,
@@ -1030,6 +1031,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     completedCount: number;
     futureCount: number;
   } | null>(null);
+  const [appAlert, setAppAlert] = useState<string | null>(null);
   const [addStudentModalOpen, setAddStudentModalOpen] = useState(false);
   const [studentSearch, setStudentSearch] = useState('');
   const [selectedChildId, setSelectedChildId] = useState('');
@@ -5981,13 +5983,21 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           : (detail?.group.lessons_per_week ?? groupForm.lessonsPerWeek),
       ) === 2;
     const hasOnceWeeklyDay = scheduleTemplates.some((st) => st.once_weekly_day);
+    /** Dwa terminy = potrzeba oznaczenia dnia 1× (nawet gdy frekwencja grupy jeszcze nie jest 2×). */
+    const hasTwoScheduleSlots = scheduleTemplates.length >= 2;
     const scheduleChangeNotice = Boolean(detail?.group.schedule_change_notice);
     const scheduleBeforeLabel = detail?.group.schedule_before_label?.trim() || null;
     const expectedScheduleSlots = groupIsTwiceWeekly ? 2 : 1;
     const initialScheduleSetupIncomplete =
       scheduleTemplates.length < expectedScheduleSlots;
-    const scheduleChangeUnlocked =
-      initialScheduleSetupIncomplete || scheduleChangeNotice;
+    const hasScheduleSnapshot = Boolean(scheduleBeforeLabel);
+    /** Pierwsze uzupełnienie pustego harmonogramu — bez checkboxa. */
+    const canAddWithoutScheduleChangeNotice =
+      initialScheduleSetupIncomplete && !hasScheduleSnapshot;
+    const canAddScheduleSlot =
+      scheduleChangeNotice || canAddWithoutScheduleChangeNotice;
+    /** Edycja / usuwanie istniejącego terminu — zawsze wymaga checkboxa. */
+    const canEditOrDeleteSchedule = scheduleChangeNotice;
     const schoolYearLessons = detail?.schoolYearLessons ?? [];
     const futureLessonsCount = detail?.generatedLessons?.futureCount ?? 0;
     const completedLessonsCount = detail?.generatedLessons?.completedCount ?? 0;
@@ -5996,8 +6006,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     const lessonsYearLabel =
       detail?.lessonsSchoolYear?.name ?? detail?.activeSchoolYear?.name ?? null;
     const hasActiveSchoolYear = Boolean(detail?.activeSchoolYear ?? activeSchoolYear);
-    const scheduleActionsDisabled =
-      disabled || !hasActiveSchoolYear || !scheduleChangeUnlocked;
+    const requireScheduleChangeNotice = () => {
+      setAppAlert(SCHEDULE_CHANGE_NOTICE_REQUIRED_MESSAGE);
+    };
     const dayNames: Record<number, string> = {
       1: 'Poniedziałek',
       2: 'Wtorek',
@@ -6015,7 +6026,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             <div>
               <h4 className="font-semibold text-zinc-900">Harmonogram</h4>
               <p className="text-sm text-zinc-500">
-                {groupIsTwiceWeekly
+                {groupIsTwiceWeekly || hasTwoScheduleSlots
                   ? 'Ustal 2 dni, kiedy będą odbywać się zajęcia.'
                   : 'Ustal 1 dzień i godzinę, kiedy będą odbywać się zajęcia.'}
               </p>
@@ -6023,7 +6034,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 <p className="mt-1 text-xs text-amber-700">Najpierw zapisz grupę, aby dodać terminy.</p>
               )}
               {!disabled &&
-                !initialScheduleSetupIncomplete &&
+                !canAddWithoutScheduleChangeNotice &&
                 !scheduleChangeNotice &&
                 hasActiveSchoolYear && (
                   <p className="mt-1 text-xs text-amber-800">
@@ -6032,7 +6043,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 )}
             </div>
             <div className="flex flex-col items-end gap-2">
-              {!disabled && groupId && !initialScheduleSetupIncomplete ? (
+              {!disabled && groupId ? (
                 <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-sm text-zinc-800">
                   <input
                     type="checkbox"
@@ -6080,14 +6091,20 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               ) : null}
               <button
                 type="button"
-                disabled={scheduleActionsDisabled}
+                disabled={disabled || !hasActiveSchoolYear}
                 className="rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
-                onClick={() => openScheduleModal()}
+                onClick={() => {
+                  if (!canAddScheduleSlot) {
+                    requireScheduleChangeNotice();
+                    return;
+                  }
+                  openScheduleModal();
+                }}
                 title={
                   !hasActiveSchoolYear
                     ? 'Harmonogram można ustawić tylko przy aktywnym roku szkolnym'
-                    : !scheduleChangeUnlocked
-                      ? 'Zaznacz „zmiana harmonogramu”, aby dodać lub zmienić terminy'
+                    : !canAddScheduleSlot
+                      ? SCHEDULE_CHANGE_NOTICE_REQUIRED_MESSAGE
                       : undefined
                 }
               >
@@ -6105,193 +6122,14 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               </p>
             </div>
           )}
-          {hasActiveSchoolYear && (detail?.activeSchoolYear ?? activeSchoolYear) && (
-            <div className="mb-3 rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-700">
-              <p>
-                Rok szkolny{' '}
-                <span className="font-semibold text-zinc-900">
-                  {detail?.activeSchoolYear?.name ?? activeSchoolYear?.name ?? '—'}
-                </span>
-                :{' '}
-                <span className="font-medium">
-                  {(detail?.activeSchoolYear?.dateFrom ?? activeSchoolYear?.date_from ?? '—')
-                    .toString()
-                    .slice(0, 10)}{' '}
-                  –{' '}
-                  {(detail?.activeSchoolYear?.dateTo ?? activeSchoolYear?.date_to ?? '—')
-                    .toString()
-                    .slice(0, 10)}
-                </span>
-              </p>
-              <p className="mt-1 text-xs text-zinc-500">
-                Generowanie zajęć używa tych dat, chyba że poniżej zawężysz zakres dla tej grupy.
-              </p>
-              {!disabled && groupId ? (
-                <div className="mt-3 space-y-3 border-t border-zinc-200 pt-3">
-                  <label className="flex flex-wrap items-center gap-2">
-                    <input
-                      type="checkbox"
-                      className="accent-emerald-700"
-                      checked={lessonBoundsDraft.startsLater}
-                      disabled={lessonBoundsSaving}
-                      onChange={(e) => {
-                        const checked = e.target.checked;
-                        setLessonBoundsDraft((prev) => ({
-                          ...prev,
-                          startsLater: checked,
-                          lessonsStartOn: checked ? prev.lessonsStartOn : '',
-                        }));
-                      }}
-                    />
-                    <span className="font-medium text-zinc-800">grupa zaczyna później</span>
-                  </label>
-                  {lessonBoundsDraft.startsLater ? (
-                    <div className="ml-6">
-                      <label className="block text-xs font-medium text-zinc-600">
-                        Data rozpoczęcia generowania zajęć
-                      </label>
-                      <input
-                        type="date"
-                        className="mt-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm"
-                        min={(
-                          detail?.activeSchoolYear?.dateFrom ??
-                          activeSchoolYear?.date_from ??
-                          ''
-                        )
-                          .toString()
-                          .slice(0, 10)}
-                        max={(
-                          detail?.activeSchoolYear?.dateTo ?? activeSchoolYear?.date_to ?? ''
-                        )
-                          .toString()
-                          .slice(0, 10)}
-                        value={lessonBoundsDraft.lessonsStartOn}
-                        disabled={lessonBoundsSaving}
-                        onChange={(e) =>
-                          setLessonBoundsDraft((prev) => ({
-                            ...prev,
-                            lessonsStartOn: e.target.value,
-                          }))
-                        }
-                      />
-                    </div>
-                  ) : null}
-                  <label className="flex flex-wrap items-center gap-2">
-                    <input
-                      type="checkbox"
-                      className="accent-emerald-700"
-                      checked={lessonBoundsDraft.endsEarlier}
-                      disabled={lessonBoundsSaving}
-                      onChange={(e) => {
-                        const checked = e.target.checked;
-                        setLessonBoundsDraft((prev) => ({
-                          ...prev,
-                          endsEarlier: checked,
-                          lessonsEndOn: checked ? prev.lessonsEndOn : '',
-                        }));
-                      }}
-                    />
-                    <span className="font-medium text-zinc-800">grupa kończy wcześniej</span>
-                  </label>
-                  {lessonBoundsDraft.endsEarlier ? (
-                    <div className="ml-6">
-                      <label className="block text-xs font-medium text-zinc-600">
-                        Data końca generowania zajęć
-                      </label>
-                      <input
-                        type="date"
-                        className="mt-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm"
-                        min={(
-                          detail?.activeSchoolYear?.dateFrom ??
-                          activeSchoolYear?.date_from ??
-                          ''
-                        )
-                          .toString()
-                          .slice(0, 10)}
-                        max={(
-                          detail?.activeSchoolYear?.dateTo ?? activeSchoolYear?.date_to ?? ''
-                        )
-                          .toString()
-                          .slice(0, 10)}
-                        value={lessonBoundsDraft.lessonsEndOn}
-                        disabled={lessonBoundsSaving}
-                        onChange={(e) =>
-                          setLessonBoundsDraft((prev) => ({
-                            ...prev,
-                            lessonsEndOn: e.target.value,
-                          }))
-                        }
-                      />
-                    </div>
-                  ) : null}
-                  <button
-                    type="button"
-                    disabled={lessonBoundsSaving}
-                    className="rounded-lg bg-emerald-700 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
-                    onClick={() => {
-                      void (async () => {
-                        if (
-                          lessonBoundsDraft.startsLater &&
-                          !lessonBoundsDraft.lessonsStartOn
-                        ) {
-                          pushToast('error', 'Podaj datę rozpoczęcia zajęć dla grupy');
-                          return;
-                        }
-                        if (
-                          lessonBoundsDraft.endsEarlier &&
-                          !lessonBoundsDraft.lessonsEndOn
-                        ) {
-                          pushToast('error', 'Podaj datę zakończenia zajęć dla grupy');
-                          return;
-                        }
-                        setLessonBoundsSaving(true);
-                        try {
-                          const res = await fetch(
-                            `/api/admin/groups/${groupId}/lesson-bounds`,
-                            {
-                              method: 'PATCH',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({
-                                schoolYearId: detail?.activeSchoolYear?.id,
-                                startsLater: lessonBoundsDraft.startsLater,
-                                lessonsStartOn: lessonBoundsDraft.startsLater
-                                  ? lessonBoundsDraft.lessonsStartOn
-                                  : null,
-                                endsEarlier: lessonBoundsDraft.endsEarlier,
-                                lessonsEndOn: lessonBoundsDraft.endsEarlier
-                                  ? lessonBoundsDraft.lessonsEndOn
-                                  : null,
-                              }),
-                            },
-                          );
-                          const data = await res.json().catch(() => ({}));
-                          if (!res.ok) {
-                            pushToast(
-                              'error',
-                              (data as { message?: string }).message ??
-                                'Nie udało się zapisać zakresu dat',
-                            );
-                            return;
-                          }
-                          pushToast(
-                            'success',
-                            (data as { message?: string }).message ??
-                              'Zapisano zakres dat zajęć grupy',
-                          );
-                          await reloadDetail();
-                        } finally {
-                          setLessonBoundsSaving(false);
-                        }
-                      })();
-                    }}
-                  >
-                    {lessonBoundsSaving ? 'Zapisywanie…' : 'Zapisz zakres dat grupy'}
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          )}
-          <div className="space-y-2 text-sm">
+          <div
+            className={`grid grid-cols-1 gap-3 ${
+              hasActiveSchoolYear && (detail?.activeSchoolYear ?? activeSchoolYear)
+                ? 'md:grid-cols-2 md:items-stretch'
+                : ''
+            }`}
+          >
+          <div className="min-w-0 space-y-2 text-sm">
             {scheduleTemplates.length === 0 ? (
               <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-6 text-center text-zinc-600">
                 {!hasActiveSchoolYear
@@ -6305,16 +6143,15 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 const hasGeneratedLessons = futureCount > 0 || completedCount > 0;
                 // Edycja terminu zablokowana tylko przez nadchodzące — zakończone zostają w historii.
                 const hasFutureGeneratedLessons = futureCount > 0;
-                const canEditSchedule =
+                const canOpenEditSchedule =
                   !disabled &&
                   hasActiveSchoolYear &&
                   Boolean(groupId) &&
-                  !hasFutureGeneratedLessons &&
-                  scheduleChangeUnlocked;
+                  !hasFutureGeneratedLessons;
                 return (
-                <div key={st.id} className="flex items-center justify-between rounded-xl border border-emerald-100 p-3">
+                <div key={st.id} className="flex flex-col gap-3 rounded-xl border border-emerald-100 p-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <p className="flex flex-wrap items-center gap-2">
+                    <p className="flex flex-wrap items-center gap-2 text-base font-semibold text-zinc-900">
                       <span>
                         {dayNames[st.day_of_week] ?? `Dzień ${st.day_of_week}`} · {st.start_time.slice(0, 5)} · {st.duration_min} min
                       </span>
@@ -6324,9 +6161,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                         </span>
                       ) : null}
                     </p>
-                    <p className="text-zinc-600">{st.location_name ?? '-'}</p>
+                    <p className="mt-0.5 text-sm text-zinc-600">{st.location_name ?? '-'}</p>
                     {hasGeneratedLessons ? (
-                      <p className="mt-1 text-xs font-medium text-emerald-700">
+                      <p className="mt-1 text-sm font-medium text-emerald-700">
                         Z tego terminu:{" "}
                         {[
                           futureCount > 0 ? `${futureCount} nadchodzących` : null,
@@ -6337,37 +6174,54 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       </p>
                     ) : (
                       !disabled && (
-                        <p className="mt-1 text-xs text-zinc-500">Brak wygenerowanych zajęć dla tego terminu</p>
+                        <p className="mt-1 text-sm text-zinc-500">Brak wygenerowanych zajęć dla tego terminu</p>
                       )
                     )}
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    {groupIsTwiceWeekly && hasActiveSchoolYear && !hasFutureGeneratedLessons ? (
+                    {hasTwoScheduleSlots && hasActiveSchoolYear && !disabled ? (
                       <button
                         type="button"
-                        className={`rounded-lg px-3 py-1 text-sm font-semibold ${
+                        disabled={busy}
+                        className={`rounded-lg px-3 py-1 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${
                           st.once_weekly_day
                             ? 'bg-amber-500 text-white hover:bg-amber-600'
-                            : 'bg-zinc-200 text-zinc-800 hover:bg-zinc-300'
+                            : 'border border-zinc-200 bg-zinc-50 font-medium text-zinc-500 hover:border-zinc-300 hover:bg-zinc-100 hover:text-zinc-700'
                         }`}
+                        title={
+                          st.once_weekly_day
+                            ? 'Ten termin jest dniem dla dzieci chodzących 1× w tygodniu'
+                            : 'Oznacz ten dzień jako jedyny dla dzieci z frekwencją 1×'
+                        }
                         onClick={async () => {
-                          const res = await fetch(`/api/admin/schedule-templates/${st.id}`, {
-                            method: 'PATCH',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ onceWeeklyDay: !st.once_weekly_day }),
-                          });
-                          if (!res.ok) {
-                            const data = await res.json().catch(() => ({}));
-                            pushToast('error', data.message ?? 'Nie udało się oznaczyć dnia');
+                          if (!groupIsTwiceWeekly) {
+                            setAppAlert(
+                              'W „Dane grupy” ustaw „Zajęcia w tygodniu” na 2× w tygodniu i zapisz grupę — dopiero wtedy można oznaczyć dzień dla dzieci chodzących 1×.',
+                            );
                             return;
                           }
-                          pushToast(
-                            'success',
-                            !st.once_weekly_day
-                              ? 'Oznaczono dzień dla dzieci 1×'
-                              : 'Usunięto oznaczenie dnia 1×',
-                          );
-                          await reloadDetail();
+                          setBusy(true);
+                          try {
+                            const res = await fetch(`/api/admin/schedule-templates/${st.id}`, {
+                              method: 'PATCH',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ onceWeeklyDay: !st.once_weekly_day }),
+                            });
+                            if (!res.ok) {
+                              const data = await res.json().catch(() => ({}));
+                              pushToast('error', data.message ?? 'Nie udało się oznaczyć dnia');
+                              return;
+                            }
+                            pushToast(
+                              'success',
+                              !st.once_weekly_day
+                                ? 'Oznaczono dzień dla dzieci 1×'
+                                : 'Usunięto oznaczenie dnia 1×',
+                            );
+                            await reloadDetail();
+                          } finally {
+                            setBusy(false);
+                          }
                         }}
                       >
                         {st.once_weekly_day ? 'Dzień 1×' : 'Ustaw jako dzień dla dzieci 1×'}
@@ -6375,32 +6229,42 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     ) : null}
                     <button
                       type="button"
-                      disabled={!canEditSchedule}
+                      disabled={!canOpenEditSchedule}
                       className="rounded-lg bg-emerald-600 px-3 py-1 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
                       title={
-                        !scheduleChangeUnlocked
-                          ? 'Zaznacz „zmiana harmonogramu”, aby edytować terminy'
+                        !canEditOrDeleteSchedule
+                          ? SCHEDULE_CHANGE_NOTICE_REQUIRED_MESSAGE
                           : hasFutureGeneratedLessons
                           ? 'Edycja niedostępna — są nadchodzące zajęcia. Usuń je poniżej, żeby zmienić harmonogram (zakończone zostaną).'
                           : !hasActiveSchoolYear
                             ? 'Harmonogram można edytować tylko przy aktywnym roku szkolnym'
                             : undefined
                       }
-                      onClick={() => openEditScheduleModal(st)}
+                      onClick={() => {
+                        if (!canEditOrDeleteSchedule) {
+                          requireScheduleChangeNotice();
+                          return;
+                        }
+                        openEditScheduleModal(st);
+                      }}
                     >
                       Edytuj
                     </button>
                     <button
                       type="button"
-                      disabled={!hasActiveSchoolYear || !groupId || !scheduleChangeUnlocked}
+                      disabled={!hasActiveSchoolYear || !groupId || disabled}
                       className="rounded-lg bg-red-600 px-3 py-1 text-white disabled:cursor-not-allowed disabled:opacity-50"
                       title={
-                        !scheduleChangeUnlocked
-                          ? 'Zaznacz „zmiana harmonogramu”, aby usunąć terminy'
+                        !canEditOrDeleteSchedule
+                          ? SCHEDULE_CHANGE_NOTICE_REQUIRED_MESSAGE
                           : undefined
                       }
                       onClick={() => {
                         if (!groupId) return;
+                        if (!canEditOrDeleteSchedule) {
+                          requireScheduleChangeNotice();
+                          return;
+                        }
                         const dayLabel =
                           dayNames[st.day_of_week] ?? `Dzień ${st.day_of_week}`;
                         setDeleteScheduleModal({
@@ -6421,6 +6285,222 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               })
             )}
           </div>
+          {hasActiveSchoolYear && (detail?.activeSchoolYear ?? activeSchoolYear) && (
+            <div className="h-full rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-700">
+              {(() => {
+                const yearFrom = (
+                  detail?.activeSchoolYear?.dateFrom ??
+                  activeSchoolYear?.date_from ??
+                  ''
+                )
+                  .toString()
+                  .slice(0, 10);
+                const yearTo = (
+                  detail?.activeSchoolYear?.dateTo ??
+                  activeSchoolYear?.date_to ??
+                  ''
+                )
+                  .toString()
+                  .slice(0, 10);
+                const selectedFrom =
+                  lessonBoundsDraft.startsLater && lessonBoundsDraft.lessonsStartOn
+                    ? lessonBoundsDraft.lessonsStartOn
+                    : yearFrom;
+                const selectedTo =
+                  lessonBoundsDraft.endsEarlier && lessonBoundsDraft.lessonsEndOn
+                    ? lessonBoundsDraft.lessonsEndOn
+                    : yearTo;
+                const savedStart =
+                  detail?.lessonBounds?.lessonsStartOn?.slice(0, 10) ?? '';
+                const savedEnd =
+                  detail?.lessonBounds?.lessonsEndOn?.slice(0, 10) ?? '';
+                const draftStart = lessonBoundsDraft.startsLater
+                  ? lessonBoundsDraft.lessonsStartOn.trim()
+                  : '';
+                const draftEnd = lessonBoundsDraft.endsEarlier
+                  ? lessonBoundsDraft.lessonsEndOn.trim()
+                  : '';
+                const lessonBoundsDirty =
+                  draftStart !== savedStart || draftEnd !== savedEnd;
+                return (
+                  <>
+                    <p>
+                      Rok szkolny{' '}
+                      <span className="font-semibold text-zinc-900">
+                        {detail?.activeSchoolYear?.name ?? activeSchoolYear?.name ?? '—'}
+                      </span>
+                      :{' '}
+                      <span className="font-medium">
+                        {yearFrom || '—'} – {yearTo || '—'}
+                      </span>
+                    </p>
+                    <p className="mt-2 text-sm text-zinc-800">
+                      Wybrany zakres generowania:{' '}
+                      <span className="font-semibold">
+                        {selectedFrom || '—'} – {selectedTo || '—'}
+                      </span>
+                    </p>
+                    <p className="mt-1 text-xs text-zinc-500">
+                      Domyślnie jak rok szkolny. Zaznacz poniżej, jeśli grupa zaczyna później lub
+                      kończy wcześniej.
+                    </p>
+                    {!disabled && groupId ? (
+                      <div className="mt-3 space-y-2.5 border-t border-zinc-200 pt-3">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                          <label className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              className="accent-emerald-700"
+                              checked={lessonBoundsDraft.startsLater}
+                              disabled={lessonBoundsSaving}
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                setLessonBoundsDraft((prev) => ({
+                                  ...prev,
+                                  startsLater: checked,
+                                  lessonsStartOn: checked ? prev.lessonsStartOn : '',
+                                }));
+                              }}
+                            />
+                            <span className="font-medium text-zinc-800">zaczyna później</span>
+                          </label>
+                          {lessonBoundsDraft.startsLater ? (
+                            <input
+                              type="date"
+                              className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm"
+                              min={yearFrom || undefined}
+                              max={
+                                (lessonBoundsDraft.endsEarlier &&
+                                  lessonBoundsDraft.lessonsEndOn) ||
+                                yearTo ||
+                                undefined
+                              }
+                              value={lessonBoundsDraft.lessonsStartOn}
+                              disabled={lessonBoundsSaving}
+                              onChange={(e) =>
+                                setLessonBoundsDraft((prev) => ({
+                                  ...prev,
+                                  lessonsStartOn: e.target.value,
+                                }))
+                              }
+                            />
+                          ) : null}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                          <label className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              className="accent-emerald-700"
+                              checked={lessonBoundsDraft.endsEarlier}
+                              disabled={lessonBoundsSaving}
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                setLessonBoundsDraft((prev) => ({
+                                  ...prev,
+                                  endsEarlier: checked,
+                                  lessonsEndOn: checked ? prev.lessonsEndOn : '',
+                                }));
+                              }}
+                            />
+                            <span className="font-medium text-zinc-800">kończy wcześniej</span>
+                          </label>
+                          {lessonBoundsDraft.endsEarlier ? (
+                            <input
+                              type="date"
+                              className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm"
+                              min={
+                                (lessonBoundsDraft.startsLater &&
+                                  lessonBoundsDraft.lessonsStartOn) ||
+                                yearFrom ||
+                                undefined
+                              }
+                              max={yearTo || undefined}
+                              value={lessonBoundsDraft.lessonsEndOn}
+                              disabled={lessonBoundsSaving}
+                              onChange={(e) =>
+                                setLessonBoundsDraft((prev) => ({
+                                  ...prev,
+                                  lessonsEndOn: e.target.value,
+                                }))
+                              }
+                            />
+                          ) : null}
+                        </div>
+                        <button
+                          type="button"
+                          disabled={lessonBoundsSaving || !lessonBoundsDirty}
+                          className={`rounded-lg px-3 py-1.5 text-sm font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                            lessonBoundsDirty
+                              ? 'bg-amber-500 shadow-sm ring-2 ring-amber-300 hover:bg-amber-600'
+                              : 'bg-emerald-700'
+                          }`}
+                          onClick={() => {
+                            void (async () => {
+                              if (
+                                lessonBoundsDraft.startsLater &&
+                                !lessonBoundsDraft.lessonsStartOn
+                              ) {
+                                pushToast('error', 'Podaj datę rozpoczęcia zajęć dla grupy');
+                                return;
+                              }
+                              if (
+                                lessonBoundsDraft.endsEarlier &&
+                                !lessonBoundsDraft.lessonsEndOn
+                              ) {
+                                pushToast('error', 'Podaj datę zakończenia zajęć dla grupy');
+                                return;
+                              }
+                              setLessonBoundsSaving(true);
+                              try {
+                                const res = await fetch(
+                                  `/api/admin/groups/${groupId}/lesson-bounds`,
+                                  {
+                                    method: 'PATCH',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                      schoolYearId: detail?.activeSchoolYear?.id,
+                                      startsLater: lessonBoundsDraft.startsLater,
+                                      lessonsStartOn: lessonBoundsDraft.startsLater
+                                        ? lessonBoundsDraft.lessonsStartOn
+                                        : null,
+                                      endsEarlier: lessonBoundsDraft.endsEarlier,
+                                      lessonsEndOn: lessonBoundsDraft.endsEarlier
+                                        ? lessonBoundsDraft.lessonsEndOn
+                                        : null,
+                                    }),
+                                  },
+                                );
+                                const data = await res.json().catch(() => ({}));
+                                if (!res.ok) {
+                                  pushToast(
+                                    'error',
+                                    (data as { message?: string }).message ??
+                                      'Nie udało się zapisać zakresu dat',
+                                  );
+                                  return;
+                                }
+                                pushToast(
+                                  'success',
+                                  (data as { message?: string }).message ??
+                                    'Zapisano zakres dat zajęć grupy',
+                                );
+                                await reloadDetail();
+                              } finally {
+                                setLessonBoundsSaving(false);
+                              }
+                            })();
+                          }}
+                        >
+                          {lessonBoundsSaving ? 'Zapisywanie…' : 'Zapisz zakres dat grupy'}
+                        </button>
+                      </div>
+                    ) : null}
+                  </>
+                );
+              })()}
+            </div>
+          )}
+          </div>
           {!disabled && groupIsTwiceWeekly && scheduleTemplates.length < 2 ? (
             <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
               <p className="font-semibold">
@@ -6431,7 +6511,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 .
               </p>
               <p className="mt-1 text-red-700/90">
-                Dodaj brakujący termin przyciskiem „+ Dodaj termin”, żeby pokryć oba dni tygodnia.
+                {canAddScheduleSlot
+                  ? 'Dodaj brakujący termin przyciskiem „+ Dodaj termin”, żeby pokryć oba dni tygodnia.'
+                  : SCHEDULE_CHANGE_NOTICE_REQUIRED_MESSAGE}
               </p>
             </div>
           ) : null}
@@ -6441,14 +6523,23 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 Grupa ma zajęcia 1× w tygodniu, a w harmonogramie nie ma jeszcze żadnego terminu.
               </p>
               <p className="mt-1 text-red-700/90">
-                Dodaj termin przyciskiem „+ Dodaj termin” u góry.
+                {canAddScheduleSlot
+                  ? 'Dodaj termin przyciskiem „+ Dodaj termin” u góry.'
+                  : SCHEDULE_CHANGE_NOTICE_REQUIRED_MESSAGE}
               </p>
             </div>
           ) : null}
-          {groupIsTwiceWeekly && scheduleTemplates.length >= 2 && !hasOnceWeeklyDay ? (
+          {hasTwoScheduleSlots && !groupIsTwiceWeekly && !disabled ? (
+            <p className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+              Masz 2 terminy, ale w danych grupy „Zajęcia w tygodniu” to <strong>1×</strong>. Ustaw{' '}
+              <strong>2× w tygodniu</strong>, zapisz grupę, potem kliknij „Ustaw jako dzień dla dzieci
+              1×” przy wybranym terminie.
+            </p>
+          ) : null}
+          {groupIsTwiceWeekly && hasTwoScheduleSlots && !hasOnceWeeklyDay ? (
             <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              Grupa ma zajęcia 2× w tygodniu — oznacz, który termin jest dniem dla dzieci chodzących
-              tylko 1×.
+              Kliknij pomarańczowy przycisk „Ustaw jako dzień dla dzieci 1×” przy Poniedziałku albo
+              Czwartku — bez odblokowywania harmonogramu.
             </p>
           ) : null}
         </section>
@@ -6561,9 +6652,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 </div>
               )}
             </div>
-            {!disabled &&
-              detail?.activeSchoolYear &&
-              scheduleTemplates.length > 0 && (
+            {!disabled && detail?.activeSchoolYear ? (
               <div className="flex shrink-0 flex-col items-stretch gap-2 sm:items-end">
                 <label className="block text-sm">
                   <span className="mb-1 block font-semibold text-zinc-700">
@@ -6575,6 +6664,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     max={500}
                     className="w-full rounded-xl border border-emerald-200 px-3 py-2 sm:w-28"
                     value={generateLessonsCount}
+                    disabled={scheduleTemplates.length === 0}
                     onChange={(e) => setGenerateLessonsCount(e.target.value)}
                     title={`Domyślnie ${defaultTargetLessonsPerYear(
                       groupForm.id === groupId ? groupForm.lessonsPerWeek : groupIsTwiceWeekly ? 2 : 1,
@@ -6588,16 +6678,74 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     )
                   </span>
                 </label>
+                {(detail.lessonBounds?.lessonsStartOn || detail.lessonBounds?.lessonsEndOn) && (
+                  <p className="max-w-xs text-right text-xs text-zinc-500">
+                    Zakres generowania
+                    {detail.lessonBounds.lessonsStartOn
+                      ? `: od ${detail.lessonBounds.lessonsStartOn}`
+                      : ''}
+                    {detail.lessonBounds.lessonsEndOn
+                      ? `${detail.lessonBounds.lessonsStartOn ? '' : ':'} do ${detail.lessonBounds.lessonsEndOn}`
+                      : ''}
+                    .
+                  </p>
+                )}
                 <button
                   type="button"
-                  disabled={busy}
+                  disabled={busy || scheduleTemplates.length === 0}
                   className={`rounded-xl px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 ${
                     detail.scheduleNeedsConfirmation
                       ? 'bg-red-600 hover:bg-red-700'
                       : 'bg-[#0f6e56] hover:bg-[#0c5a46]'
                   }`}
+                  title={
+                    scheduleTemplates.length === 0
+                      ? 'Najpierw dodaj dzień i godzinę w harmonogramie powyżej'
+                      : undefined
+                  }
                   onClick={async () => {
                     if (!groupId) return;
+                    if (scheduleTemplates.length === 0) {
+                      pushToast(
+                        'error',
+                        'Najpierw dodaj dzień i godzinę w harmonogramie — potem wygenerujesz zajęcia.',
+                      );
+                      return;
+                    }
+                    const savedStart =
+                      detail.lessonBounds?.lessonsStartOn?.slice(0, 10) ?? '';
+                    const savedEnd =
+                      detail.lessonBounds?.lessonsEndOn?.slice(0, 10) ?? '';
+                    const draftStart = lessonBoundsDraft.startsLater
+                      ? lessonBoundsDraft.lessonsStartOn.trim()
+                      : '';
+                    const draftEnd = lessonBoundsDraft.endsEarlier
+                      ? lessonBoundsDraft.lessonsEndOn.trim()
+                      : '';
+                    if (
+                      lessonBoundsDraft.startsLater &&
+                      !draftStart
+                    ) {
+                      setAppAlert(
+                        'Zaznaczono „zaczyna później” — podaj datę i zapisz zakres dat grupy.',
+                      );
+                      return;
+                    }
+                    if (
+                      lessonBoundsDraft.endsEarlier &&
+                      !draftEnd
+                    ) {
+                      setAppAlert(
+                        'Zaznaczono „kończy wcześniej” — podaj datę i zapisz zakres dat grupy.',
+                      );
+                      return;
+                    }
+                    if (draftStart !== savedStart || draftEnd !== savedEnd) {
+                      setAppAlert(
+                        'Zakres dat grupy nie jest zapisany. Kliknij „Zapisz zakres dat grupy”, a potem wygeneruj zajęcia.',
+                      );
+                      return;
+                    }
                     const count = Math.floor(Number(generateLessonsCount));
                     if (!Number.isFinite(count) || count < 1 || count > 500) {
                       pushToast('error', 'Podaj liczbę zajęć w zakresie 1–500');
@@ -6630,8 +6778,14 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 >
                   Wygeneruj zajęcia
                 </button>
+                {scheduleTemplates.length === 0 ? (
+                  <p className="max-w-xs text-right text-xs text-amber-800">
+                    Dodaj termin w harmonogramie (dzień i godzina), żeby wygenerować zajęcia.
+                    Zakres „zaczyna później / kończy wcześniej” będzie wtedy respektowany.
+                  </p>
+                ) : null}
               </div>
-            )}
+            ) : null}
           </div>
 
           {!disabled && (
@@ -6649,64 +6803,97 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     </p>
                   );
                 }
+                const nowMs = Date.now();
+                const pastCount = visibleLessons.filter((lesson) => {
+                  if (lesson.status === 'COMPLETED') return true;
+                  const t = new Date(lesson.scheduled_at).getTime();
+                  return Number.isFinite(t) && t < nowMs;
+                }).length;
                 return (
-                <ul className="max-h-80 space-y-1.5 overflow-y-auto text-sm">
-                  {visibleLessons.map((lesson, index) => {
-                    const isCompleted = lesson.status === 'COMPLETED';
-                    const isOrphan = lesson.orphan_from_schedule === true;
-                    const statusLabel = isCompleted
-                      ? 'zakończone'
-                      : isOrphan
-                        ? 'poza harmonogramem'
-                        : 'zaplanowane';
-                    const statusClass = isCompleted
-                      ? 'bg-zinc-200 text-zinc-700'
-                      : isOrphan
-                        ? 'bg-amber-100 text-amber-900'
-                        : 'bg-emerald-100 text-emerald-800';
-                    const rowClass = isCompleted
-                      ? 'border-zinc-200 bg-zinc-50'
-                      : isOrphan
-                        ? 'border-amber-200 bg-amber-50/50'
-                        : 'border-emerald-100 bg-emerald-50/40';
-                    return (
-                      <li
-                        key={lesson.id}
-                        className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 ${rowClass}`}
-                      >
-                        <span className={`font-medium ${isCompleted ? 'text-zinc-600' : 'text-zinc-900'}`}>
-                          <span className="mr-2 inline-block min-w-[1.5rem] text-zinc-500">
-                            {index + 1}.
+                  <div className="rounded-xl border border-emerald-100 bg-white">
+                    <div className="flex w-full items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-zinc-900">
+                      <span>
+                        Lista zajęć ({visibleLessons.length})
+                        {pastCount > 0 ? (
+                          <span className="ml-2 font-normal text-zinc-500">
+                            · {pastCount}{' '}
+                            {pastCount === 1 ? 'odbyte' : pastCount < 5 ? 'odbyte' : 'odbytych'}
                           </span>
-                          {formatSchoolDateTime(lesson.scheduled_at)}
-                          {lesson.duration_min ? (
-                            <span className="ml-2 font-normal text-zinc-500">· {lesson.duration_min} min</span>
-                          ) : null}
-                        </span>
-                        <div className="flex items-center gap-2">
-                          <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusClass}`}>
-                            {statusLabel}
-                          </span>
-                          {!isCompleted && !disabled && groupId ? (
-                            <button
-                              type="button"
-                              className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-semibold text-red-800 hover:bg-red-100"
-                              onClick={() => {
-                                setDeleteLessonModal({
-                                  id: lesson.id,
-                                  groupId,
-                                  label: formatSchoolDateTime(lesson.scheduled_at),
-                                });
-                              }}
+                        ) : null}
+                      </span>
+                    </div>
+                    <ul className="max-h-72 space-y-1.5 overflow-y-auto overscroll-contain border-t border-emerald-100 px-3 py-3 text-sm [scrollbar-gutter:stable]">
+                      {visibleLessons.map((lesson, index) => {
+                        const isCompleted = lesson.status === 'COMPLETED';
+                        const scheduledMs = new Date(lesson.scheduled_at).getTime();
+                        const isPast =
+                          isCompleted ||
+                          (Number.isFinite(scheduledMs) && scheduledMs < nowMs);
+                        const isOrphan = lesson.orphan_from_schedule === true;
+                        const statusLabel = isCompleted
+                          ? 'zakończone'
+                          : isPast
+                            ? 'odbyte'
+                            : isOrphan
+                              ? 'poza harmonogramem'
+                              : 'zaplanowane';
+                        const statusClass = isCompleted
+                          ? 'bg-zinc-300 text-zinc-800'
+                          : isPast
+                            ? 'bg-zinc-200 text-zinc-700'
+                            : isOrphan
+                              ? 'bg-amber-100 text-amber-900'
+                              : 'bg-emerald-100 text-emerald-800';
+                        const rowClass = isPast
+                          ? 'border-zinc-200 bg-zinc-50'
+                          : isOrphan
+                            ? 'border-amber-200 bg-amber-50/50'
+                            : 'border-emerald-100 bg-emerald-50/40';
+                        return (
+                          <li
+                            key={lesson.id}
+                            className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 ${rowClass}`}
+                          >
+                            <span
+                              className={`font-medium ${isPast ? 'text-zinc-600' : 'text-zinc-900'}`}
                             >
-                              Usuń
-                            </button>
-                          ) : null}
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
+                              <span className="mr-2 inline-block min-w-[1.5rem] text-zinc-500">
+                                {index + 1}.
+                              </span>
+                              {formatSchoolDateTime(lesson.scheduled_at)}
+                              {lesson.duration_min ? (
+                                <span className="ml-2 font-normal text-zinc-500">
+                                  · {lesson.duration_min} min
+                                </span>
+                              ) : null}
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <span
+                                className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusClass}`}
+                              >
+                                {statusLabel}
+                              </span>
+                              {!isPast && !disabled && groupId ? (
+                                <button
+                                  type="button"
+                                  className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-semibold text-red-800 hover:bg-red-100"
+                                  onClick={() => {
+                                    setDeleteLessonModal({
+                                      id: lesson.id,
+                                      groupId,
+                                      label: formatSchoolDateTime(lesson.scheduled_at),
+                                    });
+                                  }}
+                                >
+                                  Usuń
+                                </button>
+                              ) : null}
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
                 );
               })()}
             </div>
@@ -6803,7 +6990,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                           await reloadDetail();
                         }}
                       >
-                        {studentIsOnceWeekly ? 'Zmień na 2×' : 'Zmień na 1×'}
+                        {studentIsOnceWeekly ? 'zmień na chodzi 2×' : 'zmień na chodzi 1×'}
                       </button>
                     ) : null}
                     <button
@@ -9985,6 +10172,45 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           </div>
         </div>
       )}
+
+      {appAlert ? (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="app-alert-title"
+          onClick={() => setAppAlert(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-amber-200 bg-white p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <span
+                className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-lg font-bold text-amber-800"
+                aria-hidden
+              >
+                !
+              </span>
+              <div className="min-w-0 flex-1">
+                <h3 id="app-alert-title" className="text-lg font-semibold text-zinc-900">
+                  Uwaga
+                </h3>
+                <p className="mt-2 text-sm leading-relaxed text-zinc-600">{appAlert}</p>
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0c5a47]"
+                onClick={() => setAppAlert(null)}
+              >
+                Rozumiem
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {deleteScheduleModal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">

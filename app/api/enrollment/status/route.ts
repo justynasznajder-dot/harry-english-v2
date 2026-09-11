@@ -56,6 +56,8 @@ export async function GET(request: NextRequest) {
 
       proposed_at: Date | string | null;
 
+      payment_type: string | null;
+
       price_monthly: number | null;
 
       price_yearly: number | null;
@@ -95,12 +97,32 @@ export async function GET(request: NextRequest) {
          COALESCE(MAX(gl.name), MAX(sl.name), 'Do ustalenia') AS location_name,
 
          COALESCE(
-
-           STRING_AGG(DISTINCT CONCAT(${POLISH_DAY_FROM_ST_SQL}, ' ', TO_CHAR(st.start_time, 'HH24:MI')), ', '),
-
+           NULLIF(BTRIM(MAX(g.schedule_before_label)), ''),
+           NULLIF(
+             STRING_AGG(
+               DISTINCT CONCAT(${POLISH_DAY_FROM_ST_SQL}, ' ', TO_CHAR(st.start_time, 'HH24:MI')),
+               ', '
+             ) FILTER (
+               WHERE st.id IS NOT NULL
+                 AND st.active = TRUE
+                 AND st.day_of_week BETWEEN 1 AND 7
+                 AND st.start_time IS NOT NULL
+             ),
+             ''
+           ),
            'Do ustalenia'
-
          ) AS schedule,
+
+         (
+           SELECT ct.payment_type
+           FROM contracts ct
+           JOIN contract_children cc ON cc.contract_id = ct.id AND cc.child_id = c.id
+           WHERE ct.parent_id = c.parent_id
+             AND ct.school_id = c.school_id
+             AND ct.status = 'SIGNED'
+           ORDER BY ct.signed_at DESC NULLS LAST, ct.created_at DESC
+           LIMIT 1
+         ) AS payment_type,
 
          er.proposed_at,
 
@@ -147,6 +169,7 @@ export async function GET(request: NextRequest) {
        LEFT JOIN locations gl ON gl.id = g.location_id
 
        LEFT JOIN schedule_templates st ON st.group_id = g.id
+         AND st.active = TRUE
          AND ${sqlScheduleTemplateVisibleForStudent(`COALESCE(
            (
              SELECT gs2.lessons_per_week
@@ -254,6 +277,7 @@ export async function GET(request: NextRequest) {
           (row.preferred_location?.trim() || "Do ustalenia"),
         schedule: "—",
         proposed_at: null,
+        payment_type: null,
         price_monthly: null,
         price_yearly: null,
         price_per_lesson: null,
@@ -393,6 +417,8 @@ export async function GET(request: NextRequest) {
       schedule: row.schedule,
 
       proposed_at: row.proposed_at,
+
+      payment_type: row.payment_type ?? null,
 
       price_monthly: row.price_monthly,
 

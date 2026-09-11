@@ -985,27 +985,20 @@ export async function sendProposalEmail(
   const yearStartYmd = proposal.schoolYearStartOn?.slice(0, 10) || null;
   const groupStartYmd =
     proposal.groupLessonsStartOn?.slice(0, 10) || yearStartYmd;
-  const yearStartLabel = yearStartYmd ? formatPolishLongDate(yearStartYmd) : null;
   const groupStartLabel = groupStartYmd ? formatPolishLongDate(groupStartYmd) : null;
 
-  const lessonsStartHtml =
-    yearStartLabel && groupStartLabel
-      ? `
-      <p style="margin:0 0 8px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
-        Zajęcia rozpoczynają się dnia <strong>${escapeHtmlForEmail(yearStartLabel)}</strong> według harmonogramu.
-      </p>
+  const lessonsStartHtml = groupStartLabel
+    ? `
       <p style="margin:0 0 16px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
         Data rozpoczęcia zajęć dla grupy: <strong>${escapeHtmlForEmail(groupStartLabel)}</strong>.
       </p>
     `
-      : "";
-  const lessonsStartText =
-    yearStartLabel && groupStartLabel
-      ? `
-Zajęcia rozpoczynają się dnia ${yearStartLabel} według harmonogramu.
+    : "";
+  const lessonsStartText = groupStartLabel
+    ? `
 Data rozpoczęcia zajęć dla grupy: ${groupStartLabel}.
 `
-      : "";
+    : "";
 
   const pickupConsentHtml = options?.complimentaryCompleted
     ? `
@@ -1078,6 +1071,9 @@ ${lessonsStartText}`;
       intro: introHtml,
       contentHtml: `
         ${pickupConsentHtml}
+        <p style="margin:0 0 12px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
+          Poniżej znajdziesz informacje dotyczące zajęć.
+        </p>
         <ul style="margin:0 0 12px 18px;padding:0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
           <li><strong>Grupa:</strong> ${escapeHtmlForEmail(proposal.groupName)}</li>
           <li><strong>Lokalizacja:</strong> ${escapeHtmlForEmail(proposal.locationName)}</li>
@@ -1095,6 +1091,7 @@ ${lessonsStartText}`;
 
 ${introText}
 ${pickupConsentText}
+Poniżej znajdziesz informacje dotyczące zajęć.
 - Grupa: ${proposal.groupName}
 - Lokalizacja: ${proposal.locationName}
 - Termin: ${proposal.schedule}
@@ -1208,10 +1205,6 @@ export async function sendCombinedProposalEmail(
   const portalUrl = PUBLIC_SITE_URL;
   const p = getEmailPalette();
 
-  const yearStartYmd =
-    proposals.map((pr) => pr.schoolYearStartOn?.slice(0, 10)).find(Boolean) ?? null;
-  const yearStartLabel = yearStartYmd ? formatPolishLongDate(yearStartYmd) : null;
-
   const proposalsHtml = proposals
     .map((proposal) => {
       const safeChildName = `${escapeHtmlForEmail(proposal.childFirstName)} ${escapeHtmlForEmail(proposal.childLastName)}`;
@@ -1262,19 +1255,6 @@ export async function sendCombinedProposalEmail(
       }`;
     })
     .join("\n\n");
-
-  const lessonsStartHtml = yearStartLabel
-    ? `
-      <p style="margin:0 0 16px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
-        Zajęcia rozpoczynają się dnia <strong>${escapeHtmlForEmail(yearStartLabel)}</strong> według harmonogramu.
-      </p>
-    `
-    : "";
-  const lessonsStartText = yearStartLabel
-    ? `
-Zajęcia rozpoczynają się dnia ${yearStartLabel} według harmonogramu.
-`
-    : "";
 
   const isNewAccount = Boolean(login.tempPassword);
   const passwordHtml = isNewAccount
@@ -1359,7 +1339,6 @@ ${
       <p style="margin:0 0 12px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
         Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować, podpisać własnoręcznie i oddać w placówce przed pierwszymi zajęciami (świetlica / wychowawca grupy przedszkolnej).
       </p>
-      ${lessonsStartHtml}
     `;
 
   const pickupConsentText = options?.complimentaryCompleted
@@ -1370,7 +1349,7 @@ Wydrukuj dokument i podpisz ręcznie — nie podpisuje się go elektronicznie.
 `
     : `
 Załącznik zawierający zgodę na odbiór dziecka dotyczy wyłącznie dzieci, które będą odbierane przez lektora z placówki i odprowadzane na zajęcia. Należy go wydrukować, podpisać własnoręcznie i oddać w placówce przed pierwszymi zajęciami (świetlica / wychowawca grupy przedszkolnej).
-${lessonsStartText}`;
+`;
 
   await sendHarryMail({
     from: {
@@ -1384,6 +1363,9 @@ ${lessonsStartText}`;
       intro: introFull,
       contentHtml: `
         ${pickupConsentHtml}
+        <p style="margin:0 0 12px 0;font-family:${BRAND_FONT};font-size:15px;line-height:1.6;font-weight:400;color:${p.text};">
+          Poniżej znajdziesz informacje dotyczące zajęć.
+        </p>
         ${proposalsHtml}
         ${credentialsHtml}
         ${emailCtaButton(portalUrl, "Przejdź do portalu")}
@@ -1396,6 +1378,7 @@ ${lessonsStartText}`;
 
 ${introFull}
 ${pickupConsentText}
+Poniżej znajdziesz informacje dotyczące zajęć.
 ${proposalsText}
 ${credentialsText}
 Przejdź do portalu: ${portalUrl}

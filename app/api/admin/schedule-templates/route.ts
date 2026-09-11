@@ -38,7 +38,11 @@ export async function POST(request: NextRequest) {
     const group = await assertGroupInSchool(String(groupId), ctx.schoolId);
     if (!group.ok) return tenantNotFoundResponse("Nie znaleziono grupy");
 
-    const gate = await assertGroupScheduleMutationAllowed(String(groupId), ctx.schoolId);
+    const gate = await assertGroupScheduleMutationAllowed(
+      String(groupId),
+      ctx.schoolId,
+      "create"
+    );
     if (!gate.ok) {
       return NextResponse.json({ message: gate.message }, { status: gate.status });
     }

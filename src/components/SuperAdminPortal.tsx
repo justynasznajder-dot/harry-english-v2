@@ -108,11 +108,16 @@ export default function SuperAdminPortal() {
   }, [selectedSchoolId, loadUsers]);
 
   const filteredUsers = useMemo(() => {
-    const q = userSearch.trim().toLowerCase();
+    const strip = (s: string) =>
+      s
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+    const q = strip(userSearch.trim());
     return users.filter((u) => {
       if (roleFilter && u.role !== roleFilter) return false;
       if (!q) return true;
-      const hay = `${u.first_name} ${u.last_name} ${u.email}`.toLowerCase();
+      const hay = strip(`${u.first_name} ${u.last_name} ${u.email}`);
       return hay.includes(q);
     });
   }, [users, userSearch, roleFilter]);

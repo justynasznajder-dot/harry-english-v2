@@ -19,7 +19,7 @@ import {
 } from '@/lib/discount-math';
 import { validateParentContractProfileInput } from '@/lib/parent-contract-profile';
 import { parseContentDispositionFilename } from '@/lib/content-disposition';
-import { paymentPlanLabel, paymentTypeShortLabel } from '@/lib/payment-labels';
+import { paymentPlanLabel, paymentTypePeriodLabel, paymentTypeShortLabel } from '@/lib/payment-labels';
 import {
   lessonsPerWeekLabel,
   normalizeLessonsPerWeek,
@@ -68,6 +68,7 @@ interface EnrollmentProposal {
   location_name: string;
   schedule: string;
   proposed_at?: string | null;
+  payment_type?: string | null;
   price_monthly?: number | null;
   price_yearly?: number | null;
   price_per_lesson?: number | null;
@@ -726,6 +727,16 @@ export default function EnrollmentParentFlow({
         for (const p of incoming) {
           if (!isProposalInContractPricing(p)) continue;
           if (!next[p.request_id]) next[p.request_id] = 'MONTHLY';
+        }
+        for (const p of incoming) {
+          const fromContract = p.payment_type;
+          if (
+            fromContract === 'MONTHLY' ||
+            fromContract === 'YEARLY' ||
+            fromContract === 'PER_LESSON'
+          ) {
+            next[p.request_id] = fromContract;
+          }
         }
         const contractChildId =
           data.parentContract?.included_children?.[0]?.request_id ??
@@ -3123,6 +3134,16 @@ export default function EnrollmentParentFlow({
                             <span>{p.location_name}</span>
                             <span className="font-semibold text-zinc-900">Termin zajęć:</span>
                             <span>{p.schedule}</span>
+                            {(paymentTypeByRequestId[p.request_id] || p.payment_type) ? (
+                              <>
+                                <span className="font-semibold text-zinc-900">Rozliczenie:</span>
+                                <span>
+                                  {paymentTypePeriodLabel(
+                                    paymentTypeByRequestId[p.request_id] || p.payment_type || '',
+                                  )}
+                                </span>
+                              </>
+                            ) : null}
                           </div>
                           <div className="mt-4 space-y-2 border-t border-emerald-100 pt-3">
                             <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
@@ -3167,6 +3188,16 @@ export default function EnrollmentParentFlow({
                       <span>{p.location_name}</span>
                       <span className="font-semibold text-zinc-900">Termin zajęć:</span>
                       <span>{p.schedule}</span>
+                      {(paymentTypeByRequestId[p.request_id] || p.payment_type) ? (
+                        <>
+                          <span className="font-semibold text-zinc-900">Rozliczenie:</span>
+                          <span>
+                            {paymentTypePeriodLabel(
+                              paymentTypeByRequestId[p.request_id] || p.payment_type || '',
+                            )}
+                          </span>
+                        </>
+                      ) : null}
                     </div>
                   </div>
                 ))}

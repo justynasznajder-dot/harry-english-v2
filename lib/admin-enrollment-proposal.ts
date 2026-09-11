@@ -25,7 +25,7 @@ import {
   type EnrollmentStatus,
 } from "@/lib/enrollment-status";
 import { isComplimentaryForParent } from "@/lib/school-discounts";
-import { resolveEffectiveLessonRange } from "@/lib/group-lesson-bounds";
+import { resolveFirstGroupLessonOn, resolveEffectiveLessonRange } from "@/lib/group-lesson-bounds";
 import {
   normalizeLessonsPerWeek,
   sqlScheduleTemplateVisibleForStudent,
@@ -55,9 +55,9 @@ export type ProposalEmailItem = {
   locationName: string;
   schedule: string;
   teacherName: string;
-  /** Data rozpoczęcia roku szkolnego (YYYY-MM-DD) — „według harmonogramu”. */
+  /** Data rozpoczęcia roku szkolnego (YYYY-MM-DD). */
   schoolYearStartOn?: string | null;
-  /** Efektywna data startu zajęć grupy (YYYY-MM-DD). */
+  /** Data pierwszych zajęć w wybranej grupie (kalendarz lub harmonogram + zakres). */
   groupLessonsStartOn?: string | null;
 };
 
@@ -492,7 +492,13 @@ export async function submitEnrollmentProposal(
     groupId,
   });
   const schoolYearStartOn = lessonRange?.yearFrom ?? null;
-  const groupLessonsStartOn = lessonRange?.effectiveFrom ?? schoolYearStartOn;
+  const groupLessonsStartOn =
+    (await resolveFirstGroupLessonOn({
+      schoolId: parentSchoolId,
+      groupId,
+    })) ??
+    lessonRange?.effectiveFrom ??
+    schoolYearStartOn;
 
   let parentUserId: string;
   let parentFirstName: string;

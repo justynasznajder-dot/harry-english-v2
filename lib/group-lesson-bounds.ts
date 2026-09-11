@@ -139,6 +139,65 @@ export async function resolveEffectiveLessonRange(opts: {
   };
 }
 
+/** Pierwszy dzień tygodnia (ISO 1=pon … 7=nd) w dniu `base` lub później. */
+function nextDateForWeekday(base: Date, dayOfWeek: number): Date {
+  const current = ((base.getDay() + 6) % 7) + 1;
+  const diff = (dayOfWeek - current + 7) % 7;
+  const d = new Date(base);
+  d.setDate(d.getDate() + diff);
+  return d;
+}
+
+/**
+ * Data pierwszych zajęć grupy w aktywnym roku:
+ * 1) najwcześniejsze nieanulowane zajęcie w kalendarzu (w zakresie grupy),
+ * 2) inaczej — pierwszy dzień z aktywnego harmonogramu od effectiveFrom.
+ */
+export async function resolveFirstGroupLessonOn(opts: {
+  schoolId: string;
+  groupId: string;
+}): Promise<string | null> {
+  const range = await resolveEffectiveLessonRange(opts);
+  if (!range) return null;
+
+  const existing = await queryDb<{ d: string | null }>(
+    `SELECT MIN(l.scheduled_at::date)::text AS d
+     FROM lessons l
+     WHERE l.group_id = $1
+       AND l.school_year_id = $2
+       AND l.status <> 'CANCELLED'
+       AND l.scheduled_at::date >= $3::date
+       AND l.scheduled_at::date <= $4::date`,
+    [opts.groupId, range.yearId, range.effectiveFrom, range.effectiveTo],
+  );
+  const fromLessons = ymdSlice(existing.rows[0]?.d ?? null);
+  if (fromLessons) return fromLessons;
+
+  const templates = await queryDb<{ day_of_week: number }>(
+    `SELECT DISTINCT day_of_week
+     FROM schedule_templates
+     WHERE group_id = $1
+       AND active = TRUE
+       AND day_of_week BETWEEN 1 AND 7`,
+    [opts.groupId],
+  );
+  if (templates.rows.length === 0) return null;
+
+  const from = new Date(`${range.effectiveFrom}T12:00:00`);
+  const to = new Date(`${range.effectiveTo}T12:00:00`);
+  let best: string | null = null;
+  for (const st of templates.rows) {
+    const d = nextDateForWeekday(from, st.day_of_week);
+    if (d > to) continue;
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    const ymd = `${y}-${m}-${day}`;
+    if (!best || ymd < best) best = ymd;
+  }
+  return best;
+}
+
 /**
  * Zapis granic dla aktywnego roku. Puste / null czyści daną stronę.
  * Wiersz usuwany, gdy obie daty są null.
