@@ -31,6 +31,7 @@ import {
   classifyLocationForGroupLevel,
   compareGroupsYoungestToOldest,
   detectLevelFromGroupName,
+  formatGroupNameForDisplay,
   getHarryEnglishLevelStage,
   isHarryEnglishLevelCode,
   locationMatchesGroupLevel,
@@ -77,7 +78,7 @@ type EnrollmentFlowSubTab =
   | 'resignations';
 type BillingSubTab = 'summary' | 'invoices' | 'settings';
 type BillingSummaryKind = 'monthly' | 'yearly' | 'per_lesson';
-type TeacherOrgSubTab = 'list' | 'add';
+type TeacherOrgSubTab = 'list' | 'add' | 'edit';
 type LocationOrgSubTab = 'list' | 'add' | 'edit' | 'specials';
 type GroupsSubTab = 'list' | 'add' | 'organize';
 type ClassesSubTab = 'calendar' | 'lessonsList';
@@ -773,6 +774,16 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     pesel: '',
     idCardNumber: '',
   });
+  const [editTeacherId, setEditTeacherId] = useState<string | null>(null);
+  const [editTeacherForm, setEditTeacherForm] = useState({
+    firstName: '',
+    lastName: '',
+    email: '',
+    phone: '',
+    pesel: '',
+    idCardNumber: '',
+  });
+  const [editTeacherLoading, setEditTeacherLoading] = useState(false);
   const [childModalOpen, setChildModalOpen] = useState(false);
   const [childForm, setChildForm] = useState({
     parentId: '',
@@ -3093,7 +3104,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               */}
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[900px] text-sm">
+              <table className="w-full min-w-[1100px] text-sm">
                 <thead className="bg-emerald-50 text-zinc-700">
                   <tr>
                     <th className="px-4 py-3 text-left">ID</th>
@@ -3103,7 +3114,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     <th className="px-4 py-3 text-left">Rodzic</th>
                     <th className="px-4 py-3 text-left">Status</th>
                     <th className="px-4 py-3 text-left">Grupa</th>
-                    <th className="px-4 py-3 text-left">Akcje</th>
+                    <th className="px-4 py-3 text-right">Akcje</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -3123,7 +3134,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       </td>
                       <td className="px-4 py-3">{child.first_name}</td>
                       <td className="px-4 py-3">{child.last_name}</td>
-                      <td className="px-4 py-3">{child.birth_date}</td>
+                      <td className="whitespace-nowrap px-4 py-3">{child.birth_date}</td>
                       <td className="px-4 py-3">
                         {child.parent_first_name} {child.parent_last_name}
                         {child.parent_client_number ? (
@@ -3143,8 +3154,17 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                           {child.confirmed ? 'potwierdzony' : 'niepotwierdzony'}
                         </span>
                       </td>
-                      <td className="px-4 py-3">{child.group_name ?? '-'}</td>
                       <td className="px-4 py-3">
+                        <span
+                          className="block whitespace-nowrap"
+                          title={child.group_name ?? undefined}
+                        >
+                          {child.group_name
+                            ? formatGroupNameForDisplay(child.group_name)
+                            : '—'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
                         <button
                           type="button"
                           onClick={() => setProfileModal({ type: 'child', id: child.child_id })}
@@ -3568,7 +3588,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 <button
                   key={st.key}
                   type="button"
-                  onClick={() => setTeacherOrgSubTab(st.key)}
+                  onClick={() => {
+                    setEditTeacherId(null);
+                    setTeacherOrgSubTab(st.key);
+                  }}
                   className={`rounded-full border px-3 py-2 text-xs font-semibold transition sm:text-sm ${
                     teacherOrgSubTab === st.key
                       ? 'border-[#0f6e56] bg-emerald-50 text-[#0f6e56]'
@@ -3915,7 +3938,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                           <p className="text-sm text-zinc-600">{t.email}</p>
                           {t.phone ? <p className="text-xs text-zinc-500">{t.phone}</p> : null}
                         </div>
-                        <div className="flex items-center gap-2 self-start sm:self-center">
+                        <div className="flex flex-wrap items-center gap-2 self-start sm:self-center">
                           <span
                             className={`rounded-full px-2 py-1 text-xs font-semibold ${
                               t.active ? 'bg-emerald-100 text-emerald-800' : 'bg-zinc-100 text-zinc-600'
@@ -3933,9 +3956,226 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                           >
                             {t.active ? 'Dezaktywuj' : 'Aktywuj'}
                           </button>
+                          <button
+                            type="button"
+                            disabled={busy || editTeacherLoading}
+                            className="rounded-lg bg-zinc-200 px-3 py-1 text-xs font-semibold text-zinc-800 transition hover:bg-zinc-300 disabled:cursor-not-allowed disabled:opacity-50"
+                            onClick={async () => {
+                              setEditTeacherLoading(true);
+                              try {
+                                const res = await fetch(`/api/admin/users/${encodeURIComponent(t.id)}`);
+                                const data = (await res.json().catch(() => ({}))) as {
+                                  message?: string;
+                                  user?: {
+                                    first_name?: string;
+                                    last_name?: string;
+                                    email?: string;
+                                    phone?: string | null;
+                                    pesel?: string | null;
+                                    id_card_number?: string | null;
+                                  };
+                                };
+                                if (!res.ok) {
+                                  throw new Error(data.message ?? 'Nie udało się pobrać profilu');
+                                }
+                                const u = data.user;
+                                setEditTeacherId(t.id);
+                                setEditTeacherForm({
+                                  firstName: u?.first_name ?? t.first_name,
+                                  lastName: u?.last_name ?? t.last_name,
+                                  email: u?.email ?? t.email,
+                                  phone: u?.phone ?? t.phone ?? '',
+                                  pesel: u?.pesel ?? '',
+                                  idCardNumber: u?.id_card_number ?? '',
+                                });
+                                setTeacherOrgSubTab('edit');
+                              } catch (e) {
+                                pushToast('error', e instanceof Error ? e.message : 'Błąd');
+                              } finally {
+                                setEditTeacherLoading(false);
+                              }
+                            }}
+                          >
+                            Edytuj
+                          </button>
                         </div>
                       </div>
                     ))
+                  )}
+                </div>
+              )}
+              {teacherOrgSubTab === 'edit' && (
+                <div className="rounded-xl border border-dashed border-emerald-200 bg-emerald-50/30 p-4 text-sm">
+                  <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-700">
+                    Edycja nauczyciela
+                  </p>
+                  {!editTeacherId ? (
+                    <p className="text-sm text-zinc-600">
+                      Wybierz nauczyciela z listy i kliknij „Edytuj”.
+                    </p>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <label className="block">
+                          <span className="mb-1 block text-xs font-semibold text-zinc-700">Imię</span>
+                          <input
+                            className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                            value={editTeacherForm.firstName}
+                            onChange={(e) =>
+                              setEditTeacherForm((p) => ({ ...p, firstName: e.target.value }))
+                            }
+                            autoComplete="given-name"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-xs font-semibold text-zinc-700">Nazwisko</span>
+                          <input
+                            className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                            value={editTeacherForm.lastName}
+                            onChange={(e) =>
+                              setEditTeacherForm((p) => ({ ...p, lastName: e.target.value }))
+                            }
+                            autoComplete="family-name"
+                          />
+                        </label>
+                        <label className="block sm:col-span-2">
+                          <span className="mb-1 block text-xs font-semibold text-zinc-700">Email (login)</span>
+                          <input
+                            type="email"
+                            className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                            value={editTeacherForm.email}
+                            onChange={(e) =>
+                              setEditTeacherForm((p) => ({ ...p, email: e.target.value }))
+                            }
+                            autoComplete="off"
+                          />
+                        </label>
+                        <label className="block sm:col-span-2">
+                          <span className="mb-1 block text-xs font-semibold text-zinc-500">
+                            Telefon (opcjonalnie)
+                          </span>
+                          <input
+                            type="tel"
+                            className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                            placeholder="np. +48 …"
+                            value={editTeacherForm.phone}
+                            onChange={(e) =>
+                              setEditTeacherForm((p) => ({
+                                ...p,
+                                phone: normalizePolishPhone(e.target.value),
+                              }))
+                            }
+                            onBlur={(e) =>
+                              setEditTeacherForm((p) => ({
+                                ...p,
+                                phone: normalizePolishPhone(e.target.value),
+                              }))
+                            }
+                            autoComplete="tel"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-xs font-semibold text-zinc-500">
+                            PESEL (opcjonalnie)
+                          </span>
+                          <input
+                            inputMode="numeric"
+                            className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                            placeholder="11 cyfr"
+                            maxLength={11}
+                            value={editTeacherForm.pesel}
+                            onChange={(e) =>
+                              setEditTeacherForm((p) => ({
+                                ...p,
+                                pesel: e.target.value.replace(/\D/g, '').slice(0, 11),
+                              }))
+                            }
+                            autoComplete="off"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-xs font-semibold text-zinc-500">
+                            Nr dowodu (opcjonalnie)
+                          </span>
+                          <input
+                            className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-zinc-900"
+                            placeholder="np. ABC 123456"
+                            value={editTeacherForm.idCardNumber}
+                            onChange={(e) =>
+                              setEditTeacherForm((p) => ({ ...p, idCardNumber: e.target.value }))
+                            }
+                            autoComplete="off"
+                          />
+                        </label>
+                      </div>
+                      <div className="mt-4 flex flex-wrap justify-end gap-2">
+                        <button
+                          type="button"
+                          disabled={busy}
+                          className="rounded-xl border border-emerald-200 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          onClick={() => {
+                            setEditTeacherId(null);
+                            setTeacherOrgSubTab('list');
+                          }}
+                        >
+                          Anuluj
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy || !editTeacherId}
+                          className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0c5a47] disabled:cursor-not-allowed disabled:opacity-50"
+                          onClick={async () => {
+                            if (!editTeacherId) return;
+                            const { firstName, lastName, email, phone, pesel, idCardNumber } =
+                              editTeacherForm;
+                            if (!firstName.trim() || !lastName.trim() || !email.trim()) {
+                              pushToast('error', 'Uzupełnij imię, nazwisko i email');
+                              return;
+                            }
+                            if (pesel.trim() && pesel.trim().length !== 11) {
+                              pushToast('error', 'PESEL musi mieć 11 cyfr');
+                              return;
+                            }
+                            setBusy(true);
+                            try {
+                              const res = await fetch(
+                                `/api/admin/users/${encodeURIComponent(editTeacherId)}`,
+                                {
+                                  method: 'PUT',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({
+                                    first_name: firstName.trim(),
+                                    last_name: lastName.trim(),
+                                    email: email.trim().toLowerCase(),
+                                    phone: phone.trim()
+                                      ? normalizePolishPhone(phone)
+                                      : null,
+                                    pesel: pesel.trim() || null,
+                                    id_card_number: idCardNumber.trim() || null,
+                                  }),
+                                },
+                              );
+                              const data = (await res.json().catch(() => ({}))) as {
+                                message?: string;
+                              };
+                              if (!res.ok) {
+                                throw new Error(data.message ?? 'Nie udało się zapisać profilu');
+                              }
+                              pushToast('success', 'Zapisano profil nauczyciela');
+                              setEditTeacherId(null);
+                              setTeacherOrgSubTab('list');
+                              await loadData();
+                            } catch (e) {
+                              pushToast('error', e instanceof Error ? e.message : 'Błąd');
+                            } finally {
+                              setBusy(false);
+                            }
+                          }}
+                        >
+                          Zapisz
+                        </button>
+                      </div>
+                    </>
                   )}
                 </div>
               )}

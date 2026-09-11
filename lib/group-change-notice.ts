@@ -252,7 +252,7 @@ export async function transferChildGroupMembership(opts: {
                monthly_unit_price = $4,
                yearly_unit_price = $5,
                lessons_per_week = $6,
-               group_change_notice = TRUE,
+               group_change_notice = FALSE,
                group_before_label = COALESCE(group_before_label, $7)
            WHERE id = $1
            RETURNING id, group_change_notice, group_before_label`,
@@ -284,7 +284,7 @@ export async function transferChildGroupMembership(opts: {
          ) VALUES (
            $1, $2, $3, $4, CURRENT_DATE, $5,
            $6, $7, $8, $9,
-           TRUE, $10
+           FALSE, $10
          )
          RETURNING id, group_change_notice, group_before_label`,
         [

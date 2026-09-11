@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { paymentTypeShortLabel } from '@/lib/payment-labels';
+import { formatGroupNameForDisplay } from '@/src/data/harryEnglishLevels';
 import AdminEntityChangeHistory from '@/src/components/admin/AdminEntityChangeHistory';
 
 type ChildDetail = {
@@ -462,14 +463,14 @@ export default function AdminChildProfilePanel({
                 <label className="flex flex-col gap-1 text-sm text-zinc-700">
                   Nowa grupa
                   <select
-                    className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-zinc-900"
+                    className="w-full min-w-0 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-zinc-900"
                     value={selectedGroupId}
                     disabled={groupTransferBusy || saving}
                     onChange={(e) => setSelectedGroupId(e.target.value)}
                   >
                     {groupOptions.map((g) => (
                       <option key={g.id} value={g.id}>
-                        {g.name}
+                        {formatGroupNameForDisplay(g.name)}
                       </option>
                     ))}
                   </select>
@@ -478,13 +479,15 @@ export default function AdminChildProfilePanel({
                   <p className="text-xs text-zinc-500">
                     Snapshot poprzedniej grupy:{' '}
                     <span className="font-medium text-zinc-700">
-                      {membership.group_before_label}
+                      {formatGroupNameForDisplay(membership.group_before_label)}
                     </span>
                     {membership.group_before_label !== membership.group_name ? (
                       <>
                         {' '}
                         → aktualnie:{' '}
-                        <span className="font-medium text-zinc-800">{membership.group_name}</span>
+                        <span className="font-medium text-zinc-800">
+                          {formatGroupNameForDisplay(membership.group_name)}
+                        </span>
                       </>
                     ) : null}
                   </p>
@@ -509,7 +512,11 @@ export default function AdminChildProfilePanel({
                 <input
                   readOnly
                   className="rounded-xl border border-emerald-200 bg-zinc-50 px-3 py-2 text-zinc-900"
-                  value={membership?.group_name ?? 'Brak aktywnej grupy'}
+                  value={
+                    membership?.group_name
+                      ? formatGroupNameForDisplay(membership.group_name)
+                      : 'Brak aktywnej grupy'
+                  }
                 />
               </label>
             )}

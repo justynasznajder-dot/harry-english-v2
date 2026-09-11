@@ -251,8 +251,7 @@ export default function ParentGroupTab() {
                 <span className="font-semibold text-zinc-800">Grupa:</span>
                 <div className="space-y-2">
                   <span className="block">{g.groupName}</span>
-                  {g.groupChangeNotice &&
-                  g.groupBeforeLabel &&
+                  {g.groupBeforeLabel &&
                   g.groupName &&
                   g.groupBeforeLabel.trim() !== g.groupName.trim() ? (
                     <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950">

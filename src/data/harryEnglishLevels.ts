@@ -220,6 +220,19 @@ export function allocateUniqueGroupName(
   return `${base} (${n})`;
 }
 
+/**
+ * Etykieta grupy w UI: bez wielokrotnych spacji / łamań linii,
+ * twarda spacja przed krótkim sufiksem (np. „16”, „gr.1”), żeby nie spadał sam do nowej linii.
+ */
+export function formatGroupNameForDisplay(name: string | null | undefined): string {
+  const t = String(name ?? "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!t) return "";
+  return t.replace(/ (?=[^\s]{1,12}$)/u, "\u00A0");
+}
+
 export function composeGroupName(
   levelCode: string,
   locationName: string,
