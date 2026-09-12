@@ -12,11 +12,11 @@ export type ContractAmountsExportRow = {
   parentEmail: string;
   statusLabel: string;
   groupName: string;
+  hasProposedGroup: boolean;
   complimentary: boolean;
   hasKdr: boolean;
   hasSibling: boolean;
   managerDiscountPercent?: string | number | null;
-  enrollmentLessonsPerWeek?: number | null;
   groupLessonsPerWeek?: number | null;
   studentLessonsPerWeek?: number | null;
   yearlyUnitPrice?: string | number | null;
@@ -51,7 +51,7 @@ export async function downloadContractAmountsXlsx(input: {
       yearlyUnitPrice: row.yearlyUnitPrice,
       monthlyUnitPrice: row.monthlyUnitPrice,
       lessonUnitPrice: row.lessonUnitPrice,
-      enrollmentLessonsPerWeek: row.enrollmentLessonsPerWeek,
+      hasProposedGroup: row.hasProposedGroup,
       groupLessonsPerWeek: row.groupLessonsPerWeek,
       studentLessonsPerWeek: row.studentLessonsPerWeek,
       managerDiscountPercent: row.managerDiscountPercent,
@@ -71,6 +71,7 @@ export async function downloadContractAmountsXlsx(input: {
 
     const chosen =
       v.paymentType != null ? paymentTypeShortLabel(v.paymentType) : "";
+    const noFee = row.complimentary || row.contractBillingExempt === true;
 
     return {
       Uczeń: `${row.childFirstName} ${row.childLastName}`.trim(),
@@ -79,8 +80,9 @@ export async function downloadContractAmountsXlsx(input: {
       Status: row.statusLabel,
       Grupa: row.groupName,
       "Tryb bez umowy": row.complimentary ? "Tak" : "Nie",
+      "Bez opłat": noFee ? "Tak" : "Nie",
       Frekwencja: v.lessonsPerWeekLabel,
-      "Frekwencja (×)": v.lessonsPerWeek,
+      "Frekwencja (×)": v.lessonsPerWeek ?? "",
       KDR: row.hasKdr ? "Tak" : "Nie",
       Rodzeństwo: row.hasSibling ? "Tak" : "Nie",
       "Rabat manager (%)":
@@ -93,10 +95,13 @@ export async function downloadContractAmountsXlsx(input: {
       "Jednorazowa (na umowie)": moneyOrEmpty(v.onContract?.yearly ?? null),
       "Ratalna (na umowie)": moneyOrEmpty(v.onContract?.monthly ?? null),
       "Za zajęcia (na umowie)": moneyOrEmpty(v.onContract?.lesson ?? null),
-      "Wybrana płatność": chosen,
-      "Kwota na umowie / fakturze": moneyOrEmpty(v.invoiceAmount),
-      "Źródło kwoty":
-        v.invoiceAmountSource === "none" ? "" : v.invoiceAmountSource,
+      "Wybrana płatność": noFee ? "bez opłat" : chosen,
+      "Kwota na umowie / fakturze": moneyOrEmpty(noFee ? 0 : v.invoiceAmount),
+      "Źródło kwoty": noFee
+        ? "bez opłat"
+        : v.invoiceAmountSource === "none"
+          ? ""
+          : v.invoiceAmountSource,
     };
   });
 
@@ -107,6 +112,7 @@ export async function downloadContractAmountsXlsx(input: {
     Status: "",
     Grupa: "",
     "Tryb bez umowy": "",
+    "Bez opłat": "",
     Frekwencja: "",
     "Frekwencja (×)": "",
     KDR: "",
@@ -136,7 +142,7 @@ export async function downloadContractAmountsXlsx(input: {
     ["Liczba uczniów", String(flat.length)],
     [
       "Wyliczenie",
-      "stawka × frekwencja (1|2) × (1 − rabat%). Za zajęcia bez × frekwencji. Zaokrąglenie do groszy.",
+      "stawka × frekwencja (z grupy lub override managera) × (1 − rabat%). Bez grupy: frekwencja pusta, YEARLY/MONTHLY bez mnożnika. Za zajęcia bez × frekwencji.",
     ],
     [
       "Na umowie",

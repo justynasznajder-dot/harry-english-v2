@@ -10,7 +10,7 @@ import {
 } from "@/lib/lesson-pricing";
 import {
   lessonsPerWeekLabel,
-  resolveStudentLessonsPerWeek,
+  normalizeLessonsPerWeek,
   scaleAmountByLessonsPerWeek,
   type LessonsPerWeek,
 } from "@/lib/lessons-per-week";
@@ -20,11 +20,11 @@ export type ContractAmountsVerificationInput = {
   yearlyUnitPrice?: string | number | null;
   monthlyUnitPrice?: string | number | null;
   lessonUnitPrice?: string | number | null;
-  /** Frekwencja z enrollment_requests. */
-  enrollmentLessonsPerWeek?: number | null;
+  /** Czy dziecko ma przypisaną / proponowaną grupę. Bez grupy frekwencja = brak. */
+  hasProposedGroup: boolean;
   /** Frekwencja grupy (proposed / membership). */
   groupLessonsPerWeek?: number | null;
-  /** Override na group_students. */
+  /** Override managera na group_students — ważniejszy niż grupa. */
   studentLessonsPerWeek?: number | null;
   managerDiscountPercent?: string | number | null;
   hasKdr: boolean;
@@ -45,7 +45,8 @@ export type ContractAmountsVerificationInput = {
 };
 
 export type ContractAmountsVerificationRow = {
-  lessonsPerWeek: LessonsPerWeek;
+  /** null = brak grupy / brak frekwencji do wyliczenia. */
+  lessonsPerWeek: LessonsPerWeek | null;
   lessonsPerWeekLabel: string;
   discount: EffectiveDiscountResult;
   discountLabel: string | null;
@@ -55,7 +56,7 @@ export type ContractAmountsVerificationRow = {
     monthly: number | null;
     lesson: number | null;
   };
-  /** Stawki zamrożone na umowie (contract_children), bez ponownego rabatu. */
+  /** Stawki zamrożone na umowie (contract_children) + rabat z umowy. */
   onContract: {
     yearly: number | null;
     monthly: number | null;
@@ -68,15 +69,33 @@ export type ContractAmountsVerificationRow = {
   invoiceAmountSource: "contract" | "preview" | "none";
 };
 
+/**
+ * Frekwencja: wyłącznie z grupy, chyba że manager wpisał override na członkostwie.
+ * Bez przypisanej grupy → brak frekwencji (nie domyślamy 1×).
+ */
+export function resolveVerificationLessonsPerWeek(input: {
+  hasProposedGroup: boolean;
+  groupLessonsPerWeek?: number | null;
+  studentLessonsPerWeek?: number | null;
+}): LessonsPerWeek | null {
+  if (!input.hasProposedGroup) return null;
+  return (
+    normalizeLessonsPerWeek(input.studentLessonsPerWeek) ??
+    normalizeLessonsPerWeek(input.groupLessonsPerWeek) ??
+    null
+  );
+}
+
 function applyPreviewAmount(
   unit: number | null,
   paymentType: PaymentType,
-  lessonsPerWeek: LessonsPerWeek,
+  lessonsPerWeek: LessonsPerWeek | null,
   discountPercent: number
 ): number | null {
   if (unit == null) return null;
+  // Bez frekwencji: YEARLY/MONTHLY = sama stawka bazowa × rabat (bez ×1 „na ślepo”).
   const scaled =
-    paymentType === "PER_LESSON"
+    paymentType === "PER_LESSON" || lessonsPerWeek == null
       ? unit
       : scaleAmountByLessonsPerWeek(unit, lessonsPerWeek);
   if (scaled == null) return null;
@@ -91,10 +110,10 @@ function applyPreviewAmount(
 export function buildContractAmountsVerification(
   input: ContractAmountsVerificationInput
 ): ContractAmountsVerificationRow {
-  const lessonsPerWeek = resolveStudentLessonsPerWeek({
-    studentLessonsPerWeek: input.studentLessonsPerWeek,
+  const lessonsPerWeek = resolveVerificationLessonsPerWeek({
+    hasProposedGroup: input.hasProposedGroup,
     groupLessonsPerWeek: input.groupLessonsPerWeek,
-    enrollmentLessonsPerWeek: input.enrollmentLessonsPerWeek,
+    studentLessonsPerWeek: input.studentLessonsPerWeek,
   });
 
   const mode = input.complimentary ? "complimentary" : "contract";
@@ -196,7 +215,6 @@ export function buildContractAmountsVerification(
     invoiceAmount = 0;
     invoiceAmountSource = "contract";
   } else if (paymentType === "PER_LESSON") {
-    // Za zajęcia: stawka za lekcję (po rabacie) — z umowy albo z preview.
     const fromAmount = parsePriceDecimal(input.contractAmount);
     const fromStored = onContract?.lesson ?? null;
     invoiceAmount = fromAmount ?? fromStored ?? preview.lesson;
@@ -216,7 +234,8 @@ export function buildContractAmountsVerification(
 
   return {
     lessonsPerWeek,
-    lessonsPerWeekLabel: lessonsPerWeekLabel(lessonsPerWeek),
+    lessonsPerWeekLabel:
+      lessonsPerWeek != null ? lessonsPerWeekLabel(lessonsPerWeek) : "—",
     discount,
     discountLabel: formatEffectiveDiscountInfo(discount),
     preview,

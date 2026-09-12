@@ -609,7 +609,14 @@ export default function ManagerDashboardPanel({
                         >
                           2× tydz.
                         </span>
-                      ) : null}
+                      ) : (
+                        <span
+                          className="rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] font-semibold text-zinc-600"
+                          title="Zajęcia 1× w tygodniu"
+                        >
+                          1× tydz.
+                        </span>
+                      )}
                       <p className="text-xs font-medium text-zinc-500">
                         {group.children.length}{' '}
                         {group.children.length === 1

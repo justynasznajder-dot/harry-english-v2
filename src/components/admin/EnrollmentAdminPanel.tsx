@@ -1382,64 +1382,11 @@ export default function EnrollmentAdminPanel({
             discountSettings={discountSettings}
             studentQuery={studentQuery}
             exporting={exportingList}
-            onExport={() => {
+            onExport={(exportRows) => {
               void (async () => {
-                if (exportingList) return;
+                if (exportingList || exportRows.length === 0) return;
                 setExportingList(true);
                 try {
-                  const groupNameById = new Map(groups.map((g) => [g.id, g.name]));
-                  const exportRows = parents.flatMap((parent) => {
-                    const complimentary = isParentInComplimentaryList(
-                      parent,
-                      complimentaryParents,
-                    );
-                    return parent.children
-                      .filter((child) => {
-                        if (!studentQuery) return true;
-                        const hay = [
-                          child.firstName,
-                          child.lastName,
-                          parent.firstName,
-                          parent.lastName,
-                          parent.email,
-                        ]
-                          .join(' ')
-                          .toLocaleLowerCase('pl');
-                        return hay.includes(studentQuery);
-                      })
-                      .map((child) => {
-                        const groupId = (child.proposedGroupId ?? '').trim();
-                        return {
-                          childFirstName: child.firstName,
-                          childLastName: child.lastName,
-                          parentFirstName: parent.firstName,
-                          parentLastName: parent.lastName,
-                          parentEmail: parent.email,
-                          statusLabel: resolveEnrollmentListBadge(child).label,
-                          groupName: groupId
-                            ? (groupNameById.get(groupId) ?? groupId)
-                            : 'nieprzypisana',
-                          complimentary,
-                          hasKdr: Boolean(parent.discountLargeFamily),
-                          hasSibling: Boolean(parent.enrollingMultipleChildren),
-                          managerDiscountPercent: child.discountPercent,
-                          enrollmentLessonsPerWeek: child.lessonsPerWeek,
-                          groupLessonsPerWeek: child.groupLessonsPerWeek,
-                          studentLessonsPerWeek: child.studentLessonsPerWeek,
-                          yearlyUnitPrice: child.yearlyUnitPrice,
-                          monthlyUnitPrice: child.monthlyUnitPrice,
-                          lessonUnitPrice: child.lessonUnitPrice,
-                          contractPaymentType: child.contractPaymentType,
-                          contractAmount: child.contractAmount,
-                          contractBillingExempt: child.contractBillingExempt,
-                          contractLessonUnitPrice: child.contractLessonUnitPrice,
-                          contractMonthlyUnitPrice: child.contractMonthlyUnitPrice,
-                          contractYearlyUnitPrice: child.contractYearlyUnitPrice,
-                          contractHasKdr: child.contractDiscountLargeFamily,
-                          contractHasSibling: child.contractDiscountSibling,
-                        };
-                      });
-                  });
                   await downloadContractAmountsXlsx({
                     rows: exportRows,
                     discountSettings,
