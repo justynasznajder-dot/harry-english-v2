@@ -57,6 +57,7 @@ import {
   downloadLessonBillingXlsx,
   type BillingSummaryExportLine,
 } from '@/lib/billing-summary-xlsx';
+import { downloadChildrenListXlsx, downloadFamiliesXlsx } from '@/lib/families-xlsx';
 
 type TabKey =
   | 'dashboard'
@@ -798,6 +799,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     'all' | 'confirmed' | 'unconfirmed'
   >('all');
   const [familiesSubTab, setFamiliesSubTab] = useState<FamiliesSubTab>('parents');
+  const [familiesExporting, setFamiliesExporting] = useState(false);
   const [usersSubTab, setUsersSubTab] = useState<UsersSubTab>('teachers');
   const [newUser, setNewUser] = useState({
     firstName: '',
@@ -2328,25 +2330,40 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   }, [users, isManagerView, showInactive, search]);
 
   const filteredChildren = useMemo(() => {
-    return children.filter((child) => {
-      if (childrenConfirmFilter === 'confirmed' && !child.confirmed) return false;
-      if (childrenConfirmFilter === 'unconfirmed' && child.confirmed) return false;
-      const q = search.trim().toLocaleLowerCase('pl');
-      if (!q) return true;
-      const haystack = [
-        child.first_name,
-        child.last_name,
-        `${child.first_name} ${child.last_name}`,
-        `${child.last_name} ${child.first_name}`,
-        child.client_number ?? '',
-      ]
-        .join(' ')
-        .toLocaleLowerCase('pl');
-      return q
-        .split(/\s+/)
-        .filter(Boolean)
-        .every((token) => haystack.includes(token));
-    });
+    return children
+      .filter((child) => {
+        if (childrenConfirmFilter === 'confirmed' && !child.confirmed) return false;
+        if (childrenConfirmFilter === 'unconfirmed' && child.confirmed) return false;
+        const q = search.trim().toLocaleLowerCase('pl');
+        if (!q) return true;
+        const haystack = [
+          child.first_name,
+          child.last_name,
+          `${child.first_name} ${child.last_name}`,
+          `${child.last_name} ${child.first_name}`,
+          child.client_number ?? '',
+        ]
+          .join(' ')
+          .toLocaleLowerCase('pl');
+        return q
+          .split(/\s+/)
+          .filter(Boolean)
+          .every((token) => haystack.includes(token));
+      })
+      .slice()
+      .sort((a, b) => {
+        const aId = a.client_number?.trim() ?? '';
+        const bId = b.client_number?.trim() ?? '';
+        if (!aId && !bId) {
+          return `${a.last_name} ${a.first_name}`.localeCompare(
+            `${b.last_name} ${b.first_name}`,
+            'pl',
+          );
+        }
+        if (!aId) return 1;
+        if (!bId) return -1;
+        return aId.localeCompare(bId, 'pl', { numeric: true });
+      });
   }, [children, childrenConfirmFilter, search]);
 
   const calendarTeachers = useMemo(() => {
@@ -3161,17 +3178,132 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     [users]
   );
 
+  const exportFamiliesXlsx = async () => {
+    if (familiesExporting) return;
+    const parentUsers = filteredUsers
+      .filter((user) => user.role === 'PARENT')
+      .slice()
+      .sort((a, b) => {
+        const aId = a.client_number?.trim() ?? '';
+        const bId = b.client_number?.trim() ?? '';
+        if (!aId && !bId) {
+          return `${a.last_name} ${a.first_name}`.localeCompare(
+            `${b.last_name} ${b.first_name}`,
+            'pl',
+          );
+        }
+        if (!aId) return 1;
+        if (!bId) return -1;
+        return aId.localeCompare(bId, 'pl', { numeric: true });
+      });
+
+    if (parentUsers.length === 0) {
+      pushToast('error', 'Brak rodziców do eksportu');
+      return;
+    }
+
+    setFamiliesExporting(true);
+    try {
+      const childrenByParent = new Map<string, ChildRow[]>();
+      for (const child of children) {
+        const list = childrenByParent.get(child.parent_id);
+        if (list) list.push(child);
+        else childrenByParent.set(child.parent_id, [child]);
+      }
+
+      await downloadFamiliesXlsx({
+        parents: parentUsers.map((parent) => ({
+          clientNumber: parent.client_number ?? null,
+          firstName: parent.first_name,
+          lastName: parent.last_name,
+          email: parent.email,
+          active: parent.active,
+          siblingDiscount: Boolean(parent.sibling_discount),
+          children: (childrenByParent.get(parent.id) ?? []).map((child) => ({
+            clientNumber: child.client_number ?? null,
+            firstName: child.first_name,
+            lastName: child.last_name,
+            birthDate: child.birth_date,
+            confirmed: child.confirmed,
+            groupName: child.group_name,
+          })),
+        })),
+      });
+    } catch (e) {
+      pushToast('error', e instanceof Error ? e.message : 'Nie udało się wygenerować Excela');
+    } finally {
+      setFamiliesExporting(false);
+    }
+  };
+
+  const exportChildrenXlsx = async () => {
+    if (familiesExporting) return;
+    if (filteredChildren.length === 0) {
+      pushToast('error', 'Brak dzieci do eksportu');
+      return;
+    }
+
+    setFamiliesExporting(true);
+    try {
+      await downloadChildrenListXlsx({
+        rows: filteredChildren.map((child) => ({
+          childClientNumber: child.client_number ?? null,
+          childFirstName: child.first_name,
+          childLastName: child.last_name,
+          birthDate: child.birth_date,
+          confirmed: child.confirmed,
+          groupName: child.group_name,
+          parentClientNumber: child.parent_client_number ?? null,
+          parentFirstName: child.parent_first_name,
+          parentLastName: child.parent_last_name,
+          parentEmail: child.parent_email,
+        })),
+      });
+    } catch (e) {
+      pushToast('error', e instanceof Error ? e.message : 'Nie udało się wygenerować Excela');
+    } finally {
+      setFamiliesExporting(false);
+    }
+  };
+
   const renderFamilies = () => {
-    const parentUsers = filteredUsers.filter((user) => user.role === 'PARENT');
+    const parentUsers = filteredUsers
+      .filter((user) => user.role === 'PARENT')
+      .slice()
+      .sort((a, b) => {
+        const aId = a.client_number?.trim() ?? '';
+        const bId = b.client_number?.trim() ?? '';
+        if (!aId && !bId) {
+          return `${a.last_name} ${a.first_name}`.localeCompare(
+            `${b.last_name} ${b.first_name}`,
+            'pl',
+          );
+        }
+        if (!aId) return 1;
+        if (!bId) return -1;
+        return aId.localeCompare(bId, 'pl', { numeric: true });
+      });
 
     return (
       <div>
         <section className="rounded-2xl border border-emerald-100 bg-white p-4 shadow-sm sm:p-6">
-          <header className="border-b border-emerald-50 pb-4">
-            <h2 className="text-xl font-bold text-[#0f6e56] sm:text-2xl">Rodzice / dzieci</h2>
-            <p className="mt-1 text-sm text-zinc-600">
-              Lista rodziców i dzieci przypisanych do szkoły.
-            </p>
+          <header className="flex flex-wrap items-start justify-between gap-3 border-b border-emerald-50 pb-4">
+            <div>
+              <h2 className="text-xl font-bold text-[#0f6e56] sm:text-2xl">Rodzice / dzieci</h2>
+              <p className="mt-1 text-sm text-zinc-600">
+                Lista rodziców i dzieci przypisanych do szkoły.
+              </p>
+            </div>
+            {familiesSubTab === 'parents' ? (
+              <button
+                type="button"
+                disabled={familiesExporting || parentUsers.length === 0}
+                onClick={() => void exportFamiliesXlsx()}
+                className="shrink-0 rounded-full border border-[#0f6e56] bg-white px-4 py-2.5 text-sm font-semibold text-[#0f6e56] transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {familiesExporting ? 'Generowanie…' : 'Pobierz Excel'}
+              </button>
+            ) : null}
           </header>
 
           <div className="mt-4 space-y-4">
@@ -3301,8 +3433,16 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
 
         {familiesSubTab === 'children' && (
           <section className="mt-4 overflow-hidden rounded-2xl border border-emerald-100 bg-white">
-            <div className="flex items-center justify-between border-b border-emerald-50 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-50 px-4 py-3">
               <h3 className="font-semibold">Dzieci</h3>
+              <button
+                type="button"
+                disabled={familiesExporting || filteredChildren.length === 0}
+                onClick={() => void exportChildrenXlsx()}
+                className="shrink-0 rounded-full border border-[#0f6e56] bg-white px-4 py-2 text-sm font-semibold text-[#0f6e56] transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {familiesExporting ? 'Generowanie…' : 'Pobierz Excel'}
+              </button>
               {/* Tymczasowo ukryte — dodawanie zgłoszeń tylko przez formularz publiczny / Zgłoszenia.
               <button
                 onClick={() => setChildModalOpen(true)}

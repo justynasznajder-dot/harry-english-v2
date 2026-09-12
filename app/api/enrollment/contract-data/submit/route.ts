@@ -15,7 +15,7 @@ import {
 } from "@/lib/enrollment-sync";
 import { ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE } from "@/lib/enrollment-status";
 import { normalizePaymentType } from "@/lib/lesson-pricing";
-import { normalizeLessonsPerWeek, type LessonsPerWeek } from "@/lib/lessons-per-week";
+import { normalizeLessonsPerWeek, resolveStudentLessonsPerWeek, type LessonsPerWeek } from "@/lib/lessons-per-week";
 import {
   fetchParentEnrollmentChildren,
   findNextChildNeedingContract,
@@ -270,15 +270,22 @@ export async function POST(request: NextRequest) {
     // Frekwencję ustawia manager (grupa / członkostwo) — rodzic jej nie wybiera.
     let lessonsPerWeek: LessonsPerWeek | null = null;
     if (single.child.group_id) {
-      const membershipFreq = await queryDb<{ lessons_per_week: number | null }>(
-        `SELECT lessons_per_week
-         FROM group_students
-         WHERE child_id = $1 AND group_id = $2 AND left_at IS NULL
-         ORDER BY enrolled_at DESC
+      const membershipFreq = await queryDb<{
+        lessons_per_week: number | null;
+        group_lessons_per_week: number | null;
+      }>(
+        `SELECT gs.lessons_per_week, g.lessons_per_week AS group_lessons_per_week
+         FROM group_students gs
+         JOIN groups g ON g.id = gs.group_id
+         WHERE gs.child_id = $1 AND gs.group_id = $2 AND gs.left_at IS NULL
+         ORDER BY gs.enrolled_at DESC
          LIMIT 1`,
         [single.child.child_id, single.child.group_id]
       );
-      lessonsPerWeek = normalizeLessonsPerWeek(membershipFreq.rows[0]?.lessons_per_week);
+      lessonsPerWeek = resolveStudentLessonsPerWeek({
+        studentLessonsPerWeek: membershipFreq.rows[0]?.lessons_per_week,
+        groupLessonsPerWeek: membershipFreq.rows[0]?.group_lessons_per_week,
+      });
     }
     if (!lessonsPerWeek) {
       const freqRes = await queryDb<{ lessons_per_week: number | null }>(

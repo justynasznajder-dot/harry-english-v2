@@ -25,6 +25,19 @@ export type EnrollmentChildRow = {
   yearlyUnitPrice?: string | number | null;
   discountPercent?: string | number | null;
   lessonsPerWeek?: number | null;
+  /** Frekwencja proponowanej grupy. */
+  groupLessonsPerWeek?: number | null;
+  /** Frekwencja z group_students (override). */
+  studentLessonsPerWeek?: number | null;
+  /** Dane podpisanej umowy (jeśli jest). */
+  contractPaymentType?: string | null;
+  contractAmount?: string | number | null;
+  contractBillingExempt?: boolean | null;
+  contractDiscountLargeFamily?: boolean | null;
+  contractDiscountSibling?: boolean | null;
+  contractLessonUnitPrice?: string | number | null;
+  contractMonthlyUnitPrice?: string | number | null;
+  contractYearlyUnitPrice?: string | number | null;
 };
 
 export type EnrollmentParentRow = {

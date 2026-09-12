@@ -3,6 +3,10 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { paymentTypeShortLabel } from '@/lib/payment-labels';
+import {
+  lessonsPerWeekLabel,
+  resolveStudentLessonsPerWeek,
+} from '@/lib/lessons-per-week';
 import { formatGroupNameForDisplay } from '@/src/data/harryEnglishLevels';
 import AdminEntityChangeHistory from '@/src/components/admin/AdminEntityChangeHistory';
 
@@ -528,15 +532,18 @@ export default function AdminChildProfilePanel({
                 value={paymentLabel}
               />
             </label>
-            {membership && Number(membership.group_lessons_per_week) === 2 ? (
+            {membership ? (
               <label className="flex flex-col gap-1 text-sm text-zinc-700">
                 Frekwencja w grupie
                 <input
                   readOnly
                   className="rounded-xl border border-emerald-200 bg-zinc-50 px-3 py-2 text-zinc-900"
-                  value={
-                    Number(membership.lessons_per_week) === 1 ? '1× w tygodniu' : '2× w tygodniu'
-                  }
+                  value={lessonsPerWeekLabel(
+                    resolveStudentLessonsPerWeek({
+                      studentLessonsPerWeek: membership.lessons_per_week,
+                      groupLessonsPerWeek: membership.group_lessons_per_week,
+                    }),
+                  )}
                 />
               </label>
             ) : null}

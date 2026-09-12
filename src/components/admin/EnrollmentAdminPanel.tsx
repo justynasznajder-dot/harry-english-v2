@@ -12,6 +12,7 @@ import {
   resolveEnrollmentListBadge,
 } from '@/lib/enrollment-status';
 import { downloadEnrollmentListXlsx, downloadReportedChildrenXlsx } from '@/lib/enrollment-list-xlsx';
+import { downloadContractAmountsXlsx } from '@/lib/contract-amounts-xlsx';
 import {
   hasIncompleteEnrollmentPrices,
   parsePriceDecimal,
@@ -26,6 +27,7 @@ import type {
   EnrollmentGroupRow,
   EnrollmentParentRow,
 } from '@/src/components/enrollment/types';
+import ContractAmountsFrekwencjaView from '@/src/components/admin/ContractAmountsFrekwencjaView';
 
 type ProposalDraft = {
   groupId: string;
@@ -1195,7 +1197,12 @@ export default function EnrollmentAdminPanel({
   const renderList = () => {
     const isByGroupPrices = enrollmentStatusFilter === 'by-group-prices';
     const isReportedChildren = enrollmentStatusFilter === 'by-reported-children';
+    const isContractAmounts = enrollmentStatusFilter === 'by-contract-amounts';
     const studentQuery = studentNameSearch.trim().toLocaleLowerCase('pl');
+    const contractAmountsChildCount = parents.reduce(
+      (sum, parent) => sum + parent.children.length,
+      0,
+    );
     const enrollmentRows = parents.filter((parent) => parent.children.length > 0);
     const filteredEnrollmentRows = enrollmentRows
       .map((parent) => {
@@ -1310,7 +1317,18 @@ export default function EnrollmentAdminPanel({
           >
             Zgłoszone dzieci ({reportedChildrenView.totalCount})
           </button>
-          {!isByGroupPrices && !isReportedChildren && (
+          <button
+            type="button"
+            onClick={() => setEnrollmentStatusFilter('by-contract-amounts')}
+            className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+              isContractAmounts
+                ? 'border-[#0f6e56] bg-[#0f6e56] text-white'
+                : 'border-emerald-200 bg-white text-zinc-700'
+            }`}
+          >
+            Kwota na umowie + frekwencja ({contractAmountsChildCount})
+          </button>
+          {!isByGroupPrices && !isReportedChildren && !isContractAmounts && (
             <button
               type="button"
               disabled={exportingList || filteredEnrollmentRows.length === 0}
@@ -1356,7 +1374,91 @@ export default function EnrollmentAdminPanel({
           )}
         </div>
 
-        {isByGroupPrices ? (
+        {isContractAmounts ? (
+          <ContractAmountsFrekwencjaView
+            parents={parents}
+            groups={groups}
+            complimentaryParents={complimentaryParents}
+            discountSettings={discountSettings}
+            studentQuery={studentQuery}
+            exporting={exportingList}
+            onExport={() => {
+              void (async () => {
+                if (exportingList) return;
+                setExportingList(true);
+                try {
+                  const groupNameById = new Map(groups.map((g) => [g.id, g.name]));
+                  const exportRows = parents.flatMap((parent) => {
+                    const complimentary = isParentInComplimentaryList(
+                      parent,
+                      complimentaryParents,
+                    );
+                    return parent.children
+                      .filter((child) => {
+                        if (!studentQuery) return true;
+                        const hay = [
+                          child.firstName,
+                          child.lastName,
+                          parent.firstName,
+                          parent.lastName,
+                          parent.email,
+                        ]
+                          .join(' ')
+                          .toLocaleLowerCase('pl');
+                        return hay.includes(studentQuery);
+                      })
+                      .map((child) => {
+                        const groupId = (child.proposedGroupId ?? '').trim();
+                        return {
+                          childFirstName: child.firstName,
+                          childLastName: child.lastName,
+                          parentFirstName: parent.firstName,
+                          parentLastName: parent.lastName,
+                          parentEmail: parent.email,
+                          statusLabel: resolveEnrollmentListBadge(child).label,
+                          groupName: groupId
+                            ? (groupNameById.get(groupId) ?? groupId)
+                            : 'nieprzypisana',
+                          complimentary,
+                          hasKdr: Boolean(parent.discountLargeFamily),
+                          hasSibling: Boolean(parent.enrollingMultipleChildren),
+                          managerDiscountPercent: child.discountPercent,
+                          enrollmentLessonsPerWeek: child.lessonsPerWeek,
+                          groupLessonsPerWeek: child.groupLessonsPerWeek,
+                          studentLessonsPerWeek: child.studentLessonsPerWeek,
+                          yearlyUnitPrice: child.yearlyUnitPrice,
+                          monthlyUnitPrice: child.monthlyUnitPrice,
+                          lessonUnitPrice: child.lessonUnitPrice,
+                          contractPaymentType: child.contractPaymentType,
+                          contractAmount: child.contractAmount,
+                          contractBillingExempt: child.contractBillingExempt,
+                          contractLessonUnitPrice: child.contractLessonUnitPrice,
+                          contractMonthlyUnitPrice: child.contractMonthlyUnitPrice,
+                          contractYearlyUnitPrice: child.contractYearlyUnitPrice,
+                          contractHasKdr: child.contractDiscountLargeFamily,
+                          contractHasSibling: child.contractDiscountSibling,
+                        };
+                      });
+                  });
+                  await downloadContractAmountsXlsx({
+                    rows: exportRows,
+                    discountSettings,
+                    filterLabel: studentQuery
+                      ? `Kwota na umowie + frekwencja · szukaj: ${studentQuery}`
+                      : 'Kwota na umowie + frekwencja',
+                  });
+                } catch (e) {
+                  pushToast(
+                    'error',
+                    e instanceof Error ? e.message : 'Nie udało się wygenerować pliku Excel',
+                  );
+                } finally {
+                  setExportingList(false);
+                }
+              })();
+            }}
+          />
+        ) : isByGroupPrices ? (
 
           <div className="space-y-3">
             <div className="flex flex-wrap items-start justify-between gap-2">

@@ -62,6 +62,7 @@ import {
   filterScheduleForStudentAttendance,
   lessonsPerWeekLabel,
   normalizeLessonsPerWeek,
+  resolveStudentLessonsPerWeek,
   scaleAmountByLessonsPerWeek,
   type LessonsPerWeek,
 } from "@/lib/lessons-per-week";
@@ -801,15 +802,22 @@ export async function generateParentContract(
     normalizeLessonsPerWeek(ctx.lessonsPerWeek) ??
     null;
   if (!lessonsPerWeek && child.group_id) {
-    const membershipFreq = await queryDb<{ lessons_per_week: number | null }>(
-      `SELECT lessons_per_week
-       FROM group_students
-       WHERE child_id = $1 AND group_id = $2 AND left_at IS NULL
-       ORDER BY enrolled_at DESC
+    const membershipFreq = await queryDb<{
+      lessons_per_week: number | null;
+      group_lessons_per_week: number | null;
+    }>(
+      `SELECT gs.lessons_per_week, g.lessons_per_week AS group_lessons_per_week
+       FROM group_students gs
+       JOIN groups g ON g.id = gs.group_id
+       WHERE gs.child_id = $1 AND gs.group_id = $2 AND gs.left_at IS NULL
+       ORDER BY gs.enrolled_at DESC
        LIMIT 1`,
       [child.child_id, child.group_id]
     );
-    lessonsPerWeek = normalizeLessonsPerWeek(membershipFreq.rows[0]?.lessons_per_week);
+    lessonsPerWeek = resolveStudentLessonsPerWeek({
+      studentLessonsPerWeek: membershipFreq.rows[0]?.lessons_per_week,
+      groupLessonsPerWeek: membershipFreq.rows[0]?.group_lessons_per_week,
+    });
   }
   if (!lessonsPerWeek && child.request_id) {
     const freqRes = await queryDb<{ lessons_per_week: number | null }>(
@@ -820,6 +828,13 @@ export async function generateParentContract(
       [child.request_id, schoolId]
     );
     lessonsPerWeek = normalizeLessonsPerWeek(freqRes.rows[0]?.lessons_per_week);
+  }
+  if (!lessonsPerWeek && child.group_id) {
+    const groupFreq = await queryDb<{ lessons_per_week: number | null }>(
+      `SELECT lessons_per_week FROM groups WHERE id = $1 LIMIT 1`,
+      [child.group_id]
+    );
+    lessonsPerWeek = normalizeLessonsPerWeek(groupFreq.rows[0]?.lessons_per_week);
   }
 
   if (excludedRequestIds.length > 0) {

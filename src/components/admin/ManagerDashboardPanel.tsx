@@ -52,13 +52,63 @@ type GroupRosterRow = {
   level: string | null;
   locationName: string;
   teacherName: string;
+  lessonsPerWeek?: 1 | 2 | null;
+  generatedLessonsCount?: number;
   children: Array<{
     childId: string;
     childName: string;
     birthYear: string | null;
+    lessonsPerWeek?: 1 | 2 | null;
     notifyStatus: 'signed' | 'notified' | 'pending';
   }>;
 };
+
+function formatGeneratedLessonsLabel(count: number): string {
+  if (count === 1) return '1 zajęcie';
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) {
+    return `${count} zajęcia`;
+  }
+  return `${count} zajęć`;
+}
+
+function childAttendsOnceWeekly(
+  child: GroupRosterRow['children'][number],
+  groupLessonsPerWeek: number | null | undefined,
+): boolean {
+  if (Number(groupLessonsPerWeek) !== 2) return false;
+  return Number(child.lessonsPerWeek) === 1;
+}
+
+function RosterChildTiles({
+  children,
+}: {
+  children: GroupRosterRow['children'];
+}) {
+  if (children.length === 0) {
+    return <p className="text-sm text-zinc-500">Brak</p>;
+  }
+  return (
+    <ul className="flex flex-wrap gap-1.5">
+      {children.map((child) => {
+        const tile = ROSTER_CHILD_TILE[child.notifyStatus ?? 'pending'];
+        return (
+          <li
+            key={child.childId}
+            title={tile.title}
+            className={`rounded-lg border px-2.5 py-1 text-sm ${tile.className}`}
+          >
+            {child.childName}
+            {child.birthYear ? (
+              <span className="ml-1 text-xs opacity-70">({child.birthYear})</span>
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
 
 const ROSTER_CHILD_TILE: Record<
   GroupRosterRow['children'][number]['notifyStatus'],
@@ -550,14 +600,32 @@ export default function ManagerDashboardPanel({
                     <p className="font-semibold text-[#0f6e56]">{group.groupName}</p>
                   )}
 
-                  <p className="text-xs font-medium text-zinc-500">
-                    {group.children.length}{' '}
-                    {group.children.length === 1
-                      ? 'dziecko'
-                      : group.children.length >= 2 && group.children.length <= 4
-                        ? 'dzieci'
-                        : 'dzieci'}
-                  </p>
+                  <div className="flex flex-col items-end gap-0.5">
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      {Number(group.lessonsPerWeek) === 2 ? (
+                        <span
+                          className="rounded-md border border-emerald-200 bg-white px-1.5 py-0.5 text-[11px] font-semibold text-[#0f6e56]"
+                          title="Zajęcia 2× w tygodniu"
+                        >
+                          2× tydz.
+                        </span>
+                      ) : null}
+                      <p className="text-xs font-medium text-zinc-500">
+                        {group.children.length}{' '}
+                        {group.children.length === 1
+                          ? 'dziecko'
+                          : group.children.length >= 2 && group.children.length <= 4
+                            ? 'dzieci'
+                            : 'dzieci'}
+                      </p>
+                    </div>
+                    <p
+                      className="text-xs font-medium text-zinc-500"
+                      title="Wygenerowane zajęcia w bieżącym roku szkolnym"
+                    >
+                      {formatGeneratedLessonsLabel(Number(group.generatedLessonsCount) || 0)}
+                    </p>
+                  </div>
                 </div>
                 <p className="mt-1 text-sm text-zinc-600">
                   {group.level ? `${group.level} · ` : ''}
@@ -566,24 +634,37 @@ export default function ManagerDashboardPanel({
                 </p>
                 {group.children.length === 0 ? (
                   <p className="mt-2 text-sm text-zinc-500">Brak dzieci w grupie.</p>
-                ) : (
-                  <ul className="mt-2 flex flex-wrap gap-1.5">
-                    {group.children.map((child) => {
-                      const tile = ROSTER_CHILD_TILE[child.notifyStatus ?? 'pending'];
-                      return (
-                        <li
-                          key={child.childId}
-                          title={tile.title}
-                          className={`rounded-lg border px-2.5 py-1 text-sm ${tile.className}`}
-                        >
-                          {child.childName}
-                          {child.birthYear ? (
-                            <span className="ml-1 text-xs opacity-70">({child.birthYear})</span>
-                          ) : null}
-                        </li>
+                ) : Number(group.lessonsPerWeek) === 2 ? (
+                  <div className="mt-2 space-y-2">
+                    {(() => {
+                      const once = group.children.filter((c) =>
+                        childAttendsOnceWeekly(c, group.lessonsPerWeek),
                       );
-                    })}
-                  </ul>
+                      const twice = group.children.filter(
+                        (c) => !childAttendsOnceWeekly(c, group.lessonsPerWeek),
+                      );
+                      return (
+                        <>
+                          <div>
+                            <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                              1× / tydz. ({once.length})
+                            </p>
+                            <RosterChildTiles children={once} />
+                          </div>
+                          <div>
+                            <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                              2× / tydz. ({twice.length})
+                            </p>
+                            <RosterChildTiles children={twice} />
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                ) : (
+                  <div className="mt-2">
+                    <RosterChildTiles children={group.children} />
+                  </div>
                 )}
               </div>
             ))}

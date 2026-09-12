@@ -1619,13 +1619,15 @@ const CONTRACT_CHILD_ID_SQL = `COALESCE(
 )`;
 
 /**
- * Frekwencja dziecka (1|2): aktywne członkostwo (NULL → 2), potem enrollment_requests.
+ * Frekwencja dziecka (1|2): jawne członkostwo, inaczej frekwencja grupy, potem enrollment.
  * Preferuje membership z tym samym school_year_id co umowa.
+ * NULL na członkostwie = dziedziczy `groups.lessons_per_week` (nie „zawsze 2”).
  */
 const CONTRACT_CHILD_LESSONS_PER_WEEK_SQL = `COALESCE(
   (
-    SELECT COALESCE(gs.lessons_per_week, 2)
+    SELECT COALESCE(gs.lessons_per_week, g.lessons_per_week, 1)
     FROM group_students gs
+    JOIN groups g ON g.id = gs.group_id
     WHERE gs.child_id = ${CONTRACT_CHILD_ID_SQL}
       AND gs.left_at IS NULL
     ORDER BY

@@ -267,7 +267,7 @@ model group_students {
   lesson_unit_price Decimal?      @db.Decimal(10, 2)
   monthly_unit_price Decimal?     @db.Decimal(10, 2)
   yearly_unit_price Decimal?      @db.Decimal(10, 2)
-  /// Ile razy w tygodniu dziecko uczęszcza w tej grupie (1 lub 2). NULL = jak pełna frekwencja (2).
+  /// Ile razy w tygodniu dziecko uczęszcza w tej grupie (1 lub 2). NULL = jak frekwencja grupy.
   lessons_per_week  Int?
   /// Checkbox „zmiana grupy” — komunikat w panelu rodzica (bez maila).
   group_change_notice Boolean @default(false)

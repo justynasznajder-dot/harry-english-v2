@@ -483,8 +483,9 @@ export async function PUT(
     );
 
     let futureLessonsTeacherUpdated = 0;
-    if (teacherChanged && nextTeacherId) {
-      // Przyszłe (jeszcze nieodbyte) SCHEDULED — historia COMPLETED / przeszłość zostaje.
+    if (nextTeacherId) {
+      // Zawsze dopnij przyszłe SCHEDULED do lektora grupy (naprawia też wcześniejsze rozjazdy
+      // przy zapisie bez zmiany teacher_id na grupie). COMPLETED / przeszłość zostają.
       const synced = await queryDb<{ id: string }>(
         `UPDATE lessons
          SET teacher_id = $2
@@ -498,13 +499,15 @@ export async function PUT(
       futureLessonsTeacherUpdated = synced.rows.length;
     }
 
+    const message =
+      futureLessonsTeacherUpdated > 0
+        ? teacherChanged
+          ? `Grupa została zaktualizowana. Nowy lektor przypisany do ${futureLessonsTeacherUpdated} przyszłych zajęć.`
+          : `Grupa została zaktualizowana. Zsynchronizowano lektora na ${futureLessonsTeacherUpdated} przyszłych zajęciach.`
+        : "Grupa została zaktualizowana";
+
     return NextResponse.json({
-      message:
-        teacherChanged && nextTeacherId
-          ? futureLessonsTeacherUpdated > 0
-            ? `Grupa została zaktualizowana. Nowy lektor przypisany do ${futureLessonsTeacherUpdated} przyszłych zajęć.`
-            : "Grupa została zaktualizowana. Brak przyszłych zajęć do przepięcia lektora."
-          : "Grupa została zaktualizowana",
+      message,
       futureLessonsTeacherUpdated,
     });
   } catch (error) {

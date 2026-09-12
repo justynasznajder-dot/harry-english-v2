@@ -91,7 +91,7 @@ export async function GET(request: NextRequest) {
        FROM children c
        JOIN users u ON u.id = c.parent_id
        WHERE ${where.join(" AND ")}
-       ORDER BY c.last_name ASC, c.first_name ASC, c.created_at DESC`,
+       ORDER BY c.client_number ASC NULLS LAST, c.last_name ASC, c.first_name ASC`,
       values
     );
 

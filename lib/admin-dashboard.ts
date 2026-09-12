@@ -908,6 +908,11 @@ export type GroupRosterChild = {
   /** Rok urodzenia (YYYY) albo null. */
   birthYear: string | null;
   /**
+   * Frekwencja dziecka w grupie (1 lub 2).
+   * W grupie 2×: null traktujemy jak 2 (oba dni).
+   */
+  lessonsPerWeek: 1 | 2 | null;
+  /**
    * Podgląd etapu powiadomienia:
    * signed — umowa podpisana;
    * notified — mail z grupą/terminem wysłany (lub tryb bez umowy zakończony);
@@ -922,6 +927,10 @@ export type GroupRosterRow = {
   level: string | null;
   locationName: string;
   teacherName: string;
+  /** Frekwencja grupy: 1 lub 2 zajęcia w tygodniu. */
+  lessonsPerWeek: 1 | 2;
+  /** Liczba wygenerowanych zajęć w aktywnym roku szkolnym. */
+  generatedLessonsCount: number;
   children: GroupRosterChild[];
 };
 
@@ -968,12 +977,15 @@ export async function fetchGroupsRoster(schoolId: string): Promise<GroupRosterRo
     group_id: string;
     group_name: string;
     level: string | null;
+    lessons_per_week: number | null;
+    generated_lessons_count: number;
     location_name: string;
     teacher_name: string;
     child_id: string | null;
     child_first_name: string | null;
     child_last_name: string | null;
     child_birth_year: string | null;
+    child_lessons_per_week: number | null;
     child_access_level: string | null;
     enrollment_status: string | null;
     proposed_at: Date | string | null;
@@ -983,6 +995,17 @@ export async function fetchGroupsRoster(schoolId: string): Promise<GroupRosterRo
        g.id AS group_id,
        g.name AS group_name,
        g.level,
+       g.lessons_per_week,
+       COALESCE((
+         SELECT COUNT(*)::int
+         FROM lessons l
+         WHERE l.group_id = g.id
+           AND l.school_year_id = (
+             SELECT sy.id FROM school_years sy
+             WHERE sy.school_id = g.school_id AND sy.active = TRUE
+             LIMIT 1
+           )
+       ), 0) AS generated_lessons_count,
        COALESCE(loc.name, '—') AS location_name,
        CASE
          WHEN t.id IS NULL THEN '—'
@@ -995,6 +1018,7 @@ export async function fetchGroupsRoster(schoolId: string): Promise<GroupRosterRo
          WHEN c.birth_date IS NULL THEN NULL
          ELSE TO_CHAR(c.birth_date, 'YYYY')
        END AS child_birth_year,
+       gs.lessons_per_week AS child_lessons_per_week,
        c.access_level::text AS child_access_level,
        er.status::text AS enrollment_status,
        er.proposed_at,
@@ -1038,6 +1062,8 @@ export async function fetchGroupsRoster(schoolId: string): Promise<GroupRosterRo
         level: row.level,
         locationName: row.location_name,
         teacherName: row.teacher_name.trim() || "—",
+        lessonsPerWeek: Number(row.lessons_per_week) === 2 ? 2 : 1,
+        generatedLessonsCount: Number(row.generated_lessons_count) || 0,
         children: [],
       };
       byGroup.set(row.group_id, group);
@@ -1050,6 +1076,12 @@ export async function fetchGroupsRoster(schoolId: string): Promise<GroupRosterRo
         childId: row.child_id,
         childName,
         birthYear: row.child_birth_year ? String(row.child_birth_year) : null,
+        lessonsPerWeek:
+          Number(row.child_lessons_per_week) === 1
+            ? 1
+            : Number(row.child_lessons_per_week) === 2
+              ? 2
+              : null,
         notifyStatus: resolveRosterNotifyStatus({
           accessLevel: row.child_access_level,
           enrollmentStatus: row.enrollment_status,

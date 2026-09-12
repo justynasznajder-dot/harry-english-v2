@@ -39,6 +39,25 @@ export function lessonsPerWeekLabel(value: LessonsPerWeek): string {
   return value === 1 ? "1× w tygodniu" : "2× w tygodniu";
 }
 
+/**
+ * Frekwencja dziecka w grupie:
+ * - jawne 1|2 na członkostwie (manager oznaczył 1× w grupie 2×),
+ * - inaczej frekwencja grupy,
+ * - ostatecznie 1.
+ */
+export function resolveStudentLessonsPerWeek(opts: {
+  studentLessonsPerWeek?: number | null;
+  groupLessonsPerWeek?: number | null;
+  enrollmentLessonsPerWeek?: number | null;
+}): LessonsPerWeek {
+  return (
+    normalizeLessonsPerWeek(opts.studentLessonsPerWeek) ??
+    normalizeLessonsPerWeek(opts.groupLessonsPerWeek) ??
+    normalizeLessonsPerWeek(opts.enrollmentLessonsPerWeek) ??
+    1
+  );
+}
+
 /** Mnożnik cennika: 2× w tygodniu = ×2 względem stawki bazowej (1×). */
 export function lessonsPerWeekMultiplier(
   lessonsPerWeek: LessonsPerWeek | number | null | undefined
@@ -66,6 +85,7 @@ export function scaleAmountByLessonsPerWeek(
 /**
  * SQL: czy członek grupy (`gs`) powinien być na liście obecności lekcji (`l`).
  * Wymaga aliasów `gs` (group_students), `g` (groups), `l` (lessons).
+ * Dziecko bez jawnej frekwencji dziedziczy `g.lessons_per_week`.
  * Dziecko 1× w grupie 2× tylko na terminie z `once_weekly_day`.
  */
 export function sqlStudentAttendsLesson(
@@ -75,7 +95,7 @@ export function sqlStudentAttendsLesson(
 ): string {
   return `(
     COALESCE(${gAlias}.lessons_per_week, 1) <= 1
-    OR COALESCE(${gsAlias}.lessons_per_week, 2) >= 2
+    OR COALESCE(${gsAlias}.lessons_per_week, ${gAlias}.lessons_per_week, 1) >= 2
     OR ${lAlias}.schedule_template_id IS NULL
     OR EXISTS (
       SELECT 1
@@ -89,7 +109,7 @@ export function sqlStudentAttendsLesson(
 /**
  * SQL: czy wiersz `schedule_templates` (alias `st`) ma być pokazany rodzicowi / w umowie
  * dla frekwencji dziecka. `studentLpwExpr` — np. `gs.lessons_per_week` lub `er.lessons_per_week`.
- * Wymaga aliasu `g` (groups).
+ * Wymaga aliasu `g` (groups). Brak jawnej frekwencji dziecka → frekwencja grupy.
  */
 export function sqlScheduleTemplateVisibleForStudent(
   studentLpwExpr: string,
@@ -98,7 +118,7 @@ export function sqlScheduleTemplateVisibleForStudent(
 ): string {
   return `(
     COALESCE(${gAlias}.lessons_per_week, 1) <= 1
-    OR COALESCE((${studentLpwExpr}), 2) >= 2
+    OR COALESCE((${studentLpwExpr}), ${gAlias}.lessons_per_week, 1) >= 2
     OR ${stAlias}.once_weekly_day = TRUE
   )`;
 }
@@ -106,7 +126,7 @@ export function sqlScheduleTemplateVisibleForStudent(
 /**
  * Dla dziecka 1× w grupie 2× zostawia tylko termin oznaczony jako dzień 1×.
  * Gdy grupa jest 1× — wszystkie terminy (zwykle jeden).
- * Gdy dziecko 2× (lub brak oznaczenia) — wszystkie terminy.
+ * Gdy dziecko bez oznaczenia — jak frekwencja grupy.
  */
 export function filterScheduleForStudentAttendance<
   T extends { once_weekly_day?: boolean | null },
@@ -119,7 +139,10 @@ export function filterScheduleForStudentAttendance<
 ): T[] {
   const groupLpw = normalizeLessonsPerWeek(opts.groupLessonsPerWeek) ?? 1;
   if (groupLpw <= 1) return rows;
-  const studentLpw = normalizeLessonsPerWeek(opts.studentLessonsPerWeek) ?? 2;
+  const studentLpw = resolveStudentLessonsPerWeek({
+    studentLessonsPerWeek: opts.studentLessonsPerWeek,
+    groupLessonsPerWeek: groupLpw,
+  });
   if (studentLpw >= 2) return rows;
   return rows.filter((r) => r.once_weekly_day === true);
 }

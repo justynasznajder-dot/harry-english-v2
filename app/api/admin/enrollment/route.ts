@@ -113,7 +113,100 @@ export async function GET(request: NextRequest) {
                'monthlyUnitPrice', er.monthly_unit_price::text,
                'yearlyUnitPrice', er.yearly_unit_price::text,
                'discountPercent', c.discount_percent::text,
-               'lessonsPerWeek', er.lessons_per_week
+               'lessonsPerWeek', er.lessons_per_week,
+               'groupLessonsPerWeek', (
+                 SELECT g.lessons_per_week
+                 FROM groups g
+                 WHERE g.id = er.proposed_group_id
+                 LIMIT 1
+               ),
+               'studentLessonsPerWeek', (
+                 SELECT gs.lessons_per_week
+                 FROM group_students gs
+                 WHERE c.id IS NOT NULL
+                   AND gs.child_id = c.id
+                   AND gs.left_at IS NULL
+                   AND (
+                     er.proposed_group_id IS NULL
+                     OR gs.group_id = er.proposed_group_id
+                   )
+                 ORDER BY
+                   CASE WHEN gs.group_id = er.proposed_group_id THEN 0 ELSE 1 END,
+                   gs.enrolled_at DESC NULLS LAST
+                 LIMIT 1
+               ),
+               'contractPaymentType', (
+                 SELECT ct.payment_type
+                 FROM contract_children cc
+                 JOIN contracts ct ON ct.id = cc.contract_id
+                 WHERE cc.enrollment_request_id = er.id
+                   AND ct.signed_at IS NOT NULL
+                 ORDER BY ct.signed_at DESC NULLS LAST
+                 LIMIT 1
+               ),
+               'contractAmount', (
+                 SELECT ct.amount::text
+                 FROM contract_children cc
+                 JOIN contracts ct ON ct.id = cc.contract_id
+                 WHERE cc.enrollment_request_id = er.id
+                   AND ct.signed_at IS NOT NULL
+                 ORDER BY ct.signed_at DESC NULLS LAST
+                 LIMIT 1
+               ),
+               'contractBillingExempt', (
+                 SELECT ct.billing_exempt
+                 FROM contract_children cc
+                 JOIN contracts ct ON ct.id = cc.contract_id
+                 WHERE cc.enrollment_request_id = er.id
+                   AND ct.signed_at IS NOT NULL
+                 ORDER BY ct.signed_at DESC NULLS LAST
+                 LIMIT 1
+               ),
+               'contractDiscountLargeFamily', (
+                 SELECT ct.discount_large_family
+                 FROM contract_children cc
+                 JOIN contracts ct ON ct.id = cc.contract_id
+                 WHERE cc.enrollment_request_id = er.id
+                   AND ct.signed_at IS NOT NULL
+                 ORDER BY ct.signed_at DESC NULLS LAST
+                 LIMIT 1
+               ),
+               'contractDiscountSibling', (
+                 SELECT ct.discount_sibling
+                 FROM contract_children cc
+                 JOIN contracts ct ON ct.id = cc.contract_id
+                 WHERE cc.enrollment_request_id = er.id
+                   AND ct.signed_at IS NOT NULL
+                 ORDER BY ct.signed_at DESC NULLS LAST
+                 LIMIT 1
+               ),
+               'contractLessonUnitPrice', (
+                 SELECT cc.lesson_unit_price::text
+                 FROM contract_children cc
+                 JOIN contracts ct ON ct.id = cc.contract_id
+                 WHERE cc.enrollment_request_id = er.id
+                   AND ct.signed_at IS NOT NULL
+                 ORDER BY ct.signed_at DESC NULLS LAST
+                 LIMIT 1
+               ),
+               'contractMonthlyUnitPrice', (
+                 SELECT cc.monthly_unit_price::text
+                 FROM contract_children cc
+                 JOIN contracts ct ON ct.id = cc.contract_id
+                 WHERE cc.enrollment_request_id = er.id
+                   AND ct.signed_at IS NOT NULL
+                 ORDER BY ct.signed_at DESC NULLS LAST
+                 LIMIT 1
+               ),
+               'contractYearlyUnitPrice', (
+                 SELECT cc.yearly_unit_price::text
+                 FROM contract_children cc
+                 JOIN contracts ct ON ct.id = cc.contract_id
+                 WHERE cc.enrollment_request_id = er.id
+                   AND ct.signed_at IS NOT NULL
+                 ORDER BY ct.signed_at DESC NULLS LAST
+                 LIMIT 1
+               )
              )
            ) FILTER (
              WHERE COALESCE(c.id, er.id) IS NOT NULL
