@@ -8,6 +8,11 @@ import {
 import { assertGroupScheduleMutationAllowed } from "@/lib/group-schedule-change";
 import { purgeFutureOrphanScheduledLessons } from "@/lib/lesson-generation";
 import { sqlSchoolTimestampAsTimestamptz } from "@/lib/school-timezone";
+import {
+  findLocationScheduleOverlap,
+  findTeacherScheduleOverlap,
+  formatScheduleOverlapMessage,
+} from "@/lib/schedule-template-conflicts";
 
 async function countFutureGeneratedLessonsForTemplate(
   templateId: string,
@@ -199,43 +204,34 @@ export async function PATCH(
       );
     }
 
-    const teacherConflict = await queryDb<{ name: string; start_time: string }>(
-      `SELECT g.name, st.start_time::text
-       FROM schedule_templates st
-       JOIN groups g ON g.id = st.group_id AND g.school_id = $4
-       WHERE g.teacher_id = (SELECT teacher_id FROM groups WHERE id = $1 AND school_id = $4)
-         AND st.day_of_week = $2
-         AND st.start_time = $3::time
-         AND st.group_id != $1
-       LIMIT 1`,
-      [row.group_id, dayOfWeek, startTime, ctx.schoolId]
-    );
-    if (teacherConflict.rows[0]) {
+    const teacherConflict = await findTeacherScheduleOverlap({
+      schoolId: ctx.schoolId,
+      groupId: row.group_id,
+      dayOfWeek,
+      startTime,
+      durationMin,
+      excludeTemplateId: id,
+    });
+    if (teacherConflict) {
       return NextResponse.json(
-        {
-          message: `Nauczyciel zajęty: ${teacherConflict.rows[0].name}, ${teacherConflict.rows[0].start_time}`,
-        },
-        { status: 409 }
+        { message: formatScheduleOverlapMessage("teacher", teacherConflict) },
+        { status: 409 },
       );
     }
 
-    const roomConflict = await queryDb<{ name: string; start_time: string }>(
-      `SELECT g.name, st.start_time::text
-       FROM schedule_templates st
-       JOIN groups g ON g.id = st.group_id AND g.school_id = $5
-       WHERE st.location_id = $1
-         AND st.day_of_week = $2
-         AND st.start_time = $3::time
-         AND st.group_id != $4
-       LIMIT 1`,
-      [locationId, dayOfWeek, startTime, row.group_id, ctx.schoolId]
-    );
-    if (roomConflict.rows[0]) {
+    const roomConflict = await findLocationScheduleOverlap({
+      schoolId: ctx.schoolId,
+      groupId: row.group_id,
+      locationId,
+      dayOfWeek,
+      startTime,
+      durationMin,
+      excludeTemplateId: id,
+    });
+    if (roomConflict) {
       return NextResponse.json(
-        {
-          message: `Sala zajęta: ${roomConflict.rows[0].name}, ${roomConflict.rows[0].start_time}`,
-        },
-        { status: 409 }
+        { message: formatScheduleOverlapMessage("location", roomConflict) },
+        { status: 409 },
       );
     }
 

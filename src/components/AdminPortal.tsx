@@ -26,7 +26,7 @@ import {
   SCHOOL_TIMEZONE,
   todayYmdSchool,
 } from '@/lib/school-timezone';
-import { defaultLessonsPerWeekForLevel, defaultTargetLessonsPerYear } from '@/lib/lessons-per-week';
+import { defaultLessonsPerWeekForLevel, defaultTargetLessonsPerYear, lessonsPerWeekLabel } from '@/lib/lessons-per-week';
 import {
   classifyLocationForGroupLevel,
   compareGroupsYoungestToOldest,
@@ -40,6 +40,12 @@ import GroupNamingFields, {
   previewAutoGroupName,
 } from '@/src/components/admin/GroupNamingFields';
 import { formatHolidayAppliesToLabel } from '@/lib/holiday-calendar-scope';
+import {
+  groupLosesHolidayCoverage,
+  holidayCoversAllGroups,
+  isNewlyCoveredHolidayDay,
+  type HolidayCoverageInput,
+} from '@/lib/school-holiday-coverage';
 import { isInvoiceManualGenerateDisabled } from '@/lib/invoice-generate-guard';
 import { SCHEDULE_CHANGE_NOTICE_REQUIRED_MESSAGE } from '@/lib/group-schedule-change-notice';
 import {
@@ -186,6 +192,47 @@ function groupScheduleLabel(schedule: string | null | undefined): string {
     return 'BRAK';
   }
   return text;
+}
+
+const POLISH_WEEKDAYS = [
+  'Poniedziałek',
+  'Wtorek',
+  'Środa',
+  'Czwartek',
+  'Piątek',
+  'Sobota',
+  'Niedziela',
+] as const;
+
+type ScheduleSlot = {
+  dayLabel: string;
+  dayOrder: number;
+  time: string;
+  timeMinutes: number;
+};
+
+/** Terminy z etykiety „Poniedziałek 16:00, Czwartek 16:30”. */
+function parseScheduleSlots(schedule: string | null | undefined): ScheduleSlot[] {
+  const label = groupScheduleLabel(schedule);
+  if (label === 'BRAK') return [];
+  const slots: ScheduleSlot[] = [];
+  for (const part of label.split(/,\s*/).map((p) => p.trim()).filter(Boolean)) {
+    const m = part.match(
+      /^(Poniedziałek|Wtorek|Środa|Czwartek|Piątek|Sobota|Niedziela)\s+(\d{1,2}:\d{2})$/i,
+    );
+    if (!m) continue;
+    const dayCanonical =
+      POLISH_WEEKDAYS.find((d) => d.toLowerCase() === m[1].toLowerCase()) ?? m[1];
+    const time = m[2];
+    const [hh, mm] = time.split(':').map(Number);
+    slots.push({
+      dayLabel: dayCanonical,
+      dayOrder: POLISH_WEEKDAYS.findIndex((d) => d === dayCanonical) + 1 || 99,
+      time,
+      timeMinutes: (hh || 0) * 60 + (mm || 0),
+    });
+  }
+  return slots;
 }
 
 /** @deprecated Cennik grupy wyłączony — zostawione na przyszłą automatyzację. */
@@ -758,14 +805,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     email: '',
     password: '',
     phone: '',
-    role: '' as '' | Exclude<AdminPortalUserRole, 'ADMIN'>,
+    pesel: '',
+    idCardNumber: '',
+    role: '' as '' | 'TEACHER' | 'MANAGER' | 'ACCOUNTANT',
   });
-  const [newParentChildren, setNewParentChildren] = useState<Array<{
-    firstName: string;
-    lastName: string;
-    birthDate: string;
-    preferredLocationId: string;
-  }>>([{ firstName: '', lastName: '', birthDate: '', preferredLocationId: '' }]);
   const [newTeacherForm, setNewTeacherForm] = useState({
     firstName: '',
     lastName: '',
@@ -828,6 +871,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       contractId: string;
       childId: string | null;
       childName: string;
+      lessonsPerWeek?: 1 | 2 | null;
       amount: number;
       alreadyInvoiced: boolean;
       manualIssue?: boolean;
@@ -1051,6 +1095,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [locationSettlementRows, setLocationSettlementRows] = useState<LocationSettlementRow[]>([]);
   const [schoolHolidays, setSchoolHolidays] = useState<SchoolHolidayRow[]>([]);
   const [holidayModalOpen, setHolidayModalOpen] = useState(false);
+  const [editingHolidayId, setEditingHolidayId] = useState<string | null>(null);
   const [holidayForm, setHolidayForm] = useState({
     name: '',
     dateFrom: '',
@@ -1065,6 +1110,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
   const [holidayCancelConfirm, setHolidayCancelConfirm] = useState<HolidayConflictLesson[] | null>(
     null,
   );
+  const [holidayRestoreGroupsConfirm, setHolidayRestoreGroupsConfirm] = useState<
+    Array<{ id: string; name: string }> | null
+  >(null);
   const [holidayNotifyPrompt, setHolidayNotifyPrompt] = useState(false);
   const [holidayNotifyDraft, setHolidayNotifyDraft] = useState('');
   const [newYearModalOpen, setNewYearModalOpen] = useState(false);
@@ -1337,30 +1385,41 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       }
       setBusy(true);
       try {
-        const res = await fetch('/api/admin/school-holidays', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: holidayForm.name.trim(),
-            date_from: holidayForm.dateFrom,
-            date_to: holidayForm.dateTo,
-            type: holidayForm.type,
-            group_ids: holidayForm.selectedGroupIds,
-            applies_to_preschool: holidayForm.includePreschool,
-            applies_to_school: holidayForm.includeSchool,
-            notify_parents: opts.notifyParents,
-            parent_message: opts.notifyParents
-              ? opts.parentMessage.trim() || undefined
-              : undefined,
-          }),
-        });
+        const payload = {
+          name: holidayForm.name.trim(),
+          date_from: holidayForm.dateFrom,
+          date_to: holidayForm.dateTo,
+          type: holidayForm.type,
+          group_ids: holidayForm.selectedGroupIds,
+          applies_to_preschool: holidayForm.includePreschool,
+          applies_to_school: holidayForm.includeSchool,
+          notify_parents: opts.notifyParents,
+          parent_message: opts.notifyParents
+            ? opts.parentMessage.trim() || undefined
+            : undefined,
+        };
+        const res = await fetch(
+          editingHolidayId
+            ? `/api/admin/school-holidays/${encodeURIComponent(editingHolidayId)}`
+            : '/api/admin/school-holidays',
+          {
+            method: editingHolidayId ? 'PATCH' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          },
+        );
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.message ?? 'Błąd');
-        pushToast('success', data.message ?? 'Dodano dzień wolny');
+        pushToast(
+          'success',
+          data.message ?? (editingHolidayId ? 'Zaktualizowano dzień wolny' : 'Dodano dzień wolny'),
+        );
         setHolidayCancelConfirm(null);
+        setHolidayRestoreGroupsConfirm(null);
         setHolidayNotifyPrompt(false);
         setHolidayNotifyDraft('');
         setHolidayModalOpen(false);
+        setEditingHolidayId(null);
         setClassesCalRefreshSignal((s) => s + 1);
         await loadSchoolYearData();
       } catch (e) {
@@ -1369,8 +1428,22 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         setBusy(false);
       }
     },
-    [holidayForm, loadSchoolYearData, pushToast],
+    [editingHolidayId, holidayForm, loadSchoolYearData, pushToast],
   );
+
+  const continueHolidaySaveAfterImpact = useCallback(() => {
+    setHolidayCancelConfirm(null);
+    setHolidayRestoreGroupsConfirm(null);
+    if (!holidayForm.notifyParents) {
+      setHolidayNotifyDraft('');
+      setHolidayNotifyPrompt(true);
+      return;
+    }
+    void submitHolidaySave({
+      notifyParents: true,
+      parentMessage: holidayForm.parentMessage,
+    });
+  }, [holidayForm.notifyParents, holidayForm.parentMessage, submitHolidaySave]);
 
   const startHolidaySave = useCallback(async () => {
     if (!holidayForm.name.trim() || !holidayForm.dateFrom || !holidayForm.dateTo) {
@@ -1387,33 +1460,104 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     }
     setBusy(true);
     try {
-      const res = await fetch(
-        `/api/admin/lessons?from=${encodeURIComponent(holidayForm.dateFrom)}&to=${encodeURIComponent(holidayForm.dateTo)}`,
-      );
-      const data = (await res.json().catch(() => ({}))) as {
-        lessons?: Array<{
-          id: string;
-          group_id: string;
-          group_name: string;
-          scheduled_at: string;
-          status: string;
-        }>;
-        message?: string;
-      };
-      if (!res.ok) throw new Error(data.message ?? 'Nie udało się sprawdzić zajęć');
-
       const selected = new Set(holidayForm.selectedGroupIds);
-      const conflicts = (data.lessons ?? [])
-        .filter((l) => l.status === 'SCHEDULED' && selected.has(l.group_id))
-        .map((l) => ({
-          id: l.id,
-          group_id: l.group_id,
-          group_name: l.group_name,
-          scheduled_at: l.scheduled_at,
-        }));
+      let conflicts: HolidayConflictLesson[] = [];
+      let restoreGroups: Array<{ id: string; name: string }> = [];
 
-      if (conflicts.length > 0) {
-        setHolidayCancelConfirm(conflicts);
+      if (editingHolidayId) {
+        const existing = schoolHolidays.find((h) => h.id === editingHolidayId);
+        if (!existing) throw new Error('Nie znaleziono dnia wolnego do edycji');
+
+        const oldCov: HolidayCoverageInput = {
+          dateFrom: existing.date_from,
+          dateTo: existing.date_to,
+          groupIds: existing.group_ids ?? [],
+          appliesToPreschool: Boolean(existing.applies_to_preschool),
+          appliesToSchool: Boolean(existing.applies_to_school),
+        };
+        const nextCov: HolidayCoverageInput = {
+          dateFrom: holidayForm.dateFrom,
+          dateTo: holidayForm.dateTo,
+          groupIds: holidayForm.selectedGroupIds,
+          appliesToPreschool: holidayForm.includePreschool,
+          appliesToSchool: holidayForm.includeSchool,
+        };
+
+        const lessonFrom =
+          existing.date_from < holidayForm.dateFrom ? existing.date_from : holidayForm.dateFrom;
+        const lessonTo =
+          existing.date_to > holidayForm.dateTo ? existing.date_to : holidayForm.dateTo;
+        const res = await fetch(
+          `/api/admin/lessons?from=${encodeURIComponent(lessonFrom)}&to=${encodeURIComponent(lessonTo)}`,
+        );
+        const data = (await res.json().catch(() => ({}))) as {
+          lessons?: Array<{
+            id: string;
+            group_id: string;
+            group_name: string;
+            scheduled_at: string;
+            status: string;
+          }>;
+          message?: string;
+        };
+        if (!res.ok) throw new Error(data.message ?? 'Nie udało się sprawdzić zajęć');
+
+        conflicts = (data.lessons ?? [])
+          .filter((l) => {
+            if (l.status !== 'SCHEDULED') return false;
+            const ymd = String(l.scheduled_at).slice(0, 10);
+            return isNewlyCoveredHolidayDay(l.group_id, ymd, oldCov, nextCov);
+          })
+          .map((l) => ({
+            id: l.id,
+            group_id: l.group_id,
+            group_name: l.group_name,
+            scheduled_at: l.scheduled_at,
+          }));
+
+        const activeGroupIds = groups.filter((g) => g.active).map((g) => g.id);
+        const candidateIds = holidayCoversAllGroups(oldCov)
+          ? activeGroupIds
+          : existing.group_ids?.length
+            ? existing.group_ids
+            : activeGroupIds;
+        const nameById = new Map(groups.map((g) => [g.id, g.name]));
+        restoreGroups = [...new Set(candidateIds)]
+          .filter((gid) => groupLosesHolidayCoverage(gid, oldCov, nextCov))
+          .map((gid) => ({
+            id: gid,
+            name: nameById.get(gid) ?? gid,
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name, 'pl'));
+      } else {
+        const res = await fetch(
+          `/api/admin/lessons?from=${encodeURIComponent(holidayForm.dateFrom)}&to=${encodeURIComponent(holidayForm.dateTo)}`,
+        );
+        const data = (await res.json().catch(() => ({}))) as {
+          lessons?: Array<{
+            id: string;
+            group_id: string;
+            group_name: string;
+            scheduled_at: string;
+            status: string;
+          }>;
+          message?: string;
+        };
+        if (!res.ok) throw new Error(data.message ?? 'Nie udało się sprawdzić zajęć');
+
+        conflicts = (data.lessons ?? [])
+          .filter((l) => l.status === 'SCHEDULED' && selected.has(l.group_id))
+          .map((l) => ({
+            id: l.id,
+            group_id: l.group_id,
+            group_name: l.group_name,
+            scheduled_at: l.scheduled_at,
+          }));
+      }
+
+      if (conflicts.length > 0 || restoreGroups.length > 0) {
+        setHolidayCancelConfirm(conflicts.length > 0 ? conflicts : null);
+        setHolidayRestoreGroupsConfirm(restoreGroups.length > 0 ? restoreGroups : null);
         setBusy(false);
         return;
       }
@@ -1427,7 +1571,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       setBusy(false);
       pushToast('error', e instanceof Error ? e.message : 'Błąd');
     }
-  }, [holidayForm, pushToast, submitHolidaySave]);
+  }, [editingHolidayId, groups, holidayForm, pushToast, schoolHolidays, submitHolidaySave]);
 
   const loadHistoryData = useCallback(async (yearId: string) => {
     if (!yearId) {
@@ -1757,6 +1901,75 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
     }
     void loadYearLessons(yearLessonsYearId);
   }, [activeTab, classesSubTab, yearLessonsYearId, loadYearLessons]);
+
+  /** Lista zajęć: dzień → lektor → godzina (grupy 2×/tyg. pod każdym dniem). */
+  const yearLessonsGrouped = useMemo(() => {
+    type Entry = {
+      group: GroupYearLessonsRow;
+      slot: ScheduleSlot | null;
+      slotKey: string;
+      slotScheduleLabel: string;
+    };
+    type TeacherSection = { teacherKey: string; teacherLabel: string; entries: Entry[] };
+    type DaySection = { dayKey: string; dayLabel: string; teachers: TeacherSection[] };
+
+    const entries: Entry[] = [];
+    for (const g of yearLessonsGroups) {
+      const slots = parseScheduleSlots(g.schedule);
+      if (slots.length === 0) {
+        entries.push({
+          group: g,
+          slot: null,
+          slotKey: `${g.id}:none`,
+          slotScheduleLabel: 'BRAK',
+        });
+      } else {
+        for (const slot of slots) {
+          entries.push({
+            group: g,
+            slot,
+            slotKey: `${g.id}:${slot.dayOrder}:${slot.time}`,
+            slotScheduleLabel: `${slot.dayLabel} ${slot.time}`,
+          });
+        }
+      }
+    }
+
+    entries.sort((a, b) => {
+      const aDay = a.slot?.dayOrder ?? 99;
+      const bDay = b.slot?.dayOrder ?? 99;
+      if (aDay !== bDay) return aDay - bDay;
+      const aTeacher = (a.group.teacher_name ?? '\uffff').localeCompare(
+        b.group.teacher_name ?? '\uffff',
+        'pl',
+      );
+      if (aTeacher !== 0) return aTeacher;
+      const aTime = a.slot?.timeMinutes ?? 9999;
+      const bTime = b.slot?.timeMinutes ?? 9999;
+      if (aTime !== bTime) return aTime - bTime;
+      return a.group.name.localeCompare(b.group.name, 'pl');
+    });
+
+    const days: DaySection[] = [];
+    for (const entry of entries) {
+      const dayKey = entry.slot ? String(entry.slot.dayOrder) : 'none';
+      const dayLabel = entry.slot?.dayLabel ?? 'Bez harmonogramu';
+      let day = days[days.length - 1];
+      if (!day || day.dayKey !== dayKey) {
+        day = { dayKey, dayLabel, teachers: [] };
+        days.push(day);
+      }
+      const teacherKey = entry.group.teacher_name?.trim() || '';
+      const teacherLabel = teacherKey || 'Bez lektora';
+      let teacher = day.teachers[day.teachers.length - 1];
+      if (!teacher || teacher.teacherKey !== teacherKey) {
+        teacher = { teacherKey, teacherLabel, entries: [] };
+        day.teachers.push(teacher);
+      }
+      teacher.entries.push(entry);
+    }
+    return days;
+  }, [yearLessonsGroups]);
 
   useEffect(() => {
     if (activeTab === 'billing') {
@@ -2839,22 +3052,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       pushToast('error', 'Uzupełnij wszystkie pola i wybierz rolę');
       return;
     }
-    const activeLocations = schoolLocations.filter((loc) => loc.active);
-    if (newUser.role === 'PARENT') {
-      if (
-        newParentChildren.length === 0 ||
-        newParentChildren.some((child) => !child.firstName || !child.lastName || !child.birthDate)
-      ) {
-        pushToast('error', 'Dodaj co najmniej jedno dziecko i uzupełnij jego dane');
-        return;
-      }
-      if (
-        activeLocations.length > 0 &&
-        newParentChildren.some((child) => !child.preferredLocationId.trim())
-      ) {
-        pushToast('error', 'Wybierz preferowaną lokalizację dla każdego dziecka');
-        return;
-      }
+    if (newUser.pesel.trim() && newUser.pesel.trim().length !== 11) {
+      pushToast('error', 'PESEL musi mieć 11 cyfr');
+      return;
     }
     setBusy(true);
     try {
@@ -2866,17 +3066,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         password: newUser.password,
         role: newUser.role,
         confirmed: true,
-        accessLevel: newUser.role === 'PARENT' ? 'PENDING' : 'ACTIVE',
+        accessLevel: 'ACTIVE',
         ...(normalizedPhone ? { phone: normalizedPhone } : {}),
+        ...(newUser.pesel.trim() ? { pesel: newUser.pesel.trim() } : {}),
+        ...(newUser.idCardNumber.trim()
+          ? { id_card_number: newUser.idCardNumber.trim() }
+          : {}),
       };
-      if (newUser.role === 'PARENT') {
-        payload.children = newParentChildren.map((child) => ({
-          firstName: child.firstName.trim(),
-          lastName: child.lastName.trim(),
-          birthDate: child.birthDate,
-          preferredLocationId: child.preferredLocationId.trim() || null,
-        }));
-      }
       const res = await fetch('/api/admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2885,30 +3081,28 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message ?? 'Nie udało się dodać użytkownika');
 
-      if (newUser.role === 'PARENT') {
-        pushToast(
-          'success',
-          data.message ??
-            `Utworzono konto rodzica i ${data.enrollmentCount ?? newParentChildren.length} zgłoszeń`,
-        );
-        setEnrollmentFlowSubTab('enrollment');
-        setActiveTab('enrollments');
-      } else {
-        pushToast('success', 'Dodano użytkownika');
-        setOrganizationSubTab('users');
-        setUsersSubTab(
-          newUser.role === 'TEACHER'
-            ? 'teachers'
-            : newUser.role === 'MANAGER'
-              ? 'managers'
-              : newUser.role === 'ACCOUNTANT'
-                ? 'accountants'
-                : 'teachers',
-        );
-      }
+      pushToast('success', 'Dodano użytkownika');
+      setOrganizationSubTab('users');
+      setUsersSubTab(
+        newUser.role === 'TEACHER'
+          ? 'teachers'
+          : newUser.role === 'MANAGER'
+            ? 'managers'
+            : newUser.role === 'ACCOUNTANT'
+              ? 'accountants'
+              : 'teachers',
+      );
 
-      setNewUser({ firstName: '', lastName: '', email: '', password: '', phone: '', role: '' });
-      setNewParentChildren([{ firstName: '', lastName: '', birthDate: '', preferredLocationId: '' }]);
+      setNewUser({
+        firstName: '',
+        lastName: '',
+        email: '',
+        password: '',
+        phone: '',
+        pesel: '',
+        idCardNumber: '',
+        role: '',
+      });
       await loadData();
     } catch (error) {
       pushToast('error', error instanceof Error ? error.message : 'Błąd dodawania');
@@ -3244,107 +3438,43 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               className="rounded-xl border border-emerald-200 px-3 py-2"
               value={newUser.role}
               onChange={(e) =>
-                setNewUser((prev) => ({ ...prev, role: e.target.value as '' | Exclude<AdminPortalUserRole, 'ADMIN'> }))
+                setNewUser((prev) => ({
+                  ...prev,
+                  role: e.target.value as '' | 'TEACHER' | 'MANAGER' | 'ACCOUNTANT',
+                }))
               }
             >
               <option value="">Wybierz rolę</option>
-              <option value="PARENT">Rodzic</option>
               <option value="TEACHER">Nauczyciel</option>
               <option value="MANAGER">Manager</option>
               <option value="ACCOUNTANT">Księgowa</option>
             </select>
+            <input
+              className="rounded-xl border border-emerald-200 px-3 py-2"
+              placeholder="PESEL (opcjonalnie)"
+              inputMode="numeric"
+              maxLength={11}
+              value={newUser.pesel}
+              onChange={(e) =>
+                setNewUser((prev) => ({
+                  ...prev,
+                  pesel: e.target.value.replace(/\D/g, '').slice(0, 11),
+                }))
+              }
+              autoComplete="off"
+            />
+            <input
+              className="rounded-xl border border-emerald-200 px-3 py-2"
+              placeholder="Nr dowodu (opcjonalnie)"
+              value={newUser.idCardNumber}
+              onChange={(e) => setNewUser((prev) => ({ ...prev, idCardNumber: e.target.value }))}
+              autoComplete="off"
+            />
             </div>
-
-            {newUser.role === 'PARENT' && (
-              <div className="rounded-xl border border-emerald-200 p-3">
-                <p className="mb-2 font-semibold text-zinc-800">Dane dziecka</p>
-                <div className="space-y-2">
-                  {newParentChildren.map((child, idx) => (
-                    <div key={idx} className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-5">
-                      <input
-                        className="rounded-xl border border-emerald-200 px-3 py-2"
-                        placeholder="Imię dziecka"
-                        value={child.firstName}
-                        onChange={(e) =>
-                          setNewParentChildren((prev) =>
-                            prev.map((row, i) => (i === idx ? { ...row, firstName: e.target.value } : row))
-                          )
-                        }
-                      />
-                      <input
-                        className="rounded-xl border border-emerald-200 px-3 py-2"
-                        placeholder="Nazwisko dziecka"
-                        value={child.lastName}
-                        onChange={(e) =>
-                          setNewParentChildren((prev) =>
-                            prev.map((row, i) => (i === idx ? { ...row, lastName: e.target.value } : row))
-                          )
-                        }
-                      />
-                      <input
-                        className="rounded-xl border border-emerald-200 px-3 py-2"
-                        type="date"
-                        value={child.birthDate}
-                        onChange={(e) =>
-                          setNewParentChildren((prev) =>
-                            prev.map((row, i) => (i === idx ? { ...row, birthDate: e.target.value } : row))
-                          )
-                        }
-                      />
-                      <select
-                        className="rounded-xl border border-emerald-200 px-3 py-2"
-                        value={child.preferredLocationId}
-                        disabled={locationsLoading}
-                        onChange={(e) =>
-                          setNewParentChildren((prev) =>
-                            prev.map((row, i) =>
-                              i === idx ? { ...row, preferredLocationId: e.target.value } : row,
-                            )
-                          )
-                        }
-                      >
-                        <option value="">
-                          {locationsLoading
-                            ? 'Ładowanie lokalizacji…'
-                            : schoolLocations.filter((loc) => loc.active).length === 0
-                              ? 'Brak lokalizacji'
-                              : 'Preferowana lokalizacja'}
-                        </option>
-                        {schoolLocations
-                          .filter((loc) => loc.active)
-                          .map((loc) => (
-                            <option key={loc.id} value={loc.id}>
-                              {loc.name}
-                            </option>
-                          ))}
-                      </select>
-                      <button
-                        type="button"
-                        className="rounded-xl bg-zinc-200 px-3 py-2"
-                        disabled={newParentChildren.length === 1}
-                        onClick={() =>
-                          setNewParentChildren((prev) => prev.filter((_, i) => i !== idx))
-                        }
-                      >
-                        Usuń
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <button
-                  type="button"
-                  className="mt-3 rounded-xl bg-[#0f6e56] px-3 py-2 text-sm font-semibold text-white"
-                  onClick={() =>
-                    setNewParentChildren((prev) => [
-                      ...prev,
-                      { firstName: '', lastName: '', birthDate: '', preferredLocationId: '' },
-                    ])
-                  }
-                >
-                  + Dodaj kolejne dziecko
-                </button>
-              </div>
-            )}
+            <p className="text-xs text-zinc-500">
+              Kont rodziców nie dodaje się tutaj — rodzic rejestruje się samodzielnie przy zapisie
+              dziecka.
+            </p>
             <div className="flex justify-end">
               <button
                 disabled={busy}
@@ -3512,7 +3642,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
             <h2 className="text-lg font-semibold text-zinc-900">Status zapisów</h2>
             <div className="space-y-3">
               <p className="text-sm text-zinc-600">
-                Zgłoszenie → przypisany do grupy → umowa wysłana → umowa podpisana
+                Zgłoszenie → przypisany do grupy → umowa wysłana → dane uzupełnione — umowa w
+                trakcie generowania / podpisu → umowa podpisana
               </p>
               <StudentPipelinePanel
                 embedded
@@ -3732,6 +3863,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                     g.facilityKind === 'school',
                                 )
                                 .map((g) => g.id);
+                              setEditingHolidayId(null);
                               setHolidayForm({
                                 name: '',
                                 dateFrom: active?.date_from ?? '',
@@ -3744,6 +3876,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                 selectedGroupIds,
                               });
                               setHolidayCancelConfirm(null);
+                              setHolidayRestoreGroupsConfirm(null);
                               setHolidayNotifyPrompt(false);
                               setHolidayNotifyDraft('');
                               setHolidayModalOpen(true);
@@ -3846,22 +3979,82 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                                           {h.date_from} — {h.date_to}
                                         </p>
                                       </div>
-                                      <button
-                                        type="button"
-                                        disabled={busy}
-                                        onClick={() =>
-                                          setDeleteHolidayModal({
-                                            id: h.id,
-                                            name: h.name,
-                                            dateFrom: h.date_from,
-                                            dateTo: h.date_to,
-                                            restoreLessons: true,
-                                          })
-                                        }
-                                        className="self-start rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 sm:self-center"
-                                      >
-                                        Usuń
-                                      </button>
+                                      <div className="flex shrink-0 flex-wrap gap-2 self-start sm:self-center">
+                                        <button
+                                          type="button"
+                                          disabled={busy}
+                                          onClick={() => {
+                                            const coversAll = holidayCoversAllGroups({
+                                              appliesToPreschool: Boolean(h.applies_to_preschool),
+                                              appliesToSchool: Boolean(h.applies_to_school),
+                                              groupIds: h.group_ids ?? [],
+                                            });
+                                            const includePreschool = coversAll
+                                              ? true
+                                              : Boolean(h.applies_to_preschool) ||
+                                                (!h.applies_to_preschool &&
+                                                  !h.applies_to_school &&
+                                                  !(h.group_ids?.length));
+                                            const includeSchool = coversAll
+                                              ? true
+                                              : Boolean(h.applies_to_school) ||
+                                                (!h.applies_to_preschool &&
+                                                  !h.applies_to_school &&
+                                                  !(h.group_ids?.length));
+                                            let selectedGroupIds = (h.group_ids ?? []).filter(Boolean);
+                                            if (coversAll || selectedGroupIds.length === 0) {
+                                              selectedGroupIds = holidayCandidateGroups
+                                                .filter((g) => {
+                                                  if (g.facilityKind === 'preschool')
+                                                    return includePreschool;
+                                                  if (g.facilityKind === 'school') return includeSchool;
+                                                  return false;
+                                                })
+                                                .map((g) => g.id);
+                                            }
+                                            setEditingHolidayId(h.id);
+                                            setHolidayForm({
+                                              name: h.name,
+                                              dateFrom: h.date_from,
+                                              dateTo: h.date_to,
+                                              type: (['HOLIDAY', 'PUBLIC', 'SCHOOL', 'CANCELLED'].includes(
+                                                String(h.type ?? '').toUpperCase(),
+                                              )
+                                                ? String(h.type).toUpperCase()
+                                                : 'HOLIDAY') as typeof holidayForm.type,
+                                              notifyParents: false,
+                                              parentMessage: '',
+                                              includePreschool,
+                                              includeSchool,
+                                              selectedGroupIds,
+                                            });
+                                            setHolidayCancelConfirm(null);
+                                            setHolidayRestoreGroupsConfirm(null);
+                                            setHolidayNotifyPrompt(false);
+                                            setHolidayNotifyDraft('');
+                                            setHolidayModalOpen(true);
+                                          }}
+                                          className="rounded-lg border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-[#0f6e56] hover:bg-emerald-50"
+                                        >
+                                          Edytuj
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={busy}
+                                          onClick={() =>
+                                            setDeleteHolidayModal({
+                                              id: h.id,
+                                              name: h.name,
+                                              dateFrom: h.date_from,
+                                              dateTo: h.date_to,
+                                              restoreLessons: true,
+                                            })
+                                          }
+                                          className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50"
+                                        >
+                                          Usuń
+                                        </button>
+                                      </div>
                                     </li>
                                   );
                                 })}
@@ -7991,13 +8184,17 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
           parentName,
           parentEmail: parent.parentEmail,
           childName: line.childName,
+          lessonsPerWeekLabel:
+            line.lessonsPerWeek === 1 || line.lessonsPerWeek === 2
+              ? lessonsPerWeekLabel(line.lessonsPerWeek)
+              : '',
           amount: line.amount,
           invoiceIssueDate: line.invoiceIssueDate ?? null,
           invoiceStatus: held
             ? line.alreadyInvoiced
               ? 'Wystawiona ręcznie'
               : line.manualIssue
-                ? 'Do wystawienia ręcznie'
+                ? 'Do wystawienia przez księgową'
                 : 'Wstrzymana'
             : line.alreadyInvoiced
               ? 'Wystawiona'
@@ -8140,6 +8337,9 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 <th className="px-3 py-2 text-left">Rodzic</th>
                 <th className="px-3 py-2 text-left">Email</th>
                 <th className="px-3 py-2 text-left">Dziecko</th>
+                <th className="px-3 py-2 text-left" title="Częstotliwość zajęć w tygodniu">
+                  Frekwencja
+                </th>
                 <th className="px-3 py-2 text-left">Kwota</th>
                 {discountable ? (
                   <th className="px-3 py-2 text-left" title="Rabat managera przed wygenerowaniem">
@@ -8196,6 +8396,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                       {idx === 0 ? parent.parentEmail : ''}
                     </td>
                     <td className="px-3 py-2">{line.childName}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-zinc-700">
+                      {line.lessonsPerWeek === 1 || line.lessonsPerWeek === 2
+                        ? lessonsPerWeekLabel(line.lessonsPerWeek)
+                        : '—'}
+                    </td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       {discountable && !line.alreadyInvoiced && discountPct > 0 ? (
                         <span title={`Przed rabatem: ${formatPln(line.amount)}`}>
@@ -8256,9 +8461,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                             ) : null}
                           </span>
                         ) : line.manualIssue ? (
-                          <span className="text-amber-900 font-medium">Do wystawienia ręcznie</span>
+                          <span className="text-amber-900 font-medium">
+                            Do wystawienia przez księgową
+                          </span>
                         ) : (
-                          <span className="text-amber-800">Do wystawienia przez księgową</span>
+                          <span className="text-zinc-600">Wstrzymana</span>
                         )
                       ) : line.alreadyInvoiced ? (
                         <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5 text-emerald-700">
@@ -8337,7 +8544,7 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                               invoiceHoldBusyContractId === line.contractId ||
                               monthlyInvoicesGenerating
                             }
-                            title="Zaznacz, aby wstrzymać fakturę dla tego dziecka tylko w tym miesiącu (trafi do księgowej)"
+                            title="Zaznacz, aby wstrzymać fakturę dla tego dziecka tylko w tym miesiącu (status: Wstrzymana)"
                             onChange={(e) => {
                               if (e.target.checked) {
                                 void setMonthlyInvoiceHold(line.contractId, true);
@@ -8578,10 +8785,11 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     <h4 className="font-semibold text-[#0f6e56]">Faktury wstrzymane</h4>
                     <p className="mt-1 text-sm text-zinc-600">
                       Dzieci wyłączone z automatycznego generowania w tym miesiącu — widać je też w
-                      panelu księgowej. Z listy: <strong>przywróć</strong> wraca do zwykłego
-                      generowania; <strong>wystaw ręcznie</strong> zapisuje zlecenie dla księgowej
-                      (status „Do wystawienia ręcznie”). Po wystawieniu przez księgową status
-                      zmienia się na „Wystawiona ręcznie”.
+                      panelu księgowej. Po zaznaczeniu status to <strong>Wstrzymana</strong>. Z listy:{' '}
+                      <strong>przywróć</strong> wraca do zwykłego generowania;{' '}
+                      <strong>wystaw ręcznie</strong> zmienia status na „Do wystawienia przez
+                      księgową”. Po wystawieniu przez księgową status zmienia się na „Wystawiona
+                      ręcznie”.
                     </p>
                   </div>
                   {renderPreviewTable(
@@ -9377,8 +9585,8 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
               <div className="flex flex-wrap items-end justify-between gap-3">
                 <div>
                   <p className="text-sm text-zinc-600">
-                    Podsumowanie liczby zajęć w roku szkolnym. Rozwiń grupę, aby zobaczyć wszystkie
-                    terminy.
+                    Lista pogrupowana według dnia, lektora i godziny. Rozwiń grupę, aby zobaczyć
+                    wszystkie terminy.
                   </p>
                 </div>
                 <div>
@@ -9440,169 +9648,207 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                     <span className="font-semibold text-zinc-900">{yearLessonsGroups.length}</span>{' '}
                     grupach
                   </div>
-                  <div className="space-y-2">
-                    {yearLessonsGroups.map((g) => {
-                      const expanded = yearLessonsExpandedGroupId === g.id;
-                      return (
-                        <div
-                          key={g.id}
-                          className="overflow-hidden rounded-2xl border border-emerald-100 bg-white shadow-sm"
-                        >
-                          <button
-                            type="button"
-                            className="flex w-full items-start gap-3 px-4 py-4 text-left transition hover:bg-emerald-50/50"
-                            onClick={() =>
-                              setYearLessonsExpandedGroupId(expanded ? null : g.id)
-                            }
-                          >
-                            <span
-                              className={`mt-0.5 shrink-0 text-emerald-700 transition ${expanded ? 'rotate-90' : ''}`}
-                              aria-hidden
-                            >
-                              ▶
-                            </span>
-                            <div className="min-w-0 flex-1 space-y-2">
-                              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                                <p className="text-base font-semibold text-zinc-900">{g.name}</p>
-                                <p className="shrink-0 text-sm font-bold text-[#0f6e56]">
-                                  {g.lessons_count}{' '}
-                                  {g.lessons_count === 1
-                                    ? 'zajęcie'
-                                    : g.lessons_count >= 2 && g.lessons_count <= 4
-                                      ? 'zajęcia'
-                                      : 'zajęć'}
-                                </p>
-                              </div>
-                              <div className="flex flex-wrap gap-2 text-xs">
-                                <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-emerald-800">
-                                  Harmonogram: {groupScheduleLabel(g.schedule)}
-                                </span>
-                                <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-emerald-800">
-                                  Nauczyciel: {g.teacher_name ?? '-'}
-                                </span>
-                                <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-emerald-800">
-                                  Lokalizacja: {g.location_name ?? '-'}
-                                </span>
-                                {g.scheduled_count > 0 ? (
-                                  <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 font-semibold text-emerald-800">
-                                    {g.scheduled_count} zaplanowanych
-                                  </span>
-                                ) : null}
-                                {g.completed_count > 0 ? (
-                                  <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 font-semibold text-zinc-700">
-                                    {g.completed_count} zakończonych
-                                  </span>
-                                ) : null}
-                                {g.cancelled_count > 0 ? (
-                                  <span className="rounded-full bg-rose-100 px-2.5 py-0.5 font-semibold text-rose-800">
-                                    {g.cancelled_count} anulowanych
-                                  </span>
-                                ) : null}
-                                <span
-                                  className={`rounded-full px-2.5 py-0.5 font-semibold ${g.active ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-700'}`}
-                                >
-                                  {g.active ? 'aktywna' : 'nieaktywna'}
-                                </span>
-                              </div>
-                            </div>
-                          </button>
-                          {expanded && (
-                            <div className="border-t border-emerald-100 bg-emerald-50/40 px-4 py-4">
-                              {g.lessons.length === 0 ? (
-                                <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-600">
-                                  Brak zajęć w planie na ten rok szkolny.
-                                </p>
-                              ) : (
-                                <ul className="max-h-96 space-y-1.5 overflow-y-auto text-sm">
-                                  {g.lessons.map((lesson) => {
-                                    const isCompleted = lesson.status === 'COMPLETED';
-                                    const isCancelled = lesson.status === 'CANCELLED';
-                                    const isScheduled = lesson.status === 'SCHEDULED';
-                                    const statusLabel = isCompleted
-                                      ? 'zakończone'
-                                      : isCancelled
-                                        ? 'anulowane'
-                                        : 'zaplanowane';
-                                    const statusClass = isCompleted
-                                      ? 'bg-zinc-200 text-zinc-700'
-                                      : isCancelled
-                                        ? 'bg-rose-100 text-rose-800'
-                                        : 'bg-emerald-100 text-emerald-800';
-                                    const rowClass = isCompleted
-                                      ? 'border-zinc-200 bg-zinc-50'
-                                      : isCancelled
-                                        ? 'border-rose-100 bg-rose-50/50'
-                                        : 'border-emerald-100 bg-emerald-50/40';
-                                    const whenLong = (() => {
-                                      const d = new Date(lesson.scheduled_at);
-                                      if (Number.isNaN(d.getTime())) {
-                                        return formatSchoolDateTime(lesson.scheduled_at);
-                                      }
-                                      return d.toLocaleString('pl-PL', {
-                                        timeZone: SCHOOL_TIMEZONE,
-                                        weekday: 'long',
-                                        year: 'numeric',
-                                        month: 'long',
-                                        day: 'numeric',
-                                        hour: '2-digit',
-                                        minute: '2-digit',
-                                      });
-                                    })();
-                                    const cancelTitle = [
-                                      g.name,
-                                      g.location_name,
-                                      g.teacher_name,
-                                    ]
-                                      .filter((x) => Boolean(x && String(x).trim()))
-                                      .join(' · ');
-                                    return (
-                                      <li
-                                        key={lesson.id}
-                                        className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 ${rowClass}`}
+                  <div className="space-y-6">
+                    {yearLessonsGrouped.map((day) => (
+                      <section key={day.dayKey} className="space-y-3">
+                        <h3 className="border-b border-emerald-100 pb-2 text-2xl font-bold uppercase tracking-wide text-[#0f6e56] sm:text-3xl">
+                          {day.dayLabel}
+                        </h3>
+                        <div className="space-y-4">
+                          {day.teachers.map((teacher) => (
+                            <div key={`${day.dayKey}:${teacher.teacherKey}`} className="space-y-2">
+                              <h4 className="px-1 text-lg font-bold text-zinc-800 sm:text-xl">
+                                {teacher.teacherLabel}
+                              </h4>
+                              <div className="space-y-2">
+                                {teacher.entries.map(({ group: g, slot, slotKey, slotScheduleLabel }) => {
+                                  const expanded = yearLessonsExpandedGroupId === g.id;
+                                  const scheduleMissing = slotScheduleLabel === 'BRAK';
+                                  const scheduleTimeLabel = scheduleMissing
+                                    ? 'BRAK'
+                                    : (slot?.time ?? slotScheduleLabel);
+                                  const effectiveLessons = g.scheduled_count + g.completed_count;
+                                  const missingLessons =
+                                    g.active && (scheduleMissing || effectiveLessons === 0);
+                                  return (
+                                    <div
+                                      key={slotKey}
+                                      className={`overflow-hidden rounded-2xl border shadow-sm ${
+                                        missingLessons
+                                          ? 'border-red-300 bg-red-50/40'
+                                          : 'border-emerald-100 bg-white'
+                                      }`}
+                                    >
+                                      <button
+                                        type="button"
+                                        className={`flex w-full items-start gap-3 px-4 py-4 text-left transition ${
+                                          missingLessons
+                                            ? 'hover:bg-red-50'
+                                            : 'hover:bg-emerald-50/50'
+                                        }`}
+                                        onClick={() =>
+                                          setYearLessonsExpandedGroupId(expanded ? null : g.id)
+                                        }
                                       >
                                         <span
-                                          className={`font-medium ${isCompleted || isCancelled ? 'text-zinc-600' : 'text-zinc-900'}`}
+                                          className={`mt-0.5 shrink-0 transition ${
+                                            missingLessons ? 'text-red-600' : 'text-emerald-700'
+                                          } ${expanded ? 'rotate-90' : ''}`}
+                                          aria-hidden
                                         >
-                                          {formatSchoolDateTime(lesson.scheduled_at)}
-                                          {lesson.duration_min ? (
-                                            <span className="ml-2 font-normal text-zinc-500">
-                                              · {lesson.duration_min} min
+                                          ▶
+                                        </span>
+                                        <div className="min-w-0 flex-1">
+                                          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                                            <p
+                                              className={`text-base font-semibold sm:text-lg ${
+                                                missingLessons ? 'text-red-900' : 'text-zinc-900'
+                                              }`}
+                                            >
+                                              {g.name}
+                                            </p>
+                                            <p
+                                              className={`shrink-0 text-xl font-bold tabular-nums sm:text-2xl ${
+                                                scheduleMissing
+                                                  ? 'text-red-700'
+                                                  : missingLessons
+                                                    ? 'text-red-700'
+                                                    : 'text-[#0f6e56]'
+                                              }`}
+                                            >
+                                              {scheduleTimeLabel === 'BRAK' ? '—' : scheduleTimeLabel}
+                                            </p>
+                                            <p
+                                              className={`ml-auto shrink-0 text-sm font-bold ${
+                                                missingLessons ? 'text-red-700' : 'text-[#0f6e56]'
+                                              }`}
+                                            >
+                                              {g.lessons_count}{' '}
+                                              {g.lessons_count === 1
+                                                ? 'zajęcie'
+                                                : g.lessons_count >= 2 && g.lessons_count <= 4
+                                                  ? 'zajęcia'
+                                                  : 'zajęć'}
+                                            </p>
+                                          </div>
+                                          {missingLessons ? (
+                                            <span className="mt-2 inline-flex rounded-full bg-red-600 px-3 py-1 text-sm font-semibold text-white">
+                                              {scheduleMissing
+                                                ? 'Brak harmonogramu'
+                                                : 'Brakujące zajęcia'}
                                             </span>
                                           ) : null}
-                                        </span>
-                                        <span className="flex flex-wrap items-center gap-2">
-                                          <span
-                                            className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusClass}`}
-                                          >
-                                            {statusLabel}
-                                          </span>
-                                          {isScheduled ? (
-                                            <button
-                                              type="button"
-                                              className="rounded-lg border border-rose-200 bg-white px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50"
-                                              onClick={() => {
-                                                setYearLessonsCancelParentMessage('');
-                                                setYearLessonsCancelModal({
-                                                  id: lesson.id,
-                                                  title: cancelTitle || g.name,
-                                                  whenLabel: whenLong,
-                                                });
-                                              }}
-                                            >
-                                              Anuluj
-                                            </button>
-                                          ) : null}
-                                        </span>
-                                      </li>
-                                    );
-                                  })}
-                                </ul>
-                              )}
+                                        </div>
+                                      </button>
+                                      {expanded && (
+                                        <div
+                                          className={`border-t px-4 py-4 ${
+                                            missingLessons
+                                              ? 'border-red-200 bg-red-50/50'
+                                              : 'border-emerald-100 bg-emerald-50/40'
+                                          }`}
+                                        >
+                                          {g.lessons.length === 0 ? (
+                                            <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-600">
+                                              Brak zajęć w planie na ten rok szkolny.
+                                            </p>
+                                          ) : (
+                                            <ul className="max-h-96 space-y-1.5 overflow-y-auto text-sm">
+                                              {g.lessons.map((lesson) => {
+                                                const isCompleted = lesson.status === 'COMPLETED';
+                                                const isCancelled = lesson.status === 'CANCELLED';
+                                                const isScheduled = lesson.status === 'SCHEDULED';
+                                                const statusLabel = isCompleted
+                                                  ? 'zakończone'
+                                                  : isCancelled
+                                                    ? 'anulowane'
+                                                    : 'zaplanowane';
+                                                const statusClass = isCompleted
+                                                  ? 'bg-zinc-200 text-zinc-700'
+                                                  : isCancelled
+                                                    ? 'bg-rose-100 text-rose-800'
+                                                    : 'bg-emerald-100 text-emerald-800';
+                                                const rowClass = isCompleted
+                                                  ? 'border-zinc-200 bg-zinc-50'
+                                                  : isCancelled
+                                                    ? 'border-rose-100 bg-rose-50/50'
+                                                    : 'border-emerald-100 bg-emerald-50/40';
+                                                const whenLong = (() => {
+                                                  const d = new Date(lesson.scheduled_at);
+                                                  if (Number.isNaN(d.getTime())) {
+                                                    return formatSchoolDateTime(lesson.scheduled_at);
+                                                  }
+                                                  return d.toLocaleString('pl-PL', {
+                                                    timeZone: SCHOOL_TIMEZONE,
+                                                    weekday: 'long',
+                                                    year: 'numeric',
+                                                    month: 'long',
+                                                    day: 'numeric',
+                                                    hour: '2-digit',
+                                                    minute: '2-digit',
+                                                  });
+                                                })();
+                                                const cancelTitle = [
+                                                  g.name,
+                                                  g.location_name,
+                                                  g.teacher_name,
+                                                ]
+                                                  .filter((x) => Boolean(x && String(x).trim()))
+                                                  .join(' · ');
+                                                return (
+                                                  <li
+                                                    key={lesson.id}
+                                                    className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 ${rowClass}`}
+                                                  >
+                                                    <span
+                                                      className={`font-medium ${isCompleted || isCancelled ? 'text-zinc-600' : 'text-zinc-900'}`}
+                                                    >
+                                                      {formatSchoolDateTime(lesson.scheduled_at)}
+                                                      {lesson.duration_min ? (
+                                                        <span className="ml-2 font-normal text-zinc-500">
+                                                          · {lesson.duration_min} min
+                                                        </span>
+                                                      ) : null}
+                                                    </span>
+                                                    <span className="flex flex-wrap items-center gap-2">
+                                                      <span
+                                                        className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusClass}`}
+                                                      >
+                                                        {statusLabel}
+                                                      </span>
+                                                      {isScheduled ? (
+                                                        <button
+                                                          type="button"
+                                                          className="rounded-lg border border-rose-200 bg-white px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                                                          onClick={() => {
+                                                            setYearLessonsCancelParentMessage('');
+                                                            setYearLessonsCancelModal({
+                                                              id: lesson.id,
+                                                              title: cancelTitle || g.name,
+                                                              whenLabel: whenLong,
+                                                            });
+                                                          }}
+                                                        >
+                                                          Anuluj
+                                                        </button>
+                                                      ) : null}
+                                                    </span>
+                                                  </li>
+                                                );
+                                              })}
+                                            </ul>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             </div>
-                          )}
+                          ))}
                         </div>
-                      );
-                    })}
+                      </section>
+                    ))}
                   </div>
                 </>
               )}
@@ -10568,11 +10814,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
           <div className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
             <div className="shrink-0 border-b border-emerald-100 px-5 py-4">
-              <h3 className="text-lg font-semibold">Dzień wolny</h3>
+              <h3 className="text-lg font-semibold">
+                {editingHolidayId ? 'Edytuj dzień wolny' : 'Dzień wolny'}
+              </h3>
               <p className="mt-1 text-sm text-zinc-500">
-                Zaplanowane zajęcia w wybranych grupach zostaną usunięte, a brakująca liczba zajęć
-                zostanie uzupełniona kolejnymi terminami. Domyślnie rodzice nie dostaną
-                powiadomienia — możesz je wysłać poniżej.
+                {editingHolidayId
+                  ? 'Zmiana dat lub zakresu grup może usunąć zaplanowane zajęcia albo uzupełnić kalendarz w zwolnionych dniach. Liczba zajęć w grupach zostanie utrzymana.'
+                  : 'Zaplanowane zajęcia w wybranych grupach zostaną usunięte, a brakująca liczba zajęć zostanie uzupełniona kolejnymi terminami. Domyślnie rodzice nie dostaną powiadomienia — możesz je wysłać poniżej.'}
               </p>
             </div>
             <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
@@ -10773,8 +11021,10 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 className="rounded-xl bg-zinc-200 px-4 py-2"
                 onClick={() => {
                   setHolidayCancelConfirm(null);
+                  setHolidayRestoreGroupsConfirm(null);
                   setHolidayNotifyPrompt(false);
                   setHolidayNotifyDraft('');
+                  setEditingHolidayId(null);
                   setHolidayModalOpen(false);
                 }}
               >
@@ -10786,35 +11036,73 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 className="rounded-xl bg-[#0f6e56] px-4 py-2 text-white disabled:opacity-50"
                 onClick={() => void startHolidaySave()}
               >
-                Zapisz
+                {editingHolidayId ? 'Zapisz zmiany' : 'Zapisz'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {holidayCancelConfirm && (
+      {(holidayCancelConfirm || holidayRestoreGroupsConfirm) && (
         <div className="fixed inset-0 z-[60] grid place-items-center bg-black/50 p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
-            <h3 className="text-lg font-semibold text-zinc-900">Usunąć zaplanowane zajęcia?</h3>
+            <h3 className="text-lg font-semibold text-zinc-900">
+              {holidayCancelConfirm && holidayRestoreGroupsConfirm
+                ? 'Potwierdź zmiany dnia wolnego'
+                : holidayCancelConfirm
+                  ? 'Usunąć zaplanowane zajęcia?'
+                  : 'Uzupełnić zajęcia w grupach?'}
+            </h3>
             <p className="mt-2 text-sm text-zinc-600">
-              W wybranym okresie są zaplanowane zajęcia. Potwierdź, czy mają zostać usunięte
-              razem z dodaniem dnia wolnego — system uzupełni potem brakujące terminy w grupach.
+              {editingHolidayId
+                ? 'Po zapisaniu system utrzyma zadeklarowaną liczbę zajęć w grupach (usuwa konflikty i uzupełnia zwolnione dni z harmonogramu).'
+                : 'W wybranym okresie są zaplanowane zajęcia. Potwierdź, czy mają zostać usunięte razem z dodaniem dnia wolnego — system uzupełni potem brakujące terminy w grupach.'}
             </p>
-            <ul className="mt-4 max-h-64 space-y-2 overflow-y-auto rounded-xl border border-emerald-100 bg-emerald-50/40 p-3 text-sm text-zinc-800">
-              {holidayCancelConfirm.map((l) => (
-                <li key={l.id} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-                  <span className="font-semibold">{l.group_name}</span>
-                  <span className="text-zinc-600">{formatHolidayLessonWhen(l.scheduled_at)}</span>
-                </li>
-              ))}
-            </ul>
+            {holidayCancelConfirm && holidayCancelConfirm.length > 0 ? (
+              <div className="mt-4">
+                <p className="text-sm font-semibold text-zinc-800">
+                  Zajęcia do usunięcia ({holidayCancelConfirm.length})
+                </p>
+                <ul className="mt-2 max-h-48 space-y-2 overflow-y-auto rounded-xl border border-emerald-100 bg-emerald-50/40 p-3 text-sm text-zinc-800">
+                  {holidayCancelConfirm.map((l) => (
+                    <li
+                      key={l.id}
+                      className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5"
+                    >
+                      <span className="font-semibold">{l.group_name}</span>
+                      <span className="text-zinc-600">{formatHolidayLessonWhen(l.scheduled_at)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {holidayRestoreGroupsConfirm && holidayRestoreGroupsConfirm.length > 0 ? (
+              <div className="mt-4">
+                <p className="text-sm font-semibold text-zinc-800">
+                  Grupy do uzupełnienia ({holidayRestoreGroupsConfirm.length})
+                </p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  W zwolnionych dniach system doda zajęcia z harmonogramu i usunie tyle samo z końca
+                  kalendarza.
+                </p>
+                <ul className="mt-2 max-h-40 space-y-1.5 overflow-y-auto rounded-xl border border-amber-100 bg-amber-50/50 p-3 text-sm text-zinc-800">
+                  {holidayRestoreGroupsConfirm.map((g) => (
+                    <li key={g.id} className="font-semibold">
+                      {g.name}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             <div className="mt-5 flex flex-wrap justify-end gap-2">
               <button
                 type="button"
                 className="rounded-xl bg-zinc-200 px-4 py-2 text-sm font-semibold"
                 disabled={busy}
-                onClick={() => setHolidayCancelConfirm(null)}
+                onClick={() => {
+                  setHolidayCancelConfirm(null);
+                  setHolidayRestoreGroupsConfirm(null);
+                }}
               >
                 Wróć
               </button>
@@ -10822,20 +11110,13 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
                 type="button"
                 className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
                 disabled={busy}
-                onClick={() => {
-                  setHolidayCancelConfirm(null);
-                  if (!holidayForm.notifyParents) {
-                    setHolidayNotifyDraft('');
-                    setHolidayNotifyPrompt(true);
-                    return;
-                  }
-                  void submitHolidaySave({
-                    notifyParents: true,
-                    parentMessage: holidayForm.parentMessage,
-                  });
-                }}
+                onClick={() => continueHolidaySaveAfterImpact()}
               >
-                Tak, usuń zajęcia
+                {holidayCancelConfirm && holidayRestoreGroupsConfirm
+                  ? 'Tak, zastosuj zmiany'
+                  : holidayCancelConfirm
+                    ? 'Tak, usuń zajęcia'
+                    : 'Tak, uzupełnij grupy'}
               </button>
             </div>
           </div>

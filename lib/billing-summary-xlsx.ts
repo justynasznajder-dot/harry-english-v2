@@ -4,6 +4,7 @@ export type BillingSummaryExportLine = {
   parentName: string;
   parentEmail: string;
   childName: string;
+  lessonsPerWeekLabel?: string;
   amount: number;
   invoiceIssueDate: string | null;
   invoiceStatus: string;
@@ -48,6 +49,7 @@ export async function downloadInvoicePreviewXlsx(input: {
     Rodzic: row.parentName,
     Email: row.parentEmail,
     Dziecko: row.childName,
+    Frekwencja: row.lessonsPerWeekLabel ?? "",
     Kwota: formatAmount(row.amount),
     "Data wystawienia": row.invoiceIssueDate
       ? (() => {

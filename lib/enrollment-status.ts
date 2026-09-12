@@ -38,6 +38,10 @@ export const ENROLLMENT_STATUS_LABELS: Record<EnrollmentStatus, string> = {
 export const ENROLLMENT_STATUS_BADGE_BASE =
   "inline-flex h-6 shrink-0 items-center rounded-full px-2.5 text-xs font-semibold leading-none whitespace-nowrap";
 
+/** Badge z zawijaniem (długie etykiety na liście zgłoszeń). Bez nowrap/h-6 — Tailwind nie gwarantuje nadpisania kolejnością klas w HTML. */
+export const ENROLLMENT_STATUS_BADGE_WRAP =
+  "inline-flex h-auto min-h-6 shrink-0 items-center rounded-lg px-2.5 py-1 text-[10px] font-semibold leading-snug whitespace-normal text-center";
+
 export const ENROLLMENT_STATUS_COLORS: Record<EnrollmentStatus, string> = {
   NEW: "bg-emerald-50 text-emerald-950 ring-1 ring-inset ring-emerald-200",
   PROPOSED: "bg-sky-100 text-sky-800",
@@ -86,12 +90,13 @@ export function resolveEnrollmentListBadge(child: {
 
 /**
  * Uproszczony etap listy uczniów:
- * Zgłoszenie → przypisany do grupy (Zapisz) → umowa wysłana (mail z grupą) → umowa podpisana
+ * Zgłoszenie → przypisany do grupy → umowa wysłana → dane uzupełnione → umowa podpisana
  */
 export const STUDENT_LIST_PIPELINE_STAGES = [
   "Zgłoszenie",
   "Przypisany do grupy",
   "Umowa wysłana",
+  "Dane uzupełnione — umowa w trakcie generowania / podpisu",
   "Umowa podpisana",
 ] as const;
 
@@ -135,14 +140,19 @@ export function resolveStudentListPipelineStage(input: {
   ) {
     return "Umowa podpisana";
   }
-  // Mail z grupą wysłany (ACCEPTED/PROPOSED) albo dalszy flow umowy.
+  // Rodzic uzupełnił dane / umowa wygenerowana — czeka na podpis.
   if (
-    level === "ACCEPTED" ||
-    level === "PROPOSED" ||
-    level === "NEGOTIATING" ||
     level === "AWAITING_CONTRACT" ||
     level === "CONTRACT_READY" ||
     (contract.length > 0 && contract !== "SIGNED")
+  ) {
+    return "Dane uzupełnione — umowa w trakcie generowania / podpisu";
+  }
+  // Mail z grupą / loginem wysłany — rodzic może uzupełnić dane do umowy.
+  if (
+    level === "ACCEPTED" ||
+    level === "PROPOSED" ||
+    level === "NEGOTIATING"
   ) {
     return "Umowa wysłana";
   }

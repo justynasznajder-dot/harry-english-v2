@@ -859,8 +859,8 @@ export default function AccountantPortal() {
             <h3 className="text-base font-bold text-[#1e3a4c]">Faktury wstrzymane</h3>
             <p className="mt-1 text-sm text-zinc-600">
               Dzieci wyłączone przez managera z automatycznego generowania w miesiącu{' '}
-              {invoiceMonth}. Pozycje ze statusem „Do wystawienia przez księgową” czekają na
-              ręczne wystawienie.
+              {invoiceMonth}. Status <strong>Wstrzymana</strong> — tylko informacja;{' '}
+              <strong>Do wystawienia przez księgową</strong> — czekają na ręczne wystawienie.
             </p>
 
             {heldLoading ? (
@@ -901,15 +901,17 @@ export default function AccountantPortal() {
                             {line.alreadyInvoiced ? (
                               <span className="text-emerald-700">Wystawiona ręcznie</span>
                             ) : line.manualIssue ? (
-                              <span className="text-amber-900 font-medium">Do wystawienia ręcznie</span>
+                              <span className="text-amber-900 font-medium">
+                                Do wystawienia przez księgową
+                              </span>
                             ) : (
-                              <span className="text-amber-800">Do wystawienia przez księgową</span>
+                              <span className="text-zinc-600">Wstrzymana</span>
                             )}
                           </td>
                           <td className="px-2 py-2">
                             {line.alreadyInvoiced ? (
                               <span className="text-xs text-zinc-500">Już wystawiona</span>
-                            ) : (
+                            ) : line.manualIssue ? (
                               <button
                                 type="button"
                                 disabled={heldIssuingContractId === line.contractId}
@@ -920,6 +922,8 @@ export default function AccountantPortal() {
                                   ? 'Wystawianie…'
                                   : 'Wystaw fakturę ręcznie'}
                               </button>
+                            ) : (
+                              <span className="text-xs text-zinc-500">Czeka na zlecenie managera</span>
                             )}
                           </td>
                         </tr>

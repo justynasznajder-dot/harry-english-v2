@@ -35,6 +35,7 @@ import {
   buildSaleInvoiceNumber,
 } from "@/lib/client-numbers";
 import { isInvoiceGenerationAllowed } from "@/lib/invoice-generate-guard";
+import { normalizeLessonsPerWeek, type LessonsPerWeek } from "@/lib/lessons-per-week";
 import {
   applyInvoiceDiscountPercent,
   clampInvoiceDiscountPercent,
@@ -1611,10 +1612,45 @@ export type MonthlyInvoiceSchoolResult = {
   errors: Array<{ contractId: string; message: string }>;
 };
 
+/** Id dziecka z umowy (główne lub pierwsze z contract_children). */
+const CONTRACT_CHILD_ID_SQL = `COALESCE(
+  c.child_id,
+  (SELECT cc.child_id FROM contract_children cc WHERE cc.contract_id = c.id ORDER BY cc.sort_order ASC LIMIT 1)
+)`;
+
+/**
+ * Frekwencja dziecka (1|2): aktywne członkostwo (NULL → 2), potem enrollment_requests.
+ * Preferuje membership z tym samym school_year_id co umowa.
+ */
+const CONTRACT_CHILD_LESSONS_PER_WEEK_SQL = `COALESCE(
+  (
+    SELECT COALESCE(gs.lessons_per_week, 2)
+    FROM group_students gs
+    WHERE gs.child_id = ${CONTRACT_CHILD_ID_SQL}
+      AND gs.left_at IS NULL
+    ORDER BY
+      CASE
+        WHEN c.school_year_id IS NOT NULL AND gs.school_year_id = c.school_year_id THEN 0
+        ELSE 1
+      END,
+      gs.enrolled_at DESC NULLS LAST
+    LIMIT 1
+  ),
+  (
+    SELECT er.lessons_per_week
+    FROM children ch_lpw
+    JOIN enrollment_requests er ON er.id = ch_lpw.request_id
+    WHERE ch_lpw.id = ${CONTRACT_CHILD_ID_SQL}
+    LIMIT 1
+  )
+)`;
+
 export type MonthlyInvoicePreviewLine = {
   contractId: string;
   childId: string | null;
   childName: string;
+  /** Frekwencja dziecka: 1× lub 2× w tygodniu (null gdy nieznana). */
+  lessonsPerWeek: LessonsPerWeek | null;
   amount: number;
   alreadyInvoiced: boolean;
   /** true = admin zlecił wystawienie ręczne (hold z manual_issue). */
@@ -1825,6 +1861,7 @@ export async function previewYearlyInvoicesForSchool(
     child_id: string | null;
     child_first_name: string | null;
     child_last_name: string | null;
+    lessons_per_week: number | null;
     already_invoiced: boolean;
     invoice_issue_date: string | null;
     invoice_id: string | null;
@@ -1838,22 +1875,17 @@ export async function previewYearlyInvoicesForSchool(
        u.email AS parent_email,
        c.amount::text AS amount,
        c.signed_at,
-       COALESCE(
-         c.child_id,
-         (SELECT cc.child_id FROM contract_children cc WHERE cc.contract_id = c.id ORDER BY cc.sort_order ASC LIMIT 1)
-       ) AS child_id,
+       ${CONTRACT_CHILD_ID_SQL} AS child_id,
        ch.first_name AS child_first_name,
        ch.last_name AS child_last_name,
+       (${CONTRACT_CHILD_LESSONS_PER_WEEK_SQL}) AS lessons_per_week,
        (${alreadySql}) AS already_invoiced,
        (${issueDateSql}) AS invoice_issue_date,
        (${invoiceIdSql}) AS invoice_id,
        (${invoiceHasPdfSql}) AS has_pdf
      FROM contracts c
      JOIN users u ON u.id = c.parent_id
-     LEFT JOIN children ch ON ch.id = COALESCE(
-       c.child_id,
-       (SELECT cc.child_id FROM contract_children cc WHERE cc.contract_id = c.id ORDER BY cc.sort_order ASC LIMIT 1)
-     )
+     LEFT JOIN children ch ON ch.id = ${CONTRACT_CHILD_ID_SQL}
      WHERE c.school_id = $1
        AND c.payment_type = 'YEARLY'
        AND c.status = 'SIGNED'
@@ -1904,6 +1936,7 @@ export async function previewYearlyInvoicesForSchool(
       contractId: row.contract_id,
       childId: row.child_id,
       childName,
+      lessonsPerWeek: normalizeLessonsPerWeek(row.lessons_per_week),
       amount,
       alreadyInvoiced: Boolean(row.already_invoiced),
       signedAt,
@@ -2167,6 +2200,7 @@ export async function previewMonthlyInvoicesForSchool(
     invoice_issue_date: string | null;
     invoice_id: string | null;
     has_pdf: boolean;
+    lessons_per_week: number | null;
   }>(
     `SELECT
        c.id AS contract_id,
@@ -2176,12 +2210,10 @@ export async function previewMonthlyInvoicesForSchool(
        u.email AS parent_email,
        c.amount::text AS amount,
        c.signed_at,
-       COALESCE(
-         c.child_id,
-         (SELECT cc.child_id FROM contract_children cc WHERE cc.contract_id = c.id ORDER BY cc.sort_order ASC LIMIT 1)
-       ) AS child_id,
+       ${CONTRACT_CHILD_ID_SQL} AS child_id,
        ch.first_name AS child_first_name,
        ch.last_name AS child_last_name,
+       (${CONTRACT_CHILD_LESSONS_PER_WEEK_SQL}) AS lessons_per_week,
        (${alreadySql}) AS already_invoiced,
        EXISTS (
          SELECT 1 FROM school_invoice_holds h
@@ -2201,10 +2233,7 @@ export async function previewMonthlyInvoicesForSchool(
        (${invoiceHasPdfSql}) AS has_pdf
      FROM contracts c
      JOIN users u ON u.id = c.parent_id
-     LEFT JOIN children ch ON ch.id = COALESCE(
-       c.child_id,
-       (SELECT cc.child_id FROM contract_children cc WHERE cc.contract_id = c.id ORDER BY cc.sort_order ASC LIMIT 1)
-     )
+     LEFT JOIN children ch ON ch.id = ${CONTRACT_CHILD_ID_SQL}
      WHERE c.school_id = $1
        AND c.payment_type = 'MONTHLY'
        AND c.status = 'SIGNED'
@@ -2264,6 +2293,7 @@ export async function previewMonthlyInvoicesForSchool(
       contractId: row.contract_id,
       childId: row.child_id,
       childName,
+      lessonsPerWeek: normalizeLessonsPerWeek(row.lessons_per_week),
       amount,
       alreadyInvoiced: Boolean(row.already_invoiced),
       manualIssue: Boolean(row.manual_issue),

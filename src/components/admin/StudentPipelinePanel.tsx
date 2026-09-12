@@ -32,8 +32,12 @@ const STAGE_ORDER: Record<StudentListPipelineStage, number> = {
   Zgłoszenie: 0,
   'Przypisany do grupy': 1,
   'Umowa wysłana': 2,
-  'Umowa podpisana': 3,
+  'Dane uzupełnione — umowa w trakcie generowania / podpisu': 3,
+  'Umowa podpisana': 4,
 };
+
+const DATA_FILLED_STAGE =
+  'Dane uzupełnione — umowa w trakcie generowania / podpisu' as const;
 
 function PipelineBadge({
   value,
@@ -84,7 +88,7 @@ function PipelineTable({
   return (
     <div className="overflow-x-auto">
       <table
-        className={`text-left text-xs sm:text-sm ${complimentaryMode ? 'min-w-[520px]' : 'min-w-[820px]'}`}
+        className={`text-left text-xs sm:text-sm ${complimentaryMode ? 'min-w-[520px]' : 'min-w-[980px]'}`}
       >
         <thead className="bg-zinc-50 text-zinc-700">
           <tr>
@@ -95,6 +99,9 @@ function PipelineTable({
             {!complimentaryMode && (
               <>
                 <th className="px-2 py-2 font-semibold">Umowa wysłana</th>
+                <th className="px-2 py-2 font-semibold" title={DATA_FILLED_STAGE}>
+                  Dane uzupełnione
+                </th>
                 <th className="px-2 py-2 font-semibold">Umowa podpisana</th>
               </>
             )}
@@ -114,6 +121,12 @@ function PipelineTable({
               !complimentaryMode &&
               (current === 'Umowa wysłana' ||
                 STAGE_ORDER[current] > STAGE_ORDER['Umowa wysłana'])
+                ? 'Tak'
+                : null;
+            const dataFilledLabel =
+              !complimentaryMode &&
+              (current === DATA_FILLED_STAGE ||
+                STAGE_ORDER[current] > STAGE_ORDER[DATA_FILLED_STAGE])
                 ? 'Tak'
                 : null;
             const signedLabel =
@@ -175,6 +188,12 @@ function PipelineTable({
                       <PipelineBadge
                         value={sentLabel}
                         tone={stageTone('Umowa wysłana', current)}
+                      />
+                    </td>
+                    <td className="px-2 py-2">
+                      <PipelineBadge
+                        value={dataFilledLabel}
+                        tone={stageTone(DATA_FILLED_STAGE, current)}
                       />
                     </td>
                     <td className="px-2 py-2">

@@ -5,6 +5,7 @@ import {
   ENROLLMENT_LIST_FILTERS,
   ENROLLMENT_REQUIRE_PROPOSAL_ACCEPTANCE,
   ENROLLMENT_STATUS_BADGE_BASE,
+  ENROLLMENT_STATUS_BADGE_WRAP,
   ENROLLMENT_STATUS_COLORS,
   ENROLLMENT_STATUS_LABELS,
   filterEnrollmentChildrenByStatus,
@@ -1758,7 +1759,7 @@ export default function EnrollmentAdminPanel({
                         return (
                           <li
                             key={child.requestId}
-                            className="grid grid-cols-1 items-start gap-x-4 gap-y-2 py-3 sm:grid-cols-[minmax(0,36%)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(7rem,auto)]"
+                            className="grid grid-cols-1 items-start gap-x-4 gap-y-2 py-3 sm:grid-cols-[minmax(0,34%)_minmax(0,1fr)_minmax(0,1.1fr)_minmax(9rem,12rem)]"
                           >
                             <div className="min-w-0 overflow-hidden">
                               <p className="inline-flex flex-wrap items-center gap-1.5 text-sm font-medium text-zinc-900">
@@ -1823,7 +1824,7 @@ export default function EnrollmentAdminPanel({
                               </span>
                             </p>
                             <span
-                              className={`${ENROLLMENT_STATUS_BADGE_BASE} ${badge.colorClass} h-auto max-w-[11rem] justify-self-start self-center whitespace-normal py-1 text-center text-[10px] leading-snug sm:justify-self-end`}
+                              className={`${ENROLLMENT_STATUS_BADGE_WRAP} ${badge.colorClass} w-full max-w-[12rem] justify-self-start self-center sm:justify-self-end`}
                             >
                               {badge.label}
                             </span>
@@ -2133,13 +2134,13 @@ export default function EnrollmentAdminPanel({
                           </p>
                           <div className="mt-1 flex flex-wrap gap-2">
                             <span
-                              className={`${ENROLLMENT_STATUS_BADGE_BASE} ${listBadge.colorClass} h-auto max-w-full whitespace-normal text-left leading-snug`}
+                              className={`${ENROLLMENT_STATUS_BADGE_WRAP} ${listBadge.colorClass} max-w-full text-left`}
                             >
                               Zgłoszenie: {listBadge.label}
                             </span>
                             {child.childAccessLevel && child.childAccessLevel !== child.status && (
                               <span
-                                className={`${ENROLLMENT_STATUS_BADGE_BASE} ${ENROLLMENT_STATUS_COLORS[child.childAccessLevel] ?? 'bg-zinc-100 text-zinc-700'} h-auto max-w-full whitespace-normal text-left leading-snug`}
+                                className={`${ENROLLMENT_STATUS_BADGE_WRAP} ${ENROLLMENT_STATUS_COLORS[child.childAccessLevel] ?? 'bg-zinc-100 text-zinc-700'} max-w-full text-left`}
                               >
                                 Dziecko:{' '}
                                 {ENROLLMENT_STATUS_LABELS[child.childAccessLevel] ?? child.childAccessLevel}

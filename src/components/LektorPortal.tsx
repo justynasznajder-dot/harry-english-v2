@@ -5,6 +5,7 @@ import MessagesPanel from '@/src/components/messages/MessagesPanel';
 import MessagesTabLabel from '@/src/components/messages/MessagesTabLabel';
 import { useUnreadMessagesCount } from '@/src/components/messages/useUnreadMessagesCount';
 import TeacherAttendanceTab from '@/src/components/teacher/TeacherAttendanceTab';
+import AttendanceToggleButtons from '@/src/components/teacher/AttendanceToggleButtons';
 import TeacherWeekTab from '@/src/components/teacher/TeacherWeekTab';
 import { formatSchoolDateTimeMedium } from '@/lib/school-timezone';
 
@@ -36,13 +37,6 @@ type AttendanceRow = {
   note: string | null;
 };
 
-const ATTENDANCE_OPTIONS = [
-  { value: 'PRESENT', label: 'Obecny' },
-  { value: 'ABSENT', label: 'Nieobecny' },
-  { value: 'EXCUSED', label: 'Usprawiedliwiony' },
-  { value: 'LATE', label: 'Spóźniony' },
-] as const;
-
 const tabs: Array<{ key: LektorTab; label: string }> = [
   { key: 'week', label: 'Plan tygodnia' },
   { key: 'attendance', label: 'Obecność' },
@@ -69,7 +63,7 @@ export default function LektorPortal() {
   const [selectedLessonId, setSelectedLessonId] = useState<string | null>(null);
   const [attendance, setAttendance] = useState<AttendanceRow[]>([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
-  const [savingAttendance, setSavingAttendance] = useState(false);
+  const [savingChildId, setSavingChildId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -172,42 +166,49 @@ export default function LektorPortal() {
     }
   }, [selectedLessonId, loadAttendance]);
 
-  const saveAttendance = async () => {
-    if (!selectedLessonId) return;
-    const unmarkedBillable = attendance.filter((row) => row.billedPerLesson && !row.status);
-    if (unmarkedBillable.length > 0) {
-      setStatusMessage(
-        `Oznacz obecność u wszystkich dzieci z rozliczeniem za zajęcia (${unmarkedBillable.length} bez statusu)`,
-      );
-      return;
-    }
-    setSavingAttendance(true);
+  const markAttendance = async (childId: string, status: 'PRESENT' | 'ABSENT') => {
+    if (!selectedLessonId || savingChildId === childId) return;
+    const row = attendance.find((item) => item.childId === childId);
+    if (!row || row.status === status) return;
+
+    const previousStatus = row.status;
+    setAttendance((prev) =>
+      prev.map((item) => (item.childId === childId ? { ...item, status } : item)),
+    );
+    setSavingChildId(childId);
     setStatusMessage(null);
     try {
       const res = await fetch(`/api/teacher/lessons/${selectedLessonId}/attendance`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          attendance: attendance
-            .filter((row) => row.status)
-            .map((row) => ({
-              childId: row.childId,
-              status: row.status,
+          attendance: [
+            {
+              childId,
+              status,
               note: row.note,
-            })),
+            },
+          ],
         }),
       });
       const data = (await res.json().catch(() => ({}))) as { message?: string };
       if (!res.ok) {
+        setAttendance((prev) =>
+          prev.map((item) =>
+            item.childId === childId ? { ...item, status: previousStatus } : item,
+          ),
+        );
         setStatusMessage(data.message ?? 'Nie udało się zapisać obecności');
-        return;
       }
-      setStatusMessage(data.message ?? 'Obecności zapisane');
-      await loadAttendance(selectedLessonId);
     } catch {
+      setAttendance((prev) =>
+        prev.map((item) =>
+          item.childId === childId ? { ...item, status: previousStatus } : item,
+        ),
+      );
       setStatusMessage('Błąd zapisu obecności');
     } finally {
-      setSavingAttendance(false);
+      setSavingChildId((current) => (current === childId ? null : current));
     }
   };
 
@@ -337,8 +338,9 @@ export default function LektorPortal() {
               <div className="space-y-3 rounded-2xl border border-emerald-100 bg-white p-4">
                 <p className="text-sm font-semibold text-zinc-800">Obecności</p>
                 <p className="text-xs text-zinc-500">
-                  Miesięczna/roczna: domyślnie obecni. Za pojedyncze zajęcia: oznacz obowiązkowo.
-                  Pełny widok tygodnia: zakładka „Obecność”.
+                  Kliknij ✓ lub ✕ — zapisuje się od razu. Miesięczna/roczna: domyślnie obecni.
+                  Za pojedyncze zajęcia: oznacz obowiązkowo. Pełny widok tygodnia: zakładka
+                  „Obecność”.
                 </p>
                 {!selectedLessonId ? (
                   <p className="text-sm text-zinc-500">Wybierz lekcję.</p>
@@ -347,74 +349,43 @@ export default function LektorPortal() {
                 ) : attendance.length === 0 ? (
                   <p className="text-sm text-zinc-500">Brak uczniów w grupie.</p>
                 ) : (
-                  <>
-                    <div className="space-y-2">
-                      {attendance.map((row) => (
-                        <div
-                          key={row.childId}
-                          className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 ${
-                            row.billedPerLesson && !row.status
-                              ? 'border-amber-300 bg-amber-50/70'
-                              : 'border-zinc-200'
-                          }`}
-                        >
-                          <div>
-                            <span className="text-sm font-medium text-zinc-900">
-                              {row.firstName} {row.lastName}
+                  <div className="space-y-2">
+                    {attendance.map((row) => (
+                      <div
+                        key={row.childId}
+                        className={`flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 ${
+                          row.billedPerLesson && !row.status
+                            ? 'border-amber-300 bg-amber-50/70'
+                            : 'border-zinc-200'
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <span className="text-sm font-medium text-zinc-900">
+                            {row.firstName} {row.lastName}
+                          </span>
+                          {row.confirmed === false ? (
+                            <span className="mt-0.5 block text-xs font-semibold text-amber-800">
+                              Niepotwierdzony (brak podpisanej umowy)
                             </span>
-                            {row.confirmed === false ? (
-                              <span className="mt-0.5 block text-xs font-semibold text-amber-800">
-                                Niepotwierdzony (brak podpisanej umowy)
-                              </span>
-                            ) : null}
-                            {row.billedPerLesson ? (
-                              <span className="mt-0.5 block text-xs text-amber-800">
-                                Za pojedyncze zajęcia — oznacz obowiązkowo
-                              </span>
-                            ) : (
-                              <span className="mt-0.5 block text-xs text-emerald-700">
-                                Domyślnie obecny
-                              </span>
-                            )}
-                          </div>
-                          <select
-                            className="rounded-lg border border-zinc-300 px-2 py-1 text-sm"
-                            value={row.status ?? ''}
-                            onChange={(e) =>
-                              setAttendance((prev) =>
-                                prev.map((item) =>
-                                  item.childId === row.childId
-                                    ? { ...item, status: e.target.value || null }
-                                    : item,
-                                ),
-                              )
-                            }
-                          >
-                            {row.billedPerLesson && !row.status ? (
-                              <option value="">Wybierz…</option>
-                            ) : null}
-                            {ATTENDANCE_OPTIONS.map((opt) => (
-                              <option key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </option>
-                            ))}
-                          </select>
+                          ) : null}
+                          {row.billedPerLesson ? (
+                            <span className="mt-0.5 block text-xs text-amber-800">
+                              Za pojedyncze zajęcia — oznacz obowiązkowo
+                            </span>
+                          ) : (
+                            <span className="mt-0.5 block text-xs text-emerald-700">
+                              Domyślnie obecny
+                            </span>
+                          )}
                         </div>
-                      ))}
-                    </div>
-                    <button
-                      type="button"
-                      disabled={
-                        savingAttendance ||
-                        attendance.length === 0 ||
-                        attendance.some((row) => row.billedPerLesson && !row.status)
-                      }
-                      onClick={() => void saveAttendance()}
-                      className="rounded-xl bg-[#0f6e56] px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {savingAttendance ? 'Zapisywanie…' : 'Zapisz obecności'}
-                    </button>
-                  </>
+                        <AttendanceToggleButtons
+                          status={row.status}
+                          disabled={savingChildId === row.childId}
+                          onSelect={(status) => void markAttendance(row.childId, status)}
+                        />
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             </div>

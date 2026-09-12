@@ -18,8 +18,12 @@ const STAGE_ORDER: Record<StudentListPipelineStage, number> = {
   Zgłoszenie: 0,
   "Przypisany do grupy": 1,
   "Umowa wysłana": 2,
-  "Umowa podpisana": 3,
+  "Dane uzupełnione — umowa w trakcie generowania / podpisu": 3,
+  "Umowa podpisana": 4,
 };
+
+const DATA_FILLED_STAGE =
+  "Dane uzupełnione — umowa w trakcie generowania / podpisu" as const;
 
 function pipelineCells(
   row: StudentPipelineExportRow,
@@ -27,6 +31,7 @@ function pipelineCells(
 ): {
   group: string;
   contractSent: string;
+  dataFilled: string;
   contractSigned: string;
   stage: string;
 } {
@@ -50,10 +55,17 @@ function pipelineCells(
       ? "Tak"
       : "";
 
+  const dataFilled =
+    !complimentaryMode &&
+    (current === DATA_FILLED_STAGE ||
+      STAGE_ORDER[current] > STAGE_ORDER[DATA_FILLED_STAGE])
+      ? "Tak"
+      : "";
+
   const contractSigned =
     !complimentaryMode && current === "Umowa podpisana" ? "Tak" : "";
 
-  return { group, contractSent, contractSigned, stage: current };
+  return { group, contractSent, dataFilled, contractSigned, stage: current };
 }
 
 function sheetRows(
@@ -72,6 +84,8 @@ function sheetRows(
     };
     if (!complimentaryMode) {
       base["Umowa wysłana"] = cells.contractSent;
+      base["Dane uzupełnione — umowa w trakcie generowania / podpisu"] =
+        cells.dataFilled;
       base["Umowa podpisana"] = cells.contractSigned;
     }
     return base;

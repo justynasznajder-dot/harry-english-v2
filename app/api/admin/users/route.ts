@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import {
-  createParentUserWithEnrollmentRequests,
-  DuplicateEnrollmentError,
   getAllUsers,
   getRegistrationSchoolId,
   getUserById,
@@ -20,16 +18,6 @@ import { createUser } from "@/lib/db";
 
 import { requireAdminSchoolContext } from "@/lib/admin-school-context";
 import { formatIdCardNumber } from "@/lib/format-id-card-number";
-
-const LOCATION_ID_REGEX =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-type AdminChildInput = {
-  firstName?: string;
-  lastName?: string;
-  birthDate?: string;
-  preferredLocationId?: string | null;
-};
 
 
 
@@ -345,7 +333,15 @@ export async function POST(request: NextRequest) {
 
     }
 
-
+    if (targetRole === "PARENT") {
+      return NextResponse.json(
+        {
+          message:
+            "Kont rodziców nie tworzy się z panelu — rodzic rejestruje się samodzielnie przy zapisie dziecka",
+        },
+        { status: 403 }
+      );
+    }
 
     if (actor.role === "MANAGER" && targetRole === "ADMIN") {
 
@@ -408,109 +404,7 @@ export async function POST(request: NextRequest) {
 
 
     const resolvedConfirmed =
-
-      confirmed !== undefined ? Boolean(confirmed) : targetRole === "PARENT" ? false : true;
-
-
-
-    if (targetRole === "PARENT") {
-      const childrenRaw = (body as { children?: AdminChildInput[] }).children;
-      if (!Array.isArray(childrenRaw) || childrenRaw.length === 0) {
-        return NextResponse.json(
-          { message: "Dodaj co najmniej jedno dziecko i uzupełnij jego dane" },
-          { status: 400 }
-        );
-      }
-
-      if (!targetSchoolId) {
-        return NextResponse.json(
-          { message: "Brak identyfikatora szkoły dla rodzica" },
-          { status: 400 }
-        );
-      }
-
-      const normalizedChildren: Array<{
-        firstName: string;
-        lastName: string;
-        birthDate: string;
-        preferredLocationId: string | null;
-      }> = [];
-
-      for (let i = 0; i < childrenRaw.length; i++) {
-        const ch = childrenRaw[i] ?? {};
-        const firstName = String(ch.firstName ?? "").trim();
-        const lastName = String(ch.lastName ?? "").trim();
-        const birthDate = String(ch.birthDate ?? "").slice(0, 10);
-        const preferredLocationId = String(ch.preferredLocationId ?? "").trim() || null;
-
-        if (!firstName || !lastName || !birthDate) {
-          return NextResponse.json(
-            { message: `Dziecko ${i + 1}: uzupełnij imię, nazwisko i datę urodzenia` },
-            { status: 400 }
-          );
-        }
-
-        if (preferredLocationId) {
-          if (!LOCATION_ID_REGEX.test(preferredLocationId)) {
-            return NextResponse.json(
-              { message: `Dziecko ${i + 1}: nieprawidłowa lokalizacja` },
-              { status: 400 }
-            );
-          }
-          const locOk = await queryDb<{ ok: boolean }>(
-            `SELECT TRUE AS ok
-             FROM locations
-             WHERE id = $1 AND school_id = $2 AND active = TRUE
-             LIMIT 1`,
-            [preferredLocationId, targetSchoolId]
-          );
-          if (!locOk.rows[0]?.ok) {
-            return NextResponse.json(
-              { message: `Dziecko ${i + 1}: nieprawidłowa lokalizacja` },
-              { status: 400 }
-            );
-          }
-        }
-
-        normalizedChildren.push({
-          firstName,
-          lastName,
-          birthDate,
-          preferredLocationId,
-        });
-      }
-
-      const { user: newUser, enrollmentCount } = await createParentUserWithEnrollmentRequests({
-        email,
-        passwordHash,
-        firstName,
-        lastName,
-        schoolId: targetSchoolId,
-        phone,
-        confirmed: resolvedConfirmed,
-        accessLevel: accessLevel || "PENDING",
-        children: normalizedChildren,
-      });
-
-      const safeUser = {
-        id: newUser.id,
-        first_name: newUser.first_name,
-        last_name: newUser.last_name,
-        email: newUser.email,
-        role: newUser.role,
-        confirmed: newUser.confirmed,
-        active: newUser.active,
-        access_level: newUser.access_level,
-        phone: newUser.phone,
-        created_at: newUser.created_at,
-      };
-
-      return NextResponse.json({
-        user: safeUser,
-        enrollmentCount,
-        message: `Utworzono konto rodzica i ${enrollmentCount} zgłoszeń`,
-      });
-    }
+      confirmed !== undefined ? Boolean(confirmed) : true;
 
     const newUser = await createUser({
 
@@ -571,10 +465,6 @@ export async function POST(request: NextRequest) {
   } catch (error: unknown) {
 
     console.error("Create user error:", error);
-
-    if (error instanceof DuplicateEnrollmentError) {
-      return NextResponse.json({ message: error.message }, { status: 409 });
-    }
 
     const pg = error as { code?: string; message?: string; detail?: string };
 

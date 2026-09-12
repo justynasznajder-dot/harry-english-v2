@@ -79,20 +79,33 @@ export async function GET(request: NextRequest) {
     lessonParams.push(ctx.schoolId);
     p++;
   }
-  if (locationIds.length > 0) {
-    lessonWhere.push(`l.location_id = ANY($${p}::text[])`);
-    lessonParams.push(locationIds);
-    p++;
+  // Obecność parametru = filtr aktywny; pusta lista = brak wyników (nie „pokaż wszystko”).
+  if (searchParams.has("location_ids")) {
+    if (locationIds.length > 0) {
+      lessonWhere.push(`l.location_id = ANY($${p}::text[])`);
+      lessonParams.push(locationIds);
+      p++;
+    } else {
+      lessonWhere.push("FALSE");
+    }
   }
-  if (teacherIds.length > 0) {
-    lessonWhere.push(`l.teacher_id = ANY($${p}::text[])`);
-    lessonParams.push(teacherIds);
-    p++;
+  if (searchParams.has("teacher_ids")) {
+    if (teacherIds.length > 0) {
+      lessonWhere.push(`l.teacher_id = ANY($${p}::text[])`);
+      lessonParams.push(teacherIds);
+      p++;
+    } else {
+      lessonWhere.push("FALSE");
+    }
   }
-  if (groupIds.length > 0) {
-    lessonWhere.push(`l.group_id = ANY($${p}::text[])`);
-    lessonParams.push(groupIds);
-    p++;
+  if (searchParams.has("group_ids")) {
+    if (groupIds.length > 0) {
+      lessonWhere.push(`l.group_id = ANY($${p}::text[])`);
+      lessonParams.push(groupIds);
+      p++;
+    } else {
+      lessonWhere.push("FALSE");
+    }
   }
 
   const holidayParams: unknown[] = [fromYmd, toYmd];

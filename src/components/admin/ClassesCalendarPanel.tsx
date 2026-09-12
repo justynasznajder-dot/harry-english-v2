@@ -49,15 +49,54 @@ function addDaysYmd(ymd: string, days: number): string {
   return `${yy}-${mm}-${dd}`;
 }
 
-function lessonColors(status: string): { backgroundColor: string; borderColor: string } {
-  switch (status) {
-    case 'COMPLETED':
-      return { backgroundColor: '#6b7280', borderColor: '#4b5563' };
-    case 'CANCELLED':
-      return { backgroundColor: '#f97316', borderColor: '#c2410c' };
-    default:
-      return { backgroundColor: '#0d9488', borderColor: '#0f766e' };
+/** Stała paleta kolorów lektorów na kalendarzu (kolejność = kolejność na liście filtrów). */
+const TEACHER_COLOR_PALETTE: Array<{ backgroundColor: string; borderColor: string }> = [
+  { backgroundColor: '#0d9488', borderColor: '#0f766e' }, // teal
+  { backgroundColor: '#2563eb', borderColor: '#1d4ed8' }, // blue
+  { backgroundColor: '#7c3aed', borderColor: '#6d28d9' }, // violet
+  { backgroundColor: '#db2777', borderColor: '#be185d' }, // pink
+  { backgroundColor: '#ca8a04', borderColor: '#a16207' }, // yellow
+  { backgroundColor: '#059669', borderColor: '#047857' }, // green
+  { backgroundColor: '#0891b2', borderColor: '#0e7490' }, // cyan
+  { backgroundColor: '#4f46e5', borderColor: '#4338ca' }, // indigo
+  { backgroundColor: '#c026d3', borderColor: '#a21caf' }, // fuchsia
+  { backgroundColor: '#ea580c', borderColor: '#c2410c' }, // orange
+  { backgroundColor: '#0f766e', borderColor: '#115e59' }, // dark teal
+  { backgroundColor: '#be123c', borderColor: '#9f1239' }, // rose
+];
+
+function teacherColorIndex(teacherId: string, teacherIdsInOrder: string[]): number {
+  const idx = teacherIdsInOrder.indexOf(teacherId);
+  if (idx >= 0) return idx % TEACHER_COLOR_PALETTE.length;
+  let hash = 0;
+  for (let i = 0; i < teacherId.length; i++) {
+    hash = (hash * 31 + teacherId.charCodeAt(i)) >>> 0;
   }
+  return hash % TEACHER_COLOR_PALETTE.length;
+}
+
+function colorsForTeacher(
+  teacherId: string | null | undefined,
+  teacherIdsInOrder: string[],
+): { backgroundColor: string; borderColor: string } {
+  if (!teacherId) {
+    return { backgroundColor: '#64748b', borderColor: '#475569' };
+  }
+  return TEACHER_COLOR_PALETTE[teacherColorIndex(teacherId, teacherIdsInOrder)];
+}
+
+function lessonColors(
+  status: string,
+  teacherId: string | null | undefined,
+  teacherIdsInOrder: string[],
+): { backgroundColor: string; borderColor: string } {
+  if (status === 'COMPLETED') {
+    return { backgroundColor: '#6b7280', borderColor: '#4b5563' };
+  }
+  if (status === 'CANCELLED') {
+    return { backgroundColor: '#f97316', borderColor: '#c2410c' };
+  }
+  return colorsForTeacher(teacherId, teacherIdsInOrder);
 }
 
 function lessonDisplayTitle(row: CalendarLessonRow): string {
@@ -91,7 +130,11 @@ function holidayTitle(h: CalendarHolidayRow): string {
   return `Dzień wolny: ${h.name}`;
 }
 
-function buildEventInputs(lessons: CalendarLessonRow[], holidays: CalendarHolidayRow[]): EventInput[] {
+function buildEventInputs(
+  lessons: CalendarLessonRow[],
+  holidays: CalendarHolidayRow[],
+  teacherIdsInOrder: string[],
+): EventInput[] {
   const holidayEv: EventInput[] = [];
   const seenLabelKeys = new Set<string>();
 
@@ -144,7 +187,7 @@ function buildEventInputs(lessons: CalendarLessonRow[], holidays: CalendarHolida
   const lessonEv: EventInput[] = lessons.map((l) => {
     const startMs = new Date(l.scheduled_at).getTime();
     const endMs = startMs + l.duration_min * 60_000;
-    const c = lessonColors(l.status);
+    const c = lessonColors(l.status, l.teacher_id, teacherIdsInOrder);
     return {
       id: l.id,
       title: lessonDisplayTitle(l),
@@ -156,12 +199,38 @@ function buildEventInputs(lessons: CalendarLessonRow[], holidays: CalendarHolida
       extendedProps: {
         status: l.status,
         groupName: lessonDisplayTitle(l),
+        teacherName: l.teacher_name?.trim() || null,
+        locationName: l.location_name?.trim() || null,
+        durationMin: l.duration_min,
         tooltip: lessonTooltip(l),
+        teacherId: l.teacher_id,
       },
     };
   });
 
   return [...holidayEv, ...lessonEv];
+}
+
+type LessonDetailPopup = {
+  id: string;
+  groupName: string;
+  teacherName: string;
+  locationName: string;
+  whenLabel: string;
+  timeRangeLabel: string;
+  status: string;
+  durationMin: number;
+};
+
+function statusLabelPl(status: string): string {
+  switch (status) {
+    case 'COMPLETED':
+      return 'zakończone';
+    case 'CANCELLED':
+      return 'anulowane';
+    default:
+      return 'zaplanowane';
+  }
 }
 
 type ToastKind = 'success' | 'error';
@@ -185,6 +254,9 @@ export default function ClassesCalendarPanel({
 }: ClassesCalendarPanelProps) {
   const calendarApiRef = useRef<CalendarApi | null>(null);
   const filtersReadyRef = useRef(false);
+  const knownLocationIdsRef = useRef<Set<string>>(new Set());
+  const knownTeacherIdsRef = useRef<Set<string>>(new Set());
+  const knownGroupIdsRef = useRef<Set<string>>(new Set());
   const [range, setRange] = useState<{ fromYmd: string; toYmd: string } | null>(null);
   const [events, setEvents] = useState<EventInput[]>([]);
   const [loading, setLoading] = useState(false);
@@ -193,12 +265,7 @@ export default function ClassesCalendarPanel({
   const [selGroups, setSelGroups] = useState<string[]>([]);
   const [pickDate, setPickDate] = useState('');
   const [localRefresh, setLocalRefresh] = useState(0);
-  const [cancelLessonModal, setCancelLessonModal] = useState<{
-    id: string;
-    title: string;
-    whenLabel: string;
-    status: string;
-  } | null>(null);
+  const [lessonPopup, setLessonPopup] = useState<LessonDetailPopup | null>(null);
   const [cancelLessonParentMessage, setCancelLessonParentMessage] = useState('');
   const [cancelLessonBusy, setCancelLessonBusy] = useState(false);
 
@@ -225,14 +292,35 @@ export default function ClassesCalendarPanel({
       setSelLocations(locIds);
       setSelTeachers(teacherIds);
       setSelGroups(groupIds);
+      knownLocationIdsRef.current = new Set(locIds);
+      knownTeacherIdsRef.current = new Set(teacherIds);
+      knownGroupIdsRef.current = new Set(groupIds);
       filtersReadyRef.current = true;
       return;
     }
 
-    setSelLocations((prev) => [...new Set([...prev, ...locIds])].filter((id) => locIds.includes(id)));
-    setSelTeachers((prev) => [...new Set([...prev, ...teacherIds])].filter((id) => teacherIds.includes(id)));
-    setSelGroups((prev) => [...new Set([...prev, ...groupIds])].filter((id) => groupIds.includes(id)));
+    // Usuń zniknięte ID; nowo pojawiające się zaznaczaj — nie nadpisuj pustego wyboru użytkownika.
+    setSelLocations((prev) => {
+      const kept = prev.filter((id) => locIds.includes(id));
+      const added = locIds.filter((id) => !knownLocationIdsRef.current.has(id));
+      knownLocationIdsRef.current = new Set(locIds);
+      return [...new Set([...kept, ...added])];
+    });
+    setSelTeachers((prev) => {
+      const kept = prev.filter((id) => teacherIds.includes(id));
+      const added = teacherIds.filter((id) => !knownTeacherIdsRef.current.has(id));
+      knownTeacherIdsRef.current = new Set(teacherIds);
+      return [...new Set([...kept, ...added])];
+    });
+    setSelGroups((prev) => {
+      const kept = prev.filter((id) => groupIds.includes(id));
+      const added = groupIds.filter((id) => !knownGroupIdsRef.current.has(id));
+      knownGroupIdsRef.current = new Set(groupIds);
+      return [...new Set([...kept, ...added])];
+    });
   }, [locations, teachers, groups]);
+
+  const teacherIdsInOrder = useMemo(() => teachers.map((t) => t.id), [teachers]);
 
   useEffect(() => {
     if (!isActive || !range) return;
@@ -243,9 +331,11 @@ export default function ClassesCalendarPanel({
       setLoading(true);
       try {
         const qs = new URLSearchParams({ from: range.fromYmd, to: range.toYmd });
-        if (selLocations.length) qs.set('location_ids', selLocations.join(','));
-        if (selTeachers.length) qs.set('teacher_ids', selTeachers.join(','));
-        if (selGroups.length) qs.set('group_ids', selGroups.join(','));
+        // Wysyłaj parametry zawsze gdy lista filtrów istnieje — pusta lista = brak zajęć
+        // (API: obecność klucza + pusta wartość → FALSE). Brak klucza = bez filtra.
+        if (locations.length > 0) qs.set('location_ids', selLocations.join(','));
+        if (teachers.length > 0) qs.set('teacher_ids', selTeachers.join(','));
+        if (groups.length > 0) qs.set('group_ids', selGroups.join(','));
         const res = await fetch(`/api/admin/lessons?${qs}`, { signal: ac.signal });
         const data = (await res.json().catch(() => ({}))) as {
           lessons?: CalendarLessonRow[];
@@ -259,7 +349,7 @@ export default function ClassesCalendarPanel({
         }
         const lessons = data.lessons ?? [];
         const holidays = data.holidays ?? [];
-        if (!cancelled) setEvents(buildEventInputs(lessons, holidays));
+        if (!cancelled) setEvents(buildEventInputs(lessons, holidays, teacherIdsInOrder));
       } catch (e) {
         if (e instanceof Error && e.name === 'AbortError') return;
         console.error('ClassesCalendarPanel fetch', e);
@@ -276,48 +366,74 @@ export default function ClassesCalendarPanel({
       cancelled = true;
       ac.abort();
     };
-  }, [isActive, range, filterKey, refreshSignal, localRefresh, selLocations, selTeachers, selGroups]);
+  }, [
+    isActive,
+    range,
+    filterKey,
+    refreshSignal,
+    localRefresh,
+    selLocations,
+    selTeachers,
+    selGroups,
+    locations.length,
+    teachers.length,
+    groups.length,
+    teacherIdsInOrder,
+  ]);
 
-  const handleLessonClick = useCallback(
-    (arg: EventClickArg) => {
-      const id = arg.event.id;
-      if (!id || id.startsWith('holiday-') || arg.event.extendedProps?.isHolidayLabel) return;
+  const handleLessonClick = useCallback((arg: EventClickArg) => {
+    const id = arg.event.id;
+    if (!id || id.startsWith('holiday-') || arg.event.extendedProps?.isHolidayLabel) return;
 
-      const status = String(arg.event.extendedProps.status ?? 'SCHEDULED');
-      if (status === 'CANCELLED') {
-        pushToast('error', 'Te zajęcia są już anulowane');
-        return;
-      }
-      if (status !== 'SCHEDULED') {
-        pushToast('error', 'Można anulować tylko zaplanowane zajęcia');
-        return;
-      }
-
-      const start = arg.event.start;
-      const whenLabel = start
-        ? start.toLocaleString('pl-PL', {
-            timeZone: TZ,
-            weekday: 'long',
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-          })
-        : arg.event.title;
-
-      setCancelLessonParentMessage('');
-      setCancelLessonModal({
-        id,
-        title:
-          (arg.event.extendedProps?.tooltip as string | undefined)?.trim() ||
-          arg.event.title,
-        whenLabel,
-        status,
+    const props = arg.event.extendedProps ?? {};
+    const status = String(props.status ?? 'SCHEDULED');
+    const start = arg.event.start;
+    const end = arg.event.end;
+    const whenLabel = start
+      ? start.toLocaleString('pl-PL', {
+          timeZone: TZ,
+          weekday: 'long',
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+        })
+      : '—';
+    const timeRangeLabel = (() => {
+      if (!start) return '—';
+      const startT = start.toLocaleTimeString('pl-PL', {
+        timeZone: TZ,
+        hour: '2-digit',
+        minute: '2-digit',
       });
-    },
-    [pushToast],
-  );
+      if (!end) return startT;
+      const endT = end.toLocaleTimeString('pl-PL', {
+        timeZone: TZ,
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      return `${startT} – ${endT}`;
+    })();
+
+    setCancelLessonParentMessage('');
+    setLessonPopup({
+      id,
+      groupName:
+        (props.groupName as string | undefined)?.trim() ||
+        arg.event.title ||
+        'Zajęcia',
+      teacherName: (props.teacherName as string | null | undefined)?.trim() || '—',
+      locationName: (props.locationName as string | null | undefined)?.trim() || '—',
+      whenLabel,
+      timeRangeLabel,
+      status,
+      durationMin: Number(props.durationMin) || 0,
+    });
+  }, []);
+
+  const closeLessonPopup = () => {
+    setLessonPopup(null);
+    setCancelLessonParentMessage('');
+  };
 
   const toggleId = (list: string[], setList: (v: string[]) => void, id: string) => {
     setList(list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
@@ -342,8 +458,8 @@ export default function ClassesCalendarPanel({
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <h3 className="text-lg font-semibold text-[#0f6e56]">Zajęcia</h3>
         <p className="text-xs text-zinc-500 md:text-right">
-          Strefa czasowa: {TZ}. Szare: weekendy, święta PL i pełne dni wolne. Żółte: dzień wolny tylko
-          dla szkół albo tylko dla przedszkoli.
+          Strefa czasowa: {TZ}. Kolory bloków = lektorzy. Szare zakończone, pomarańczowe anulowane.
+          Tło: weekendy/święta (szare) oraz dni wolne szkoła/przedszkole (żółte).
         </p>
       </div>
 
@@ -416,19 +532,31 @@ export default function ClassesCalendarPanel({
                   {teachers.length === 0 ? (
                     <p className="text-xs text-zinc-500">Brak nauczycieli</p>
                   ) : (
-                    teachers.map((t) => (
-                      <label key={t.id} className="flex cursor-pointer items-center gap-2 text-xs">
-                        <input
-                          type="checkbox"
-                          checked={selTeachers.includes(t.id)}
-                          onChange={() => toggleId(selTeachers, setSelTeachers, t.id)}
-                          className="rounded border-emerald-300 text-emerald-700"
-                        />
-                        <span className="truncate">
-                          {t.first_name} {t.last_name}
-                        </span>
-                      </label>
-                    ))
+                    teachers.map((t, i) => {
+                      const color =
+                        TEACHER_COLOR_PALETTE[i % TEACHER_COLOR_PALETTE.length];
+                      return (
+                        <label
+                          key={t.id}
+                          className="flex cursor-pointer items-center gap-2 text-xs"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selTeachers.includes(t.id)}
+                            onChange={() => toggleId(selTeachers, setSelTeachers, t.id)}
+                            className="rounded border-emerald-300 text-emerald-700"
+                          />
+                          <span
+                            className="h-2.5 w-2.5 shrink-0 rounded-full"
+                            style={{ backgroundColor: color.backgroundColor }}
+                            aria-hidden
+                          />
+                          <span className="truncate">
+                            {t.first_name} {t.last_name}
+                          </span>
+                        </label>
+                      );
+                    })
                   )}
                 </div>
               </div>
@@ -516,83 +644,163 @@ export default function ClassesCalendarPanel({
         </div>
       </div>
 
-      {cancelLessonModal && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
-            <h3 className="text-lg font-semibold text-zinc-900">Anuluj zajęcia</h3>
-            <p className="mt-3 text-sm text-zinc-600">
-              Czy na pewno chcesz anulować te zajęcia?
-            </p>
-            <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2.5 text-sm text-zinc-800">
-              <p className="font-semibold">{cancelLessonModal.title}</p>
-              <p className="mt-1 capitalize text-zinc-600">{cancelLessonModal.whenLabel}</p>
-            </div>
-            <p className="mt-3 text-sm text-zinc-500">
-              Rodzice dzieci z tej grupy otrzymają wiadomość w panelu oraz powiadomienie e-mail.
-              System automatycznie doda kolejny termin w harmonogramie grupy (jeśli jest wolny slot
-              do końca roku).
-            </p>
-            <label className="mt-4 block text-sm">
-              <span className="mb-1 block font-semibold text-zinc-700">Wiadomość do rodziców</span>
-              <span className="mb-2 block text-xs text-zinc-500">
-                Opcjonalna treść dołączona do powiadomienia. Jeśli zostawisz puste, wysłany zostanie
-                domyślny tekst.
-              </span>
-              <textarea
-                className="min-h-[100px] w-full rounded-xl border border-emerald-200 px-3 py-2"
-                value={cancelLessonParentMessage}
-                onChange={(e) => setCancelLessonParentMessage(e.target.value)}
-                placeholder="Np. Zajęcia odbędą się w innym terminie — informacja wkrótce."
-              />
-            </label>
-            <div className="mt-5 flex justify-end gap-2">
+      {lessonPopup && (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !cancelLessonBusy) closeLessonPopup();
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="lesson-popup-title"
+            className="w-full max-w-lg rounded-2xl border border-emerald-100 bg-white p-5 shadow-xl sm:p-6"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 id="lesson-popup-title" className="text-lg font-semibold text-zinc-900">
+                  Szczegóły zajęć
+                </h3>
+                <p className="mt-1 text-base font-semibold leading-snug text-[#0f6e56]">
+                  {lessonPopup.groupName}
+                </p>
+              </div>
               <button
                 type="button"
-                className="rounded-xl bg-zinc-200 px-4 py-2 text-sm font-semibold"
+                className="shrink-0 rounded-lg px-2 py-1 text-sm font-semibold text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
                 disabled={cancelLessonBusy}
-                onClick={() => {
-                  setCancelLessonModal(null);
-                  setCancelLessonParentMessage('');
-                }}
+                onClick={closeLessonPopup}
+                aria-label="Zamknij"
               >
-                Zamknij
-              </button>
-              <button
-                type="button"
-                disabled={cancelLessonBusy}
-                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                onClick={async () => {
-                  setCancelLessonBusy(true);
-                  try {
-                    const res = await fetch(
-                      `/api/admin/lessons/${cancelLessonModal.id}/cancel`,
-                      {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          parent_message: cancelLessonParentMessage.trim() || undefined,
-                        }),
-                      },
-                    );
-                    const data = await res.json().catch(() => ({}));
-                    if (!res.ok) {
-                      pushToast('error', data.message ?? 'Nie udało się anulować zajęć');
-                      return;
-                    }
-                    pushToast('success', data.message ?? 'Zajęcia anulowane');
-                    setCancelLessonModal(null);
-                    setCancelLessonParentMessage('');
-                    setLocalRefresh((s) => s + 1);
-                  } catch {
-                    pushToast('error', 'Nie udało się anulować zajęć');
-                  } finally {
-                    setCancelLessonBusy(false);
-                  }
-                }}
-              >
-                {cancelLessonBusy ? 'Anulowanie…' : 'Anuluj i powiadom rodziców'}
+                ✕
               </button>
             </div>
+
+            <dl className="mt-4 space-y-2.5 rounded-xl border border-emerald-100 bg-emerald-50/50 px-4 py-3.5 text-[15px] leading-snug">
+              <div className="flex gap-3">
+                <dt className="w-28 shrink-0 text-zinc-500">Kiedy</dt>
+                <dd className="min-w-0 capitalize text-zinc-900">
+                  {lessonPopup.whenLabel}
+                  <span className="mt-1 block text-base font-semibold normal-case text-zinc-800">
+                    {lessonPopup.timeRangeLabel}
+                    {lessonPopup.durationMin > 0 ? (
+                      <span className="font-normal text-zinc-500">
+                        {' '}
+                        · {lessonPopup.durationMin} min
+                      </span>
+                    ) : null}
+                  </span>
+                </dd>
+              </div>
+              <div className="flex gap-3">
+                <dt className="w-28 shrink-0 text-zinc-500">Prowadzi</dt>
+                <dd className="min-w-0 text-base font-semibold text-zinc-900">
+                  {lessonPopup.teacherName}
+                </dd>
+              </div>
+              <div className="flex gap-3">
+                <dt className="w-28 shrink-0 text-zinc-500">Lokalizacja</dt>
+                <dd className="min-w-0 text-zinc-900">{lessonPopup.locationName}</dd>
+              </div>
+              <div className="flex gap-3">
+                <dt className="w-28 shrink-0 text-zinc-500">Status</dt>
+                <dd className="min-w-0">
+                  <span
+                    className={`inline-block rounded-full px-2.5 py-1 text-sm font-semibold ${
+                      lessonPopup.status === 'COMPLETED'
+                        ? 'bg-zinc-200 text-zinc-700'
+                        : lessonPopup.status === 'CANCELLED'
+                          ? 'bg-rose-100 text-rose-800'
+                          : 'bg-emerald-100 text-emerald-800'
+                    }`}
+                  >
+                    {statusLabelPl(lessonPopup.status)}
+                  </span>
+                </dd>
+              </div>
+            </dl>
+
+            {lessonPopup.status === 'SCHEDULED' ? (
+              <>
+                <div className="mt-4 border-t border-emerald-100 pt-3">
+                  <p className="text-sm font-semibold text-zinc-800">Anuluj zajęcia</p>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Rodzice dostaną wiadomość w panelu i e-mail. System doda kolejny termin w
+                    harmonogramie grupy, jeśli jest wolny slot do końca roku.
+                  </p>
+                  <label className="mt-3 block text-sm">
+                    <span className="mb-1 block font-medium text-zinc-700">
+                      Wiadomość do rodziców
+                    </span>
+                    <span className="mb-1.5 block text-xs text-zinc-500">
+                      Opcjonalnie. Puste pole = domyślny tekst powiadomienia.
+                    </span>
+                    <textarea
+                      className="min-h-[88px] w-full rounded-xl border border-emerald-200 px-3 py-2 text-sm"
+                      value={cancelLessonParentMessage}
+                      onChange={(e) => setCancelLessonParentMessage(e.target.value)}
+                      placeholder="Np. Zajęcia odbędą się w innym terminie — informacja wkrótce."
+                      disabled={cancelLessonBusy}
+                    />
+                  </label>
+                </div>
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    className="rounded-xl bg-zinc-200 px-4 py-2 text-sm font-semibold disabled:opacity-50"
+                    disabled={cancelLessonBusy}
+                    onClick={closeLessonPopup}
+                  >
+                    Zamknij
+                  </button>
+                  <button
+                    type="button"
+                    disabled={cancelLessonBusy}
+                    className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                    onClick={async () => {
+                      setCancelLessonBusy(true);
+                      try {
+                        const res = await fetch(
+                          `/api/admin/lessons/${lessonPopup.id}/cancel`,
+                          {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              parent_message: cancelLessonParentMessage.trim() || undefined,
+                            }),
+                          },
+                        );
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) {
+                          pushToast('error', data.message ?? 'Nie udało się anulować zajęć');
+                          return;
+                        }
+                        pushToast('success', data.message ?? 'Zajęcia anulowane');
+                        closeLessonPopup();
+                        setLocalRefresh((s) => s + 1);
+                      } catch {
+                        pushToast('error', 'Nie udało się anulować zajęć');
+                      } finally {
+                        setCancelLessonBusy(false);
+                      }
+                    }}
+                  >
+                    {cancelLessonBusy ? 'Anulowanie…' : 'Anuluj i powiadom rodziców'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  className="rounded-xl bg-zinc-200 px-4 py-2 text-sm font-semibold"
+                  onClick={closeLessonPopup}
+                >
+                  Zamknij
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

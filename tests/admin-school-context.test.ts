@@ -55,6 +55,8 @@ describe("admin-school-context helpers", () => {
       first_name: "M",
       last_name: "G",
       phone: null,
+      pesel: null,
+      id_card_number: null,
       active: true,
       confirmed: true,
       must_change_password: false,
