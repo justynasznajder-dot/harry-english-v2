@@ -2872,15 +2872,28 @@ export default function AdminPortal({ initialGroupId }: AdminPortalProps) {
         pushToast('error', data.message ?? 'Nie udało się zapisać grupy');
         return;
       }
-      pushToast('success', 'Grupa zaktualizowana');
+      pushToast('success', data.message ?? 'Grupa zaktualizowana');
       await loadData();
       await loadGroupDetail(groupForm.id, getGroupDetailReloadOptions(groupForm.id));
+      if (classesSubTab === 'lessonsList' && yearLessonsYearId) {
+        void loadYearLessons(yearLessonsYearId);
+      }
     } catch {
       pushToast('error', 'Nie udało się zapisać grupy');
     } finally {
       setGroupSaving(false);
     }
-  }, [groupForm, groupDetail, pushToast, loadData, loadGroupDetail, getGroupDetailReloadOptions]);
+  }, [
+    groupForm,
+    groupDetail,
+    pushToast,
+    loadData,
+    loadGroupDetail,
+    getGroupDetailReloadOptions,
+    classesSubTab,
+    yearLessonsYearId,
+    loadYearLessons,
+  ]);
 
   const groupFormDirty = useMemo(() => {
     if (!groupForm.id || !groupDetail?.group || groupDetail.group.id !== groupForm.id) {

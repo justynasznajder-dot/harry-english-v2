@@ -1639,7 +1639,7 @@ const CONTRACT_CHILD_LESSONS_PER_WEEK_SQL = `COALESCE(
   (
     SELECT er.lessons_per_week
     FROM children ch_lpw
-    JOIN enrollment_requests er ON er.id = ch_lpw.request_id
+    JOIN enrollment_requests er ON er.id = ch_lpw.enrollment_request_id
     WHERE ch_lpw.id = ${CONTRACT_CHILD_ID_SQL}
     LIMIT 1
   )

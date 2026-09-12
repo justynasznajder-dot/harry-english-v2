@@ -335,10 +335,11 @@ export async function PUT(
       name: string;
       level: string | null;
       location_id: string | null;
+      teacher_id: string | null;
       active: boolean;
       deleted_at: Date | string | null;
     }>(
-      `SELECT id, school_id, name, level, location_id, active, deleted_at
+      `SELECT id, school_id, name, level, location_id, teacher_id, active, deleted_at
        FROM groups
        WHERE id = $1 ${tenant.role === "MANAGER" ? "AND school_id = $2" : ""}
        LIMIT 1`,
@@ -426,6 +427,15 @@ export async function PUT(
         ? null
         : normalizeLessonsPerWeek(lessonsPerWeek);
 
+    const nextTeacherId =
+      teacherId === undefined
+        ? existing.teacher_id
+        : teacherId == null || String(teacherId).trim() === ""
+          ? null
+          : String(teacherId).trim();
+    const teacherChanged =
+      (existing.teacher_id ?? null) !== (nextTeacherId ?? null);
+
     await queryDb(
       `UPDATE groups
        SET name = $2,
@@ -446,7 +456,7 @@ export async function PUT(
             nextName,
             nextLevel,
             nextLocationId,
-            teacherId ?? null,
+            nextTeacherId,
             maxStudents ?? null,
             nextActive,
             priceMonthly != null && priceMonthly !== "" ? Number(priceMonthly) : null,
@@ -461,7 +471,7 @@ export async function PUT(
             nextName,
             nextLevel,
             nextLocationId,
-            teacherId ?? null,
+            nextTeacherId,
             maxStudents ?? null,
             nextActive,
             priceMonthly != null && priceMonthly !== "" ? Number(priceMonthly) : null,
@@ -471,7 +481,32 @@ export async function PUT(
             nextLessonsPerWeek,
           ]
     );
-    return NextResponse.json({ message: "Grupa została zaktualizowana" });
+
+    let futureLessonsTeacherUpdated = 0;
+    if (teacherChanged && nextTeacherId) {
+      // Przyszłe (jeszcze nieodbyte) SCHEDULED — historia COMPLETED / przeszłość zostaje.
+      const synced = await queryDb<{ id: string }>(
+        `UPDATE lessons
+         SET teacher_id = $2
+         WHERE group_id = $1
+           AND status = 'SCHEDULED'
+           AND ${sqlSchoolTimestampAsTimestamptz("scheduled_at")} > NOW()
+           AND teacher_id IS DISTINCT FROM $2
+         RETURNING id`,
+        [id, nextTeacherId]
+      );
+      futureLessonsTeacherUpdated = synced.rows.length;
+    }
+
+    return NextResponse.json({
+      message:
+        teacherChanged && nextTeacherId
+          ? futureLessonsTeacherUpdated > 0
+            ? `Grupa została zaktualizowana. Nowy lektor przypisany do ${futureLessonsTeacherUpdated} przyszłych zajęć.`
+            : "Grupa została zaktualizowana. Brak przyszłych zajęć do przepięcia lektora."
+          : "Grupa została zaktualizowana",
+      futureLessonsTeacherUpdated,
+    });
   } catch (error) {
     console.error("PUT group error:", error);
     return NextResponse.json({ message: "Błąd aktualizacji grupy" }, { status: 500 });
